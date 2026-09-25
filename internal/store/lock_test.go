@@ -182,6 +182,48 @@ func TestDanglingSymlinkSharesLock(t *testing.T) {
 	wantInUse(t, target)
 }
 
+// A path whose ".." follows a directory link: the lock must belong to the
+// file the operating system actually opens, whichever that is.
+func TestDotDotAfterLinkSharesLock(t *testing.T) {
+	dir := t.TempDir()
+	sep := string(filepath.Separator)
+	a, sub := filepath.Join(dir, "a"), filepath.Join(dir, "b", "sub")
+	for _, d := range []string{a, sub} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(".."+sep+"b"+sep+"sub", filepath.Join(a, "hop")); err != nil {
+		skipUnlessCI(t, err)
+	}
+	if err := os.Symlink("hop"+sep+".."+sep+"linked.db", filepath.Join(a, "link.db")); err != nil {
+		skipUnlessCI(t, err)
+	}
+	created := func(t *testing.T, name string) string {
+		t.Helper()
+		var found []string
+		for _, d := range []string{a, filepath.Join(dir, "b")} {
+			if _, err := os.Stat(filepath.Join(d, name)); err == nil {
+				found = append(found, filepath.Join(d, name))
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("database files named %s: %v, want exactly one", name, found)
+		}
+		return found[0]
+	}
+	t.Run("link target", func(t *testing.T) {
+		s := mustOpen(t, filepath.Join(a, "link.db"))
+		defer s.Close()
+		wantInUse(t, created(t, "linked.db"))
+	})
+	t.Run("caller path", func(t *testing.T) {
+		s := mustOpen(t, a+sep+"hop"+sep+".."+sep+"direct.db")
+		defer s.Close()
+		wantInUse(t, created(t, "direct.db"))
+	})
+}
+
 // A process that holds the store and then ends, by exiting without Close or
 // by being killed, leaves nothing that blocks the next Open.
 func TestLockEndsWithHoldingProcess(t *testing.T) {

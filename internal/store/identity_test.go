@@ -91,7 +91,7 @@ func (s *Store) redeemForTest(ctx context.Context, key string, sc InvitationScop
 	return out, err
 }
 
-func scope(t *testing.T, inv string, purpose linkPurpose, teamID string, role Role, agentID, pinned, label string) InvitationScope {
+func scope(t *testing.T, inv string, purpose InvitationPurpose, teamID string, role Role, agentID, pinned, label string) InvitationScope {
 	t.Helper()
 	sc, err := newInvitationScope(inv, purpose, teamID, role, "hub-a", agentID, pinned, label)
 	if err != nil {
@@ -104,7 +104,7 @@ func scope(t *testing.T, inv string, purpose linkPurpose, teamID string, role Ro
 func joinAs(t *testing.T, s *Store, v *fakeVerifier, inv, teamID string, role Role, label, user, token string) LinkResult {
 	t.Helper()
 	ctx := context.Background()
-	sc := scope(t, inv, purposeJoin, teamID, role, "", "", label)
+	sc := scope(t, inv, PurposeJoin, teamID, role, "", "", label)
 	ch, err := s.issueForTest(ctx, inv+"-issue", sc)
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +146,7 @@ func TestFailedOrUnavailableVerificationChangesNothing(t *testing.T) {
 	ctx := context.Background()
 	v := newFakeVerifier()
 	tm := mustTeam(t, s, "t1", "crew")
-	sc := scope(t, "inv-1", purposeJoin, tm.ID, RoleWorker, "", "", "builder")
+	sc := scope(t, "inv-1", PurposeJoin, tm.ID, RoleWorker, "", "", "builder")
 	ch, err := s.issueForTest(ctx, "issue", sc)
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +245,7 @@ func TestOneUserOneAgent(t *testing.T) {
 
 	// Linking another agent record to that user is refused.
 	other := mustAgent(t, s, "a-other", "other")
-	sc := scope(t, "inv-3", purposeLink, t1.ID, RoleWorker, other.ID, "", "")
+	sc := scope(t, "inv-3", PurposeLink, t1.ID, RoleWorker, other.ID, "", "")
 	ch, err := s.issueForTest(ctx, "issue-3", sc)
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +255,7 @@ func TestOneUserOneAgent(t *testing.T) {
 	}
 	// So is a rebind of another agent to that user.
 	joined := joinAs(t, s, v, "inv-4", t1.ID, RoleIndependent, "third", "user-3", "tok-3")
-	rb := scope(t, "inv-5", purposeRebind, t1.ID, RoleIndependent, joined.AgentID, "user-1", "")
+	rb := scope(t, "inv-5", PurposeRebind, t1.ID, RoleIndependent, joined.AgentID, "user-1", "")
 	ch5, err := s.issueForTest(ctx, "issue-5", rb)
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +278,7 @@ func TestLinkAndPinRules(t *testing.T) {
 	a := mustAgent(t, s, "a1", "builder")
 
 	// A pinned join refuses a different user.
-	pinned := scope(t, "inv-p", purposeJoin, tm.ID, RoleWorker, "", "user-9", "pinned")
+	pinned := scope(t, "inv-p", PurposeJoin, tm.ID, RoleWorker, "", "user-9", "pinned")
 	chp, err := s.issueForTest(ctx, "issue-p", pinned)
 	if err != nil {
 		t.Fatal(err)
@@ -288,7 +288,7 @@ func TestLinkAndPinRules(t *testing.T) {
 	}
 
 	// Link an unlinked record, then link it again for another team as the same user.
-	sc := scope(t, "inv-1", purposeLink, tm.ID, RoleWorker, a.ID, "", "")
+	sc := scope(t, "inv-1", PurposeLink, tm.ID, RoleWorker, a.ID, "", "")
 	ch, err := s.issueForTest(ctx, "issue-1", sc)
 	if err != nil {
 		t.Fatal(err)
@@ -298,7 +298,7 @@ func TestLinkAndPinRules(t *testing.T) {
 		t.Fatalf("link = %+v, %v", res, err)
 	}
 	t2 := mustTeam(t, s, "t2", "two")
-	again := scope(t, "inv-2", purposeLink, t2.ID, RoleWorker, a.ID, "", "")
+	again := scope(t, "inv-2", PurposeLink, t2.ID, RoleWorker, a.ID, "", "")
 	ch2, err := s.issueForTest(ctx, "issue-2", again)
 	if err != nil {
 		t.Fatal(err)
@@ -307,7 +307,7 @@ func TestLinkAndPinRules(t *testing.T) {
 		t.Fatalf("same-user link = %+v, %v", res, err)
 	}
 	// Linking that record for a different user needs a rebind.
-	third := scope(t, "inv-3", purposeLink, tm.ID, RoleWorker, a.ID, "", "")
+	third := scope(t, "inv-3", PurposeLink, tm.ID, RoleWorker, a.ID, "", "")
 	ch3, err := s.issueForTest(ctx, "issue-3", third)
 	if err != nil {
 		t.Fatal(err)
@@ -323,7 +323,7 @@ func TestRoleConflictChangesNothing(t *testing.T) {
 	v := newFakeVerifier()
 	tm := mustTeam(t, s, "t1", "crew")
 	res := joinAs(t, s, v, "inv-1", tm.ID, RoleWorker, "builder", "user-1", "tok-1")
-	sc := scope(t, "inv-2", purposeJoin, tm.ID, RoleCoordinator, "", "", "builder")
+	sc := scope(t, "inv-2", PurposeJoin, tm.ID, RoleCoordinator, "", "", "builder")
 	ch, err := s.issueForTest(ctx, "issue-2", sc)
 	if err != nil {
 		t.Fatal(err)
@@ -351,7 +351,7 @@ func TestRebindEndsSessionsAndRespectsOutstandingWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rb := scope(t, "inv-2", purposeRebind, tm.ID, RoleCoordinator, res.AgentID, "user-2", "")
+	rb := scope(t, "inv-2", PurposeRebind, tm.ID, RoleCoordinator, res.AgentID, "user-2", "")
 	ch, err := s.issueForTest(ctx, "issue-2", rb)
 	if err != nil {
 		t.Fatal(err)
@@ -438,7 +438,7 @@ func TestChallengeValidity(t *testing.T) {
 		t.Fatalf("challenge for an unlinked agent: got %v, want ErrIdentityLinkRequired", err)
 	}
 
-	sc := scope(t, "inv-1", purposeJoin, tm.ID, RoleWorker, "", "", "builder")
+	sc := scope(t, "inv-1", PurposeJoin, tm.ID, RoleWorker, "", "", "builder")
 	old, err := s.issueForTest(ctx, "issue-a", sc)
 	if err != nil {
 		t.Fatal(err)
@@ -451,7 +451,7 @@ func TestChallengeValidity(t *testing.T) {
 	if _, err := s.redeemForTest(ctx, "r-old", sc, v, old.ID, v.receipt("rc-1", "hub-a", "user-1", "tok-1")); !errors.Is(err, ErrChallengeInvalid) {
 		t.Errorf("superseded challenge: got %v, want ErrChallengeInvalid", err)
 	}
-	other := scope(t, "inv-2", purposeJoin, tm.ID, RoleWorker, "", "", "other")
+	other := scope(t, "inv-2", PurposeJoin, tm.ID, RoleWorker, "", "", "other")
 	if _, err := s.redeemForTest(ctx, "r-other", other, v, newer.ID, v.receipt("rc-2", "hub-a", "user-2", "tok-2")); !errors.Is(err, ErrChallengeInvalid) {
 		t.Errorf("challenge of another invitation: got %v, want ErrChallengeInvalid", err)
 	}
@@ -508,7 +508,7 @@ func TestConcurrentCompletionsConsumeOnce(t *testing.T) {
 	ctx := context.Background()
 	v := newFakeVerifier()
 	tm := mustTeam(t, s, "t1", "crew")
-	sc := scope(t, "inv-1", purposeJoin, tm.ID, RoleWorker, "", "", "builder")
+	sc := scope(t, "inv-1", PurposeJoin, tm.ID, RoleWorker, "", "", "builder")
 	ch, err := s.issueForTest(ctx, "issue", sc)
 	if err != nil {
 		t.Fatal(err)
@@ -545,7 +545,7 @@ func TestRedemptionIsAtomic(t *testing.T) {
 	ctx := context.Background()
 	v := newFakeVerifier()
 	tm := mustTeam(t, s, "t1", "crew")
-	sc := scope(t, "inv-1", purposeJoin, tm.ID, RoleWorker, "", "", "builder")
+	sc := scope(t, "inv-1", PurposeJoin, tm.ID, RoleWorker, "", "", "builder")
 	ch, err := s.issueForTest(ctx, "issue", sc)
 	if err != nil {
 		t.Fatal(err)
@@ -574,7 +574,7 @@ func TestReceiptIsNeverStoredOrPrinted(t *testing.T) {
 	v := newFakeVerifier()
 	tm := mustTeam(t, s, "t1", "crew")
 	const value = "receipt-SECRET-4f7a"
-	sc := scope(t, "inv-1", purposeJoin, tm.ID, RoleWorker, "", "", "builder")
+	sc := scope(t, "inv-1", PurposeJoin, tm.ID, RoleWorker, "", "", "builder")
 	ch, err := s.issueForTest(ctx, "issue", sc)
 	if err != nil {
 		t.Fatal(err)
@@ -616,35 +616,35 @@ func TestInvitationScopeRules(t *testing.T) {
 		make func() error
 	}{
 		{"join naming an agent", func() error {
-			_, err := newInvitationScope("i", purposeJoin, "t", RoleWorker, "hub-a", "agent", "", "label")
+			_, err := newInvitationScope("i", PurposeJoin, "t", RoleWorker, "hub-a", "agent", "", "label")
 			return err
 		}},
 		{"join without a label", func() error {
-			_, err := newInvitationScope("i", purposeJoin, "t", RoleWorker, "hub-a", "", "", "")
+			_, err := newInvitationScope("i", PurposeJoin, "t", RoleWorker, "hub-a", "", "", "")
 			return err
 		}},
 		{"link without an agent", func() error {
-			_, err := newInvitationScope("i", purposeLink, "t", RoleWorker, "hub-a", "", "", "")
+			_, err := newInvitationScope("i", PurposeLink, "t", RoleWorker, "hub-a", "", "", "")
 			return err
 		}},
 		{"rebind without a pinned user", func() error {
-			_, err := newInvitationScope("i", purposeRebind, "t", RoleWorker, "hub-a", "agent", "", "")
+			_, err := newInvitationScope("i", PurposeRebind, "t", RoleWorker, "hub-a", "agent", "", "")
 			return err
 		}},
 		{"unknown role", func() error {
-			_, err := newInvitationScope("i", purposeJoin, "t", Role("admin"), "hub-a", "", "", "label")
+			_, err := newInvitationScope("i", PurposeJoin, "t", Role("admin"), "hub-a", "", "", "label")
 			return err
 		}},
 		{"invalid hub", func() error {
-			_, err := newInvitationScope("i", purposeJoin, "t", RoleWorker, "hub a", "", "", "label")
+			_, err := newInvitationScope("i", PurposeJoin, "t", RoleWorker, "hub a", "", "", "label")
 			return err
 		}},
 		{"invalid UTF-8", func() error {
-			_, err := newInvitationScope("i\xff", purposeJoin, "t", RoleWorker, "hub-a", "", "", "label")
+			_, err := newInvitationScope("i\xff", PurposeJoin, "t", RoleWorker, "hub-a", "", "", "label")
 			return err
 		}},
 		{"unknown purpose", func() error {
-			_, err := newInvitationScope("i", linkPurpose("admin"), "t", RoleWorker, "hub-a", "", "", "label")
+			_, err := newInvitationScope("i", InvitationPurpose("admin"), "t", RoleWorker, "hub-a", "", "", "label")
 			return err
 		}},
 	}

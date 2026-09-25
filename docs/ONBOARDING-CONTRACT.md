@@ -134,7 +134,9 @@ operator        aicrew                   client                 aimem
 | `join`: verified user already linked to agent X | not refused: X gains the membership, and no new agent is created |
 | `join`: verified user not linked | new agent created with the intended label, then linked and given the membership |
 | `link`: bound agent unlinked | link set, membership created |
+| `link`: bound agent already linked to the verified user | membership created; link unchanged |
 | `link`: bound agent linked to a different user | `identity_mismatch` (needs `rebind`) |
+| `link` or `rebind`: verified user already linked to another agent | `identity_already_linked` (one user, one agent) |
 | `rebind`: bound agent has outstanding work | `work_outstanding` |
 | `rebind`: allowed | link replaced, old link kept in audit, every session of the agent ended and its generation advanced |
 | Agent already an active member of the team with a different role | `role_conflict` (role changes are operator operations) |

@@ -265,8 +265,11 @@ func TestSchemaFromNewerBuildIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Close()
-	if _, err := Open(ctx, path); !errors.Is(err, ErrSchemaTooNew) {
-		t.Fatalf("got %v, want ErrSchemaTooNew", err)
+	// The second attempt proves the failed first one released its lock.
+	for range 2 {
+		if _, err := Open(ctx, path); !errors.Is(err, ErrSchemaTooNew) {
+			t.Fatalf("got %v, want ErrSchemaTooNew", err)
+		}
 	}
 }
 

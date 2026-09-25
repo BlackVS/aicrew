@@ -13,6 +13,16 @@ one toolchain and storage engine. The store opens the database in WAL mode
 with foreign keys on, full sync, a busy timeout, and write transactions that
 take the lock at `BEGIN`, so concurrent commands serialize instead of failing.
 
+One store process serves a database file. `Open` holds an exclusive
+operating-system lock on `<database>.lock` (`flock` on Linux, macOS and the
+BSDs, `LockFileEx` on Windows) and refuses a second opener with
+`store_in_use`, in the same process or another. The lock ends with `Close`
+or with the process, however it ends; the `.lock` file stays behind and is
+harmless, so there is nothing to clean up after a crash. Symbolic links are
+resolved first, so every spelling of a path shares the lock. Hard links to
+the database and network file systems are not supported (SQLite's WAL mode
+needs a local file system anyway).
+
 ## Dependencies
 
 - Every module version is pinned in `go.mod`, and `go.sum` holds the
@@ -23,8 +33,13 @@ take the lock at `BEGIN`, so concurrent commands serialize instead of failing.
 - GitHub Actions are pinned to a commit SHA, with the release tag in a
   comment.
 
-Current direct dependency: `modernc.org/sqlite v1.58.0` (published
-2026-09-01, the same version aimem uses).
+Current direct dependencies:
+
+- `modernc.org/sqlite v1.58.0` (published 2026-09-01, the same version aimem
+  uses).
+- `golang.org/x/sys v0.47.0` (published 2026-06-30, Go project), for the
+  store's file lock. It was already in the module graph through the SQLite
+  driver at this version.
 
 ## Checks
 

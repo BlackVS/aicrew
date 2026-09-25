@@ -230,8 +230,10 @@ the original result, and a changed input under the same key is a conflict.
 A command that asks aimem before its transaction, such as an identity proof
 or an invitation completion, holds its key while it runs: an identical retry
 that arrives meanwhile waits and then returns the original's result, or is
-evaluated anew if the original committed nothing. A cancelled or bounded-out
-wait ends with the retryable `request_in_progress` and changes nothing.
+evaluated anew if the original committed nothing. A wait that passes
+aicrew's bound ends with the retryable `request_in_progress`; one the caller
+cancels, or whose deadline passes, ends with the caller's own cancellation.
+Neither changes anything.
 Audit records hold the linked actor IDs, agent, session and generation,
 profile snapshot (model and client), process pin, task and attempt
 references and receipt, and never a secret, session handle or proof.

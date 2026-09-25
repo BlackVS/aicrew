@@ -48,7 +48,7 @@ Provider authentication stays in client-supported storage.
 
 The future product's agent-home layout is a design requirement, not something
 to install over this development checkout. `repos/`, `worktrees/`, credential
-naming and managed initial docs are covered by the workspace contract task.
+naming and managed initial docs are defined in `docs/WORKSPACE.md`.
 
 `docs/SESSION-STATE.md` is a local, gitignored single-writer handoff, at most
 50 lines: owner/date, objective, verified milestones, next, one-line pickup.

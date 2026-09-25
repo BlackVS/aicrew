@@ -218,31 +218,31 @@ func (s *Store) GetInvitation(ctx context.Context, id string) (Invitation, error
 // resolveForBegin finds the invitation for a presented code when a holder
 // starts redeeming it. The invitation must be issued (not locked) and
 // unexpired. Every refusal is ErrInvitationInvalid.
-func resolveForBegin(ctx context.Context, tx *sql.Tx, code Secret, now time.Time) (Invitation, InvitationScope, error) {
-	return resolveInvitation(ctx, tx, code, now, InvitationIssued)
+func resolveForBegin(ctx context.Context, q querier, code Secret, now time.Time) (Invitation, InvitationScope, error) {
+	return resolveInvitation(ctx, q, code, now, InvitationIssued)
 }
 
 // resolveForCompletion finds the invitation when a holder completes
 // redemption. A locked invitation still completes its last allowed attempt;
 // the challenge check ensures only the newest challenge counts.
-func resolveForCompletion(ctx context.Context, tx *sql.Tx, code Secret, now time.Time) (Invitation, InvitationScope, error) {
-	return resolveInvitation(ctx, tx, code, now, InvitationIssued, InvitationLocked)
+func resolveForCompletion(ctx context.Context, q querier, code Secret, now time.Time) (Invitation, InvitationScope, error) {
+	return resolveInvitation(ctx, q, code, now, InvitationIssued, InvitationLocked)
 }
 
-func resolveInvitation(ctx context.Context, tx *sql.Tx, code Secret, now time.Time, allowed ...InvitationState) (Invitation, InvitationScope, error) {
+func resolveInvitation(ctx context.Context, q querier, code Secret, now time.Time, allowed ...InvitationState) (Invitation, InvitationScope, error) {
 	digest, err := invitationCodeDigest(code)
 	if err != nil {
 		return Invitation{}, InvitationScope{}, ErrInvitationInvalid
 	}
 	var id string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM invitations WHERE code_digest = ?`, digest).Scan(&id)
+	err = q.QueryRowContext(ctx, `SELECT id FROM invitations WHERE code_digest = ?`, digest).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Invitation{}, InvitationScope{}, ErrInvitationInvalid
 	}
 	if err != nil {
 		return Invitation{}, InvitationScope{}, fmt.Errorf("find invitation: %w", err)
 	}
-	inv, err := getInvitation(ctx, tx, id)
+	inv, err := getInvitation(ctx, q, id)
 	if err != nil {
 		return Invitation{}, InvitationScope{}, err
 	}
@@ -258,6 +258,7 @@ func resolveInvitation(ctx context.Context, tx *sql.Tx, code Secret, now time.Ti
 	if err != nil {
 		return Invitation{}, InvitationScope{}, fmt.Errorf("stored invitation %s: %w", inv.ID, err)
 	}
+	sc.expiresAt = inv.ExpiresAt
 	return inv, sc, nil
 }
 

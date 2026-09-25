@@ -44,6 +44,9 @@ type InvitationScope struct {
 	agentID        string // required for link and rebind
 	expectedUserID string // required for rebind; optional otherwise
 	label          string // label for a new agent created by join
+	// expiresAt is the invitation's deadline when the scope was resolved
+	// from the store; a challenge never outlives it. Zero means unknown.
+	expiresAt time.Time
 }
 
 func newInvitationScope(invitationID string, purpose InvitationPurpose, teamID string, role Role,
@@ -100,7 +103,7 @@ type LinkResult struct {
 
 // issueInvitationChallenge issues a challenge for an invitation inside the
 // caller's transaction. It supersedes any earlier pending challenge for the
-// same invitation.
+// same invitation, and its deadline never passes the invitation's expiry.
 func issueInvitationChallenge(ctx context.Context, tx *sql.Tx, sc InvitationScope, now time.Time) (Challenge, error) {
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE challenges SET state = 'superseded', updated_at = ?
@@ -108,7 +111,7 @@ func issueInvitationChallenge(ctx context.Context, tx *sql.Tx, sc InvitationScop
 		formatTime(now), sc.invitationID); err != nil {
 		return Challenge{}, fmt.Errorf("supersede challenges: %w", err)
 	}
-	return insertChallenge(ctx, tx, challengeInvitation, "", sc.invitationID, sc.hubID, now)
+	return insertChallenge(ctx, tx, challengeInvitation, "", sc.invitationID, sc.hubID, now, sc.expiresAt)
 }
 
 // bindInvitation applies an invitation's binding rules for an identity the

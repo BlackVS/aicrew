@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,58 +11,15 @@ import (
 	"time"
 )
 
-// beginForTest and completeForTest play the future redemption command: each
-// runs the package-internal invitation operations with the crew-core 2b
-// binding inside one store command, which is how crew-onboarding will
-// compose them.
+// beginForTest and completeForTest call the redemption commands with the
+// argument order the invitation tests were written against.
 
 func (s *Store) beginForTest(ctx context.Context, key string, code Secret) (Challenge, error) {
-	var out Challenge
-	err := s.run(ctx, Caller{}, command{
-		op: "test.begin", key: key, input: struct{ Key string }{key}, authorize: anyCaller,
-		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
-			inv, sc, err := resolveForBegin(ctx, tx, code, now)
-			if err != nil {
-				return nil, err
-			}
-			if _, err := recordBeginAttempt(ctx, tx, inv, now); err != nil {
-				return nil, err
-			}
-			return issueInvitationChallenge(ctx, tx, sc, now)
-		},
-	}, &out)
-	return out, err
+	return s.BeginRedemption(ctx, key, code)
 }
 
 func (s *Store) completeForTest(ctx context.Context, key string, code Secret, v Verifier, challengeID string, receipt Secret) (LinkResult, error) {
-	ch, err := s.pendingChallenge(ctx, challengeID, challengeInvitation)
-	if err != nil {
-		return LinkResult{}, err
-	}
-	id, err := verifyChallenge(ctx, v, ch, receipt, "test-complete:"+key)
-	if err != nil {
-		return LinkResult{}, err
-	}
-	var out LinkResult
-	err = s.run(ctx, Caller{}, command{
-		op: "test.complete", scope: challengeID, key: key,
-		input: struct{ ChallengeID string }{challengeID}, authorize: anyCaller,
-		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
-			inv, sc, err := resolveForCompletion(ctx, tx, code, now)
-			if err != nil {
-				return nil, err
-			}
-			res, err := s.bindInvitation(ctx, tx, sc, challengeID, id, now)
-			if err != nil {
-				return nil, err
-			}
-			if _, err := markInvitationRedeemed(ctx, tx, inv, now); err != nil {
-				return nil, err
-			}
-			return res, nil
-		},
-	}, &out)
-	return out, err
+	return s.CompleteRedemption(ctx, v, key, code, challengeID, receipt)
 }
 
 func newCode(t *testing.T) Secret {
@@ -373,9 +329,10 @@ func TestAttemptLimit(t *testing.T) {
 	if _, err := s.beginForTest(ctx, "b-over", code); err != ErrInvitationInvalid { //nolint:errorlint
 		t.Fatalf("begin past the limit: %v", err)
 	}
-	// A retried begin replays its receipt and is not counted again.
-	if _, err := s.beginForTest(ctx, "b0", code); err != nil {
-		t.Fatalf("retry of the first begin: %v", err)
+	// Retrying the first begin is not counted again. Its challenge was
+	// superseded, so the retry is refused rather than replayed.
+	if _, err := s.beginForTest(ctx, "b0", code); !errors.Is(err, ErrChallengeInvalid) {
+		t.Fatalf("retry of a superseded begin: %v", err)
 	}
 	if again, _ := s.GetInvitation(ctx, inv.ID); again.Attempts != maxInvitationAttempts {
 		t.Fatalf("retry counted as an attempt: %d", again.Attempts)
@@ -441,7 +398,7 @@ func TestRedemptionComposesAtomically(t *testing.T) {
 
 	injected := errors.New("injected")
 	s.beforeReceipt = func(op string) error {
-		if op == "test.complete" {
+		if op == opCompleteRedemption {
 			return injected
 		}
 		return nil

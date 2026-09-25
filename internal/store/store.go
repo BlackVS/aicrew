@@ -141,6 +141,7 @@ var schemaV1 = []string{
 		team_id    TEXT NOT NULL REFERENCES teams (id),
 		agent_id   TEXT NOT NULL REFERENCES agents (id),
 		role       TEXT NOT NULL CHECK (role IN ('coordinator', 'worker', 'independent')),
+		removed    INTEGER NOT NULL DEFAULT 0 CHECK (removed IN (0, 1)),
 		revision   INTEGER NOT NULL,
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,

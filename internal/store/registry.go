@@ -539,12 +539,26 @@ func (s *Store) AddMember(ctx context.Context, c Caller, key, teamID, agentID st
 			} else if !errors.Is(err, ErrNotFound) {
 				return nil, err
 			}
+			// A removed membership row is reactivated, not recreated, so the
+			// pair's revision keeps increasing and a delayed command that
+			// expected an old revision cannot match the new membership.
 			at := formatTime(now)
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO memberships (team_id, agent_id, role, revision, created_at, updated_at)
-				 VALUES (?, ?, ?, 1, ?, ?)`,
-				teamID, agentID, string(role), at, at); err != nil {
-				return nil, fmt.Errorf("insert membership: %w", err)
+			res, err := tx.ExecContext(ctx,
+				`UPDATE memberships SET role = ?, removed = 0, revision = revision + 1, created_at = ?, updated_at = ?
+				 WHERE team_id = ? AND agent_id = ? AND removed = 1`,
+				string(role), at, at, teamID, agentID)
+			if err != nil {
+				return nil, fmt.Errorf("reactivate membership: %w", err)
+			}
+			if n, err := res.RowsAffected(); err != nil {
+				return nil, err
+			} else if n == 0 {
+				if _, err := tx.ExecContext(ctx,
+					`INSERT INTO memberships (team_id, agent_id, role, revision, created_at, updated_at)
+					 VALUES (?, ?, ?, 1, ?, ?)`,
+					teamID, agentID, string(role), at, at); err != nil {
+					return nil, fmt.Errorf("insert membership: %w", err)
+				}
 			}
 			return getMembership(ctx, tx, teamID, agentID)
 		},
@@ -574,13 +588,13 @@ func (s *Store) SetMemberRole(ctx context.Context, c Caller, key, teamID, agentI
 		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
 			res, err := tx.ExecContext(ctx,
 				`UPDATE memberships SET role = ?, revision = revision + 1, updated_at = ?
-				 WHERE team_id = ? AND agent_id = ? AND revision = ?`,
+				 WHERE team_id = ? AND agent_id = ? AND revision = ? AND removed = 0`,
 				string(role), formatTime(now), teamID, agentID, expectedRevision)
 			if err != nil {
 				return nil, fmt.Errorf("set member role: %w", err)
 			}
 			if err := casUpdate(ctx, tx, res,
-				`SELECT 1 FROM memberships WHERE team_id = ? AND agent_id = ?`, teamID, agentID); err != nil {
+				`SELECT 1 FROM memberships WHERE team_id = ? AND agent_id = ? AND removed = 0`, teamID, agentID); err != nil {
 				return nil, fmt.Errorf("set member role %s/%s: %w", teamID, agentID, err)
 			}
 			return getMembership(ctx, tx, teamID, agentID)
@@ -595,22 +609,24 @@ type memberRemove struct {
 	ExpectedRevision int64  `json:"expected_revision"`
 }
 
-// RemoveMember removes a membership. Operator only. The audit log keeps the
-// history. Later increments add the outstanding-work check the contract
-// requires before removal; this increment has no sessions or work.
+// RemoveMember removes a membership. Operator only. The row is kept, marked
+// removed, with its revision advanced, and the audit log keeps the history.
+// Later increments add the outstanding-work check the contract requires
+// before removal; this increment has no sessions or work.
 func (s *Store) RemoveMember(ctx context.Context, c Caller, key, teamID, agentID string, expectedRevision int64) error {
 	in := memberRemove{TeamID: teamID, AgentID: agentID, ExpectedRevision: expectedRevision}
 	return s.run(ctx, c, command{
 		op: opRemoveMember, scope: teamID, key: key, input: in, authorize: requireOperator,
 		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
 			res, err := tx.ExecContext(ctx,
-				`DELETE FROM memberships WHERE team_id = ? AND agent_id = ? AND revision = ?`,
-				teamID, agentID, expectedRevision)
+				`UPDATE memberships SET removed = 1, revision = revision + 1, updated_at = ?
+				 WHERE team_id = ? AND agent_id = ? AND revision = ? AND removed = 0`,
+				formatTime(now), teamID, agentID, expectedRevision)
 			if err != nil {
 				return nil, fmt.Errorf("remove member: %w", err)
 			}
 			if err := casUpdate(ctx, tx, res,
-				`SELECT 1 FROM memberships WHERE team_id = ? AND agent_id = ?`, teamID, agentID); err != nil {
+				`SELECT 1 FROM memberships WHERE team_id = ? AND agent_id = ? AND removed = 0`, teamID, agentID); err != nil {
 				return nil, fmt.Errorf("remove member %s/%s: %w", teamID, agentID, err)
 			}
 			return in, nil
@@ -625,7 +641,7 @@ func (s *Store) ListMembers(ctx context.Context, teamID string) ([]Membership, e
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT team_id, agent_id, role, revision, created_at, updated_at FROM memberships
-		 WHERE team_id = ? ORDER BY created_at, agent_id`, teamID)
+		 WHERE team_id = ? AND removed = 0 ORDER BY created_at, agent_id`, teamID)
 	if err != nil {
 		return nil, fmt.Errorf("list members: %w", err)
 	}
@@ -644,7 +660,7 @@ func (s *Store) ListMembers(ctx context.Context, teamID string) ([]Membership, e
 func getMembership(ctx context.Context, q querier, teamID, agentID string) (Membership, error) {
 	row := q.QueryRowContext(ctx,
 		`SELECT team_id, agent_id, role, revision, created_at, updated_at FROM memberships
-		 WHERE team_id = ? AND agent_id = ?`, teamID, agentID)
+		 WHERE team_id = ? AND agent_id = ? AND removed = 0`, teamID, agentID)
 	m, err := scanMembership(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Membership{}, fmt.Errorf("membership %s/%s: %w", teamID, agentID, ErrNotFound)

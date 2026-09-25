@@ -378,6 +378,46 @@ func TestMembershipLifecycle(t *testing.T) {
 	}
 }
 
+// A command prepared against a removed membership must not act on a later
+// re-added membership of the same pair: revisions are never reused.
+func TestStaleMembershipCommandsDoNotTouchReplacement(t *testing.T) {
+	s, _ := openTemp(t)
+	ctx := context.Background()
+	op := operator(t)
+	a := mustAgent(t, s, "a1", "builder")
+	tm := mustTeam(t, s, "t1", "crew")
+
+	old, err := s.AddMember(ctx, op, "add-1", tm.ID, a.ID, RoleWorker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveMember(ctx, op, "remove-1", tm.ID, a.ID, old.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetMemberRole(ctx, op, "role-removed", tm.ID, a.ID, old.Revision, RoleIndependent); !errors.Is(err, ErrNotFound) {
+		t.Errorf("role change on removed membership: got %v, want ErrNotFound", err)
+	}
+	replacement, err := s.AddMember(ctx, op, "add-2", tm.ID, a.ID, RoleCoordinator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.Revision <= old.Revision {
+		t.Fatalf("replacement revision %d reuses or precedes old revision %d", replacement.Revision, old.Revision)
+	}
+
+	// Delayed commands that expected the old membership's revision.
+	if _, err := s.SetMemberRole(ctx, op, "role-stale", tm.ID, a.ID, old.Revision, RoleWorker); !errors.Is(err, ErrRevisionConflict) {
+		t.Errorf("stale role change: got %v, want ErrRevisionConflict", err)
+	}
+	if err := s.RemoveMember(ctx, op, "remove-stale", tm.ID, a.ID, old.Revision); !errors.Is(err, ErrRevisionConflict) {
+		t.Errorf("stale removal: got %v, want ErrRevisionConflict", err)
+	}
+	members, err := s.ListMembers(ctx, tm.ID)
+	if err != nil || len(members) != 1 || members[0].Role != RoleCoordinator || members[0].Revision != replacement.Revision {
+		t.Fatalf("replacement after stale commands = %+v, %v", members, err)
+	}
+}
+
 // Concurrent conflicting writes: exactly one wins, the rest see a conflict.
 func TestConcurrentConflictingWritesHaveOneWinner(t *testing.T) {
 	s, _ := openTemp(t)

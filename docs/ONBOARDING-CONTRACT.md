@@ -166,12 +166,19 @@ none of them do.
 | Begin reply | Retry with the same redemption key. If the recorded challenge is still pending and unexpired and the invitation is still usable, the same challenge comes back and no attempt is counted. If the challenge has expired or been superseded, the retry is refused as `challenge_invalid`; the client recovers by beginning again with a **new** redemption key, which counts one attempt and succeeds only while the invitation is valid and under its attempt limit. |
 | Aimem receipt reply | Ask aimem for another receipt for the same challenge (context contract). |
 | Aimem's reply to aicrew's redemption call | Aicrew retries the redemption with the same request key and gets the same result (context contract) before it commits or refuses anything. |
-| Complete reply | Retry with the same completion key. The recorded result comes back without a second effect. |
+| Complete reply | Retry with the same completion key. The recorded result comes back without a second effect, and aimem is not asked again. |
+| Complete retried while the original is still running | The retry waits for the original, then returns its recorded result. If the original committed nothing, the retry is evaluated as a new completion with its own outcome. A wait that is cancelled or passes its bound ends with the retryable `request_in_progress` and changes nothing; the client retries with the same key. |
 | Complete retried with a new key after redemption | Refused as `invitation_invalid`. The client continues by starting a session through proof, since it is now linked. |
 | Aimem unreachable, or it refuses the receipt | Nothing is created or changed, and the invitation keeps its state. While the challenge is valid, the client completes it again with a new aimem receipt for the same challenge. Otherwise it begins again with a new redemption key, which a `locked` invitation refuses. |
 | Client state lost before completion | Rerun the bootstrap with the same code. The new begin supersedes the old challenge. |
 
 Unavailable or failed verification never creates or changes a link.
+
+A retry answered from a recorded result never asks aimem again, and neither
+does one that waited for an original that committed. If the original
+committed nothing, the retry asks aimem for itself. Completions with
+different keys are separate attempts: each may reach aimem, and at most one
+commits.
 
 **Client recovery is automatic.** The future client bootstrap handles a
 `challenge_invalid` refusal of a begin retry on its own: it generates a new
@@ -181,7 +188,8 @@ redeemed, locked or unknown), which needs a new invitation from the
 operator. A redemption key identifies one begin and its retry receipt never
 changes, so a new challenge always comes from a new key. This recovery rule
 was accepted with the operator's merge of the redemption implementation
-(aicrew PR #9).
+(aicrew PR #9). The client also retries a `request_in_progress` refusal
+of a completion with the same key.
 
 ## Expiry and revocation
 

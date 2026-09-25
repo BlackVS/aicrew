@@ -88,6 +88,9 @@ func (s *Store) BeginRedemption(ctx context.Context, key string, code Secret) (C
 // the holder obtained for the challenge.
 //
 // Order of work:
+//  0. An identical completion (same key and code) still running is waited
+//     for, so a retry that overlaps its original answers from the
+//     original's receipt instead of racing it (inflight.go).
 //  1. A retry of an already committed completion is answered from its
 //     receipt without calling aimem again.
 //  2. Pre-checks on a read snapshot, writing nothing: the invitation is
@@ -112,6 +115,11 @@ func (s *Store) CompleteRedemption(ctx context.Context, v Verifier, key string, 
 		input:     redemptionComplete{CodeDigest: digest, ChallengeID: challengeID},
 		authorize: anyCaller,
 	}
+	release, err := s.flights.acquire(ctx, holder, cmd, s.flightWait)
+	if err != nil {
+		return out, err
+	}
+	defer release()
 	if done, err := s.receiptExists(ctx, holder, cmd); err != nil || done {
 		if err != nil {
 			return out, err
@@ -124,6 +132,9 @@ func (s *Store) CompleteRedemption(ctx context.Context, v Verifier, key string, 
 		return out, s.run(ctx, holder, cmd, &out)
 	}
 
+	if s.afterReceiptLookup != nil {
+		s.afterReceiptLookup(cmd.op)
+	}
 	var ch Challenge
 	err = s.snapshot(ctx, func(q querier) error {
 		now := s.now()

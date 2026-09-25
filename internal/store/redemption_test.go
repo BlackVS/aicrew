@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -251,14 +252,15 @@ func TestConcurrentCompletions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	calls := v.calls
 	results, errs := run(code2, ch2.ID, func(int) string { return "same-key" })
 	for i, err := range errs {
-		if err != nil && !errors.Is(err, ErrChallengeInvalid) {
-			t.Errorf("same-key completion %d: %v", i, err)
+		if err != nil || results[i].AgentID == "" || !reflect.DeepEqual(results[i], results[0]) {
+			t.Errorf("same-key completion %d = %+v, %v; want %+v", i, results[i], err, results[0])
 		}
-		if err == nil && results[i].AgentID == "" {
-			t.Errorf("same-key completion %d returned no result", i)
-		}
+	}
+	if v.calls != calls+1 {
+		t.Errorf("same-key completions asked aimem %d times, want once", v.calls-calls)
 	}
 	if count(t, s, "agents") != 2 {
 		t.Fatalf("same-key completions created %d agents in total, want 2", count(t, s, "agents"))

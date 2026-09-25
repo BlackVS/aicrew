@@ -23,6 +23,9 @@
 //   - Reads that span several statements see one consistent snapshot.
 //   - Each mutation commits its state change, audit record and idempotency
 //     receipt in one transaction.
+//   - An identity proof or redemption retried while the original is still
+//     running waits for it and then answers from its receipt (inflight.go).
+//     This holds within one Store, so a database file is served by one Store.
 //
 // The package is internal and has no network, CLI or MCP surface.
 package store
@@ -51,9 +54,17 @@ type Store struct {
 	rdb *sql.DB // reads: deferred, query-only transactions
 	now func() time.Time
 
+	// flights serializes identical commands that call out before their
+	// transaction; flightWait bounds how long one waits (inflight.go).
+	flights    inflight
+	flightWait time.Duration
+
 	// beforeReceipt, when set by tests, runs after the state change and audit
 	// record are written and before the receipt, to prove rollback.
 	beforeReceipt func(op string) error
+	// afterReceiptLookup, when set by tests, runs when a command that calls
+	// out before its transaction found no receipt, to force interleavings.
+	afterReceiptLookup func(op string)
 
 	// outstandingWork reports whether an agent holds work that must be
 	// reconciled before its identity changes. Offers and attempts arrive
@@ -80,8 +91,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
 	s := &Store{
-		db:  db,
-		now: func() time.Time { return time.Now().UTC() },
+		db:         db,
+		now:        func() time.Time { return time.Now().UTC() },
+		flightWait: defaultInflightWait,
 		outstandingWork: func(context.Context, *sql.Tx, string) (bool, error) {
 			return false, nil
 		},

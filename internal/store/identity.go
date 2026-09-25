@@ -149,13 +149,19 @@ type agentProofRequest struct {
 // and the agent's active sessions are rebound to it under a new generation.
 //
 // The verifier runs before any write; if it fails or is unavailable, nothing
-// changes. A retry with the same key returns the recorded result.
+// changes. A retry with the same key returns the recorded result; one that
+// overlaps its still running original waits for it first (inflight.go).
 func (s *Store) CompleteAgentProof(ctx context.Context, c Caller, v Verifier, key, challengeID string, receipt Secret) (ProofResult, error) {
 	var out ProofResult
 	cmd := command{
 		op: opCompleteAgentProof, scope: challengeID, key: key,
 		input: agentProofRequest{ChallengeID: challengeID}, authorize: anyCaller,
 	}
+	release, err := s.flights.acquire(ctx, c, cmd, s.flightWait)
+	if err != nil {
+		return out, err
+	}
+	defer release()
 	if done, err := s.receiptExists(ctx, c, cmd); err != nil || done {
 		if err != nil {
 			return out, err
@@ -166,6 +172,9 @@ func (s *Store) CompleteAgentProof(ctx context.Context, c Caller, v Verifier, ke
 		return out, s.run(ctx, c, cmd, &out)
 	}
 
+	if s.afterReceiptLookup != nil {
+		s.afterReceiptLookup(cmd.op)
+	}
 	ch, err := s.pendingChallenge(ctx, challengeID, challengeAgent)
 	if err != nil {
 		return out, err

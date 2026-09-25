@@ -167,6 +167,21 @@ func skipUnlessCI(t *testing.T, err error) {
 	t.Skipf("cannot set up locally: %v", err)
 }
 
+// A symlink to a database that does not exist yet: the first Open creates
+// the target through the link, and every spelling must still share its lock.
+func TestDanglingSymlinkSharesLock(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.db")
+	link := filepath.Join(dir, "link.db")
+	if err := os.Symlink(target, link); err != nil {
+		skipUnlessCI(t, err)
+	}
+	s := mustOpen(t, link)
+	defer s.Close()
+	wantInUse(t, link)
+	wantInUse(t, target)
+}
+
 // A process that holds the store and then ends, by exiting without Close or
 // by being killed, leaves nothing that blocks the next Open.
 func TestLockEndsWithHoldingProcess(t *testing.T) {

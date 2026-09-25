@@ -1,0 +1,14 @@
+# Credentials and local operation only
+.creds/
+.work/
+.aimem.json
+docs/SESSION-STATE.md
+.claude/settings.local.json
+# Build artifacts
+/dist/
+/bin/
+
+# Local environment secrets
+/.env
+/.env.*
+!/.env.example

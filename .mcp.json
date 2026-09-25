@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "aimem": {
+      "command": "aimem",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

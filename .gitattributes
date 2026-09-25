@@ -1,0 +1,16 @@
+# Normalize line endings at the Git boundary; contributors use Windows and
+# Linux hosts.
+* text=auto
+
+# LF always: anything executed or parsed on Linux, and Go source.
+*.go   text eol=lf
+*.sh   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+
+# CRLF: PowerShell scripts are edited and run on Windows.
+*.ps1  text eol=crlf

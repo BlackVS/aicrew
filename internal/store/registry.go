@@ -31,11 +31,14 @@ type Profile struct {
 	ClientVersion string `json:"client_version"`
 }
 
-// LinkedActor is the verified aimem identity of an agent. Nothing in this
-// increment sets it; it stays nil until proof integration exists.
+// LinkedActor is the verified aimem identity of an agent: the stable hub and
+// user IDs, plus the ID of the individual aimem credential last proven. Only a
+// verified proof sets it (identity.go); one aimem user links to at most one
+// agent.
 type LinkedActor struct {
-	HubID  string `json:"hub_id"`
-	UserID string `json:"user_id"`
+	HubID   string `json:"hub_id"`
+	UserID  string `json:"user_id"`
+	TokenID string `json:"token_id"`
 }
 
 type Agent struct {
@@ -294,13 +297,15 @@ func getAgent(ctx context.Context, q querier, id string) (Agent, error) {
 	var (
 		a                  Agent
 		hubID, userID      sql.NullString
+		tokenID            sql.NullString
 		createdAt, updated string
 	)
 	err := q.QueryRowContext(ctx,
-		`SELECT id, label, model, client, client_version, linked_hub_id, linked_user_id, revision, created_at, updated_at
+		`SELECT id, label, model, client, client_version, linked_hub_id, linked_user_id, linked_token_id,
+		        revision, created_at, updated_at
 		 FROM agents WHERE id = ?`, id).
 		Scan(&a.ID, &a.Label, &a.Profile.Model, &a.Profile.Client, &a.Profile.ClientVersion,
-			&hubID, &userID, &a.Revision, &createdAt, &updated)
+			&hubID, &userID, &tokenID, &a.Revision, &createdAt, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Agent{}, fmt.Errorf("agent %s: %w", id, ErrNotFound)
 	}
@@ -308,7 +313,7 @@ func getAgent(ctx context.Context, q querier, id string) (Agent, error) {
 		return Agent{}, fmt.Errorf("read agent: %w", err)
 	}
 	if hubID.Valid {
-		a.Linked = &LinkedActor{HubID: hubID.String, UserID: userID.String}
+		a.Linked = &LinkedActor{HubID: hubID.String, UserID: userID.String, TokenID: tokenID.String}
 	}
 	if a.CreatedAt, err = parseTime(createdAt); err != nil {
 		return Agent{}, err
@@ -554,42 +559,48 @@ func (s *Store) AddMember(ctx context.Context, c Caller, key, teamID, agentID st
 			return nil
 		},
 		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
-			if _, err := getTeam(ctx, tx, teamID); err != nil {
-				return nil, err
-			}
-			if _, err := getAgent(ctx, tx, agentID); err != nil {
-				return nil, err
-			}
-			if _, err := getMembership(ctx, tx, teamID, agentID); err == nil {
-				return nil, fmt.Errorf("membership %s/%s: %w", teamID, agentID, ErrExists)
-			} else if !errors.Is(err, ErrNotFound) {
-				return nil, err
-			}
-			// A removed membership row is reactivated, not recreated, so the
-			// pair's revision keeps increasing and a delayed command that
-			// expected an old revision cannot match the new membership.
-			at := formatTime(now)
-			res, err := tx.ExecContext(ctx,
-				`UPDATE memberships SET role = ?, removed = 0, revision = revision + 1, created_at = ?, updated_at = ?
-				 WHERE team_id = ? AND agent_id = ? AND removed = 1`,
-				string(role), at, at, teamID, agentID)
-			if err != nil {
-				return nil, fmt.Errorf("reactivate membership: %w", err)
-			}
-			if n, err := res.RowsAffected(); err != nil {
-				return nil, err
-			} else if n == 0 {
-				if _, err := tx.ExecContext(ctx,
-					`INSERT INTO memberships (team_id, agent_id, role, revision, created_at, updated_at)
-					 VALUES (?, ?, ?, 1, ?, ?)`,
-					teamID, agentID, string(role), at, at); err != nil {
-					return nil, fmt.Errorf("insert membership: %w", err)
-				}
-			}
-			return getMembership(ctx, tx, teamID, agentID)
+			return addMembership(ctx, tx, teamID, agentID, role, now)
 		},
 	}, &out)
 	return out, err
+}
+
+// addMembership creates an active membership inside the caller's
+// transaction, or returns ErrExists if one is already active.
+func addMembership(ctx context.Context, tx *sql.Tx, teamID, agentID string, role Role, now time.Time) (Membership, error) {
+	if _, err := getTeam(ctx, tx, teamID); err != nil {
+		return Membership{}, err
+	}
+	if _, err := getAgent(ctx, tx, agentID); err != nil {
+		return Membership{}, err
+	}
+	if _, err := getMembership(ctx, tx, teamID, agentID); err == nil {
+		return Membership{}, fmt.Errorf("membership %s/%s: %w", teamID, agentID, ErrExists)
+	} else if !errors.Is(err, ErrNotFound) {
+		return Membership{}, err
+	}
+	// A removed membership row is reactivated, not recreated, so the pair's
+	// revision keeps increasing and a delayed command that expected an old
+	// revision cannot match the new membership.
+	at := formatTime(now)
+	res, err := tx.ExecContext(ctx,
+		`UPDATE memberships SET role = ?, removed = 0, revision = revision + 1, created_at = ?, updated_at = ?
+		 WHERE team_id = ? AND agent_id = ? AND removed = 1`,
+		string(role), at, at, teamID, agentID)
+	if err != nil {
+		return Membership{}, fmt.Errorf("reactivate membership: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return Membership{}, err
+	} else if n == 0 {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO memberships (team_id, agent_id, role, revision, created_at, updated_at)
+			 VALUES (?, ?, ?, 1, ?, ?)`,
+			teamID, agentID, string(role), at, at); err != nil {
+			return Membership{}, fmt.Errorf("insert membership: %w", err)
+		}
+	}
+	return getMembership(ctx, tx, teamID, agentID)
 }
 
 type memberRoleUpdate struct {

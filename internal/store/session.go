@@ -46,9 +46,12 @@ type Session struct {
 	State                 SessionState `json:"state"`
 	Generation            int64        `json:"generation"`
 	CoordinatorGeneration int64        `json:"coordinator_generation"`
-	LastSeenAt            time.Time    `json:"last_seen_at"`
-	CreatedAt             time.Time    `json:"created_at"`
-	UpdatedAt             time.Time    `json:"updated_at"`
+	// TokenID is the agent's aimem credential the session is bound to. A
+	// rotation rebinds it and advances the generation.
+	TokenID    string    `json:"token_id"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 const (
@@ -114,9 +117,9 @@ func (s *Store) StartSession(ctx context.Context, c Caller, key, teamID string) 
 			at := formatTime(now)
 			if _, err := tx.ExecContext(ctx,
 				`INSERT INTO sessions (id, team_id, agent_id, role, state, generation, coordinator_generation,
-				                       last_seen_at, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, 'active', 1, ?, ?, ?, ?)`,
-				id, teamID, c.id, string(m.Role), coordGen, at, at, at); err != nil {
+				                       token_id, last_seen_at, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?)`,
+				id, teamID, c.id, string(m.Role), coordGen, agent.Linked.TokenID, at, at, at); err != nil {
 				return nil, fmt.Errorf("insert session: %w", err)
 			}
 			return getSession(ctx, tx, id)
@@ -358,7 +361,7 @@ func bumpCoordinatorGeneration(ctx context.Context, tx *sql.Tx, teamID string) (
 }
 
 const sessionColumns = `id, team_id, agent_id, role, state, generation, coordinator_generation,
-	last_seen_at, created_at, updated_at`
+	token_id, last_seen_at, created_at, updated_at`
 
 func getSession(ctx context.Context, q querier, id string) (Session, error) {
 	sess, err := scanSession(q.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, id))
@@ -385,7 +388,7 @@ func scanSession(sc scanner) (Session, error) {
 		lastSeen, created, updated string
 	)
 	if err := sc.Scan(&s.ID, &s.TeamID, &s.AgentID, &role, &state, &s.Generation, &s.CoordinatorGeneration,
-		&lastSeen, &created, &updated); err != nil {
+		&s.TokenID, &lastSeen, &created, &updated); err != nil {
 		return Session{}, err
 	}
 	s.Role, s.State = Role(role), SessionState(state)

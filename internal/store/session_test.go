@@ -11,13 +11,12 @@ import (
 	"time"
 )
 
-// seedVerifiedLink stands in for verified proof integration, which does not
-// exist yet (crew-core 2b). Only tests may create a link; no production path
-// in this package sets one.
+// seedVerifiedLink writes a link directly, for tests that are about sessions
+// rather than proof. Production links come only from verified proofs.
 func seedVerifiedLink(t *testing.T, s *Store, agentID string) {
 	t.Helper()
-	if _, err := s.db.Exec(`UPDATE agents SET linked_hub_id = 'hub-test', linked_user_id = ? WHERE id = ?`,
-		"user-"+agentID, agentID); err != nil {
+	if _, err := s.db.Exec(`UPDATE agents SET linked_hub_id = 'hub-test', linked_user_id = ?, linked_token_id = ?
+		WHERE id = ?`, "user-"+agentID, "token-"+agentID, agentID); err != nil {
 		t.Fatalf("seed link: %v", err)
 	}
 }

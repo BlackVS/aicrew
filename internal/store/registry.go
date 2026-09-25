@@ -56,12 +56,16 @@ type ProjectRef struct {
 }
 
 type Team struct {
-	ID        string       `json:"id"`
-	Name      string       `json:"name"`
-	Projects  []ProjectRef `json:"projects"`
-	Revision  int64        `json:"revision"`
-	CreatedAt time.Time    `json:"created_at"`
-	UpdatedAt time.Time    `json:"updated_at"`
+	ID       string       `json:"id"`
+	Name     string       `json:"name"`
+	Projects []ProjectRef `json:"projects"`
+	Revision int64        `json:"revision"`
+	// CoordinatorGeneration advances whenever a coordinator session starts,
+	// resumes or ends. It is separate from Revision, which versions the
+	// team record itself.
+	CoordinatorGeneration int64     `json:"coordinator_generation"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 type Membership struct {
@@ -257,17 +261,28 @@ func (s *Store) SetAgentProfile(ctx context.Context, c Caller, key, agentID stri
 
 // GetAgent reads an agent by ID.
 func (s *Store) GetAgent(ctx context.Context, id string) (Agent, error) {
-	return getAgent(ctx, s.db, id)
+	var a Agent
+	err := s.snapshot(ctx, func(q querier) error {
+		var err error
+		a, err = getAgent(ctx, q, id)
+		return err
+	})
+	return a, err
 }
 
 // ResolveAgent finds the one agent with the given label. It returns
 // ErrAmbiguous rather than choosing when several agents share the label.
 func (s *Store) ResolveAgent(ctx context.Context, label string) (Agent, error) {
-	id, err := resolveLabel(ctx, s.db, `SELECT id FROM agents WHERE label = ? LIMIT 2`, "agent", label)
-	if err != nil {
-		return Agent{}, err
-	}
-	return getAgent(ctx, s.db, id)
+	var a Agent
+	err := s.snapshot(ctx, func(q querier) error {
+		id, err := resolveLabel(ctx, q, `SELECT id FROM agents WHERE label = ? LIMIT 2`, "agent", label)
+		if err != nil {
+			return err
+		}
+		a, err = getAgent(ctx, q, id)
+		return err
+	})
+	return a, err
 }
 
 type querier interface {
@@ -456,17 +471,28 @@ func insertProjects(ctx context.Context, tx *sql.Tx, teamID string, projects []P
 
 // GetTeam reads a team and its project list by ID.
 func (s *Store) GetTeam(ctx context.Context, id string) (Team, error) {
-	return getTeam(ctx, s.db, id)
+	var t Team
+	err := s.snapshot(ctx, func(q querier) error {
+		var err error
+		t, err = getTeam(ctx, q, id)
+		return err
+	})
+	return t, err
 }
 
 // ResolveTeam finds the one team with the given name, or returns
 // ErrAmbiguous when several share it.
 func (s *Store) ResolveTeam(ctx context.Context, name string) (Team, error) {
-	id, err := resolveLabel(ctx, s.db, `SELECT id FROM teams WHERE name = ? LIMIT 2`, "team", name)
-	if err != nil {
-		return Team{}, err
-	}
-	return getTeam(ctx, s.db, id)
+	var t Team
+	err := s.snapshot(ctx, func(q querier) error {
+		id, err := resolveLabel(ctx, q, `SELECT id FROM teams WHERE name = ? LIMIT 2`, "team", name)
+		if err != nil {
+			return err
+		}
+		t, err = getTeam(ctx, q, id)
+		return err
+	})
+	return t, err
 }
 
 func getTeam(ctx context.Context, q querier, id string) (Team, error) {
@@ -475,8 +501,8 @@ func getTeam(ctx context.Context, q querier, id string) (Team, error) {
 		createdAt, updated string
 	)
 	err := q.QueryRowContext(ctx,
-		`SELECT id, name, revision, created_at, updated_at FROM teams WHERE id = ?`, id).
-		Scan(&t.ID, &t.Name, &t.Revision, &createdAt, &updated)
+		`SELECT id, name, revision, coordinator_generation, created_at, updated_at FROM teams WHERE id = ?`, id).
+		Scan(&t.ID, &t.Name, &t.Revision, &t.CoordinatorGeneration, &createdAt, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Team{}, fmt.Errorf("team %s: %w", id, ErrNotFound)
 	}
@@ -573,7 +599,9 @@ type memberRoleUpdate struct {
 	Role             Role   `json:"role"`
 }
 
-// SetMemberRole changes a member's role. Operator only.
+// SetMemberRole changes a member's role. Operator only. It ends the member's
+// active session, advancing its generation; the member starts a new session
+// under the new role.
 func (s *Store) SetMemberRole(ctx context.Context, c Caller, key, teamID, agentID string, expectedRevision int64, role Role) (Membership, error) {
 	in := memberRoleUpdate{TeamID: teamID, AgentID: agentID, ExpectedRevision: expectedRevision, Role: role}
 	var out Membership
@@ -597,6 +625,9 @@ func (s *Store) SetMemberRole(ctx context.Context, c Caller, key, teamID, agentI
 				`SELECT 1 FROM memberships WHERE team_id = ? AND agent_id = ? AND removed = 0`, teamID, agentID); err != nil {
 				return nil, fmt.Errorf("set member role %s/%s: %w", teamID, agentID, err)
 			}
+			if err := endActiveSession(ctx, tx, teamID, agentID, now); err != nil {
+				return nil, err
+			}
 			return getMembership(ctx, tx, teamID, agentID)
 		},
 	}, &out)
@@ -611,6 +642,7 @@ type memberRemove struct {
 
 // RemoveMember removes a membership. Operator only. The row is kept, marked
 // removed, with its revision advanced, and the audit log keeps the history.
+// The member's active session ends and its generation advances.
 // Later increments add the outstanding-work check the contract requires
 // before removal; this increment has no sessions or work.
 func (s *Store) RemoveMember(ctx context.Context, c Caller, key, teamID, agentID string, expectedRevision int64) error {
@@ -629,6 +661,9 @@ func (s *Store) RemoveMember(ctx context.Context, c Caller, key, teamID, agentID
 				`SELECT 1 FROM memberships WHERE team_id = ? AND agent_id = ? AND removed = 0`, teamID, agentID); err != nil {
 				return nil, fmt.Errorf("remove member %s/%s: %w", teamID, agentID, err)
 			}
+			if err := endActiveSession(ctx, tx, teamID, agentID, now); err != nil {
+				return nil, err
+			}
 			return in, nil
 		},
 	}, nil)
@@ -636,10 +671,20 @@ func (s *Store) RemoveMember(ctx context.Context, c Caller, key, teamID, agentID
 
 // ListMembers returns a team's memberships ordered by creation.
 func (s *Store) ListMembers(ctx context.Context, teamID string) ([]Membership, error) {
-	if _, err := getTeam(ctx, s.db, teamID); err != nil {
+	var members []Membership
+	err := s.snapshot(ctx, func(q querier) error {
+		var err error
+		members, err = listMembers(ctx, q, teamID)
+		return err
+	})
+	return members, err
+}
+
+func listMembers(ctx context.Context, q querier, teamID string) ([]Membership, error) {
+	if _, err := getTeam(ctx, q, teamID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := q.QueryContext(ctx,
 		`SELECT team_id, agent_id, role, revision, created_at, updated_at FROM memberships
 		 WHERE team_id = ? AND removed = 0 ORDER BY created_at, agent_id`, teamID)
 	if err != nil {

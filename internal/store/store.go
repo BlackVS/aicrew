@@ -1,7 +1,8 @@
 // Package store is aicrew's durable coordination store.
 //
-// This increment holds the registry: agents, teams with their project sets,
-// and memberships with roles. It follows docs/CREW-CONTRACT.md:
+// It holds the registry (agents, teams with their project sets, memberships
+// with roles) and team sessions with generation fencing. It follows
+// docs/CREW-CONTRACT.md:
 //
 //   - Every mutation takes an explicit Caller. Only an operator caller may
 //     change the registry; the zero-value Caller has no authority. The store
@@ -10,7 +11,12 @@
 //   - A team's project list records intended scope only. Access to a project
 //     is decided by aimem grants, never by this list.
 //   - Linked aimem identities stay unset until verified proof integration
-//     exists; no function in this package sets them.
+//     exists; no function in this package sets them. Starting a session
+//     requires a linked identity, so no session can start in production yet.
+//   - A session command names its session and generation. A stale generation
+//     is refused, and a replayed result is returned only while the session
+//     still has the generation recorded in it.
+//   - Reads that span several statements see one consistent snapshot.
 //   - Each mutation commits its state change, audit record and idempotency
 //     receipt in one transaction.
 //
@@ -31,13 +37,14 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 1
+const schemaVersion = 2
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
 // Store is an open aicrew store. It is safe for concurrent use.
 type Store struct {
-	db  *sql.DB
+	db  *sql.DB // writes: immediate transactions
+	rdb *sql.DB // reads: deferred, query-only transactions
 	now func() time.Time
 
 	// beforeReceipt, when set by tests, runs after the state change and audit
@@ -67,11 +74,35 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Readers use deferred transactions: in WAL mode a read transaction sees
+	// one snapshot from its first statement until it ends, without taking the
+	// write lock.
+	rdb, err := sql.Open("sqlite", path+"?_txlock=deferred"+
+		"&_pragma=busy_timeout(10000)"+
+		"&_pragma=query_only(1)")
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open store reader: %w", err)
+	}
+	s.rdb = rdb
 	return s, nil
 }
 
 // Close closes the store.
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	return errors.Join(s.rdb.Close(), s.db.Close())
+}
+
+// snapshot runs fn in one read transaction, so every statement it issues
+// sees the same committed state.
+func (s *Store) snapshot(ctx context.Context, fn func(q querier) error) error {
+	tx, err := s.rdb.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin read: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only
+	return fn(tx)
+}
 
 func (s *Store) migrate(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -97,12 +128,20 @@ func (s *Store) migrate(ctx context.Context) error {
 	if version == schemaVersion {
 		return tx.Commit()
 	}
-	for _, stmt := range schemaV1 {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("apply schema v1: %w", err)
+	// Each step upgrades the schema by one version; steps are additive.
+	steps := [][]string{schemaV1, schemaV2}
+	for v := version; v < schemaVersion; v++ {
+		for _, stmt := range steps[v] {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("apply schema v%d: %w", v+1, err)
+			}
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_version (version) VALUES (?)`, schemaVersion); err != nil {
+	record := `UPDATE schema_version SET version = ?`
+	if version == 0 {
+		record = `INSERT INTO schema_version (version) VALUES (?)`
+	}
+	if _, err := tx.ExecContext(ctx, record, schemaVersion); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
 	return tx.Commit()
@@ -174,6 +213,26 @@ var schemaV1 = []string{
 }
 
 // timeLayout is fixed width so stored timestamps sort correctly as text.
+// schemaV2 adds team sessions and the team-wide coordinator generation.
+var schemaV2 = []string{
+	`ALTER TABLE teams ADD COLUMN coordinator_generation INTEGER NOT NULL DEFAULT 0`,
+	`CREATE TABLE sessions (
+		id                     TEXT PRIMARY KEY,
+		team_id                TEXT NOT NULL REFERENCES teams (id),
+		agent_id               TEXT NOT NULL REFERENCES agents (id),
+		role                   TEXT NOT NULL CHECK (role IN ('coordinator', 'worker', 'independent')),
+		state                  TEXT NOT NULL CHECK (state IN ('active', 'left', 'stopped', 'ended')),
+		generation             INTEGER NOT NULL CHECK (generation >= 1),
+		coordinator_generation INTEGER NOT NULL,
+		last_seen_at           TEXT NOT NULL,
+		created_at             TEXT NOT NULL,
+		updated_at             TEXT NOT NULL
+	)`,
+	`CREATE UNIQUE INDEX sessions_one_active_per_member ON sessions (team_id, agent_id) WHERE state = 'active'`,
+	`CREATE UNIQUE INDEX sessions_one_active_coordinator ON sessions (team_id)
+		WHERE state = 'active' AND role = 'coordinator'`,
+}
+
 const timeLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 func formatTime(t time.Time) string { return t.UTC().Format(timeLayout) }

@@ -1,6 +1,9 @@
 package store
 
-import "fmt"
+import (
+	"fmt"
+	"unicode/utf8"
+)
 
 type callerKind uint8
 
@@ -56,6 +59,15 @@ func (c Caller) String() string {
 	return c.kind.String() + ":" + c.id
 }
 
+// requireAgent admits agent callers only. Operations using it also check
+// that the agent acts on its own membership or session.
+func requireAgent(c Caller) error {
+	if c.kind != callerAgent || c.id == "" {
+		return fmt.Errorf("%w: agent caller required, caller is %s", ErrForbidden, c)
+	}
+	return nil
+}
+
 // requireOperator is the only policy used by registry mutations. It looks at
 // the caller kind alone: labels, model and client data never reach it.
 func requireOperator(c Caller) error {
@@ -66,8 +78,8 @@ func requireOperator(c Caller) error {
 }
 
 func validateCallerID(id string) error {
-	if id == "" || len(id) > 128 {
-		return fmt.Errorf("%w: caller id must be 1-128 characters", ErrInvalid)
+	if id == "" || len(id) > 128 || !utf8.ValidString(id) {
+		return fmt.Errorf("%w: caller id must be 1-128 bytes of valid UTF-8", ErrInvalid)
 	}
 	for _, r := range id {
 		if r <= ' ' || r == 0x7f {

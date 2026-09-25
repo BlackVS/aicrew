@@ -52,11 +52,8 @@ func (s *Store) run(ctx context.Context, c Caller, cmd command, out any) error {
 	if err := cmd.authorize(c); err != nil {
 		return err
 	}
-	if cmd.key == "" || len(cmd.key) > maxKeyLen || !utf8.ValidString(cmd.key) {
-		return fmt.Errorf("%w: idempotency key must be 1-%d bytes of valid UTF-8", ErrInvalid, maxKeyLen)
-	}
-	if !utf8.ValidString(cmd.scope) {
-		return fmt.Errorf("%w: scope is not valid UTF-8", ErrInvalid)
+	if err := checkKeyAndScope(cmd); err != nil {
+		return err
 	}
 	if cmd.validate != nil {
 		if err := cmd.validate(); err != nil {
@@ -142,6 +139,41 @@ func (s *Store) run(ctx context.Context, c Caller, cmd command, out any) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	return decodeResult(string(result), out)
+}
+
+func checkKeyAndScope(cmd command) error {
+	if cmd.key == "" || len(cmd.key) > maxKeyLen || !utf8.ValidString(cmd.key) {
+		return fmt.Errorf("%w: idempotency key must be 1-%d bytes of valid UTF-8", ErrInvalid, maxKeyLen)
+	}
+	if !utf8.ValidString(cmd.scope) {
+		return fmt.Errorf("%w: scope is not valid UTF-8", ErrInvalid)
+	}
+	return nil
+}
+
+// receiptExists reports whether the caller already committed this command.
+// Commands that must call out before their transaction (identity proof) use
+// it so a retry is answered from the receipt instead of calling out again.
+// Authorization and key checks come first, as in run.
+func (s *Store) receiptExists(ctx context.Context, c Caller, cmd command) (bool, error) {
+	if err := cmd.authorize(c); err != nil {
+		return false, err
+	}
+	if err := checkKeyAndScope(cmd); err != nil {
+		return false, err
+	}
+	var one int
+	err := s.rdb.QueryRowContext(ctx,
+		`SELECT 1 FROM receipts
+		 WHERE caller_kind = ? AND caller_id = ? AND operation = ? AND scope = ? AND key = ?`,
+		c.kind.String(), c.id, cmd.op, cmd.scope, cmd.key).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read receipt: %w", err)
+	}
+	return true, nil
 }
 
 func decodeResult(result string, out any) error {

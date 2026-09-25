@@ -10,9 +10,11 @@
 //   - Labels, model and client data describe records and never authorize.
 //   - A team's project list records intended scope only. Access to a project
 //     is decided by aimem grants, never by this list.
-//   - Linked aimem identities stay unset until verified proof integration
-//     exists; no function in this package sets them. Starting a session
-//     requires a linked identity, so no session can start in production yet.
+//   - A linked aimem identity is set only by a verified proof (identity.go):
+//     a verifier redeems the agent's aimem receipt for a challenge the store
+//     issued. Failed or unavailable verification changes nothing. One aimem
+//     user links to at most one agent. Starting a session requires a link.
+//   - Receipts are secrets: they never enter digests, audit or storage.
 //   - A session command names its session and generation. A stale generation
 //     is refused, and a replayed result is returned only while the session
 //     still has the generation recorded in it.
@@ -37,7 +39,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 2
+const schemaVersion = 3
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -50,6 +52,12 @@ type Store struct {
 	// beforeReceipt, when set by tests, runs after the state change and audit
 	// record are written and before the receipt, to prove rollback.
 	beforeReceipt func(op string) error
+
+	// outstandingWork reports whether an agent holds work that must be
+	// reconciled before its identity changes. Offers and attempts arrive
+	// with crew-execution, which must extend this check; until then an agent
+	// has none. Tests replace it to exercise the refusal.
+	outstandingWork func(ctx context.Context, tx *sql.Tx, agentID string) (bool, error)
 }
 
 // Open opens or creates the store at path and applies the schema.
@@ -69,7 +77,13 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
-	s := &Store{db: db, now: func() time.Time { return time.Now().UTC() }}
+	s := &Store{
+		db:  db,
+		now: func() time.Time { return time.Now().UTC() },
+		outstandingWork: func(context.Context, *sql.Tx, string) (bool, error) {
+			return false, nil
+		},
+	}
 	if err := s.migrate(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -129,7 +143,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return tx.Commit()
 	}
 	// Each step upgrades the schema by one version; steps are additive.
-	steps := [][]string{schemaV1, schemaV2}
+	steps := [][]string{schemaV1, schemaV2, schemaV3}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -210,6 +224,29 @@ var schemaV1 = []string{
 		created_at   TEXT NOT NULL,
 		PRIMARY KEY (caller_kind, caller_id, operation, scope, key)
 	)`,
+}
+
+// schemaV3 adds identity proof: the linked credential's token ID, one agent
+// per aimem identity, the token a session is bound to, and challenges.
+var schemaV3 = []string{
+	`ALTER TABLE agents ADD COLUMN linked_token_id TEXT`,
+	`CREATE UNIQUE INDEX agents_one_per_identity ON agents (linked_hub_id, linked_user_id)
+		WHERE linked_hub_id IS NOT NULL`,
+	`ALTER TABLE sessions ADD COLUMN token_id TEXT NOT NULL DEFAULT ''`,
+	`CREATE TABLE challenges (
+		id            TEXT PRIMARY KEY,
+		kind          TEXT NOT NULL CHECK (kind IN ('agent', 'invitation')),
+		agent_id      TEXT REFERENCES agents (id),
+		invitation_id TEXT,
+		hub_id        TEXT NOT NULL,
+		state         TEXT NOT NULL CHECK (state IN ('pending', 'consumed', 'superseded')),
+		expires_at    TEXT NOT NULL,
+		created_at    TEXT NOT NULL,
+		updated_at    TEXT NOT NULL,
+		CHECK ((kind = 'agent' AND agent_id IS NOT NULL AND invitation_id IS NULL) OR
+		       (kind = 'invitation' AND invitation_id IS NOT NULL AND agent_id IS NULL))
+	)`,
+	`CREATE INDEX challenges_invitation ON challenges (invitation_id) WHERE invitation_id IS NOT NULL`,
 }
 
 // timeLayout is fixed width so stored timestamps sort correctly as text.

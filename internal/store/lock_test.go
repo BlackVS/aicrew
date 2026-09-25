@@ -117,7 +117,16 @@ func TestEquivalentPathsShareLock(t *testing.T) {
 	sep := string(filepath.Separator)
 
 	wantInUse(t, dir+sep+"."+sep+"aicrew.db")
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	wantInUse(t, dir+sep+"sub"+sep+".."+sep+"aicrew.db")
+	// Through a directory that does not exist the spelling is refused on
+	// systems that resolve ".." after the directory; it is never admitted.
+	if s2, err := Open(context.Background(), dir+sep+"missing"+sep+".."+sep+"aicrew.db"); err == nil {
+		s2.Close()
+		t.Fatal("a second Store was admitted through a missing directory")
+	}
 
 	t.Run("relative", func(t *testing.T) {
 		t.Chdir(dir)

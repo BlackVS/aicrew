@@ -24,11 +24,12 @@ var ErrStoreInUse = errors.New("store_in_use")
 // Removing it on Close would let a concurrent Open lock a new file with the
 // same name while another opener still holds the old one.
 //
-// The sidecar path comes from the database path with symbolic links
-// resolved, even a link to a database not created yet, so every spelling of
-// one file shares one lock; the file system resolves relative paths,
-// directory links and, on case-insensitive volumes, case. Hard links to the
-// database and network file systems are not supported.
+// Every spelling of one database file shares one lock: the sidecar is named
+// after the file the path leads to, following a final symbolic link even to
+// a database not created yet, and the operating system resolves the rest of
+// the path (relative parts, directory links, "..", and case on
+// case-insensitive volumes) exactly as it does for the database. Hard links
+// to the database and network file systems are not supported.
 type storeLock struct {
 	f    *os.File
 	once sync.Once
@@ -62,18 +63,15 @@ func (l *storeLock) release() error {
 	return l.err
 }
 
-// lockPath returns the sidecar path for the database at path: the file the
-// path names once every symbolic link is followed, including a link to a
-// database that does not exist yet, which the first Open creates through it.
-// A relative result is fine: the lock file is opened once, right away.
+// lockPath returns the sidecar path for the database at path. It is the
+// path as given, never cleaned here, so the operating system resolves its
+// directories, directory links and ".." the same way when it opens the
+// sidecar as when it opens the database. Only a link in the final component
+// is followed here, since the sidecar must be named after the file the link
+// leads to, even one the first Open has not created yet.
 func lockPath(path string) (string, error) {
 	p := path
 	for range maxLinkHops {
-		dir, err := filepath.EvalSymlinks(filepath.Dir(p))
-		if err != nil {
-			return "", fmt.Errorf("resolve store path: %w", err)
-		}
-		p = filepath.Join(dir, filepath.Base(p))
 		fi, err := os.Lstat(p)
 		if errors.Is(err, fs.ErrNotExist) || (err == nil && fi.Mode()&fs.ModeSymlink == 0) {
 			return p + ".lock", nil
@@ -86,7 +84,8 @@ func lockPath(path string) (string, error) {
 			return "", fmt.Errorf("resolve store path: %w", err)
 		}
 		if !filepath.IsAbs(target) {
-			target = filepath.Join(dir, target)
+			dir, _ := filepath.Split(p) // the raw directory, as the link sees it
+			target = dir + target
 		}
 		p = target
 	}

@@ -69,8 +69,10 @@ An invitation records:
   an expected aimem user ID the proof must match (required for `rebind`,
   optional otherwise), and an intended agent label for a new agent.
 - **Lifecycle:** the issuing operator, an expiry (default 24 hours, at most
-  72), a state (`issued`, `redeemed`, `revoked`, `expired`, `locked`) and an
-  attempt counter.
+  72), a state (`issued`, `locked`, `redeemed`, `revoked`) and an attempt
+  counter. Expiry is not a state: an invitation past its deadline is refused
+  whatever its state. `locked` means the attempt limit is used up: no new
+  redemption may begin, but the latest challenge may still complete.
 
 The invitation code is a bearer capability:
 
@@ -109,10 +111,12 @@ operator        aicrew                   client                 aimem
 
 1. **Begin.** The client presents the code and a redemption key it
    generated. If the invitation is `issued` and unexpired, aicrew creates a
-   challenge bound to its service ID, this invitation and the target hub,
-   with a deadline of at most 5 minutes. A new challenge supersedes any
-   earlier outstanding one for the invitation. Each begin counts as an
-   attempt; after 5 the invitation becomes `locked`. A retry of a begin with
+   challenge bound to its service ID, this invitation and the target hub.
+   The challenge expires at the earlier of 5 minutes after it is issued and
+   the invitation's expiry, so it never outlives the invitation. A new
+   challenge supersedes any earlier outstanding one for the invitation.
+   Each begin counts as an attempt; the fifth makes the invitation `locked`,
+   which refuses any further begin. A retry of a begin with
    the same redemption key is not a new attempt: it returns the recorded
    challenge while that challenge and the invitation are still usable, and
    is refused otherwise (see "Retries and lost replies").
@@ -121,9 +125,13 @@ operator        aicrew                   client                 aimem
    contract, steps 2 and 3).
 3. **Complete.** The client presents the code, the challenge ID, the receipt
    and a completion key. Aicrew first checks that the invitation is still
-   `issued` and that the challenge is its current, unexpired one. It then
-   redeems the receipt with aimem and applies the binding rules below in one
-   local transaction.
+   `issued` or `locked` and unexpired, and that the challenge is its latest
+   (not superseded), unexpired one. A `locked` invitation can therefore
+   complete its last allowed attempt. It then redeems the receipt with aimem
+   and, in one local transaction, checks the invitation and challenge again
+   (so an expiry or revocation that happened meanwhile wins) and applies the
+   binding rules below. Every identity and binding check applies unchanged
+   to a `locked` invitation.
 4. **Session.** Completion returns no secret. The client then starts a
    session through the normal proof (crew-context), which is when aicrew
    issues the first session handle.
@@ -160,7 +168,7 @@ none of them do.
 | Aimem's reply to aicrew's redemption call | Aicrew retries the redemption with the same request key and gets the same result (context contract) before it commits or refuses anything. |
 | Complete reply | Retry with the same completion key. The recorded result comes back without a second effect. |
 | Complete retried with a new key after redemption | Refused as `invitation_invalid`. The client continues by starting a session through proof, since it is now linked. |
-| Aimem unreachable, or it refuses the receipt | Nothing is created or changed. The invitation stays `issued` and the client may begin again until the attempt limit. |
+| Aimem unreachable, or it refuses the receipt | Nothing is created or changed, and the invitation keeps its state. While the challenge is valid, the client completes it again with a new aimem receipt for the same challenge. Otherwise it begins again with a new redemption key, which a `locked` invitation refuses. |
 | Client state lost before completion | Rerun the bootstrap with the same code. The new begin supersedes the old challenge. |
 
 Unavailable or failed verification never creates or changes a link.
@@ -179,8 +187,10 @@ was accepted with the operator's merge of the redemption implementation
 
 - An invitation expires at its deadline. Begin and complete both refuse it
   afterwards, and a challenge never outlives its invitation.
-- Challenges last at most 5 minutes (aicrew) and receipts at most 1 minute
-  (aimem). Expired ones need a new begin.
+- A challenge expires at the earlier of 5 minutes after it is issued and
+  the invitation's expiry; aimem receipts last at most 1 minute. An expired
+  challenge needs a new begin, with a new redemption key, which counts one
+  attempt.
 - The operator may revoke an invitation at any time before it is redeemed.
   Revocation and completion serialize in the aicrew store, so exactly one
   wins. If revocation wins, a receipt aimem already consumed simply goes
@@ -188,8 +198,9 @@ was accepted with the operator's merge of the redemption implementation
 - Revoking a redeemed invitation changes nothing. To undo its effect, the
   operator removes the membership, which ends the session (crew-core).
 - Public refusals use one non-disclosing `invitation_invalid` for unknown,
-  expired, revoked, redeemed and locked invitations. The operator audit
-  keeps the exact reason.
+  expired, revoked and redeemed invitations, and for a new begin on a
+  `locked` invitation (its latest challenge may still complete). The
+  operator audit keeps the exact reason.
 
 ## Re-proof, rotation and recovery for linked agents
 

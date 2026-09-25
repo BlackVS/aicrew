@@ -10,7 +10,8 @@ either backlog. Do not join the old Pilot team or launch workers.
    <https://github.com/BlackVS/aimem/tree/2b068c1b8f9f499fbae304c3ab6dab0be2dd509d/docs>
    (`DESIGN-AIFORGE.md`, `DESIGN-AIFORGE-CONTEXT.md`,
    `DESIGN-AIFORGE-RESERVATIONS.md`). Aicrew's own contracts are
-   `docs/WORKSPACE.md` and `docs/CREW-CONTRACT.md`. Endpoint shapes, wire
+   `docs/WORKSPACE.md`, `docs/CREW-CONTRACT.md` and
+   `docs/ONBOARDING-CONTRACT.md`. Endpoint shapes, wire
    encoding, storage schemas and migration are still open implementation
    reviews; do not infer them. Aimem owns its documents; do not keep copies
    here. Move the pin only to a later reviewed aimem commit.

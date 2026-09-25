@@ -4,10 +4,15 @@ Assigned session: **Opus 5.5**, standalone. Another session (GPT-6 Sol)
 implements aimem prerequisites. The review/monitor session does not implement
 either backlog. Do not join the old Pilot team or launch workers.
 
-1. Read AGENTS.md, this file, the local SESSION-STATE.md, DESIGN-AIFORGE.md and
-   BACKLOG-MAP.md. The proposal is direction, not a completed wire protocol.
+1. Read AGENTS.md, this file, the local SESSION-STATE.md, BACKLOG-MAP.md and
+   the AIForge design, pinned to its reviewed aimem commit:
+   <https://github.com/BlackVS/aimem/blob/f47dc5a46f30e462ac2ed42011da30d01df33e93/docs/DESIGN-AIFORGE.md>.
+   It fixes the service boundary and the Q1-Q5 decisions. Endpoint shapes,
+   credential issuance, reservation storage and migration are still open
+   aimem contracts; do not infer them. Aimem owns the document; do not keep
+   a copy here. Move the pin only to a later reviewed aimem commit.
 2. Check Git branch/status/remotes and preserve the operator's LICENSE and
-   prepared uncommitted files. Start a feature branch; do not push to main.
+   any uncommitted operator files. Start a feature branch; do not push to main.
 3. Run `aimem version`, `aimem task-token show-source` and `aimem process show`
    from this checkout. Confirm project aicrew and complete instructions.
    Verify oh-code-review is actually available to this client.
@@ -19,10 +24,10 @@ either backlog. Do not join the old Pilot team or launch workers.
    inspected now; do not claim the dependency is satisfied until evidence says
    so. Pick only eligible work, following the process, not list order.
 
-The repository was created by the operator. Prepared files are not committed,
-reviewed or proof of completed setup. Confirm GitHub visibility, license,
-reviewer integration and minimal CI as part of the baseline task. Preserve
-the existing README and LICENSE unless a scoped reviewed change is needed.
+The repository was created by the operator. The baseline task records the
+verified visibility, license, CI check (`repo-checks`) and external-review
+integration; recheck them rather than assume. Preserve the existing README
+and LICENSE unless a scoped reviewed change is needed.
 
 ## Coordination with aimem implementation
 

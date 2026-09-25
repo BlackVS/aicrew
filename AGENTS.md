@@ -2,10 +2,11 @@
 
 ## Start here
 
-Read `docs/START-HERE.md`, `docs/SESSION-STATE.md` if present, and
-`docs/DESIGN-AIFORGE.md` at session start and after compaction. Verify Git and
-live task evidence rather than trusting the handoff. Use the aimem project
-`aicrew`; this is a standalone implementation session, not a Pilot member.
+Read `docs/START-HERE.md`, `docs/SESSION-STATE.md` if present, and the
+pinned AIForge design linked from START-HERE at session start and after
+compaction. Verify Git and live task evidence rather than trusting the
+handoff. Use the aimem project `aicrew`; this is a standalone implementation
+session, not a Pilot member.
 
 The task board is authoritative for live task state. `docs/BACKLOG-MAP.md`
 contains IDs and ownership, not a second status list. Read the selected process

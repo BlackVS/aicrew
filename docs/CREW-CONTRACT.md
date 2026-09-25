@@ -207,18 +207,35 @@ Each team has one durable, ordered message log with a monotonic sequence.
   keeps it for audit. Because every member of a team uses the same aimem
   profile, project scope within a team is not a per-member grant check;
   knowledge access itself stays in aimem.
-- **Recipients** are fixed at send time from the active memberships (and, for
-  directed messages, the named recipient).
-- **Delivery is not receipt.** A read returns unacknowledged messages after a
-  cursor, in bounded pages, and records a delivery attempt. Acknowledgement
-  names explicit message IDs that were delivered; acknowledging twice is a
-  no-op. A client restarting from its cursor sees every unacknowledged
-  message again.
+- **Recipients** are fixed at send time. A team-wide message goes to every
+  other active member; a directed message goes to one named active member.
+  A message to its sender, or one with no recipient, is refused. A member
+  who joins later does not receive earlier messages. A member who is removed
+  receives nothing sent while it is out; if it is added again, it still has
+  the messages addressed to it that it never acknowledged.
+- **Current session.** Sending, reading and acknowledging all require the
+  caller's own active session at its current generation. A stale
+  generation, an ended session, a removed member or a changed role is
+  refused with `context_stale`, and the refusal changes nothing.
+- **Delivery is not receipt, and there is no client cursor.** A read returns
+  the caller's oldest unacknowledged messages, in sequence order and in
+  bounded pages, and records a delivery on each. Acknowledgement names
+  explicit message IDs that were delivered to the caller; acknowledging an
+  undelivered or foreign message is refused, and acknowledging twice is a
+  no-op. Because every read starts at the oldest unacknowledged message, a
+  message delivered but not acknowledged, even across a restart, is
+  delivered again, and neither a page size nor the order of
+  acknowledgements can skip it. A client that wants the next page
+  acknowledges the current one.
 - **Idempotent send.** A sender's idempotency key and input digest make a
-  retried send return the original message.
+  retried send return the original message, while the sender's session is
+  still at the generation it sent from.
+- **Text** is stored exactly as sent: 1 to 16 KiB of valid UTF-8 that is not
+  blank. The store does not rewrite text or judge its style.
 - **Lifecycle messages** that announce an offer, acceptance, submission,
   review, stop or recovery are written in the same local transaction as the
-  transition they announce.
+  transition they announce. The store provides this as an internal step;
+  the transitions that use it arrive with crew-execution.
 - **Questions never assign work.** Only the offer and claim transitions
   above create an attempt. Wake-up hints from client adapters are
   best-effort; the inbox stays authoritative.

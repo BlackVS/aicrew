@@ -20,6 +20,9 @@
 //   - A session command names its session and generation. A stale generation
 //     is refused, and a replayed result is returned only while the session
 //     still has the generation recorded in it.
+//   - Each team has one ordered inbox (messages.go). A read always starts at
+//     the caller's oldest unacknowledged message, so nothing delivered but
+//     unacknowledged is ever skipped, even across a restart.
 //   - Reads that span several statements see one consistent snapshot.
 //   - Each mutation commits its state change, audit record and idempotency
 //     receipt in one transaction.
@@ -45,7 +48,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 4
+const schemaVersion = 5
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -170,7 +173,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return tx.Commit()
 	}
 	// Each step upgrades the schema by one version; steps are additive.
-	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4}
+	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -296,6 +299,42 @@ var schemaV4 = []string{
 		created_at       TEXT NOT NULL,
 		updated_at       TEXT NOT NULL
 	)`,
+}
+
+// schemaV5 adds the team inbox: one ordered message log per team, and one
+// row per recipient recording its deliveries and acknowledgement.
+var schemaV5 = []string{
+	`CREATE TABLE messages (
+		id                    TEXT PRIMARY KEY,
+		team_id               TEXT NOT NULL REFERENCES teams (id),
+		seq                   INTEGER NOT NULL CHECK (seq > 0),
+		kind                  TEXT NOT NULL CHECK (kind IN ('message', 'lifecycle')),
+		sender_agent_id       TEXT NOT NULL DEFAULT '',
+		sender_session_id     TEXT NOT NULL DEFAULT '',
+		sender_generation     INTEGER NOT NULL DEFAULT 0,
+		sender_model          TEXT NOT NULL DEFAULT '',
+		sender_client         TEXT NOT NULL DEFAULT '',
+		sender_client_version TEXT NOT NULL DEFAULT '',
+		to_agent_id           TEXT NOT NULL DEFAULT '',
+		project_hub_id        TEXT NOT NULL DEFAULT '',
+		project_id            TEXT NOT NULL DEFAULT '',
+		task_hub_id           TEXT NOT NULL DEFAULT '',
+		task_project_id       TEXT NOT NULL DEFAULT '',
+		task_id               TEXT NOT NULL DEFAULT '',
+		text                  TEXT NOT NULL,
+		created_at            TEXT NOT NULL,
+		UNIQUE (team_id, seq)
+	)`,
+	`CREATE TABLE message_recipients (
+		message_id         TEXT NOT NULL REFERENCES messages (id),
+		agent_id           TEXT NOT NULL REFERENCES agents (id),
+		deliveries         INTEGER NOT NULL DEFAULT 0 CHECK (deliveries >= 0),
+		first_delivered_at TEXT,
+		last_delivered_at  TEXT,
+		acknowledged_at    TEXT,
+		PRIMARY KEY (message_id, agent_id)
+	)`,
+	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
 }
 
 // timeLayout is fixed width so stored timestamps sort correctly as text.

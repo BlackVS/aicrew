@@ -21,6 +21,9 @@ type fakeVerifier struct {
 	byKey    map[string]VerifiedIdentity
 	fail     error
 	calls    int
+	// onRedeem, if set, runs inside Redeem before it answers, to model
+	// something else happening while aimem is being asked.
+	onRedeem func()
 }
 
 func newFakeVerifier() *fakeVerifier {
@@ -30,6 +33,9 @@ func newFakeVerifier() *fakeVerifier {
 var errAimemUnavailable = errors.New("aimem unavailable")
 
 func (f *fakeVerifier) Redeem(_ context.Context, req RedeemRequest) (VerifiedIdentity, error) {
+	if f.onRedeem != nil {
+		f.onRedeem()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++

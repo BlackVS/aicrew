@@ -133,7 +133,7 @@ func (s *Store) IssueAgentChallenge(ctx context.Context, c Caller, key, agentID 
 			if agent.Linked == nil {
 				return nil, fmt.Errorf("agent %s: %w", agentID, ErrIdentityLinkRequired)
 			}
-			return insertChallenge(ctx, tx, challengeAgent, agentID, "", agent.Linked.HubID, now)
+			return insertChallenge(ctx, tx, challengeAgent, agentID, "", agent.Linked.HubID, now, time.Time{})
 		},
 	}, &out)
 	return out, err
@@ -274,7 +274,10 @@ func agentByIdentity(ctx context.Context, q querier, hubID, userID string) (Agen
 	return getAgent(ctx, q, id)
 }
 
-func insertChallenge(ctx context.Context, tx *sql.Tx, kind challengeKind, agentID, invitationID, hubID string, now time.Time) (Challenge, error) {
+// insertChallenge stores a pending challenge that expires after challengeTTL,
+// or at notAfter if that is sooner.
+func insertChallenge(ctx context.Context, tx *sql.Tx, kind challengeKind, agentID, invitationID, hubID string,
+	now, notAfter time.Time) (Challenge, error) {
 	id, err := newID(now)
 	if err != nil {
 		return Challenge{}, err
@@ -286,11 +289,15 @@ func insertChallenge(ctx context.Context, tx *sql.Tx, kind challengeKind, agentI
 	if invitationID != "" {
 		invitationArg = invitationID
 	}
+	expires := now.Add(challengeTTL)
+	if !notAfter.IsZero() && notAfter.Before(expires) {
+		expires = notAfter
+	}
 	at := formatTime(now)
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO challenges (id, kind, agent_id, invitation_id, hub_id, state, expires_at, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
-		id, string(kind), agentArg, invitationArg, hubID, formatTime(now.Add(challengeTTL)), at, at); err != nil {
+		id, string(kind), agentArg, invitationArg, hubID, formatTime(expires), at, at); err != nil {
 		return Challenge{}, fmt.Errorf("insert challenge: %w", err)
 	}
 	return getChallenge(ctx, tx, id)

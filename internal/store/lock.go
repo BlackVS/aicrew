@@ -26,10 +26,9 @@ var ErrStoreInUse = errors.New("store_in_use")
 //
 // The sidecar path comes from the database path with symbolic links
 // resolved, even a link to a database not created yet, so every spelling of
-// one file shares one lock; the file system
-// resolves relative paths, directory links and, on case-insensitive volumes,
-// case. Hard links to the database and
-// network file systems are not supported.
+// one file shares one lock; the file system resolves relative paths,
+// directory links and, on case-insensitive volumes, case. Hard links to the
+// database and network file systems are not supported.
 type storeLock struct {
 	f    *os.File
 	once sync.Once

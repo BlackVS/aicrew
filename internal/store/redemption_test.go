@@ -121,6 +121,48 @@ func TestBeginRetryRules(t *testing.T) {
 	}
 }
 
+// Accepted recovery (docs/ONBOARDING-CONTRACT.md, retry table): a same-key
+// begin retry after the challenge expired is refused and counts nothing; a
+// new key begins a new attempt, which completes while the invitation is
+// still usable.
+func TestExpiredBeginRetryRecoversWithNewKey(t *testing.T) {
+	s, _ := openTemp(t)
+	ctx := context.Background()
+	v := newFakeVerifier()
+	tm := mustTeam(t, s, "t1", "crew")
+	code := newCode(t)
+	inv := issueJoin(t, s, "k1", tm.ID, code)
+	first, err := s.BeginRedemption(ctx, "b1", code)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The reply was lost and the challenge expired before the retry.
+	s.now = func() time.Time { return first.ExpiresAt.Add(time.Second) }
+	if _, err := s.BeginRedemption(ctx, "b1", code); !errors.Is(err, ErrChallengeInvalid) {
+		t.Fatalf("same-key retry after expiry: got %v, want ErrChallengeInvalid", err)
+	}
+	if got, _ := s.GetInvitation(ctx, inv.ID); got.Attempts != 1 || got.State != InvitationIssued {
+		t.Fatalf("refused retry changed the invitation: %+v", got)
+	}
+
+	// Recovery: a new key is a new attempt with a fresh challenge.
+	second, err := s.BeginRedemption(ctx, "b2", code)
+	if err != nil {
+		t.Fatalf("new-key begin: %v", err)
+	}
+	if second.ID == first.ID || second.State != "pending" {
+		t.Fatalf("new-key challenge = %+v", second)
+	}
+	if got, _ := s.GetInvitation(ctx, inv.ID); got.Attempts != 2 {
+		t.Fatalf("attempts after recovery = %d, want 2", got.Attempts)
+	}
+	res, err := s.CompleteRedemption(ctx, v, "c1", code, second.ID, v.receipt("rc", "hub-a", "user-1", "tok-1"))
+	if err != nil || !res.Created {
+		t.Fatalf("completion after recovery = %+v, %v", res, err)
+	}
+}
+
 func TestCompleteRetryAndConflict(t *testing.T) {
 	s, _ := openTemp(t)
 	ctx := context.Background()

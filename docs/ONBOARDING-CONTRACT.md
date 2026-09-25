@@ -112,7 +112,10 @@ operator        aicrew                   client                 aimem
    challenge bound to its service ID, this invitation and the target hub,
    with a deadline of at most 5 minutes. A new challenge supersedes any
    earlier outstanding one for the invitation. Each begin counts as an
-   attempt; after 5 the invitation becomes `locked`.
+   attempt; after 5 the invitation becomes `locked`. A retry of a begin with
+   the same redemption key is not a new attempt: it returns the recorded
+   challenge while that challenge and the invitation are still usable, and
+   is refused otherwise (see "Retries and lost replies").
 2. **Proof.** The client sends the challenge to aimem with its own
    individual credential and receives a single-use receipt (context
    contract, steps 2 and 3).
@@ -152,7 +155,7 @@ none of them do.
 
 | Lost or failed | Recovery |
 | --- | --- |
-| Begin reply | Retry with the same redemption key. If the challenge is still valid, the same challenge comes back; otherwise a new one does (one attempt). |
+| Begin reply | Retry with the same redemption key. If the recorded challenge is still pending and unexpired and the invitation is still usable, the same challenge comes back and no attempt is counted. If the challenge has expired or been superseded, the retry is refused as `challenge_invalid`; the client recovers by beginning again with a **new** redemption key, which counts one attempt and succeeds only while the invitation is valid and under its attempt limit. |
 | Aimem receipt reply | Ask aimem for another receipt for the same challenge (context contract). |
 | Aimem's reply to aicrew's redemption call | Aicrew retries the redemption with the same request key and gets the same result (context contract) before it commits or refuses anything. |
 | Complete reply | Retry with the same completion key. The recorded result comes back without a second effect. |
@@ -161,6 +164,16 @@ none of them do.
 | Client state lost before completion | Rerun the bootstrap with the same code. The new begin supersedes the old challenge. |
 
 Unavailable or failed verification never creates or changes a link.
+
+**Client recovery is automatic.** The future client bootstrap handles a
+`challenge_invalid` refusal of a begin retry on its own: it generates a new
+redemption key and begins again, without operator intervention. It stops and
+reports only on `invitation_invalid` (the invitation is expired, revoked,
+redeemed, locked or unknown), which needs a new invitation from the
+operator. A redemption key identifies one begin and its retry receipt never
+changes, so a new challenge always comes from a new key. This recovery rule
+was accepted with the operator's merge of the redemption implementation
+(aicrew PR #9).
 
 ## Expiry and revocation
 

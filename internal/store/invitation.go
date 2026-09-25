@@ -26,18 +26,18 @@ import (
 //   - Verification (verifyChallenge) happens before that transaction and
 //     writes nothing, so failed or unavailable verification changes nothing.
 
-type linkPurpose string
+type InvitationPurpose string
 
 const (
-	purposeJoin   linkPurpose = "join"   // a new or already linked agent joins a team
-	purposeLink   linkPurpose = "link"   // an existing unlinked agent record is linked
-	purposeRebind linkPurpose = "rebind" // an existing agent moves to a different user
+	PurposeJoin   InvitationPurpose = "join"   // a new or already linked agent joins a team
+	PurposeLink   InvitationPurpose = "link"   // an existing unlinked agent record is linked
+	PurposeRebind InvitationPurpose = "rebind" // an existing agent moves to a different user
 )
 
 // InvitationScope is the validated scope of one invitation.
 type InvitationScope struct {
 	invitationID   string
-	purpose        linkPurpose
+	purpose        InvitationPurpose
 	teamID         string
 	role           Role
 	hubID          string
@@ -46,7 +46,7 @@ type InvitationScope struct {
 	label          string // label for a new agent created by join
 }
 
-func newInvitationScope(invitationID string, purpose linkPurpose, teamID string, role Role,
+func newInvitationScope(invitationID string, purpose InvitationPurpose, teamID string, role Role,
 	hubID, agentID, expectedUserID, label string) (InvitationScope, error) {
 	sc := InvitationScope{
 		invitationID: invitationID, purpose: purpose, teamID: teamID, role: role,
@@ -61,18 +61,18 @@ func newInvitationScope(invitationID string, purpose linkPurpose, teamID string,
 		return InvitationScope{}, fmt.Errorf("%w: hub %q", ErrInvalid, hubID)
 	}
 	switch purpose {
-	case purposeJoin:
+	case PurposeJoin:
 		if agentID != "" {
 			return InvitationScope{}, fmt.Errorf("%w: join invitations do not name an agent", ErrInvalid)
 		}
 		if err := validateLabel("agent label", label); err != nil {
 			return InvitationScope{}, err
 		}
-	case purposeLink:
+	case PurposeLink:
 		if agentID == "" {
 			return InvitationScope{}, fmt.Errorf("%w: link invitations name the agent to link", ErrInvalid)
 		}
-	case purposeRebind:
+	case PurposeRebind:
 		if agentID == "" || expectedUserID == "" {
 			return InvitationScope{}, fmt.Errorf("%w: rebind invitations name the agent and pin the new user", ErrInvalid)
 		}
@@ -138,7 +138,7 @@ func (s *Store) bindInvitation(ctx context.Context, tx *sql.Tx, sc InvitationSco
 
 	res := LinkResult{ChallengeID: challengeID, Identity: id}
 	switch sc.purpose {
-	case purposeJoin:
+	case PurposeJoin:
 		if holderFound {
 			// The user already has an agent: it joins, no duplicate is made.
 			res.AgentID = holder.ID
@@ -163,7 +163,7 @@ func (s *Store) bindInvitation(ctx context.Context, tx *sql.Tx, sc InvitationSco
 		}
 		res.AgentID, res.Created = agentID, true
 
-	case purposeLink:
+	case PurposeLink:
 		bound, err := getAgent(ctx, tx, sc.agentID)
 		if err != nil {
 			return LinkResult{}, err
@@ -184,7 +184,7 @@ func (s *Store) bindInvitation(ctx context.Context, tx *sql.Tx, sc InvitationSco
 		}
 		res.AgentID = bound.ID
 
-	case purposeRebind:
+	case PurposeRebind:
 		bound, err := getAgent(ctx, tx, sc.agentID)
 		if err != nil {
 			return LinkResult{}, err

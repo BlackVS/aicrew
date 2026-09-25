@@ -15,6 +15,8 @@
 //     issued. Failed or unavailable verification changes nothing. One aimem
 //     user links to at most one agent. Starting a session requires a link.
 //   - Receipts are secrets: they never enter digests, audit or storage.
+//   - Invitation codes are secrets too: the store keeps only their digest
+//     (invitestore.go), never the code, not even in retry receipts.
 //   - A session command names its session and generation. A stale generation
 //     is refused, and a replayed result is returned only while the session
 //     still has the generation recorded in it.
@@ -39,7 +41,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 3
+const schemaVersion = 4
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -143,7 +145,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return tx.Commit()
 	}
 	// Each step upgrades the schema by one version; steps are additive.
-	steps := [][]string{schemaV1, schemaV2, schemaV3}
+	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -247,6 +249,28 @@ var schemaV3 = []string{
 		       (kind = 'invitation' AND invitation_id IS NOT NULL AND agent_id IS NULL))
 	)`,
 	`CREATE INDEX challenges_invitation ON challenges (invitation_id) WHERE invitation_id IS NOT NULL`,
+}
+
+// schemaV4 adds operator-issued invitations, stored by code digest only.
+var schemaV4 = []string{
+	`CREATE TABLE invitations (
+		id               TEXT PRIMARY KEY,
+		code_digest      TEXT NOT NULL UNIQUE,
+		purpose          TEXT NOT NULL CHECK (purpose IN ('join', 'link', 'rebind')),
+		team_id          TEXT NOT NULL REFERENCES teams (id),
+		role             TEXT NOT NULL CHECK (role IN ('coordinator', 'worker', 'independent')),
+		hub_id           TEXT NOT NULL,
+		agent_id         TEXT NOT NULL DEFAULT '',
+		expected_user_id TEXT NOT NULL DEFAULT '',
+		label            TEXT NOT NULL DEFAULT '',
+		issued_by        TEXT NOT NULL,
+		state            TEXT NOT NULL CHECK (state IN ('issued', 'redeemed', 'revoked', 'locked')),
+		attempts         INTEGER NOT NULL CHECK (attempts >= 0),
+		revision         INTEGER NOT NULL,
+		expires_at       TEXT NOT NULL,
+		created_at       TEXT NOT NULL,
+		updated_at       TEXT NOT NULL
+	)`,
 }
 
 // timeLayout is fixed width so stored timestamps sort correctly as text.

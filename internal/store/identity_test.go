@@ -545,6 +545,65 @@ func TestConcurrentCompletionsConsumeOnce(t *testing.T) {
 	}
 }
 
+// Concurrent proofs with one key all get the one result and ask aimem once;
+// with different keys exactly one consumes the challenge.
+func TestConcurrentAgentProofs(t *testing.T) {
+	s, _ := openTemp(t)
+	ctx := context.Background()
+	v := newFakeVerifier()
+	tm := mustTeam(t, s, "t1", "crew")
+	res := joinAs(t, s, v, "inv-1", tm.ID, RoleWorker, "builder", "user-1", "tok-1")
+	rc := v.receipt("rc-2", "hub-a", "user-1", "tok-2")
+	const n = 6
+	prove := func(chID string, key func(int) string) ([]ProofResult, []error) {
+		results := make([]ProofResult, n)
+		errs := make([]error, n)
+		var wg sync.WaitGroup
+		for i := range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				results[i], errs[i] = s.CompleteAgentProof(ctx, Caller{}, v, key(i), chID, rc)
+			}()
+		}
+		wg.Wait()
+		return results, errs
+	}
+
+	ch, err := s.IssueAgentChallenge(ctx, Caller{}, "i1", res.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := v.calls
+	results, errs := prove(ch.ID, func(int) string { return "same-key" })
+	for i, err := range errs {
+		if err != nil || results[i] != results[0] || !results[i].Rotated {
+			t.Errorf("same-key proof %d = %+v, %v; want %+v with a rotation", i, results[i], err, results[0])
+		}
+	}
+	if v.calls != calls+1 {
+		t.Errorf("same-key proofs asked aimem %d times, want once", v.calls-calls)
+	}
+
+	ch2, err := s.IssueAgentChallenge(ctx, Caller{}, "i2", res.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs = prove(ch2.ID, func(i int) string { return fmt.Sprintf("k%d", i) })
+	wins := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			wins++
+		case !errors.Is(err, ErrChallengeInvalid):
+			t.Errorf("unexpected error %v", err)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("different-key proofs: %d won, want 1", wins)
+	}
+}
+
 // Redemption commits link, agent, membership and challenge state together.
 func TestRedemptionIsAtomic(t *testing.T) {
 	s, _ := openTemp(t)

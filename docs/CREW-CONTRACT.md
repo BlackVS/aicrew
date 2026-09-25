@@ -167,12 +167,15 @@ disagree, aicrew conforms to aimem:
 | Stop | `STOP_REQUESTED` → `STOPPED` → `CLOSED` | Release to `READY`, or `BLOCKED` with a recorded blocker, after the worker confirms stop |
 | Operator recovery | any → `CLOSED` | Recovery release or finalize by an authorized principal |
 
-The reservation contract fixes that only the current holder, or an
-authorized recovery principal, may mutate, release or finalize a held task.
-Before transfer the holder is the coordinator's offer; after it, the worker's
-attempt. So the coordinator sends offer-stage releases, and the worker sends
-work mutations, stop releases and, for the first pilot, the finalize. Which
-principal acts when that holder cannot, is listed under open questions.
+The reservation contract lets only the current holder mutate a held task,
+and only the holder or an authorized recovery principal release it. Finalize
+needs the current reservation ID and fence with an authenticated actor and
+context, or the recovery path. Before transfer the holder is the
+coordinator's offer; after it, the worker's attempt. So the coordinator sends
+offer-stage releases, and the worker sends work mutations and stop releases.
+This contract assumes the holding worker also sends the finalize; whether the
+reviewing coordinator may, and which principal acts when the holder cannot,
+are listed under open questions.
 
 The worker starts work only in `RUNNING`, that is, after aimem has confirmed
 the transfer or claim. It works in a worktree created from the attempt's

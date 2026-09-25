@@ -25,7 +25,8 @@
 //     receipt in one transaction.
 //   - An identity proof or redemption retried while the original is still
 //     running waits for it and then answers from its receipt (inflight.go).
-//     This holds within one Store, so a database file is served by one Store.
+//     This holds within one Store, so a database file is served by one
+//     Store: Open refuses a file another Store has open (lock.go).
 //
 // The package is internal and has no network, CLI or MCP surface.
 package store
@@ -50,9 +51,10 @@ var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
 // Store is an open aicrew store. It is safe for concurrent use.
 type Store struct {
-	db  *sql.DB // writes: immediate transactions
-	rdb *sql.DB // reads: deferred, query-only transactions
-	now func() time.Time
+	db   *sql.DB // writes: immediate transactions
+	rdb  *sql.DB // reads: deferred, query-only transactions
+	lock *storeLock
+	now  func() time.Time
 
 	// flights serializes identical commands that call out before their
 	// transaction; flightWait bounds how long one waits (inflight.go).
@@ -73,11 +75,21 @@ type Store struct {
 	outstandingWork func(ctx context.Context, tx *sql.Tx, agentID string) (bool, error)
 }
 
-// Open opens or creates the store at path and applies the schema.
-func Open(ctx context.Context, path string) (*Store, error) {
+// Open opens or creates the store at path and applies the schema. It
+// refuses with ErrStoreInUse while another Store has the file open (lock.go).
+func Open(ctx context.Context, path string) (_ *Store, err error) {
 	if path == "" || strings.Contains(path, "?") {
 		return nil, fmt.Errorf("%w: store path must be non-empty and contain no '?'", ErrInvalid)
 	}
+	lock, err := lockStore(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			lock.release() //nolint:errcheck // the open error is the one to report
+		}
+	}()
 	// Writers take the lock at BEGIN (_txlock=immediate) and wait for it
 	// (busy_timeout), so concurrent commands serialize instead of failing on
 	// a read-to-write lock upgrade.
@@ -92,6 +104,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}
 	s := &Store{
 		db:         db,
+		lock:       lock,
 		now:        func() time.Time { return time.Now().UTC() },
 		flightWait: defaultInflightWait,
 		outstandingWork: func(context.Context, *sql.Tx, string) (bool, error) {
@@ -116,9 +129,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return s, nil
 }
 
-// Close closes the store.
+// Close closes the store and releases its file lock.
 func (s *Store) Close() error {
-	return errors.Join(s.rdb.Close(), s.db.Close())
+	return errors.Join(s.rdb.Close(), s.db.Close(), s.lock.release())
 }
 
 // snapshot runs fn in one read transaction, so every statement it issues

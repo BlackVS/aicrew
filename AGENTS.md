@@ -32,10 +32,9 @@ same license and licensor; source copied from aimem must keep aimem's
 `Required Notice:` line beside aicrew's in LICENSE. Check the terms of any
 other source before importing it.
 
-Go is the approved build language. No Go module exists yet, and no production
-architecture is selected. `scripts/check-repo.sh` is the only check today;
-run it before every push. CI runs the same script. Add Go build/vet/test to
-CI in the PR that lands the first runnable code, not before.
+Go is the build language. `docs/DEVELOPMENT.md` records the toolchain,
+dependency pinning rules and the exact checks; run them before every push.
+CI runs the same checks.
 
 ## Files, credentials and handoff
 

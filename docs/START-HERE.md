@@ -5,12 +5,15 @@ implements aimem prerequisites. The review/monitor session does not implement
 either backlog. Do not join the old Pilot team or launch workers.
 
 1. Read AGENTS.md, this file, the local SESSION-STATE.md, BACKLOG-MAP.md and
-   the AIForge design, pinned to its reviewed aimem commit:
-   <https://github.com/BlackVS/aimem/blob/f47dc5a46f30e462ac2ed42011da30d01df33e93/docs/DESIGN-AIFORGE.md>.
-   It fixes the service boundary and the Q1-Q5 decisions. Endpoint shapes,
-   credential issuance, reservation storage and migration are still open
-   aimem contracts; do not infer them. Aimem owns the document; do not keep
-   a copy here. Move the pin only to a later reviewed aimem commit.
+   the AIForge design with its context and reservation contracts, pinned to
+   their reviewed aimem commit:
+   <https://github.com/BlackVS/aimem/tree/2b068c1b8f9f499fbae304c3ab6dab0be2dd509d/docs>
+   (`DESIGN-AIFORGE.md`, `DESIGN-AIFORGE-CONTEXT.md`,
+   `DESIGN-AIFORGE-RESERVATIONS.md`). Aicrew's own contracts are
+   `docs/WORKSPACE.md` and `docs/CREW-CONTRACT.md`. Endpoint shapes, wire
+   encoding, storage schemas and migration are still open implementation
+   reviews; do not infer them. Aimem owns its documents; do not keep copies
+   here. Move the pin only to a later reviewed aimem commit.
 2. Check Git branch/status/remotes and preserve the operator's LICENSE and
    any uncommitted operator files. Start a feature branch; do not push to main.
 3. Run `aimem version`, `aimem task-token show-source` and `aimem process show`

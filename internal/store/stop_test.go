@@ -4,9 +4,125 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// gate holds the next reservation call of op in flight, after the port has
+// received it, until release is called.
+func (e execTeam) gate(op ReservationOp) (entered <-chan struct{}, release func()) {
+	in, out := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	e.port.onMutate = func(got ReservationOp, _ ReservationRequest) {
+		if got == op {
+			once.Do(func() { close(in); <-out })
+		}
+	}
+	return in, func() { close(out) }
+}
+
+// A stop is recorded, with its message, while a reservation call is in
+// flight on the attempt; the call's settle, in any outcome, keeps the stop
+// and applies it: an update settles as usual, a committed finalize closes
+// the attempt, and a refused finalize voids the acceptance it kept.
+func TestStopWhileACallIsInFlight(t *testing.T) {
+	ctx := context.Background()
+	submit := func(e execTeam, a Attempt) error {
+		_, err := e.work(t, "submit", a, IntentSubmit, "https://example.invalid/pull/1")
+		return err
+	}
+	finalize := func(e execTeam, a Attempt) error {
+		_, err := e.finalize(t, "final", a, e.builder, 1, devDelivery("1"))
+		return err
+	}
+	stillStopping := func(t *testing.T, got Attempt, phase AttemptPhase) {
+		t.Helper()
+		if got.State != AttemptRunning || got.Stop != StopRequested || got.Phase != phase || got.AcceptedResult != 0 {
+			t.Fatalf("attempt = %+v; want running in %s, still stopping, with no acceptance", got, phase)
+		}
+	}
+	finalized := func(t *testing.T, got Attempt, _ AttemptPhase) {
+		t.Helper()
+		if got.State != AttemptClosed || got.CloseReason != "finalized" || got.FinalizedResult != 1 {
+			t.Fatalf("attempt = %+v; want finalized with result 1", got)
+		}
+	}
+	for _, tc := range []struct {
+		name      string
+		op        ReservationOp
+		call      func(e execTeam, a Attempt) error
+		accepted  bool
+		fault     simFault
+		refuse    bool
+		reconcile bool // the call's outcome is unknown and is reconciled
+		check     func(t *testing.T, got Attempt, phase AttemptPhase)
+	}{
+		{"update committed", ReservationUpdate, submit, false, faultNone, false, false, stillStopping},
+		{"update unknown", ReservationUpdate, submit, false, faultLostReply, false, true, stillStopping},
+		{"finalize committed", ReservationFinalize, finalize, true, faultNone, false, false, finalized},
+		{"finalize unknown, committed", ReservationFinalize, finalize, true, faultLostReply, false, true, finalized},
+		{"finalize not committed", ReservationFinalize, finalize, true, faultBeforeCommit, false, true, stillStopping},
+		{"finalize refused", ReservationFinalize, finalize, true, faultNone, true, false, stillStopping},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, a := running(t)
+			if tc.accepted {
+				e.mustWork(t, "submit", a, IntentSubmit, "https://example.invalid/pull/1")
+				if _, err := e.review(t, "accept", a, e.lead, 1, ReviewAccept); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e.port.faults[tc.op] = tc.fault
+			if tc.refuse {
+				e.port.refuse[tc.op] = fixtureRefusal(t, "stale_worker")
+			}
+			// Waiting on the step lock would fail fast rather than pass late.
+			e.s.flightWait = 200 * time.Millisecond
+			entered, release := e.gate(tc.op)
+			done := make(chan error, 1)
+			go func() { done <- tc.call(e, a) }()
+			<-entered
+
+			got, err := e.requestStop(t, "stop", a, e.lead, "priorities changed")
+			txt := lastText(t, e, e.builder)
+			release()
+			callErr := <-done
+			if err != nil || got.Stop != StopRequested || got.PendingKey == "" {
+				t.Fatalf("stop with a call in flight = %+v, %v", got, err)
+			}
+			if tc.accepted && got.AcceptedResult != 1 {
+				t.Fatalf("stop with a finalize in flight dropped its acceptance: %+v", got)
+			}
+			if txt != "lead requested a stop of task hub-a/project-a/task-1 for builder: priorities changed" {
+				t.Fatalf("stop message before the call returned = %q", txt)
+			}
+			switch {
+			case tc.reconcile:
+				if !errors.Is(callErr, ErrOutcomeUnknown) {
+					t.Fatalf("call = %v, want an unknown outcome", callErr)
+				}
+				if cur := mustState(t, e.s, a.ID, AttemptReconciling); cur.Stop != StopRequested {
+					t.Fatalf("reconciling attempt lost its stop: %+v", cur)
+				}
+				if _, err := e.s.ReconcileAttempt(ctx, e.builder.caller, e.port, a.ID); err != nil {
+					t.Fatal(err)
+				}
+			case tc.refuse:
+				if callErr == nil {
+					t.Fatal("the refused call succeeded")
+				}
+			case callErr != nil:
+				t.Fatalf("call: %v", callErr)
+			}
+			cur, err := e.s.GetAttempt(ctx, a.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.check(t, cur, PhaseSubmitted)
+		})
+	}
+}
 
 // newExecTeamNamed is a further execution team in the same store.
 func newExecTeamNamed(t *testing.T, s *Store, name string) execTeam {

@@ -745,6 +745,14 @@ func (s *Store) settle(ctx context.Context, c Caller, a Attempt, o callOutcome) 
 
 func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now time.Time) (Attempt, error) {
 	const clearPending = pendingColumnsCleared
+	// A stop may be requested while the call was in flight (stop.go), so
+	// the stop is read in this transaction, not taken from the attempt as
+	// it was when the call began.
+	var stop string
+	if err := tx.QueryRowContext(ctx, `SELECT stop FROM attempts WHERE id = ?`, a.ID).Scan(&stop); err != nil {
+		return Attempt{}, fmt.Errorf("read attempt stop: %w", err)
+	}
+	a.Stop = StopState(stop)
 	var err error
 	switch o.kind {
 	case outcomeUnknown:

@@ -151,11 +151,10 @@ func (s *Store) RequestStop(ctx context.Context, c Caller, key, attemptID string
 	if !byOperator {
 		cmd.replayCheck = sessionCurrent(c, in.SessionID, in.Generation)
 	}
-	unlock, err := s.lockAttempt(ctx, attemptID)
-	if err != nil {
-		return out, err
-	}
-	defer unlock()
+	// The request is one local transaction and does not wait for a
+	// reservation call in flight on the attempt (the attempt's step lock),
+	// so a stop can always be recorded. The settle of that call reads the
+	// stop inside its own transaction (applyOutcome).
 	return out, s.run(ctx, c, cmd, &out)
 }
 

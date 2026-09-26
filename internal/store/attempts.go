@@ -104,26 +104,30 @@ type Attempt struct {
 	CoordinatorGeneration int64   `json:"coordinator_generation"`
 	// WorkerSessionID and WorkerGeneration are the worker's session context
 	// when the offer was issued; empty if it had no active session then.
-	WorkerSessionID  string         `json:"worker_session_id,omitempty"`
-	WorkerGeneration int64          `json:"worker_generation,omitempty"`
-	State            AttemptState   `json:"state"`
-	CloseReason      string         `json:"close_reason,omitempty"`
-	Declined         bool           `json:"declined"`
-	BaseCommit       string         `json:"base_commit"`
-	Branch           string         `json:"branch"`
-	Process          TrustedProcess `json:"process"`
-	OfferExpiresAt   time.Time      `json:"offer_expires_at"`
-	TaskRevision     int64          `json:"task_revision"`
-	ReservationID    string         `json:"reservation_id,omitempty"`
-	Fence            string         `json:"fence,omitempty"`
-	LastReceiptID    string         `json:"last_receipt_id,omitempty"`
-	LastRefusal      string         `json:"last_refusal,omitempty"`
-	PendingOp        ReservationOp  `json:"pending_op,omitempty"`
-	PendingKey       string         `json:"pending_key,omitempty"`
-	PendingFrom      AttemptState   `json:"pending_from,omitempty"`
-	Revision         int64          `json:"revision"`
-	CreatedAt        time.Time      `json:"created_at"`
-	UpdatedAt        time.Time      `json:"updated_at"`
+	WorkerSessionID  string `json:"worker_session_id,omitempty"`
+	WorkerGeneration int64  `json:"worker_generation,omitempty"`
+	// WorkerSessionFloor is the worker's latest session number in the team
+	// when the offer was issued, or -1 if unknown (an offer from before it
+	// was recorded). Only the next session may accept an offline offer.
+	WorkerSessionFloor int64          `json:"worker_session_floor"`
+	State              AttemptState   `json:"state"`
+	CloseReason        string         `json:"close_reason,omitempty"`
+	Declined           bool           `json:"declined"`
+	BaseCommit         string         `json:"base_commit"`
+	Branch             string         `json:"branch"`
+	Process            TrustedProcess `json:"process"`
+	OfferExpiresAt     time.Time      `json:"offer_expires_at"`
+	TaskRevision       int64          `json:"task_revision"`
+	ReservationID      string         `json:"reservation_id,omitempty"`
+	Fence              string         `json:"fence,omitempty"`
+	LastReceiptID      string         `json:"last_receipt_id,omitempty"`
+	LastRefusal        string         `json:"last_refusal,omitempty"`
+	PendingOp          ReservationOp  `json:"pending_op,omitempty"`
+	PendingKey         string         `json:"pending_key,omitempty"`
+	PendingFrom        AttemptState   `json:"pending_from,omitempty"`
+	Revision           int64          `json:"revision"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
 }
 
 // offerRef and attemptRef are the work references aimem records for the
@@ -234,6 +238,10 @@ func (s *Store) OfferTask(ctx context.Context, c Caller, port Reservations, key 
 		} else if !errors.Is(err, ErrNotFound) {
 			return nil, err
 		}
+		floor, err := lastSessionOrdinal(ctx, tx, sess.TeamID, in.WorkerAgentID)
+		if err != nil {
+			return nil, err
+		}
 		id, err := newID(now)
 		if err != nil {
 			return nil, err
@@ -244,14 +252,14 @@ func (s *Store) OfferTask(ctx context.Context, c Caller, port Reservations, key 
 			        coordinator_agent_id, coordinator_session_id, coordinator_generation, state,
 			        base_commit, branch, process_repository, process_commit, process_manifest, instruction_digest,
 			        offer_expires_at, task_revision, pending_op, pending_key, pending_from, intents,
-			        worker_session_id, worker_generation, revision, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'offering', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'closed', 1, ?, ?, 1, ?, ?)`,
+			        worker_session_id, worker_generation, worker_session_floor, revision, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'offering', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'closed', 1, ?, ?, ?, 1, ?, ?)`,
 			id, sess.TeamID, in.Task.HubID, in.Task.ProjectID, in.Task.TaskID, in.WorkerAgentID,
 			sess.AgentID, sess.ID, sess.CoordinatorGeneration,
 			in.BaseCommit, in.Branch, in.Process.Identity.Repository, in.Process.Identity.Commit,
 			in.Process.Identity.Manifest, in.Process.InstructionDigest,
 			formatTime(in.ExpiresAt), in.ExpectedRevision, string(ReservationClaim), requestKey(id, ReservationClaim, 1),
-			workerSession, workerGeneration, at, at); err != nil {
+			workerSession, workerGeneration, floor, at, at); err != nil {
 			return nil, fmt.Errorf("insert attempt: %w", err)
 		}
 		return getAttempt(ctx, tx, id)
@@ -843,9 +851,11 @@ func attemptForWorker(ctx context.Context, tx *sql.Tx, c Caller, attemptID, sess
 // acceptable checks that an offer can still be accepted from the worker's
 // session. The offer is bound to the worker's session context when it was
 // issued: the same session at the same generation, or, if the worker had no
-// active session then, a session still at its first generation, which began
-// after the offer. Any later advance (resume, credential rotation) or a
-// replacement session makes the offer stale.
+// active session then, the first session the worker started after the offer
+// (the next in its session history), still at its first generation. Any
+// later advance (resume, credential rotation) or a replacement session makes
+// the offer stale for good; so does an offer whose eligible session is
+// unknown.
 func acceptable(ctx context.Context, tx *sql.Tx, a Attempt, sessionID string, now time.Time) error {
 	switch {
 	case a.State != AttemptOffered:
@@ -866,11 +876,21 @@ func acceptable(ctx context.Context, tx *sql.Tx, a Attempt, sessionID string, no
 	if err != nil {
 		return err
 	}
-	switch {
-	case a.WorkerSessionID != "" && (sess.ID != a.WorkerSessionID || sess.Generation != a.WorkerGeneration):
-		return fmt.Errorf("attempt %s: the worker's session changed since the offer: %w", a.ID, ErrOfferStale)
-	case a.WorkerSessionID == "" && sess.Generation != firstGeneration:
-		return fmt.Errorf("attempt %s: the worker's session advanced since the offer: %w", a.ID, ErrOfferStale)
+	if a.WorkerSessionID != "" {
+		if sess.ID != a.WorkerSessionID || sess.Generation != a.WorkerGeneration {
+			return fmt.Errorf("attempt %s: the worker's session changed since the offer: %w", a.ID, ErrOfferStale)
+		}
+		return nil
+	}
+	// Session ordinals start at 1, so an unknown floor (-1) matches no
+	// session: such an offer is refused until it is released and re-issued.
+	ordinal, err := sessionOrdinal(ctx, tx, sess.ID)
+	if err != nil {
+		return err
+	}
+	if ordinal != a.WorkerSessionFloor+1 || sess.Generation != firstGeneration {
+		return fmt.Errorf("attempt %s: only the worker's first session after the offer, at its first generation, may accept: %w",
+			a.ID, ErrOfferStale)
 	}
 	return nil
 }
@@ -904,7 +924,7 @@ const attemptColumns = `id, team_id, task_hub_id, task_project_id, task_id, work
 	coordinator_session_id, coordinator_generation, state, close_reason, declined, base_commit, branch,
 	process_repository, process_commit, process_manifest, instruction_digest, offer_expires_at, task_revision,
 	reservation_id, fence, last_receipt_id, last_refusal, pending_op, pending_key, pending_from,
-	worker_session_id, worker_generation, revision, created_at, updated_at`
+	worker_session_id, worker_generation, worker_session_floor, revision, created_at, updated_at`
 
 func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 	var (
@@ -919,7 +939,7 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		&a.Process.Identity.Repository, &a.Process.Identity.Commit, &a.Process.Identity.Manifest,
 		&a.Process.InstructionDigest, &expires, &a.TaskRevision, &a.ReservationID, &a.Fence, &a.LastReceiptID,
 		&a.LastRefusal, &op, &a.PendingKey, &from, &a.WorkerSessionID, &a.WorkerGeneration,
-		&a.Revision, &created, &updated)
+		&a.WorkerSessionFloor, &a.Revision, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Attempt{}, fmt.Errorf("attempt %s: %w", id, ErrNotFound)
 	}

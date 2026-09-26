@@ -53,7 +53,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 7
+const schemaVersion = 8
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -177,7 +177,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return tx.Commit()
 	}
 	// Each step upgrades the schema by one version; steps are additive.
-	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7}
+	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -339,6 +339,19 @@ var schemaV5 = []string{
 		PRIMARY KEY (message_id, agent_id)
 	)`,
 	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
+}
+
+// schemaV8 keeps a monotonic history of each member's sessions in a team,
+// numbered in the order they started (existing sessions by start time, then
+// ID), and records on an offer the worker's highest session number when it
+// was issued. Offers from before this version record -1: unknown.
+var schemaV8 = []string{
+	`ALTER TABLE sessions ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0`,
+	`UPDATE sessions SET ordinal = (SELECT COUNT(*) FROM sessions s2
+		WHERE s2.team_id = sessions.team_id AND s2.agent_id = sessions.agent_id
+		  AND (s2.created_at < sessions.created_at OR (s2.created_at = sessions.created_at AND s2.id <= sessions.id)))`,
+	`CREATE UNIQUE INDEX sessions_member_ordinal ON sessions (team_id, agent_id, ordinal)`,
+	`ALTER TABLE attempts ADD COLUMN worker_session_floor INTEGER NOT NULL DEFAULT -1`,
 }
 
 // schemaV7 binds an offer to the worker's session context when it was

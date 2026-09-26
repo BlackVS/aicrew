@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -292,11 +293,19 @@ func TestWorkStepLostReply(t *testing.T) {
 		if _, err := e.review(t, "r1", a, e.lead, 1, ReviewAccept); !errors.Is(err, ErrAttemptState) {
 			t.Fatalf("review while reconciling: got %v, want ErrAttemptState", err)
 		}
-		if got, err = e.work(t, "w1", a, IntentSubmit, "https://example.invalid/pull/1"); err != nil || got.Phase != PhaseSubmitted {
-			t.Fatalf("retry = %+v, %v", got, err)
+		if got, err = e.work(t, "w1", a, IntentSubmit, "https://example.invalid/pull/1"); err != nil ||
+			got.Phase != PhaseSubmitted || got.State != AttemptRunning {
+			t.Fatalf("retry = %+v, %v; want running and submitted", got, err)
 		}
 		if refs := resultRefs(t, e.s, a); len(refs) != 1 {
 			t.Fatalf("results after the retry = %v, want one", refs)
+		}
+		// The lifecycle continues after the reconciled step.
+		if _, err := e.review(t, "r2", a, e.lead, 1, ReviewAccept); err != nil {
+			t.Fatalf("review after the reconciled submit: %v", err)
+		}
+		if got, err := e.finalize(t, "f1", a, e.lead, 1, devDelivery("1")); err != nil || got.State != AttemptClosed {
+			t.Fatalf("finalize after the reconciled submit = %+v, %v", got, err)
 		}
 	})
 	t.Run("finalize", func(t *testing.T) {
@@ -312,6 +321,26 @@ func TestWorkStepLostReply(t *testing.T) {
 		}
 		if got, err = e.s.ReconcileAttempt(ctx, e.lead.caller, e.port, a.ID); err != nil || got.State != AttemptClosed || got.Phase != PhaseFinalized {
 			t.Fatalf("reconcile = %+v, %v", got, err)
+		}
+	})
+	t.Run("block and resume reconciled", func(t *testing.T) {
+		e, a := running(t)
+		for i, intent := range []WorkIntent{IntentBlock, IntentResume} {
+			e.port.faults[ReservationUpdate] = faultLostReply
+			detail := ""
+			if intent == IntentBlock {
+				detail = "Waiting for a decision."
+			}
+			if _, err := e.work(t, fmt.Sprintf("w%d", i), a, intent, detail); !errors.Is(err, ErrOutcomeUnknown) {
+				t.Fatalf("%s with a lost reply: %v", intent, err)
+			}
+			got, err := e.s.ReconcileAttempt(ctx, e.builder.caller, e.port, a.ID)
+			if err != nil || got.State != AttemptRunning || got.PendingKey != "" {
+				t.Fatalf("reconcile of %s = %+v, %v; want running with nothing pending", intent, got, err)
+			}
+		}
+		if got := e.mustWork(t, "w-submit", a, IntentSubmit, "https://example.invalid/pull/1"); got.Phase != PhaseSubmitted {
+			t.Fatalf("submit after reconciled steps = %+v", got)
 		}
 	})
 	t.Run("no second step while one is pending", func(t *testing.T) {
@@ -407,4 +436,28 @@ func TestInconsistentUpdateReplyIsNotTrusted(t *testing.T) {
 	if got, err = e.s.ReconcileAttempt(ctx, e.builder.caller, e.port, a.ID); err != nil || got.Phase != PhaseBlocked {
 		t.Fatalf("reconcile from the recorded receipt = %+v, %v", got, err)
 	}
+}
+
+// A blocker is accepted only if the complete team message it produces fits,
+// so a committed block can always be settled; the boundary is checked before
+// anything is sent, and an accepted maximum-size blocker settles and resumes.
+func TestBlockerFitsItsTeamMessage(t *testing.T) {
+	e, a := running(t)
+	calls := len(e.port.callLog())
+	if _, err := e.work(t, "w-long", a, IntentBlock, strings.Repeat("x", maxMessageText)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("oversized blocker: got %v, want ErrInvalid", err)
+	}
+	if len(e.port.callLog()) != calls {
+		t.Fatal("the oversized blocker was sent to aimem")
+	}
+	prefix, err := workMessage(context.Background(), e.s.db, a, IntentBlock, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	longest := strings.Repeat("x", maxMessageText-len(prefix))
+	got := e.mustWork(t, "w-max", a, IntentBlock, longest)
+	if got.Phase != PhaseBlocked || got.State != AttemptRunning {
+		t.Fatalf("maximum blocker = %+v", got)
+	}
+	e.mustWork(t, "w-resume", a, IntentResume, "")
 }

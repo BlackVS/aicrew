@@ -147,6 +147,13 @@ func (s *Store) UpdateWork(ctx context.Context, c Caller, port Reservations, key
 				}
 				detail = in.Detail
 			}
+			text, err := workMessage(ctx, tx, a, in.Intent, detail)
+			if err != nil {
+				return nil, err
+			}
+			if err := validateMessageText(text); err != nil {
+				return nil, fmt.Errorf("%w: the %s detail is too long for its team message", ErrInvalid, in.Intent)
+			}
 			return startWorkIntent(ctx, tx, a, ReservationUpdate, in.Intent, detail, "", now)
 		},
 	}
@@ -412,21 +419,37 @@ func applyWorkOutcome(ctx context.Context, tx *sql.Tx, a Attempt, r ReservationR
 			return fmt.Errorf("record result: %w", err)
 		}
 	}
+	// The step may be settled from a reconciliation, so the running state
+	// is set here, not assumed.
 	if err := updateAttempt(ctx, tx, a.ID, now,
-		`phase = ?, fence = ?, task_revision = ?, last_receipt_id = ?, `+clearPending,
+		`state = 'running', phase = ?, fence = ?, task_revision = ?, last_receipt_id = ?, `+clearPending,
 		string(phase), r.Reservation.Fence, r.TaskRevision, r.Receipt.ID); err != nil {
 		return err
 	}
-	switch WorkIntent(a.PendingIntent) {
+	text, err := workMessage(ctx, tx, a, WorkIntent(a.PendingIntent), a.PendingDetail)
+	if err != nil {
+		return err
+	}
+	task := a.Task
+	_, err = postLifecycle(ctx, tx, a.TeamID, a.WorkerAgentID, text, &task, now)
+	return err
+}
+
+// workMessage is the lifecycle message a committed work update posts. The
+// update's intent checks it before anything is recorded or sent, so a step
+// aimem commits can always be settled.
+func workMessage(ctx context.Context, q querier, a Attempt, intent WorkIntent, detail string) (string, error) {
+	worker, err := getAgent(ctx, q, a.WorkerAgentID)
+	if err != nil {
+		return "", err
+	}
+	switch intent {
 	case IntentBlock:
-		return announce(ctx, tx, a, a.WorkerAgentID, "%s blocked task %s: %s", now,
-			labelOf(a.WorkerAgentID), taskName(a.Task), a.PendingDetail)
+		return fmt.Sprintf("%s blocked task %s: %s", worker.Label, taskName(a.Task), detail), nil
 	case IntentSubmit:
-		return announce(ctx, tx, a, a.WorkerAgentID, "%s submitted a result for task %s: %s", now,
-			labelOf(a.WorkerAgentID), taskName(a.Task), a.PendingDetail)
+		return fmt.Sprintf("%s submitted a result for task %s: %s", worker.Label, taskName(a.Task), detail), nil
 	default:
-		return announce(ctx, tx, a, a.WorkerAgentID, "%s resumed work on task %s.", now,
-			labelOf(a.WorkerAgentID), taskName(a.Task))
+		return fmt.Sprintf("%s resumed work on task %s.", worker.Label, taskName(a.Task)), nil
 	}
 }
 

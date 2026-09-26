@@ -358,6 +358,36 @@ func TestInconsistentReplyIsNotTrusted(t *testing.T) {
 	}
 }
 
+// A retried command reports its own step's outcome. A refused step stays
+// refused on retry even after a later command with another key succeeded.
+func TestRetryReportsItsOwnStep(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	e := newExecTeam(t, s)
+	a := e.offer(t, "o1", "task-1")
+
+	e.port.refuse[ReservationRelease] = fixtureRefusal(t, "stale_worker")
+	if _, err := e.release(t, "r1", a); err == nil {
+		t.Fatal("the refused release succeeded")
+	}
+	e.port.refuse[ReservationTransfer] = fixtureRefusal(t, "stale_worker")
+	if _, err := s.AcceptOffer(ctx, e.builder.caller, e.port, "a1", a.ID, e.acceptReq()); err == nil {
+		t.Fatal("the refused acceptance succeeded")
+	}
+	if got := e.accept(t, "a2", a); got.State != AttemptRunning {
+		t.Fatalf("second acceptance = %+v", got)
+	}
+	if got, err := s.AcceptOffer(ctx, e.builder.caller, e.port, "a1", a.ID, e.acceptReq()); !errors.Is(err, ErrAttemptState) || got.State != AttemptRunning {
+		t.Fatalf("retry of the refused acceptance after another succeeded = %+v, %v; want ErrAttemptState", got, err)
+	}
+	if got, err := s.AcceptOffer(ctx, e.builder.caller, e.port, "a2", a.ID, e.acceptReq()); err != nil || got.State != AttemptRunning {
+		t.Fatalf("retry of the successful acceptance = %+v, %v; want success", got, err)
+	}
+	if _, err := e.release(t, "r1", a); !errors.Is(err, ErrAttemptState) {
+		t.Fatalf("retry of the refused release: got %v, want ErrAttemptState", err)
+	}
+}
+
 // When aimem shows the hold released by recovery, reconciliation closes the
 // attempt and frees the capacity. A failed status read, or a hold aicrew
 // does not recognize, changes nothing.

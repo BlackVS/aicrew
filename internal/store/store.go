@@ -343,7 +343,9 @@ var schemaV5 = []string{
 
 // schemaV6 adds execution attempts. An attempt that is not closed holds its
 // worker's one execution capacity: the partial unique index allows one open
-// attempt per worker agent across all teams.
+// attempt per worker agent across all teams. attempt_steps keeps the known
+// outcome of each reservation step by its request key, so a retried command
+// reports its own step's outcome.
 var schemaV6 = []string{
 	`CREATE TABLE attempts (
 		id                     TEXT PRIMARY KEY,
@@ -380,6 +382,15 @@ var schemaV6 = []string{
 		updated_at             TEXT NOT NULL
 	)`,
 	`CREATE UNIQUE INDEX attempts_one_open_per_worker ON attempts (worker_agent_id) WHERE state != 'closed'`,
+	`CREATE TABLE attempt_steps (
+		request_key TEXT PRIMARY KEY,
+		attempt_id  TEXT NOT NULL REFERENCES attempts (id),
+		operation   TEXT NOT NULL,
+		outcome     TEXT NOT NULL CHECK (outcome IN ('committed', 'refused', 'not_committed')),
+		refusal     TEXT NOT NULL DEFAULT '',
+		receipt_id  TEXT NOT NULL DEFAULT '',
+		settled_at  TEXT NOT NULL
+	)`,
 	`CREATE INDEX attempts_coordinator ON attempts (coordinator_agent_id) WHERE state != 'closed'`,
 }
 

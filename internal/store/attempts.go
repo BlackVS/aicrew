@@ -401,13 +401,9 @@ func (s *Store) transition(ctx context.Context, c Caller, port Reservations, cmd
 	}
 	if cur.PendingKey != intent.PendingKey || cur.PendingKey == "" {
 		// Settled already, by an earlier call or a reconciliation. Report
-		// whether the step took effect, so a retry never mistakes a refused
-		// step for a successful one.
-		if cur.State == settledState(intent.PendingOp) {
-			return cur, nil
-		}
-		return cur, fmt.Errorf("attempt %s is %s after its %s step (%s): %w",
-			cur.ID, cur.State, intent.PendingOp, cur.LastRefusal, ErrAttemptState)
+		// this command's own step, never the attempt's later state, so a
+		// retried refused step is not mistaken for a success.
+		return s.stepOutcome(ctx, cur, intent.PendingKey)
 	}
 	if retry {
 		return s.reconcilePending(ctx, c, port, cur)
@@ -459,6 +455,25 @@ func (s *Store) ReconcileAttempt(ctx context.Context, c Caller, port Reservation
 		}
 	default:
 		return a, nil
+	}
+}
+
+// stepOutcome reports the recorded outcome of one settled step.
+func (s *Store) stepOutcome(ctx context.Context, cur Attempt, key string) (Attempt, error) {
+	var outcome, refusal string
+	err := s.snapshot(ctx, func(q querier) error {
+		return q.QueryRowContext(ctx, `SELECT outcome, refusal FROM attempt_steps WHERE request_key = ?`, key).
+			Scan(&outcome, &refusal)
+	})
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return cur, fmt.Errorf("attempt %s: step %s has no recorded outcome: %w", cur.ID, key, ErrOutcomeUnknown)
+	case err != nil:
+		return cur, fmt.Errorf("read step outcome: %w", err)
+	case outcome == string(outcomeCommitted):
+		return cur, nil
+	default:
+		return cur, fmt.Errorf("attempt %s: step %s was %s %s: %w", cur.ID, key, outcome, refusal, ErrAttemptState)
 	}
 }
 
@@ -543,19 +558,6 @@ func classify(a Attempt, res ReservationResult, err error) callOutcome {
 		return callOutcome{kind: outcomeUnknown, detail: "the committed reservation does not match the pending request"}
 	}
 	return callOutcome{kind: outcomeCommitted, result: res}
-}
-
-// settledState is the state a step leaves the attempt in when aimem
-// committed it.
-func settledState(op ReservationOp) AttemptState {
-	switch op {
-	case ReservationClaim:
-		return AttemptOffered
-	case ReservationTransfer:
-		return AttemptRunning
-	default:
-		return AttemptClosed
-	}
 }
 
 func requestKey(attemptID string, op ReservationOp, n int64) string {
@@ -730,7 +732,28 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 	if err != nil {
 		return Attempt{}, err
 	}
+	if err := recordStep(ctx, tx, a, o, now); err != nil {
+		return Attempt{}, err
+	}
 	return getAttempt(ctx, tx, a.ID)
+}
+
+// recordStep keeps the known outcome of a pending step by its request key.
+func recordStep(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now time.Time) error {
+	if a.PendingKey == "" || (o.kind != outcomeCommitted && o.kind != outcomeRefused && o.kind != outcomeNotCommitted) {
+		return nil
+	}
+	refusal := ""
+	if o.refusal != nil {
+		refusal = o.refusal.Code
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO attempt_steps (request_key, attempt_id, operation, outcome, refusal, receipt_id, settled_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		a.PendingKey, a.ID, string(a.PendingOp), string(o.kind), refusal, o.result.Receipt.ID, formatTime(now)); err != nil {
+		return fmt.Errorf("record step outcome: %w", err)
+	}
+	return nil
 }
 
 // label is a placeholder resolved to an agent's label inside the

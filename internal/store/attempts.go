@@ -56,7 +56,9 @@ var (
 	// ones recorded on the offer.
 	ErrProcessMismatch = errors.New("process_mismatch")
 	// ErrOutcomeUnknown reports that a reservation call's outcome is not
-	// known; the attempt is reconciling.
+	// known, so the attempt is reconciling; or that a reconciliation found
+	// no evidence to act on, so the attempt is unchanged and awaits
+	// operator recovery.
 	ErrOutcomeUnknown = errors.New("reservation_outcome_unknown")
 )
 

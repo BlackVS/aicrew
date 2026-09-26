@@ -248,8 +248,9 @@ key; a call that was not committed, or a final refusal, leaves the attempt
 stopped with its hold and capacity.
 
 **Recovery.** Aicrew sends no recovery mutation: the recovery principal
-acts in aimem. Aicrew closes an attempt only on its own committed receipt;
-a status read never closes one. Until the reservation contract can report
+acts in aimem. Aicrew closes an attempt only on the known outcome of its
+own request (a committed receipt, or a claim aimem refused or did not
+commit); a status read never closes one. Until the reservation contract can report
 that this exact reservation closed with its fence advanced (an aimem
 follow-up for the recovery work), an attempt whose hold was released
 outside aicrew stays open with the capacity for operator recovery.

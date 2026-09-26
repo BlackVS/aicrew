@@ -184,7 +184,14 @@ are listed under open questions.
 
 An offer can be accepted only while the team's coordinator generation is
 the one it was made under; after a coordinator change, the current
-coordinator releases or re-issues it. A worker's decline is recorded in
+coordinator releases or re-issues it. An offer is also bound to the
+worker's session context when it was issued: acceptance must come from the
+same session at the same generation, or, if the worker had no active
+session then, from a session still at its first generation. So a resume, a
+credential rotation or a replacement session makes a pending offer
+unacceptable, as "Sessions and generation fencing" requires for resume; the
+hold and the worker's capacity stay until the coordinator's release is
+confirmed. A worker's decline is recorded in
 aicrew and releases nothing: the coordinator releases the offer's hold. An
 expired offer cannot be accepted, and expiry releases nothing by itself.
 

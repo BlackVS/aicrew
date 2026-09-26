@@ -114,10 +114,10 @@ func (s *Server) handle(method, path string, h http.HandlerFunc) {
 }
 
 // dispatch matches the request path and method exactly. There is no
-// pattern matching, no path cleaning and no redirect: any other path is 404,
-// and any other method on a known path, HEAD included, is 405.
+// pattern matching, no path cleaning, no decoding and no redirect: any other
+// path is 404, and any other method on a known path, HEAD included, is 405.
 func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
-	methods, ok := s.routes[r.URL.Path]
+	methods, ok := s.routes[requestPath(r)]
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "not_found"})
 		return
@@ -140,10 +140,18 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 // the registered path, or "unmatched". It never returns request text that
 // no route registered.
 func (s *Server) routeOf(r *http.Request) string {
-	if _, ok := s.routes[r.URL.Path][r.Method]; ok {
-		return r.Method + " " + r.URL.Path
+	if path := requestPath(r); s.routes[path][r.Method] != nil {
+		return r.Method + " " + path
 	}
 	return "unmatched"
+}
+
+// requestPath is the path exactly as the client sent it in the request
+// target, before the query. URL.Path is not used: it is percent-decoded, so
+// "/%68ealthz" would read as "/healthz".
+func requestPath(r *http.Request) string {
+	path, _, _ := strings.Cut(r.RequestURI, "?")
+	return path
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

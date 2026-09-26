@@ -199,8 +199,13 @@ func TestRoutes(t *testing.T) {
 			t.Fatalf("%s /healthz = %d, Allow %q; want 405, Allow GET", method, code, allow)
 		}
 	}
+	// A query does not change the path.
+	if code, _ := r.raw(t, http.MethodGet, "/healthz?probe=1"); code != http.StatusOK {
+		t.Fatalf("GET /healthz?probe=1 = %d, want 200", code)
+	}
 	for _, target := range []string{"/", "/v1/crew/introspect", "/healthz/", "/healthz/x", "//healthz",
-		"/./healthz", "/missing//child", "/a/../healthz", "/HEALTHZ"} {
+		"/./healthz", "/missing//child", "/a/../healthz", "/HEALTHZ",
+		"/%68ealthz", "/healt%68z", "/%2Fhealthz", "/healthz%2F", "/healthz%3F", "https://x/healthz"} {
 		if code, _ := r.raw(t, http.MethodGet, target); code != http.StatusNotFound {
 			t.Fatalf("GET %s = %d, want 404", target, code)
 		}

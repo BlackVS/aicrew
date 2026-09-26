@@ -127,7 +127,7 @@ func TestStopWhileACallIsInFlight(t *testing.T) {
 // newExecTeamNamed is a further execution team in the same store.
 func newExecTeamNamed(t *testing.T, s *Store, name string) execTeam {
 	t.Helper()
-	tm := mustTeam(t, s, name, "crew-"+name)
+	tm := mustTeam(t, s, name, "crew-"+name, projectA)
 	return execTeam{s: s, tm: tm,
 		lead:    joinCrew(t, s, tm.ID, "lead-"+name, RoleCoordinator),
 		builder: joinCrew(t, s, tm.ID, "builder-"+name, RoleWorker),

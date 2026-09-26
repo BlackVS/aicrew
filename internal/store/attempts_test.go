@@ -783,36 +783,199 @@ func TestWorkerContextChangeMakesOffersStale(t *testing.T) {
 	}
 }
 
-// An offer made while the worker has no session can be accepted from the
-// worker's first session, but not after that session advances.
-func TestOfferToAWorkerWithoutSession(t *testing.T) {
+// An offer issued while the worker had no session may be accepted only by
+// the first session the worker starts after it, at that session's first
+// generation. Nothing can make a refused offer acceptable again, and a
+// refusal keeps the offer, the hold and the capacity until the coordinator
+// releases it. (Offers issued to an active session: see
+// TestWorkerContextChangeMakesOffersStale.)
+func TestOfflineOfferHistoryRule(t *testing.T) {
 	ctx := context.Background()
-	for _, resume := range []bool{false, true} {
-		t.Run(fmt.Sprintf("resumed=%v", resume), func(t *testing.T) {
+	type world struct {
+		e      execTeam
+		a      Attempt
+		caller Caller
+	}
+	start := func(t *testing.T, w *world, key string) {
+		t.Helper()
+		sess, err := w.e.s.StartSession(ctx, w.caller, key, w.e.tm.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.e.builder.sess = sess
+	}
+	resume := func(t *testing.T, w *world) {
+		t.Helper()
+		sess, err := w.e.s.ResumeSession(ctx, w.caller, "resume-"+w.e.builder.sess.ID, w.e.builder.sess.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.e.builder.sess = sess
+	}
+	stop := func(t *testing.T, w *world) {
+		t.Helper()
+		if _, err := w.e.s.StopSession(ctx, operator(t), "stop-"+w.e.builder.sess.ID, w.e.builder.sess.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rotate := func(t *testing.T, w *world) {
+		t.Helper()
+		v := newFakeVerifier()
+		ch, err := w.e.s.IssueAgentChallenge(ctx, Caller{}, "challenge-rotate", w.e.builder.agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rc := v.receipt("rc-rotate", ch.HubID, "user-"+w.e.builder.agent.ID, "token-rotated")
+		if res, err := w.e.s.CompleteAgentProof(ctx, Caller{}, v, "proof-rotate", ch.ID, rc); err != nil || !res.Rotated {
+			t.Fatalf("rotation = %+v, %v", res, err)
+		}
+		if w.e.builder.sess, err = w.e.s.GetSession(ctx, w.e.builder.sess.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refused := func(t *testing.T, w *world) { t.Helper(); staleAccept(t, w.e, w.a, w.e.builder) }
+
+	for _, tc := range []struct {
+		name  string
+		steps func(t *testing.T, w *world)
+		// accepted: the last step is an acceptance that succeeds.
+		accepted bool
+	}{
+		{"first session accepts", func(t *testing.T, w *world) { start(t, w, "s1") }, true},
+		{"resume, then replacement", func(t *testing.T, w *world) {
+			start(t, w, "s1")
+			resume(t, w)
+			refused(t, w)
+			stop(t, w)
+			start(t, w, "s2")
+			refused(t, w)
+		}, false},
+		{"replacement without an attempt", func(t *testing.T, w *world) {
+			start(t, w, "s1")
+			stop(t, w)
+			start(t, w, "s2")
+			refused(t, w)
+		}, false},
+		{"rotation, then replacement", func(t *testing.T, w *world) {
+			start(t, w, "s1")
+			rotate(t, w)
+			refused(t, w)
+			stop(t, w)
+			start(t, w, "s2")
+			refused(t, w)
+		}, false},
+		{"eligible session unknown", func(t *testing.T, w *world) {
+			// An offer from before the session history was recorded.
+			if _, err := w.e.s.db.Exec(`UPDATE attempts SET worker_session_floor = -1 WHERE id = ?`, w.a.ID); err != nil {
+				t.Fatal(err)
+			}
+			start(t, w, "s1")
+			refused(t, w)
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			s, _ := openTemp(t)
 			tm := mustTeam(t, s, "t1", "crew")
 			lead := joinCrew(t, s, tm.ID, "lead", RoleCoordinator)
 			agent, caller := member(t, s, tm.ID, "builder", RoleWorker)
-			e := execTeam{s: s, tm: tm, lead: lead, builder: crewMember{agent: agent, caller: caller}, port: newFakeReservations(t)}
-			a := e.offer(t, "o1", "task-1")
-			if a.WorkerSessionID != "" || a.WorkerGeneration != 0 {
-				t.Fatalf("offer recorded a worker session that does not exist: %+v", a)
+			w := &world{e: execTeam{s: s, tm: tm, lead: lead, builder: crewMember{agent: agent, caller: caller},
+				port: newFakeReservations(t)}, caller: caller}
+			w.a = w.e.offer(t, "o1", "task-1")
+			if w.a.WorkerSessionID != "" || w.a.WorkerSessionFloor != 0 {
+				t.Fatalf("offline offer recorded %+v", w.a)
 			}
-			sess, err := s.StartSession(ctx, caller, "start-builder", tm.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			e.builder.sess = sess
-			if resume {
-				if e.builder.sess, err = s.ResumeSession(ctx, caller, "resume-builder", sess.ID); err != nil {
-					t.Fatal(err)
+			tc.steps(t, w)
+			if tc.accepted {
+				if got := w.e.accept(t, "a1", w.a); got.State != AttemptRunning {
+					t.Fatalf("acceptance = %+v", got)
 				}
-				staleAccept(t, e, a, e.builder)
 				return
 			}
-			if got := e.accept(t, "a1", a); got.State != AttemptRunning {
-				t.Fatalf("acceptance from the first session = %+v", got)
+			// The coordinator's release frees the capacity; a re-issued offer,
+			// bound to the worker's current session, can be accepted.
+			if got, err := w.e.release(t, "r1", w.a); err != nil || got.State != AttemptClosed || busy(t, s, agent.ID) {
+				t.Fatalf("release of the refused offer = %+v, %v", got, err)
+			}
+			again := w.e.offer(t, "o2", "task-1")
+			if got := w.e.accept(t, "a2", again); got.State != AttemptRunning {
+				t.Fatalf("re-issued offer = %+v", got)
 			}
 		})
+	}
+}
+
+// The schema version 8 backfill numbers existing sessions per member in the
+// order they started.
+func TestSessionOrdinalBackfill(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	tm := mustTeam(t, s, "t1", "crew")
+	_, lc := member(t, s, tm.ID, "lead", RoleCoordinator)
+	b, bc := member(t, s, tm.ID, "builder", RoleWorker)
+	ids := []string{}
+	for i := range 3 {
+		sess, err := s.StartSession(ctx, bc, fmt.Sprintf("s%d", i), tm.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, sess.ID)
+		if _, err := s.StopSession(ctx, operator(t), fmt.Sprintf("stop%d", i), sess.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.StartSession(ctx, lc, "lead-s", tm.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`DROP INDEX sessions_member_ordinal`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE sessions SET ordinal = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(schemaV8[1]); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	for i, id := range ids {
+		if n, err := sessionOrdinal(ctx, s.db, id); err != nil || n != int64(i+1) {
+			t.Errorf("session %d of the builder has ordinal %d, %v; want %d", i+1, n, err, i+1)
+		}
+	}
+	if n, err := lastSessionOrdinal(ctx, s.db, tm.ID, b.ID); err != nil || n != 3 {
+		t.Errorf("builder's last ordinal = %d, %v; want 3", n, err)
+	}
+	if _, err := s.db.Exec(schemaV8[2]); err != nil {
+		t.Fatalf("unique index after backfill: %v", err)
+	}
+}
+
+// The offer's floor counts the worker's earlier sessions: after two sessions
+// before the offer, the third session is the first after it and may accept.
+func TestOfflineOfferAfterEarlierSessions(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	tm := mustTeam(t, s, "t1", "crew")
+	lead := joinCrew(t, s, tm.ID, "lead", RoleCoordinator)
+	agent, caller := member(t, s, tm.ID, "builder", RoleWorker)
+	for i := range 2 {
+		sess, err := s.StartSession(ctx, caller, fmt.Sprintf("before-%d", i), tm.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.StopSession(ctx, operator(t), fmt.Sprintf("stop-before-%d", i), sess.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := execTeam{s: s, tm: tm, lead: lead, builder: crewMember{agent: agent, caller: caller}, port: newFakeReservations(t)}
+	a := e.offer(t, "o1", "task-1")
+	if a.WorkerSessionFloor != 2 {
+		t.Fatalf("offer floor = %d, want 2", a.WorkerSessionFloor)
+	}
+	sess, err := s.StartSession(ctx, caller, "after", tm.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.builder.sess = sess
+	if got := e.accept(t, "a1", a); got.State != AttemptRunning {
+		t.Fatalf("acceptance from the first session after the offer = %+v", got)
 	}
 }

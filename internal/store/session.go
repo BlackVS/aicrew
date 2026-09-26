@@ -115,11 +115,17 @@ func (s *Store) StartSession(ctx context.Context, c Caller, key, teamID string) 
 				return nil, err
 			}
 			at := formatTime(now)
+			// A member's sessions are numbered in the order they start; the
+			// write lock makes the number monotonic (attempts.go uses it).
+			ordinal, err := lastSessionOrdinal(ctx, tx, teamID, c.id)
+			if err != nil {
+				return nil, err
+			}
 			if _, err := tx.ExecContext(ctx,
 				`INSERT INTO sessions (id, team_id, agent_id, role, state, generation, coordinator_generation,
-				                       token_id, last_seen_at, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?)`,
-				id, teamID, c.id, string(m.Role), coordGen, agent.Linked.TokenID, at, at, at); err != nil {
+				                       token_id, last_seen_at, created_at, updated_at, ordinal)
+				 VALUES (?, ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?, ?)`,
+				id, teamID, c.id, string(m.Role), coordGen, agent.Linked.TokenID, at, at, at, ordinal+1); err != nil {
 				return nil, fmt.Errorf("insert session: %w", err)
 			}
 			return getSession(ctx, tx, id)
@@ -377,6 +383,26 @@ func getSession(ctx context.Context, q querier, id string) (Session, error) {
 		return Session{}, fmt.Errorf("session %s: %w", id, ErrNotFound)
 	}
 	return sess, err
+}
+
+// lastSessionOrdinal is the number of the member's latest session in the
+// team, or 0 if it never had one.
+func lastSessionOrdinal(ctx context.Context, q querier, teamID, agentID string) (int64, error) {
+	var n int64
+	if err := q.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(ordinal), 0) FROM sessions WHERE team_id = ? AND agent_id = ?`,
+		teamID, agentID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("read session history: %w", err)
+	}
+	return n, nil
+}
+
+func sessionOrdinal(ctx context.Context, q querier, id string) (int64, error) {
+	var n int64
+	if err := q.QueryRowContext(ctx, `SELECT ordinal FROM sessions WHERE id = ?`, id).Scan(&n); err != nil {
+		return 0, fmt.Errorf("read session ordinal: %w", err)
+	}
+	return n, nil
 }
 
 func activeSession(ctx context.Context, q querier, teamID, agentID string) (Session, error) {

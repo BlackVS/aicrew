@@ -1,0 +1,115 @@
+// Package server is aicrew's HTTPS service: the process that opens the store
+// and answers requests over TLS it terminates itself. It has no plain-HTTP
+// listener and no fallback.
+package server
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"regexp"
+	"strconv"
+	"time"
+)
+
+// Config is the service's configuration file. It names files and addresses
+// only; it holds no secret itself.
+type Config struct {
+	StorePath       string   `json:"store_path"`
+	ListenAddr      string   `json:"listen_addr"`
+	TLSCertFile     string   `json:"tls_cert_file"`
+	TLSKeyFile      string   `json:"tls_key_file"`
+	ServiceID       string   `json:"service_id"`
+	ShutdownTimeout Duration `json:"shutdown_timeout,omitempty"`
+}
+
+// Duration is a time.Duration written as a Go duration string, like "15s".
+type Duration time.Duration
+
+func (d *Duration) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return errors.New("a duration is a string such as \"15s\"")
+	}
+	v, err := time.ParseDuration(s)
+	if err != nil {
+		return errors.New("a duration is a string such as \"15s\"")
+	}
+	*d = Duration(v)
+	return nil
+}
+
+const (
+	maxConfigBytes         = 64 << 10
+	defaultShutdownTimeout = 15 * time.Second
+	maxShutdownTimeout     = 5 * time.Minute
+)
+
+// serviceIDShape is the identity.v1 ID shape; aimem registers the service
+// under this ID.
+var serviceIDShape = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+
+// LoadConfig reads and checks the configuration file at path. Unknown fields
+// are refused. Errors name the field at fault, never a file's content.
+func LoadConfig(path string) (Config, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("open config: %w", err)
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err != nil {
+		return Config{}, fmt.Errorf("read config: %w", err)
+	}
+	if len(raw) > maxConfigBytes {
+		return Config{}, fmt.Errorf("config is larger than %d bytes", maxConfigBytes)
+	}
+	return ParseConfig(raw)
+}
+
+// ParseConfig decodes and checks one configuration object.
+func ParseConfig(raw []byte) (Config, error) {
+	var c Config
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
+	}
+	if dec.Decode(&struct{}{}) != io.EOF {
+		return Config{}, errors.New("config: one JSON object expected")
+	}
+	if c.ShutdownTimeout == 0 {
+		c.ShutdownTimeout = Duration(defaultShutdownTimeout)
+	}
+	return c, c.validate()
+}
+
+func (c Config) validate() error {
+	for _, f := range []struct{ name, value string }{
+		{"store_path", c.StorePath}, {"listen_addr", c.ListenAddr},
+		{"tls_cert_file", c.TLSCertFile}, {"tls_key_file", c.TLSKeyFile},
+	} {
+		if f.value == "" {
+			return fmt.Errorf("config: %s is required", f.name)
+		}
+	}
+	// An empty host listens on every interface.
+	_, port, err := net.SplitHostPort(c.ListenAddr)
+	if err != nil {
+		return errors.New("config: listen_addr must be host:port")
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
+		return errors.New("config: listen_addr must have a numeric port")
+	}
+	if !serviceIDShape.MatchString(c.ServiceID) {
+		return errors.New("config: service_id must be 1 to 128 characters from [A-Za-z0-9._:-]")
+	}
+	if d := time.Duration(c.ShutdownTimeout); d <= 0 || d > maxShutdownTimeout {
+		return fmt.Errorf("config: shutdown_timeout must be positive and at most %s", maxShutdownTimeout)
+	}
+	return nil
+}

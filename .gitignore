@@ -7,6 +7,8 @@ docs/SESSION-STATE.md
 # Build artifacts
 /dist/
 /bin/
+/aicrewd
+/aicrewd.exe
 
 # Local environment secrets
 /.env

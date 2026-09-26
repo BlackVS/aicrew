@@ -24,7 +24,20 @@ const (
 	ReservationClaim    ReservationOp = "claim"
 	ReservationTransfer ReservationOp = "transfer"
 	ReservationRelease  ReservationOp = "release"
+	ReservationUpdate   ReservationOp = "update"
+	ReservationFinalize ReservationOp = "finalize"
 )
+
+// OwnedTaskFields are the task fields a work step sets: the aimem task
+// state it leads to and aicrew's own references. The integration adapter
+// reads aimem's current task, keeps every other field as it is, and sends
+// the complete content with the expected revision and fence (work.go).
+type OwnedTaskFields struct {
+	State     string     `json:"state"`
+	Blocker   string     `json:"blocker,omitempty"`
+	ResultRef string     `json:"result_ref,omitempty"`
+	Evidence  []Evidence `json:"evidence,omitempty"`
+}
 
 // ReservationHolder is the holder a claim or transfer asks for. Aicrew
 // always uses the external mode, naming its own offer or attempt.
@@ -47,7 +60,11 @@ type ReservationRequest struct {
 	Fence             string             `json:"fence,omitempty"`
 	Holder            *ReservationHolder `json:"holder,omitempty"`
 	Reason            string             `json:"reason,omitempty"`
+	Intent            string             `json:"intent,omitempty"`
+	TerminalEvidence  []string           `json:"terminal_evidence,omitempty"`
 	CoordinationProof string             `json:"coordination_proof,omitempty"`
+	// Owned travels to the adapter, not on the wire as is.
+	Owned *OwnedTaskFields `json:"-"`
 }
 
 // ReservationReceipt is aimem's record of a committed mutation.

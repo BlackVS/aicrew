@@ -211,6 +211,31 @@ running attempt never does. Aicrew's accepted result is not merge evidence
 and never marks a task `DONE` by itself; no merge, release or deployment
 follows automatically.
 
+**Results, review and finalize.** Submitted results form an append-only
+history per attempt; none is ever changed. The team's current coordinator,
+including a successor, reviews the latest result: accepting it records that
+exact result and the reviewing session and generation; returning it for
+rework clears the acceptance, so a later result needs its own review. A
+coordinator may finalize only from the session and generation that
+recorded the acceptance, so a successor, or a coordinator after a resume,
+reviews the result itself first; succession alone is not review. The
+holder may finalize its own accepted result. Finalizing as `DONE` needs the
+delivery evidence the project's process requires; for the current
+development workflow, the reviewed head, the human merge and post-merge CI.
+A trusted internal caller supplies both the requirement and the references;
+arbitrary callers never do, and neither a reference nor aimem storing it
+proves that the referenced check passed. There is no cancellation shortcut:
+cancelling belongs to the stop and recovery flow.
+
+**Task content.** Aicrew's commands carry only the fields aicrew owns: the
+step's intent and target state, a blocker, a result reference, a reason and
+delivery references. The integration adapter reads aimem's current task,
+keeps every other field, and sends the complete content with the expected
+revision and the reservation fence. A revision conflict is refused, never
+overwritten: the attempt keeps its phase, reconciles its revision from its
+hold status while no request is pending, and sends a new request. A pending
+request is never changed.
+
 ## Process pins
 
 When an offer is created (or an independent claim is recorded), aicrew reads

@@ -34,6 +34,7 @@ type fixtureMatrix struct {
 	Status    string `json:"status"`
 	Mutations []struct {
 		Operation  string          `json:"operation"`
+		ActorCase  string          `json:"actor_case"`
 		RequestKey string          `json:"request_key"`
 		Request    json.RawMessage `json:"request"`
 		Response   json.RawMessage `json:"response"`

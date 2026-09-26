@@ -513,6 +513,56 @@ func TestLifecycleMessageSharesTheTransition(t *testing.T) {
 	}
 }
 
+// Lifecycle text follows the same text rule as member text. Malformed
+// UTF-8 refuses the whole transition, leaving no message, recipient,
+// delivery, audit record or receipt; valid text is kept byte for byte.
+func TestLifecycleTextMustBeValidUTF8(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	tm, lead, builder, _ := crew(t, s)
+	transition := func(key, text string) error {
+		return s.run(ctx, lead.caller, command{
+			op: "test.lifecycle", scope: tm.ID, key: key, input: struct{ Key string }{key}, authorize: requireAgent,
+			apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
+				return postLifecycle(ctx, tx, tm.ID, lead.agent.ID, text, nil, now)
+			},
+		}, nil)
+	}
+
+	malformed := "The review of task 7 finished \xff with two notes."
+	if err := transition("bad", malformed); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("malformed lifecycle text: got %v, want ErrInvalid", err)
+	}
+	for table, want := range map[string]int{
+		"messages":           0,
+		"message_recipients": 0,
+		"audit WHERE operation = 'test.lifecycle'":    0,
+		"receipts WHERE operation = 'test.lifecycle'": 0,
+	} {
+		if n := count(t, s, table); n != want {
+			t.Errorf("%s has %d rows after the refused transition, want %d", table, n, want)
+		}
+	}
+
+	valid := "Die Prüfung ist abgeschlossen.\n\nThe café review costs 10 €, and the Japanese tests passed: 日本語のテストも通りました。"
+	if err := transition("good", valid); err != nil {
+		t.Fatalf("valid lifecycle text: %v", err)
+	}
+	sent := send(t, s, lead, "member", NewMessage{To: builder.agent.ID, Text: valid})
+	items := read(t, s, builder, 10)
+	if len(items) != 2 {
+		t.Fatalf("builder reads %d messages, want the lifecycle and the member message", len(items))
+	}
+	for _, it := range items {
+		if it.Text != valid {
+			t.Errorf("%s message text = %q, want it byte for byte", it.Kind, it.Text)
+		}
+	}
+	if sent.Text != valid {
+		t.Errorf("sent text = %q, want it byte for byte", sent.Text)
+	}
+}
+
 // The message keeps who sent it, from which session and generation, with
 // the profile the sender reported then, and its text exactly as written.
 func TestMessageRecordsSenderAndText(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Team inbox (docs/CREW-CONTRACT.md, "Inbox, receipts and audit").
@@ -120,7 +121,13 @@ func (m NewMessage) validate() error {
 	return nil
 }
 
+// validateMessageText is the one text rule for member and lifecycle
+// messages alike. Lifecycle text is built inside a transition, where the
+// command path's input check does not see it, so the rule checks UTF-8 too.
 func validateMessageText(text string) error {
+	if !utf8.ValidString(text) {
+		return fmt.Errorf("%w: message text is not valid UTF-8", ErrInvalid)
+	}
 	if strings.TrimSpace(text) == "" || len(text) > maxMessageText {
 		return fmt.Errorf("%w: message text must be non-blank and at most %d bytes", ErrInvalid, maxMessageText)
 	}

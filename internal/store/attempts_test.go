@@ -694,3 +694,125 @@ func TestReconcileAuthorization(t *testing.T) {
 		t.Fatalf("reconcile by the operator: %v", err)
 	}
 }
+
+// staleAccept requires acceptance to be refused as offer_stale without
+// changing the offer, the aimem hold or the worker's capacity.
+func staleAccept(t *testing.T, e execTeam, a Attempt, worker crewMember) {
+	t.Helper()
+	calls := len(e.port.callLog())
+	req := AcceptRequest{SessionID: worker.sess.ID, Generation: worker.sess.Generation,
+		Selected: testPin, InstructionDigest: testPin.InstructionDigest}
+	if _, err := e.s.AcceptOffer(context.Background(), worker.caller, e.port, "accept-"+worker.sess.ID+"-"+fmt.Sprint(worker.sess.Generation), a.ID, req); !errors.Is(err, ErrOfferStale) {
+		t.Fatalf("accept after the worker's context changed: got %v, want ErrOfferStale", err)
+	}
+	mustState(t, e.s, a.ID, AttemptOffered)
+	if h := e.port.holdOf(a.Task); !h.active || h.workRef != a.offerRef() {
+		t.Fatalf("the refusal changed the aimem hold: %+v", h)
+	}
+	if !busy(t, e.s, worker.agent.ID) {
+		t.Fatal("the refusal freed the worker's capacity")
+	}
+	if got := e.port.callLog(); len(got) != calls {
+		t.Fatalf("the refused acceptance called aimem: %v", got[calls:])
+	}
+}
+
+// An offer is bound to the worker's session context when it was issued. A
+// resume, a replacement session or a credential rotation makes it stale;
+// the current coordinator's release still closes it and frees the capacity.
+func TestWorkerContextChangeMakesOffersStale(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		change func(t *testing.T, e execTeam) Session
+	}{
+		{"resume", func(t *testing.T, e execTeam) Session {
+			sess, err := e.s.ResumeSession(ctx, e.builder.caller, "resume-builder", e.builder.sess.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return sess
+		}},
+		{"replacement session", func(t *testing.T, e execTeam) Session {
+			if _, err := e.s.StopSession(ctx, operator(t), "stop-builder", e.builder.sess.ID); err != nil {
+				t.Fatal(err)
+			}
+			sess, err := e.s.StartSession(ctx, e.builder.caller, "restart-builder", e.tm.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return sess
+		}},
+		{"credential rotation", func(t *testing.T, e execTeam) Session {
+			v := newFakeVerifier()
+			ch, err := e.s.IssueAgentChallenge(ctx, Caller{}, "challenge-builder", e.builder.agent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rc := v.receipt("rc-rotate", ch.HubID, "user-"+e.builder.agent.ID, "token-rotated")
+			if res, err := e.s.CompleteAgentProof(ctx, Caller{}, v, "proof-builder", ch.ID, rc); err != nil || !res.Rotated {
+				t.Fatalf("rotation = %+v, %v", res, err)
+			}
+			sess, err := e.s.GetSession(ctx, e.builder.sess.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return sess
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := openTemp(t)
+			e := newExecTeam(t, s)
+			a := e.offer(t, "o1", "task-1")
+			if a.WorkerSessionID != e.builder.sess.ID || a.WorkerGeneration != e.builder.sess.Generation {
+				t.Fatalf("the offer did not record the worker's session: %+v", a)
+			}
+			e.builder.sess = tc.change(t, e)
+			staleAccept(t, e, a, e.builder)
+
+			// The current coordinator releases it; a re-issued offer, bound to
+			// the worker's new context, can be accepted.
+			if got, err := e.release(t, "r1", a); err != nil || got.State != AttemptClosed || busy(t, s, e.builder.agent.ID) {
+				t.Fatalf("release of the stale offer = %+v, %v", got, err)
+			}
+			again := e.offer(t, "o2", "task-1")
+			if got := e.accept(t, "a2", again); got.State != AttemptRunning {
+				t.Fatalf("re-issued offer = %+v", got)
+			}
+		})
+	}
+}
+
+// An offer made while the worker has no session can be accepted from the
+// worker's first session, but not after that session advances.
+func TestOfferToAWorkerWithoutSession(t *testing.T) {
+	ctx := context.Background()
+	for _, resume := range []bool{false, true} {
+		t.Run(fmt.Sprintf("resumed=%v", resume), func(t *testing.T) {
+			s, _ := openTemp(t)
+			tm := mustTeam(t, s, "t1", "crew")
+			lead := joinCrew(t, s, tm.ID, "lead", RoleCoordinator)
+			agent, caller := member(t, s, tm.ID, "builder", RoleWorker)
+			e := execTeam{s: s, tm: tm, lead: lead, builder: crewMember{agent: agent, caller: caller}, port: newFakeReservations(t)}
+			a := e.offer(t, "o1", "task-1")
+			if a.WorkerSessionID != "" || a.WorkerGeneration != 0 {
+				t.Fatalf("offer recorded a worker session that does not exist: %+v", a)
+			}
+			sess, err := s.StartSession(ctx, caller, "start-builder", tm.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.builder.sess = sess
+			if resume {
+				if e.builder.sess, err = s.ResumeSession(ctx, caller, "resume-builder", sess.ID); err != nil {
+					t.Fatal(err)
+				}
+				staleAccept(t, e, a, e.builder)
+				return
+			}
+			if got := e.accept(t, "a1", a); got.State != AttemptRunning {
+				t.Fatalf("acceptance from the first session = %+v", got)
+			}
+		})
+	}
+}

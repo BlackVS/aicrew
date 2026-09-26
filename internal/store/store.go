@@ -53,7 +53,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 6
+const schemaVersion = 7
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -177,7 +177,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return tx.Commit()
 	}
 	// Each step upgrades the schema by one version; steps are additive.
-	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6}
+	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -339,6 +339,13 @@ var schemaV5 = []string{
 		PRIMARY KEY (message_id, agent_id)
 	)`,
 	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
+}
+
+// schemaV7 binds an offer to the worker's session context when it was
+// issued: the worker's active session and generation, or none.
+var schemaV7 = []string{
+	`ALTER TABLE attempts ADD COLUMN worker_session_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN worker_generation INTEGER NOT NULL DEFAULT 0`,
 }
 
 // schemaV6 adds execution attempts. An attempt that is not closed holds its

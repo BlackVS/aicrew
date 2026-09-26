@@ -120,7 +120,7 @@ func (s *Store) UpdateWork(ctx context.Context, c Caller, port Reservations, key
 			if err != nil {
 				return nil, err
 			}
-			if err := idleRunning(a); err != nil {
+			if err := workable(a); err != nil {
 				return nil, err
 			}
 			allowed := map[WorkIntent][]AttemptPhase{
@@ -154,7 +154,7 @@ func (s *Store) UpdateWork(ctx context.Context, c Caller, port Reservations, key
 			if err := validateMessageText(text); err != nil {
 				return nil, fmt.Errorf("%w: the %s detail is too long for its team message", ErrInvalid, in.Intent)
 			}
-			return startWorkIntent(ctx, tx, a, ReservationUpdate, in.Intent, detail, "", text, now)
+			return startWorkIntent(ctx, tx, a, ReservationUpdate, AttemptRunning, string(in.Intent), detail, "", text, now)
 		},
 	}
 	return s.transition(ctx, c, port, cmd, attemptID)
@@ -187,7 +187,7 @@ func (s *Store) ReviewResult(ctx context.Context, c Caller, key, attemptID strin
 			if a.TeamID != sess.TeamID {
 				return nil, fmt.Errorf("attempt %s: %w", attemptID, ErrNotFound)
 			}
-			if err := idleRunning(a); err != nil {
+			if err := workable(a); err != nil {
 				return nil, err
 			}
 			if !phaseIn(a.Phase, []AttemptPhase{PhaseSubmitted, PhaseAccepted}) {
@@ -207,7 +207,7 @@ func (s *Store) ReviewResult(ctx context.Context, c Caller, key, attemptID strin
 				}
 			case ReviewRework:
 				err = updateAttempt(ctx, tx, a.ID, now,
-					`phase = 'rework', accepted_result = 0, accepted_by_session = '', accepted_by_generation = 0`)
+					`phase = 'rework', `+acceptanceCleared)
 				if err == nil {
 					err = announce(ctx, tx, a, sess.AgentID, "%s returned result %d of task %s for rework.",
 						now, labelOf(sess.AgentID), in.ResultSeq, taskName(a.Task))
@@ -256,7 +256,7 @@ func (s *Store) FinalizeWork(ctx context.Context, c Caller, port Reservations, k
 			if a.TeamID != sess.TeamID {
 				return nil, fmt.Errorf("attempt %s: %w", attemptID, ErrNotFound)
 			}
-			if err := idleRunning(a); err != nil {
+			if err := workable(a); err != nil {
 				return nil, err
 			}
 			if a.Phase != PhaseAccepted {
@@ -288,7 +288,7 @@ func (s *Store) FinalizeWork(ctx context.Context, c Caller, port Reservations, k
 			if err != nil {
 				return nil, fmt.Errorf("encode delivery evidence: %w", err)
 			}
-			return startWorkIntent(ctx, tx, a, ReservationFinalize, "", "", string(evidence), "", now)
+			return startWorkIntent(ctx, tx, a, ReservationFinalize, AttemptRunning, "", "", string(evidence), "", now)
 		},
 	}
 	return s.transition(ctx, c, port, cmd, attemptID)
@@ -332,6 +332,25 @@ func idleRunning(a Attempt) error {
 	return nil
 }
 
+// workable requires an idle running attempt that is not being stopped: a
+// requested stop refuses every further work step.
+func workable(a Attempt) error {
+	if err := idleRunning(a); err != nil {
+		return err
+	}
+	if a.Stop != StopNone {
+		return fmt.Errorf("attempt %s: a stop is %s: %w", a.ID, a.Stop, ErrAttemptState)
+	}
+	return nil
+}
+
+// acceptanceCleared forgets a recorded acceptance; acceptanceVoided also
+// returns an accepted result to submitted.
+const (
+	acceptanceCleared = `accepted_result = 0, accepted_by_session = '', accepted_by_generation = 0`
+	acceptanceVoided  = `phase = CASE phase WHEN 'accepted' THEN 'submitted' ELSE phase END, ` + acceptanceCleared
+)
+
 func phaseIn(p AttemptPhase, allowed []AttemptPhase) bool {
 	for _, a := range allowed {
 		if p == a {
@@ -362,15 +381,16 @@ func latestResult(ctx context.Context, q querier, attemptID string) (int64, erro
 	return n, nil
 }
 
-// startWorkIntent records a pending update or finalize on a running attempt.
-func startWorkIntent(ctx context.Context, tx *sql.Tx, a Attempt, op ReservationOp, intent WorkIntent,
-	detail, evidence, message string, now time.Time) (Attempt, error) {
-	if _, err := startIntent(ctx, tx, a, op, AttemptRunning, now); err != nil {
+// startWorkIntent records a pending step on a running attempt with its
+// intent, detail, delivery evidence and checked team message.
+func startWorkIntent(ctx context.Context, tx *sql.Tx, a Attempt, op ReservationOp, state AttemptState,
+	intent, detail, evidence, message string, now time.Time) (Attempt, error) {
+	if _, err := startIntent(ctx, tx, a, op, state, now); err != nil {
 		return Attempt{}, err
 	}
 	if err := updateAttempt(ctx, tx, a.ID, now,
 		`pending_intent = ?, pending_detail = ?, pending_evidence = ?, pending_message = ?`,
-		string(intent), detail, evidence, message); err != nil {
+		intent, detail, evidence, message); err != nil {
 		return Attempt{}, err
 	}
 	return getAttempt(ctx, tx, a.ID)

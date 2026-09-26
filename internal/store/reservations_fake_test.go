@@ -208,6 +208,13 @@ func (f *fakeReservations) Mutate(_ context.Context, op ReservationOp, req Reser
 		if h == nil || !h.active || h.id != req.ReservationID || strconv.Itoa(h.fence) != req.Fence {
 			return ReservationResult{}, fixtureRefusal(f.t, "stale_worker")
 		}
+		if req.Owned != nil {
+			// A release that writes task content follows the update rules.
+			if req.ExpectedRevision != f.revision[task] {
+				return ReservationResult{}, fixtureRefusal(f.t, "changed_task")
+			}
+			f.mergeOwned(task, req.Owned)
+		}
 		h.fence++
 		if op == ReservationTransfer {
 			h.workRef = req.Holder.WorkRef
@@ -344,7 +351,7 @@ func (f *fakeReservations) holdOf(task TaskRef) fakeHold {
 }
 
 // recoveryRelease models an authorized recovery principal releasing a hold
-// in aimem, outside aicrew.
+// in aimem, outside aicrew. The caller's status then shows no hold.
 func (f *fakeReservations) recoveryRelease(task TaskRef) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -360,6 +367,15 @@ func (f *fakeReservations) standaloneHold(task TaskRef, workRef string) {
 	defer f.mu.Unlock()
 	f.nextID++
 	f.holds[taskKey(task)] = &fakeHold{id: fmt.Sprintf("reservation-%d", f.nextID), fence: 1, workRef: workRef, active: true}
+}
+
+// blindStatus is the fake whose status read cannot see the caller's hold,
+// as when the caller has lost visibility of the task: the hold is still in
+// place, but the status shows none.
+type blindStatus struct{ *fakeReservations }
+
+func (blindStatus) Status(context.Context, TaskRef) (HoldStatus, error) {
+	return HoldStatus{State: "none"}, nil
 }
 
 func (f *fakeReservations) callLog() []fakeCall {
@@ -419,14 +435,23 @@ func TestReservationFixtureConformance(t *testing.T) {
 		a := Attempt{ID: "x", PendingOp: op, PendingKey: "k", ReservationID: "r", Fence: "1", TaskRevision: 3,
 			PendingIntent: string(IntentSubmit), PendingDetail: "https://example.invalid/pull/1",
 			PendingEvidence: `[{"kind":"reviewed_head","ref":"abc"}]`}
-		ours, _ := json.Marshal(reservationRequest(a))
-		var sent map[string]json.RawMessage
-		if err := json.Unmarshal(ours, &sent); err != nil {
-			t.Fatal(err)
+		variants := []Attempt{a}
+		if op == ReservationRelease {
+			// The release of a stopped attempt, by its holder.
+			stopped := a
+			stopped.Stop, stopped.PendingIntent, stopped.PendingDetail = StopConfirmed, string(ReleaseBlocked), "waiting on review"
+			variants = append(variants, stopped)
 		}
-		for field := range sent {
-			if !known[op][field] {
-				t.Errorf("%s request field %q is not in the fixture", op, field)
+		for _, v := range variants {
+			ours, _ := json.Marshal(reservationRequest(v))
+			var sent map[string]json.RawMessage
+			if err := json.Unmarshal(ours, &sent); err != nil {
+				t.Fatal(err)
+			}
+			for field := range sent {
+				if !known[op][field] {
+					t.Errorf("%s request field %q is not in the fixture", op, field)
+				}
 			}
 		}
 	}

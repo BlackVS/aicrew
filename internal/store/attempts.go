@@ -140,6 +140,12 @@ type Attempt struct {
 	Revision             int64          `json:"revision"`
 	CreatedAt            time.Time      `json:"created_at"`
 	UpdatedAt            time.Time      `json:"updated_at"`
+	// The stop of a running attempt (stop.go).
+	Stop        StopState `json:"stop,omitempty"`
+	StopBy      string    `json:"stop_by,omitempty"`
+	StopSession string    `json:"stop_session,omitempty"`
+	StopReason  string    `json:"stop_reason,omitempty"`
+	StopAt      time.Time `json:"stop_at,omitzero"`
 }
 
 // offerRef and attemptRef are the work references aimem records for the
@@ -476,18 +482,18 @@ func (s *Store) ReconcileAttempt(ctx context.Context, c Caller, port Reservation
 		if a.State == AttemptRunning {
 			ref = a.attemptRef()
 		}
-		switch {
-		case st.State == "held" && st.OwnWorkRef == ref && st.ReservationID == a.ReservationID:
+		if st.State == "held" && st.OwnWorkRef == ref && st.ReservationID == a.ReservationID {
 			if st.TaskRevision > a.TaskRevision {
 				return s.refreshRevision(ctx, c, a, st.TaskRevision)
 			}
 			return a, nil
-		case st.State == "none":
-			return s.settle(ctx, c, a, callOutcome{kind: outcomeRecovered})
-		default:
-			return a, fmt.Errorf("attempt %s: aimem shows a different hold; operator recovery is required: %w",
-				a.ID, ErrOutcomeUnknown)
 		}
+		// Neither another hold nor no visible hold shows that this hold was
+		// released: "none" may only mean the caller can no longer see it.
+		// Until aimem reports the closure of this exact reservation, the
+		// attempt stays open with its capacity for operator recovery.
+		return a, fmt.Errorf("attempt %s: aimem shows %q, not this attempt's hold, which is not evidence of its release; "+
+			"operator recovery is required: %w", a.ID, st.State, ErrOutcomeUnknown)
 	default:
 		return a, nil
 	}
@@ -555,7 +561,6 @@ const (
 	outcomeRefused      outcomeKind = "refused"
 	outcomeNotCommitted outcomeKind = "not_committed"
 	outcomeUnknown      outcomeKind = "unknown"
-	outcomeRecovered    outcomeKind = "recovered"
 )
 
 type callOutcome struct {
@@ -615,9 +620,15 @@ func reservationRequest(a Attempt) ReservationRequest {
 		req.Holder = &ReservationHolder{Mode: "external", WorkRef: a.attemptRef()}
 	case ReservationRelease:
 		req.ReservationID, req.Fence = a.ReservationID, a.Fence
-		req.Reason = "withdrawn offer"
-		if a.Declined {
+		switch {
+		case a.Stop == StopConfirmed:
+			// The holder releases its own hold; no coordination reference.
+			req.Reason, req.CoordinationProof = "stopped", ""
+			req.Owned = &OwnedTaskFields{State: a.PendingIntent, Blocker: a.PendingDetail}
+		case a.Declined:
 			req.Reason = "declined offer"
+		default:
+			req.Reason = "withdrawn offer"
 		}
 	case ReservationUpdate:
 		// The holder updates its own hold; no coordination reference.
@@ -736,12 +747,6 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 	switch o.kind {
 	case outcomeUnknown:
 		err = updateAttempt(ctx, tx, a.ID, now, `state = 'reconciling'`)
-	case outcomeRecovered:
-		err = updateAttempt(ctx, tx, a.ID, now, `state = 'closed', close_reason = 'recovered'`)
-		if err == nil {
-			err = announce(ctx, tx, a, "", "Aimem no longer holds task %s for %s, so the attempt was closed as recovered.",
-				now, taskName(a.Task), labelOf(a.WorkerAgentID))
-		}
 	case outcomeRefused, outcomeNotCommitted:
 		reason := "not_committed"
 		if o.refusal != nil {
@@ -751,8 +756,12 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 			err = updateAttempt(ctx, tx, a.ID, now,
 				`state = 'closed', close_reason = ?, last_refusal = ?, `+clearPending, "claim "+reason, reason)
 		} else {
-			err = updateAttempt(ctx, tx, a.ID, now,
-				`state = ?, last_refusal = ?, `+clearPending, string(a.PendingFrom), reason)
+			set := `state = ?, last_refusal = ?, ` + clearPending
+			if a.PendingOp == ReservationFinalize && a.Stop != StopNone {
+				// The acceptance was kept only for the finalize in flight.
+				set += `, ` + acceptanceVoided
+			}
+			err = updateAttempt(ctx, tx, a.ID, now, set, string(a.PendingFrom), reason)
 		}
 	case outcomeCommitted:
 		r := o.result
@@ -774,6 +783,10 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 					now, labelOf(a.WorkerAgentID), taskName(a.Task))
 			}
 		case ReservationRelease:
+			if a.Stop == StopConfirmed {
+				err = applyStopRelease(ctx, tx, a, r, now)
+				break
+			}
 			reason := "withdrawn"
 			if a.Declined {
 				reason = "declined"
@@ -970,12 +983,13 @@ const attemptColumns = `id, team_id, task_hub_id, task_project_id, task_id, work
 	reservation_id, fence, last_receipt_id, last_refusal, pending_op, pending_key, pending_from,
 	worker_session_id, worker_generation, worker_session_floor, phase, pending_intent, pending_detail,
 	pending_evidence, pending_message, accepted_result, accepted_by_session, accepted_by_generation, finalized_result,
-	terminal_evidence, revision, created_at, updated_at`
+	terminal_evidence, stop, stop_by, stop_session, stop_reason, stop_at, revision, created_at, updated_at`
 
 func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 	var (
 		a                         Attempt
 		state, op, from, phase    string
+		stop, stopAt              string
 		declined                  int
 		expires, created, updated string
 	)
@@ -987,7 +1001,7 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		&a.LastRefusal, &op, &a.PendingKey, &from, &a.WorkerSessionID, &a.WorkerGeneration,
 		&a.WorkerSessionFloor, &phase, &a.PendingIntent, &a.PendingDetail, &a.PendingEvidence, &a.PendingMessage,
 		&a.AcceptedResult, &a.AcceptedBySession, &a.AcceptedByGeneration, &a.FinalizedResult,
-		&a.TerminalEvidence, &a.Revision, &created, &updated)
+		&a.TerminalEvidence, &stop, &a.StopBy, &a.StopSession, &a.StopReason, &stopAt, &a.Revision, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Attempt{}, fmt.Errorf("attempt %s: %w", id, ErrNotFound)
 	}
@@ -995,7 +1009,12 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		return Attempt{}, fmt.Errorf("read attempt: %w", err)
 	}
 	a.State, a.PendingOp, a.PendingFrom, a.Declined = AttemptState(state), ReservationOp(op), AttemptState(from), declined == 1
-	a.Phase = AttemptPhase(phase)
+	a.Phase, a.Stop = AttemptPhase(phase), StopState(stop)
+	if stopAt != "" {
+		if a.StopAt, err = parseTime(stopAt); err != nil {
+			return Attempt{}, err
+		}
+	}
 	for _, t := range []struct {
 		dst *time.Time
 		src string

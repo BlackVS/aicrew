@@ -388,36 +388,49 @@ func TestRetryReportsItsOwnStep(t *testing.T) {
 	}
 }
 
-// When aimem shows the hold released by recovery, reconciliation closes the
-// attempt and frees the capacity. A failed status read, or a hold aicrew
-// does not recognize, changes nothing.
-func TestRecoveryReleaseClosesTheAttempt(t *testing.T) {
+// A status read never closes an attempt. Only this attempt's own hold is
+// recognized; no visible hold is not evidence of release, since the caller
+// may only have lost sight of it, and neither is another holder's hold or a
+// failed read. Each leaves the attempt open with the worker's capacity, for
+// operator recovery, and sends nothing.
+func TestStatusNeverClosesAnAttempt(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTemp(t)
 	e := newExecTeam(t, s)
-	a := e.accept(t, "a1", e.offer(t, "o1", "task-1"))
+	offered := e.offer(t, "o1", "task-1")
+	calls := len(e.port.callLog())
+	stays := func(what string, port Reservations, id string, want AttemptState) {
+		t.Helper()
+		got, err := s.ReconcileAttempt(ctx, operator(t), port, id)
+		if !errors.Is(err, ErrOutcomeUnknown) || got.State != want || !busy(t, s, e.builder.agent.ID) {
+			t.Fatalf("%s = %+v, %v; want %s, still holding the capacity, for operator recovery", what, got, err, want)
+		}
+		mustState(t, s, id, want)
+	}
+	// The hold is in place, but the caller cannot see it.
+	stays("offered attempt, invisible hold", blindStatus{e.port}, offered.ID, AttemptOffered)
+	if len(e.port.callLog()) != calls {
+		t.Fatalf("reconciliation sent %v", e.port.callLog()[calls:])
+	}
+	a := e.accept(t, "a1", offered)
+	calls = len(e.port.callLog())
 
 	if got, err := s.ReconcileAttempt(ctx, e.builder.caller, e.port, a.ID); err != nil || got.State != AttemptRunning {
 		t.Fatalf("reconcile with the hold in place = %+v, %v", got, err)
 	}
-	e.port.statusErr = errSimulatedTransport
-	if got, err := s.ReconcileAttempt(ctx, e.builder.caller, e.port, a.ID); !errors.Is(err, ErrOutcomeUnknown) || got.State != AttemptRunning {
-		t.Fatalf("status unavailable = %+v, %v; want unchanged", got, err)
+	stays("running attempt, invisible hold", blindStatus{e.port}, a.ID, AttemptRunning)
+	if !e.port.holdOf(a.Task).active {
+		t.Fatal("the hold was changed")
 	}
+	e.port.statusErr = errSimulatedTransport
+	stays("status unavailable", e.port, a.ID, AttemptRunning)
 	e.port.statusErr = nil
 	e.port.recoveryRelease(a.Task)
+	stays("no hold after a release outside aicrew", e.port, a.ID, AttemptRunning)
 	e.port.standaloneHold(a.Task, "a-new-holder")
-	if got, err := s.ReconcileAttempt(ctx, e.builder.caller, e.port, a.ID); !errors.Is(err, ErrOutcomeUnknown) || got.State != AttemptRunning {
-		t.Fatalf("unrecognized hold = %+v, %v; want unchanged, for operator recovery", got, err)
-	}
-	e.port.recoveryRelease(a.Task)
-	got, err := s.ReconcileAttempt(ctx, e.builder.caller, e.port, a.ID)
-	if err != nil || got.State != AttemptClosed || got.CloseReason != "recovered" || busy(t, s, e.builder.agent.ID) {
-		t.Fatalf("after recovery release = %+v, %v; want closed as recovered", got, err)
-	}
-	lead := read(t, s, e.lead, 10)
-	if len(lead) == 0 || lead[len(lead)-1].Text != "Aimem no longer holds task hub-a/project-a/task-1 for builder, so the attempt was closed as recovered." {
-		t.Fatalf("lead reads %+v, want the recovery announcement", lead)
+	stays("another holder's hold", e.port, a.ID, AttemptRunning)
+	if len(e.port.callLog()) != calls {
+		t.Fatalf("reconciliation sent %v", e.port.callLog()[calls:])
 	}
 }
 

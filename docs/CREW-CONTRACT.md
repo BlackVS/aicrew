@@ -152,7 +152,7 @@ When the two stores disagree, aicrew conforms to aimem:
 | --- | --- | --- |
 | intent recorded, call not committed | no hold | close the intent; release local capacity |
 | intent recorded, call committed | hold for this attempt | complete the local transition from the receipt |
-| attempt active | hold released or finalized by recovery | close the attempt as recovered; release capacity |
+| attempt active | no hold visible to the caller, or another holder's hold | stay open with the capacity; report; operator recovery. A status read is not evidence that this hold was released: the caller may only have lost sight of it |
 | no attempt | hold naming an aicrew reference | operator recovery; never adopt or release it automatically |
 | any | unreachable or unresolved | stay `RECONCILING`; report; send nothing |
 
@@ -170,7 +170,7 @@ When the two stores disagree, aicrew conforms to aimem:
 | Review: accept result | `SUBMITTED` → `ACCEPTED` | none; acceptance is not delivery |
 | Finalize after human merge | `ACCEPTED` → `FINALIZED` | Finalize `DONE` with reviewed delivery evidence |
 | Stop | `STOP_REQUESTED` → `STOPPED` → `CLOSED` | Release to `READY`, or `BLOCKED` with a recorded blocker, after the worker confirms stop |
-| Operator recovery | any → `CLOSED` | Recovery release or finalize by an authorized principal |
+| Operator recovery | any → `CLOSED` | Recovery release or finalize by an authorized principal in aimem; aicrew closes the attempt only once aimem can report this reservation closed (see Recovery) |
 
 The reservation contract lets only the current holder mutate a held task,
 and only the holder or an authorized recovery principal release it. Finalize
@@ -226,6 +226,33 @@ A trusted internal caller supplies both the requirement and the references;
 arbitrary callers never do, and neither a reference nor aimem storing it
 proves that the referenced check passed. There is no cancellation shortcut:
 cancelling belongs to the stop and recovery flow.
+
+**Stop.** The team's current coordinator, including a successor, or the
+operator requests the stop of a running attempt in any work phase before
+finalize, with a reason; the worker cannot request its own stop. The
+request is local: it sends nothing to aimem, and the hold and the worker's
+capacity stay. A requested stop cannot be withdrawn and voids a recorded
+acceptance, returning the result to submitted; while it stands, no work
+update, review or finalize is accepted. A step already in flight settles or
+reconciles by the usual rules and never clears the stop; a finalize in
+flight keeps its acceptance, and if aimem did not commit it the acceptance
+is voided then. Only the worker confirms the stop, from its current session
+with no step in flight. Nothing else confirms it: not elapsed time, a lost
+connection, a coordinator change, or the worker's session being resumed or
+replaced, so an unconfirmed stop stays requested indefinitely, with its
+hold and capacity. After confirming, the worker, as holder, releases the
+task to `READY`, or to `BLOCKED` with a blocker, through the ordinary step
+ordering; the attempt closes and the capacity is freed only when aimem
+commits the release. A lost reply is reconciled by the receipt for the same
+key; a call that was not committed, or a final refusal, leaves the attempt
+stopped with its hold and capacity.
+
+**Recovery.** Aicrew sends no recovery mutation: the recovery principal
+acts in aimem. Aicrew closes an attempt only on its own committed receipt;
+a status read never closes one. Until the reservation contract can report
+that this exact reservation closed with its fence advanced (an aimem
+follow-up for the recovery work), an attempt whose hold was released
+outside aicrew stays open with the capacity for operator recovery.
 
 **Task content.** Aicrew's commands carry only the fields aicrew owns: the
 step's intent and target state, a blocker, a result reference, a reason and

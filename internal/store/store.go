@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 9
+const schemaVersion = 10
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -181,7 +181,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return tx.Commit()
 	}
 	// Each step upgrades the schema by one version; steps are additive.
-	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9}
+	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -343,6 +343,17 @@ var schemaV5 = []string{
 		PRIMARY KEY (message_id, agent_id)
 	)`,
 	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
+}
+
+// schemaV10 adds the stop of a running attempt (stop.go): its state, who
+// requested it, from which session, why and when. It is kept apart from the
+// work phase so that settling a work step never clears it.
+var schemaV10 = []string{
+	`ALTER TABLE attempts ADD COLUMN stop TEXT NOT NULL DEFAULT '' CHECK (stop IN ('', 'requested', 'confirmed'))`,
+	`ALTER TABLE attempts ADD COLUMN stop_by TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN stop_session TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN stop_reason TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN stop_at TEXT NOT NULL DEFAULT ''`,
 }
 
 // schemaV9 adds the work lifecycle of a running attempt (work.go): its

@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 10
+const schemaVersion = 11
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -156,8 +156,34 @@ func (s *Store) snapshot(ctx context.Context, fn func(q querier) error) error {
 	return fn(tx)
 }
 
-func (s *Store) migrate(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Store) migrate(ctx context.Context) (err error) {
+	// A step may rebuild a table that others reference, which SQLite allows
+	// only with foreign keys off, and that pragma has no effect inside a
+	// transaction. So the migration runs on one connection with foreign
+	// keys off, checks every reference before it commits, and turns them
+	// back on before the connection returns to the pool.
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("migration connection: %w", err)
+	}
+	defer conn.Close() //nolint:errcheck // a failed migration closes the store
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("disable foreign keys for migration: %w", err)
+	}
+	defer func() {
+		var on int
+		_, xerr := conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+		if xerr == nil {
+			xerr = conn.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&on)
+		}
+		if xerr == nil && on != 1 {
+			xerr = errors.New("foreign keys are off")
+		}
+		if xerr != nil && err == nil {
+			err = fmt.Errorf("re-enable foreign keys after migration: %w", xerr)
+		}
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin migration: %w", err)
 	}
@@ -180,8 +206,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if version == schemaVersion {
 		return tx.Commit()
 	}
-	// Each step upgrades the schema by one version; steps are additive.
-	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10}
+	// Each step upgrades the schema by one version.
+	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
+		schemaV10, schemaV11}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -196,7 +223,29 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := tx.ExecContext(ctx, record, schemaVersion); err != nil {
 		return fmt.Errorf("record schema version: %w", err)
 	}
+	if err := foreignKeyCheck(ctx, tx); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+// foreignKeyCheck fails if any row references a row that does not exist.
+func foreignKeyCheck(ctx context.Context, q querier) error {
+	rows, err := q.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return fmt.Errorf("foreign key check: %w", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var table, parent string
+		var rowid sql.NullInt64
+		var fk int
+		if err := rows.Scan(&table, &rowid, &parent, &fk); err != nil {
+			return fmt.Errorf("foreign key check: %w", err)
+		}
+		return fmt.Errorf("foreign key check: a row of %s references a missing row of %s", table, parent)
+	}
+	return rows.Err()
 }
 
 var schemaV1 = []string{
@@ -344,6 +393,88 @@ var schemaV5 = []string{
 	)`,
 	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
 }
+
+// schemaV11 lets an attempt start from an independent member's claim as
+// well as from a coordinator's offer (docs/CREW-CONTRACT.md, "Independent
+// claim"). A claim has no coordinator and a claiming state, which the
+// attempts table's constraints could not express, so the table is rebuilt
+// with every row and index kept: origin says how the attempt began, a
+// coordinator is recorded exactly for offers, and the state set gains
+// claiming. The migration checks every reference before it commits.
+var schemaV11 = []string{
+	`CREATE TABLE attempts_v11 (
+		id                     TEXT PRIMARY KEY,
+		team_id                TEXT NOT NULL REFERENCES teams (id),
+		task_hub_id            TEXT NOT NULL,
+		task_project_id        TEXT NOT NULL,
+		task_id                TEXT NOT NULL,
+		worker_agent_id        TEXT NOT NULL REFERENCES agents (id),
+		origin                 TEXT NOT NULL CHECK (origin IN ('offer', 'claim')),
+		coordinator_agent_id   TEXT REFERENCES agents (id),
+		coordinator_session_id TEXT NOT NULL,
+		coordinator_generation INTEGER NOT NULL,
+		state                  TEXT NOT NULL CHECK (state IN
+			('offering', 'offered', 'accepting', 'claiming', 'running', 'releasing', 'reconciling', 'closed')),
+		close_reason           TEXT NOT NULL DEFAULT '',
+		declined               INTEGER NOT NULL DEFAULT 0 CHECK (declined IN (0, 1)),
+		base_commit            TEXT NOT NULL,
+		branch                 TEXT NOT NULL,
+		process_repository     TEXT NOT NULL,
+		process_commit         TEXT NOT NULL,
+		process_manifest       TEXT NOT NULL,
+		instruction_digest     TEXT NOT NULL,
+		offer_expires_at       TEXT NOT NULL,
+		task_revision          INTEGER NOT NULL,
+		reservation_id         TEXT NOT NULL DEFAULT '',
+		fence                  TEXT NOT NULL DEFAULT '',
+		last_receipt_id        TEXT NOT NULL DEFAULT '',
+		last_refusal           TEXT NOT NULL DEFAULT '',
+		pending_op             TEXT NOT NULL DEFAULT '',
+		pending_key            TEXT NOT NULL DEFAULT '',
+		pending_from           TEXT NOT NULL DEFAULT '',
+		intents                INTEGER NOT NULL DEFAULT 0,
+		revision               INTEGER NOT NULL,
+		created_at             TEXT NOT NULL,
+		updated_at             TEXT NOT NULL,
+		worker_session_id      TEXT NOT NULL DEFAULT '',
+		worker_generation      INTEGER NOT NULL DEFAULT 0,
+		worker_session_floor   INTEGER NOT NULL DEFAULT -1,
+		phase                  TEXT NOT NULL DEFAULT '' CHECK (phase IN
+			('', 'working', 'blocked', 'submitted', 'rework', 'accepted', 'finalized')),
+		pending_intent         TEXT NOT NULL DEFAULT '',
+		pending_detail         TEXT NOT NULL DEFAULT '',
+		pending_evidence       TEXT NOT NULL DEFAULT '',
+		pending_message        TEXT NOT NULL DEFAULT '',
+		accepted_result        INTEGER NOT NULL DEFAULT 0,
+		accepted_by_session    TEXT NOT NULL DEFAULT '',
+		accepted_by_generation INTEGER NOT NULL DEFAULT 0,
+		finalized_result       INTEGER NOT NULL DEFAULT 0,
+		terminal_evidence      TEXT NOT NULL DEFAULT '',
+		stop                   TEXT NOT NULL DEFAULT '' CHECK (stop IN ('', 'requested', 'confirmed')),
+		stop_by                TEXT NOT NULL DEFAULT '',
+		stop_session           TEXT NOT NULL DEFAULT '',
+		stop_reason            TEXT NOT NULL DEFAULT '',
+		stop_at                TEXT NOT NULL DEFAULT '',
+		CHECK ((origin = 'offer') = (coordinator_agent_id IS NOT NULL))
+	)`,
+	`INSERT INTO attempts_v11 (` + attemptsV10Columns + `, origin)
+	 SELECT ` + attemptsV10Columns + `, 'offer' FROM attempts`,
+	`DROP TABLE attempts`,
+	`ALTER TABLE attempts_v11 RENAME TO attempts`,
+	`CREATE UNIQUE INDEX attempts_one_open_per_worker ON attempts (worker_agent_id) WHERE state != 'closed'`,
+	`CREATE INDEX attempts_coordinator ON attempts (coordinator_agent_id) WHERE state != 'closed'`,
+}
+
+// attemptsV10Columns are the attempts columns before schema v11, all
+// carried over as they are.
+const attemptsV10Columns = `id, team_id, task_hub_id, task_project_id, task_id, worker_agent_id,
+	coordinator_agent_id, coordinator_session_id, coordinator_generation, state, close_reason, declined,
+	base_commit, branch, process_repository, process_commit, process_manifest, instruction_digest,
+	offer_expires_at, task_revision, reservation_id, fence, last_receipt_id, last_refusal, pending_op,
+	pending_key, pending_from, intents, revision, created_at, updated_at, worker_session_id,
+	worker_generation, worker_session_floor, phase, pending_intent, pending_detail, pending_evidence,
+	pending_message, accepted_result, accepted_by_session, accepted_by_generation, finalized_result,
+	terminal_evidence, stop, stop_by, stop_session, stop_reason, stop_at`
 
 // schemaV10 adds the stop of a running attempt (stop.go): its state, who
 // requested it, from which session, why and when. It is kept apart from the

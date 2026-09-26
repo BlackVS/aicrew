@@ -119,6 +119,11 @@ func (s *Store) RequestStop(ctx context.Context, c Caller, key, attemptID string
 				if a.TeamID != sess.TeamID {
 					return nil, fmt.Errorf("attempt %s: %w", attemptID, ErrNotFound)
 				}
+				// A worker never requests its own stop, even after becoming
+				// the team's coordinator; the operator still may.
+				if a.WorkerAgentID == sess.AgentID {
+					return nil, fmt.Errorf("%w: the worker of attempt %s cannot request its own stop", ErrForbidden, a.ID)
+				}
 				if who, err = agentLabel(ctx, tx, sess.AgentID); err != nil {
 					return nil, err
 				}

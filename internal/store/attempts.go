@@ -68,6 +68,7 @@ const (
 	AttemptOffering    AttemptState = "offering"
 	AttemptOffered     AttemptState = "offered"
 	AttemptAccepting   AttemptState = "accepting"
+	AttemptClaiming    AttemptState = "claiming"
 	AttemptRunning     AttemptState = "running"
 	AttemptReleasing   AttemptState = "releasing"
 	AttemptReconciling AttemptState = "reconciling"
@@ -96,7 +97,18 @@ func (p TrustedProcess) valid() bool {
 	return validRefs(p.Identity.Repository, p.Identity.Commit, p.Identity.Manifest, p.InstructionDigest)
 }
 
-// Attempt is one task offered to one worker.
+// AttemptOrigin is how an attempt began: a coordinator's offer to a named
+// worker, or an independent member's own claim (claim.go).
+type AttemptOrigin string
+
+const (
+	OriginOffer AttemptOrigin = "offer"
+	OriginClaim AttemptOrigin = "claim"
+)
+
+// Attempt is one task offered to one worker, or claimed by an independent
+// member for itself. A claimed attempt has no coordinator and no offer
+// expiry.
 type Attempt struct {
 	ID                    string  `json:"id"`
 	TeamID                string  `json:"team_id"`
@@ -130,7 +142,7 @@ type Attempt struct {
 	BaseCommit           string         `json:"base_commit"`
 	Branch               string         `json:"branch"`
 	Process              TrustedProcess `json:"process"`
-	OfferExpiresAt       time.Time      `json:"offer_expires_at"`
+	OfferExpiresAt       time.Time      `json:"offer_expires_at,omitzero"`
 	TaskRevision         int64          `json:"task_revision"`
 	ReservationID        string         `json:"reservation_id,omitempty"`
 	Fence                string         `json:"fence,omitempty"`
@@ -143,17 +155,28 @@ type Attempt struct {
 	CreatedAt            time.Time      `json:"created_at"`
 	UpdatedAt            time.Time      `json:"updated_at"`
 	// The stop of a running attempt (stop.go).
-	Stop        StopState `json:"stop,omitempty"`
-	StopBy      string    `json:"stop_by,omitempty"`
-	StopSession string    `json:"stop_session,omitempty"`
-	StopReason  string    `json:"stop_reason,omitempty"`
-	StopAt      time.Time `json:"stop_at,omitzero"`
+	Stop        StopState     `json:"stop,omitempty"`
+	StopBy      string        `json:"stop_by,omitempty"`
+	StopSession string        `json:"stop_session,omitempty"`
+	StopReason  string        `json:"stop_reason,omitempty"`
+	StopAt      time.Time     `json:"stop_at,omitzero"`
+	Origin      AttemptOrigin `json:"origin"`
 }
 
 // offerRef and attemptRef are the work references aimem records for the
 // coordinator's offer hold and the worker's hold.
 func (a Attempt) offerRef() string   { return "aicrew-offer-" + a.ID }
 func (a Attempt) attemptRef() string { return "aicrew-attempt-" + a.ID }
+
+// claimRef is the work reference an attempt's claim asks aimem to hold: the
+// offer for a coordinator's offer, the attempt itself for an independent
+// claim.
+func (a Attempt) claimRef() string {
+	if a.Origin == OriginClaim {
+		return a.attemptRef()
+	}
+	return a.offerRef()
+}
 
 // OfferRequest offers a task to a named worker. ExpectedRevision, Process
 // and the task reference come from a trusted internal caller that read them
@@ -268,12 +291,12 @@ func (s *Store) OfferTask(ctx context.Context, c Caller, port Reservations, key 
 		}
 		at := formatTime(now)
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO attempts (id, team_id, task_hub_id, task_project_id, task_id, worker_agent_id,
+			`INSERT INTO attempts (id, team_id, task_hub_id, task_project_id, task_id, worker_agent_id, origin,
 			        coordinator_agent_id, coordinator_session_id, coordinator_generation, state,
 			        base_commit, branch, process_repository, process_commit, process_manifest, instruction_digest,
 			        offer_expires_at, task_revision, pending_op, pending_key, pending_from, intents,
 			        worker_session_id, worker_generation, worker_session_floor, revision, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'offering', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'closed', 1, ?, ?, ?, 1, ?, ?)`,
+			 VALUES (?, ?, ?, ?, ?, ?, 'offer', ?, ?, ?, 'offering', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'closed', 1, ?, ?, ?, 1, ?, ?)`,
 			id, sess.TeamID, in.Task.HubID, in.Task.ProjectID, in.Task.TaskID, in.WorkerAgentID,
 			sess.AgentID, sess.ID, sess.CoordinatorGeneration,
 			in.BaseCommit, in.Branch, in.Process.Identity.Repository, in.Process.Identity.Commit,
@@ -590,7 +613,7 @@ func classify(a Attempt, res ReservationResult, err error) callOutcome {
 	var ok bool
 	switch a.PendingOp {
 	case ReservationClaim:
-		ok = r.Active && r.ID != "" && r.OwnWorkRef == a.offerRef()
+		ok = r.Active && r.ID != "" && r.OwnWorkRef == a.claimRef()
 	case ReservationTransfer:
 		ok = r.Active && r.ID == a.ReservationID && r.OwnWorkRef == a.attemptRef()
 	case ReservationRelease, ReservationFinalize:
@@ -616,7 +639,7 @@ func reservationRequest(a Attempt) ReservationRequest {
 	}
 	switch a.PendingOp {
 	case ReservationClaim:
-		req.Holder = &ReservationHolder{Mode: "external", WorkRef: a.offerRef()}
+		req.Holder = &ReservationHolder{Mode: "external", WorkRef: a.claimRef()}
 	case ReservationTransfer:
 		req.ReservationID, req.Fence = a.ReservationID, a.Fence
 		req.Holder = &ReservationHolder{Mode: "external", WorkRef: a.attemptRef()}
@@ -777,6 +800,10 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 		r := o.result
 		switch a.PendingOp {
 		case ReservationClaim:
+			if a.Origin == OriginClaim {
+				err = applyClaimRun(ctx, tx, a, r, now)
+				break
+			}
 			err = updateAttempt(ctx, tx, a.ID, now,
 				`state = 'offered', reservation_id = ?, fence = ?, task_revision = ?, last_receipt_id = ?, `+clearPending,
 				r.Reservation.ID, r.Reservation.Fence, r.TaskRevision, r.Receipt.ID)
@@ -987,19 +1014,19 @@ func openWork(ctx context.Context, q querier, agentID, teamID string) (bool, err
 	return true, nil
 }
 
-const attemptColumns = `id, team_id, task_hub_id, task_project_id, task_id, worker_agent_id, coordinator_agent_id,
+const attemptColumns = `id, team_id, task_hub_id, task_project_id, task_id, worker_agent_id, COALESCE(coordinator_agent_id, ''),
 	coordinator_session_id, coordinator_generation, state, close_reason, declined, base_commit, branch,
 	process_repository, process_commit, process_manifest, instruction_digest, offer_expires_at, task_revision,
 	reservation_id, fence, last_receipt_id, last_refusal, pending_op, pending_key, pending_from,
 	worker_session_id, worker_generation, worker_session_floor, phase, pending_intent, pending_detail,
 	pending_evidence, pending_message, accepted_result, accepted_by_session, accepted_by_generation, finalized_result,
-	terminal_evidence, stop, stop_by, stop_session, stop_reason, stop_at, revision, created_at, updated_at`
+	terminal_evidence, stop, stop_by, stop_session, stop_reason, stop_at, origin, revision, created_at, updated_at`
 
 func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 	var (
 		a                         Attempt
 		state, op, from, phase    string
-		stop, stopAt              string
+		stop, stopAt, origin      string
 		declined                  int
 		expires, created, updated string
 	)
@@ -1011,7 +1038,7 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		&a.LastRefusal, &op, &a.PendingKey, &from, &a.WorkerSessionID, &a.WorkerGeneration,
 		&a.WorkerSessionFloor, &phase, &a.PendingIntent, &a.PendingDetail, &a.PendingEvidence, &a.PendingMessage,
 		&a.AcceptedResult, &a.AcceptedBySession, &a.AcceptedByGeneration, &a.FinalizedResult,
-		&a.TerminalEvidence, &stop, &a.StopBy, &a.StopSession, &a.StopReason, &stopAt, &a.Revision, &created, &updated)
+		&a.TerminalEvidence, &stop, &a.StopBy, &a.StopSession, &a.StopReason, &stopAt, &origin, &a.Revision, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Attempt{}, fmt.Errorf("attempt %s: %w", id, ErrNotFound)
 	}
@@ -1019,7 +1046,12 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		return Attempt{}, fmt.Errorf("read attempt: %w", err)
 	}
 	a.State, a.PendingOp, a.PendingFrom, a.Declined = AttemptState(state), ReservationOp(op), AttemptState(from), declined == 1
-	a.Phase, a.Stop = AttemptPhase(phase), StopState(stop)
+	a.Phase, a.Stop, a.Origin = AttemptPhase(phase), StopState(stop), AttemptOrigin(origin)
+	if expires != "" {
+		if a.OfferExpiresAt, err = parseTime(expires); err != nil {
+			return Attempt{}, err
+		}
+	}
 	if stopAt != "" {
 		if a.StopAt, err = parseTime(stopAt); err != nil {
 			return Attempt{}, err
@@ -1028,7 +1060,7 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 	for _, t := range []struct {
 		dst *time.Time
 		src string
-	}{{&a.OfferExpiresAt, expires}, {&a.CreatedAt, created}, {&a.UpdatedAt, updated}} {
+	}{{&a.CreatedAt, created}, {&a.UpdatedAt, updated}} {
 		if *t.dst, err = parseTime(t.src); err != nil {
 			return Attempt{}, err
 		}

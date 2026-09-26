@@ -215,7 +215,8 @@ follows automatically.
 history per attempt; none is ever changed. The team's current coordinator,
 including a successor, reviews the latest result: accepting it records that
 exact result and the reviewing session and generation; returning it for
-rework clears the acceptance, so a later result needs its own review. A
+rework clears the acceptance, so a later result needs its own review. No
+member reviews its own result, even after becoming the coordinator. A
 coordinator may finalize only from the session and generation that
 recorded the acceptance, so a successor, or a coordinator after a resume,
 reviews the result itself first; succession alone is not review. The
@@ -229,7 +230,8 @@ cancelling belongs to the stop and recovery flow.
 
 **Stop.** The team's current coordinator, including a successor, or the
 operator requests the stop of a running attempt in any work phase before
-finalize, with a reason; the worker cannot request its own stop. The
+finalize, with a reason; the worker cannot request its own stop, even
+after becoming the coordinator. The
 request is local: it sends nothing to aimem, and the hold and the worker's
 capacity stay. A requested stop cannot be withdrawn and voids a recorded
 acceptance, returning the result to submitted; while it stands, no work
@@ -254,6 +256,27 @@ commit); a status read never closes one. Until the reservation contract can repo
 that this exact reservation closed with its fence advanced (an aimem
 follow-up for the recovery work), an attempt whose hold was released
 outside aicrew stays open with the capacity for operator recovery.
+
+**Independent claim.** Only a member with the independent role claims, from
+its own active session at its current generation, and only a task in one of
+the team's projects; a worker receives work by offer and a coordinator
+offers it. A trusted reader supplies the task reference, its expected
+revision and the project's selected process pin; the claimer supplies the
+base commit and branch and the digest of the instructions it verified,
+which must match the pin. Recording the claim takes the claimer's one
+execution capacity, so a member busy in any team cannot claim, and a
+member with a claim cannot be offered work anywhere. Aimem is then asked to
+claim the task with an external holder that names this exact attempt,
+under the claimer's own verified context. A committed claim runs the
+attempt at once. A final refusal, such as a task another holder already
+holds, or a call that was not committed, closes the attempt and frees the
+capacity; any other outcome keeps both and reconciles by receipt. A claimed
+attempt has no coordinator. From then on it follows the same rules as any
+running attempt: the claimer works as holder, the team's current
+coordinator reviews (a claimer never reviews its own result, and with no
+coordinator a submitted result waits), the holder or the reviewing
+coordinator finalizes, and a stop is requested by the coordinator or the
+operator and confirmed by the claimer.
 
 **Task content.** Aicrew's commands carry only the fields aicrew owns: the
 step's intent and target state, a blocker, a result reference, a reason and
@@ -375,7 +398,8 @@ action.
 
 ## Open questions for the aimem reservation API review
 
-These follow from combining the parent contracts and are not decided here:
+These follow from combining the parent contracts. The first two are not
+decided here; the third has since been decided:
 
 1. Which principal releases an offer-stage hold when the worker declines or
    the offer expires while no coordinator session is active, or after the
@@ -384,8 +408,9 @@ These follow from combining the parent contracts and are not decided here:
    an authorized recovery principal releases them; capacity stays taken.
 2. Whether finalize for an external hold may be sent by the reviewing
    coordinator's context, or only by the holding worker or recovery.
-3. Which holder mode an independent worker's claim uses: an external holder
-   referencing its aicrew attempt (assumed here), or a standalone hold.
+3. Decided (C4 decision 3; the reservation fixture's independent-worker
+   claim): an independent worker's claim uses an external holder that names
+   its aicrew attempt, not a standalone hold.
 
 ## Deferred
 

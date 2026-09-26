@@ -140,8 +140,13 @@ reservation follows one rule:
 
 After a lost reply, aicrew queries the receipt with the same key and never
 retries with a fresh key. While the receipt is unresolved, the attempt is
-`RECONCILING` and no further transition is sent. When the two stores
-disagree, aicrew conforms to aimem:
+`RECONCILING` and no further transition is sent. Only a committed receipt
+for the pending request and the expected hold, or a refusal that is not
+retryable, is a known outcome. A transport error, a timeout, a retryable
+refusal and a receipt that does not match the request are all unknown: the
+attempt keeps the worker's capacity and reconciles. A reservation
+`coordination_proof` is an opaque reference that grants nothing in aicrew.
+When the two stores disagree, aicrew conforms to aimem:
 
 | Aicrew shows | Aimem shows | Resolution |
 | --- | --- | --- |
@@ -177,6 +182,12 @@ This contract assumes the holding worker also sends the finalize; whether the
 reviewing coordinator may, and which principal acts when the holder cannot,
 are listed under open questions.
 
+An offer can be accepted only while the team's coordinator generation is
+the one it was made under; after a coordinator change, the current
+coordinator releases or re-issues it. A worker's decline is recorded in
+aicrew and releases nothing: the coordinator releases the offer's hold. An
+expired offer cannot be accepted, and expiry releases nothing by itself.
+
 The worker starts work only in `RUNNING`, that is, after aimem has confirmed
 the transfer or claim. It works in a worktree created from the attempt's
 recorded base commit (workspace convention). A submitted result is immutable;
@@ -194,8 +205,12 @@ instructions the worker will receive. The worker receives and verifies that
 pin before accepting; if the pinned assets or required skills are
 unavailable, it declines with that reason instead of improvising. A running
 attempt keeps its pin even if the project later selects a different process.
-If the selection changes between offer and accept, the offer is withdrawn and
-re-issued under the new pin. Every audit record carries the attempt's pin.
+If the selection changes between offer and accept, acceptance is refused and
+the offer is withdrawn and re-issued under the new pin; a recorded pin is
+never updated. A matching instruction digest shows the worker has the
+recorded instructions, not that it read or understood them. The pin comes
+from a trusted reader of the project's selection, never from what a caller
+sends. Every audit record carries the attempt's pin.
 
 ## Inbox, receipts and audit
 

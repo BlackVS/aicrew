@@ -206,17 +206,25 @@ func (s *Store) Heartbeat(ctx context.Context, c Caller, key, sessionID string, 
 	return out, err
 }
 
-// LeaveSession ends the caller's session at its current generation. Later
-// increments refuse leave while the member has outstanding work; this
-// increment has none.
+// LeaveSession ends the caller's session at its current generation. It is
+// refused with work_outstanding while the member has open work in the team:
+// an attempt it works on, or an offer it made that is not yet running.
 func (s *Store) LeaveSession(ctx context.Context, c Caller, key, sessionID string, generation int64) (Session, error) {
 	var out Session
 	err := s.run(ctx, c, command{
 		op: opLeaveSession, scope: sessionID, key: key, input: sessionAt{SessionID: sessionID, Generation: generation},
 		authorize: requireAgent, replayCheck: sessionStillAt,
 		check: func(ctx context.Context, tx *sql.Tx) error {
-			_, err := currentSession(ctx, tx, c, sessionID, generation)
-			return err
+			sess, err := currentSession(ctx, tx, c, sessionID, generation)
+			if err != nil {
+				return err
+			}
+			if busy, err := openWork(ctx, tx, sess.AgentID, sess.TeamID); err != nil {
+				return err
+			} else if busy {
+				return fmt.Errorf("session %s: %w", sessionID, ErrWorkOutstanding)
+			}
+			return nil
 		},
 		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
 			sess, err := getSession(ctx, tx, sessionID)

@@ -1,0 +1,162 @@
+{
+  "version": 1,
+  "status": "proposal_only",
+  "scenario_rule": "Examples are independent isolated tasks unless the actor_case names a linked offer path; coordinator_offer forks to accepted_offer_to_worker or successor_coordinator_unaccepted_offer.",
+  "scope": {
+    "hub_id": "hub-example",
+    "project_id": "project-example",
+    "task_id": "01a0d755-0000-7000-8000-000000000001"
+  },
+  "mutations": [
+    {
+      "operation": "claim",
+      "mcp_tool": "task_reservation_claim",
+      "actor_case": "personal_standalone",
+      "request_key": "claim-example-1",
+      "request": {
+        "expected_revision": 3,
+        "holder": {"mode": "standalone", "work_ref": "work-example-1"}
+      },
+      "response": {
+        "receipt": {"id": "receipt-claim-1", "state": "committed", "operation": "claim", "request_key": "claim-example-1", "replayed": false, "actor_id": "user-example", "verified_mode": "personal"},
+        "task_revision": 3,
+        "reservation": {"id": "01a0d755-0000-7000-8000-000000000010", "fence": "1", "active": true, "holder_mode": "standalone", "own_work_ref": "work-example-1"}
+      }
+    },
+    {
+      "operation": "claim",
+      "mcp_tool": "task_reservation_claim",
+      "actor_case": "independent_worker_external_attempt",
+      "request_key": "claim-example-2",
+      "request": {
+        "expected_revision": 3,
+        "holder": {"mode": "external", "work_ref": "attempt-example-2"},
+        "coordination_proof": "proof-reference-2"
+      },
+      "response": {
+        "receipt": {"id": "receipt-claim-2", "state": "committed", "operation": "claim", "request_key": "claim-example-2", "replayed": false, "actor_id": "user-example", "verified_mode": "team"},
+        "task_revision": 3,
+        "reservation": {"id": "01a0d755-0000-7000-8000-000000000011", "fence": "1", "active": true, "holder_mode": "external", "own_work_ref": "attempt-example-2"}
+      }
+    },
+    {
+      "operation": "claim",
+      "mcp_tool": "task_reservation_claim",
+      "actor_case": "coordinator_offer",
+      "request_key": "claim-example-3",
+      "request": {
+        "expected_revision": 3,
+        "holder": {"mode": "external", "work_ref": "offer-example-3"},
+        "coordination_proof": "proof-reference-3"
+      },
+      "response": {
+        "receipt": {"id": "receipt-claim-3", "state": "committed", "operation": "claim", "request_key": "claim-example-3", "replayed": false, "actor_id": "coordinator-example", "verified_mode": "team"},
+        "task_revision": 3,
+        "reservation": {"id": "01a0d755-0000-7000-8000-000000000012", "fence": "1", "active": true, "holder_mode": "external", "own_work_ref": "offer-example-3"}
+      }
+    },
+    {
+      "operation": "transfer",
+      "mcp_tool": "task_reservation_transfer",
+      "actor_case": "accepted_offer_to_worker",
+      "request_key": "transfer-example-1",
+      "request": {
+        "expected_revision": 3,
+        "reservation_id": "01a0d755-0000-7000-8000-000000000012",
+        "fence": "1",
+        "holder": {"mode": "external", "work_ref": "attempt-example-3"},
+        "coordination_proof": "accept-proof-reference-3"
+      },
+      "response": {
+        "receipt": {"id": "receipt-transfer-1", "state": "committed", "operation": "transfer", "request_key": "transfer-example-1", "replayed": false, "actor_id": "worker-example", "verified_mode": "team"},
+        "task_revision": 3,
+        "reservation": {"id": "01a0d755-0000-7000-8000-000000000012", "fence": "2", "active": true, "holder_mode": "external", "own_work_ref": "attempt-example-3"}
+      }
+    },
+    {
+      "operation": "update",
+      "mcp_tool": "task_reservation_update",
+      "actor_case": "worker_submit",
+      "request_key": "update-example-1",
+      "request": {
+        "expected_revision": 3,
+        "reservation_id": "01a0d755-0000-7000-8000-000000000012",
+        "fence": "2",
+        "intent": "submit",
+        "content": {"title": "Example task", "objective": "Deliver example result", "acceptance_criteria": "Reviewed result", "non_goals": "No deploy", "state": "REVIEW", "blocker": "", "dependencies": [], "candidate_refs": [{"kind": "commit", "ref": "https://example.invalid/commit/1"}], "evidence_refs": [], "next_action": "Await review", "archived": false}
+      },
+      "response": {
+        "receipt": {"id": "receipt-update-1", "state": "committed", "operation": "update", "request_key": "update-example-1", "replayed": false, "actor_id": "worker-example", "verified_mode": "team"},
+        "task_revision": 4,
+        "reservation": {"id": "01a0d755-0000-7000-8000-000000000012", "fence": "2", "active": true, "holder_mode": "external", "own_work_ref": "attempt-example-3"}
+      }
+    },
+    {
+      "operation": "release",
+      "mcp_tool": "task_reservation_release",
+      "actor_case": "successor_coordinator_unaccepted_offer",
+      "request_key": "release-example-1",
+      "request": {
+        "expected_revision": 3,
+        "reservation_id": "01a0d755-0000-7000-8000-000000000012",
+        "fence": "1",
+        "reason": "declined offer",
+        "content": {"title": "Example task", "objective": "Deliver example result", "acceptance_criteria": "Reviewed result", "non_goals": "No deploy", "state": "READY", "blocker": "", "dependencies": [], "candidate_refs": [], "evidence_refs": [], "next_action": "Available for pickup", "archived": false},
+        "coordination_proof": "unaccepted-offer-proof-3"
+      },
+      "response": {
+        "receipt": {"id": "receipt-release-1", "state": "committed", "operation": "release", "request_key": "release-example-1", "replayed": false, "actor_id": "successor-coordinator-example", "verified_mode": "team"},
+        "task_revision": 4,
+        "reservation": {"id": "", "fence": "2", "active": false}
+      }
+    },
+    {
+      "operation": "finalize",
+      "mcp_tool": "task_reservation_finalize",
+      "actor_case": "verified_reviewing_coordinator",
+      "request_key": "finalize-example-1",
+      "request": {
+        "expected_revision": 4,
+        "reservation_id": "01a0d755-0000-7000-8000-000000000012",
+        "fence": "2",
+        "reason": "reviewed delivery merged",
+        "content": {"title": "Example task", "objective": "Deliver example result", "acceptance_criteria": "Reviewed result", "non_goals": "No deploy", "state": "DONE", "blocker": "", "dependencies": [], "candidate_refs": [{"kind": "commit", "ref": "https://example.invalid/commit/1"}], "evidence_refs": [{"kind": "pr", "ref": "https://example.invalid/pull/1"}], "next_action": "Complete", "archived": false},
+        "terminal_evidence": ["review-head-example", "human-merge-example", "post-merge-ci-example"],
+        "coordination_proof": "accepted-attempt-proof-3"
+      },
+      "response": {
+        "receipt": {"id": "receipt-finalize-1", "state": "committed", "operation": "finalize", "request_key": "finalize-example-1", "replayed": false, "actor_id": "reviewing-coordinator-example", "verified_mode": "team"},
+        "task_revision": 5,
+        "reservation": {"id": "", "fence": "3", "active": false}
+      }
+    }
+  ],
+  "reconciliation": [
+    {"case": "identical_replay", "operation": "claim", "request_key": "claim-example-1", "receipt_state": "committed", "replayed": true, "same_receipt_id": "receipt-claim-1", "next_action": "use recorded outcome"},
+    {"case": "call_not_committed", "operation": "claim", "request_key": "claim-example-4", "receipt_state": "not_committed", "replayed": false, "next_action": "retry same key"},
+    {"case": "ambiguous_commit", "operation": "claim", "request_key": "claim-example-5", "receipt_state": "unresolved", "replayed": false, "next_action": "stop and reconcile same key"}
+  ],
+  "status_example": {"state": "held", "reservation_id": "01a0d755-0000-7000-8000-000000000012", "fence": "2", "own_work_ref": "attempt-example-3", "task_revision": 4},
+  "refusal_envelope_example": {"code": "context_unavailable", "message": "The selected team context could not be verified.", "active_mode": "team", "retryable": true, "next_action": "Retry verification later with the same context and key.", "correlation_id": "correlation-example-1"},
+  "refusals": [
+    {"case": "revoked_token", "code": "invalid_credential", "http_status": 401, "retryable": false, "active_mode": null, "next_action": "Recover the individual credential through the authorized flow."},
+    {"case": "unlinked_actor", "code": "identity_link_required", "http_status": 403, "retryable": false, "active_mode": "team", "next_action": "Complete the verified identity proof flow."},
+    {"case": "wrong_link", "code": "identity_mismatch", "http_status": 403, "retryable": false, "active_mode": "team", "next_action": "Stop and reconcile the configured identity."},
+    {"case": "missing_team_binding", "code": "context_missing", "http_status": 403, "retryable": false, "active_mode": "team", "next_action": "Start or resume the aicrew session in this conversation."},
+    {"case": "stale_session", "code": "context_stale", "http_status": 403, "retryable": false, "active_mode": "team", "next_action": "Resume the team context and reconcile outstanding work."},
+    {"case": "introspection_outage", "code": "context_unavailable", "http_status": 503, "retryable": true, "active_mode": "team", "next_action": "Retry verification later with the same context and key."},
+    {"case": "missing_project_grant", "code": "grant_denied", "http_status": 403, "retryable": false, "active_mode": "team", "next_action": "Request an authorized project grant change."},
+    {"case": "role_downgrade", "code": "role_forbidden", "http_status": 403, "retryable": false, "active_mode": "team", "next_action": "Use the permitted aicrew flow."},
+    {"case": "inaccessible_task", "code": "task_unavailable", "http_status": 404, "retryable": false, "active_mode": "team", "next_action": "Verify the task reference with an authorized project reader."},
+    {"case": "dependency_denied", "code": "dependency_unresolved", "http_status": 404, "retryable": false, "active_mode": "team", "next_action": "Verify readable dependency evidence before retrying the same key."},
+    {"case": "dependency_outage", "code": "dependency_unresolved", "http_status": 503, "retryable": true, "active_mode": "team", "next_action": "Retry verification later with the same context and key."},
+    {"case": "competing_hold", "code": "reservation_conflict", "http_status": 409, "retryable": false, "active_mode": "team", "next_action": "Read own authorized status and reconcile."},
+    {"case": "changed_task", "code": "revision_conflict", "http_status": 409, "retryable": false, "active_mode": "team", "next_action": "Read the current task revision before a new operation."},
+    {"case": "stale_worker", "code": "stale_fence", "http_status": 409, "retryable": false, "active_mode": "team", "next_action": "Stop the old holder and inspect own authorized status."},
+    {"case": "changed_replay", "code": "idempotency_conflict", "http_status": 409, "retryable": false, "active_mode": "team", "next_action": "Investigate changed input under the original key."},
+    {"case": "unknown_receipt", "code": "receipt_unresolved", "http_status": 503, "retryable": true, "active_mode": "team", "next_action": "Stop later transitions and reconcile the original key."},
+    {"case": "leave_with_work", "code": "work_outstanding", "http_status": 409, "retryable": false, "active_mode": "team", "next_action": "Reconcile accepted or stopped work before leaving."},
+    {"case": "malformed_body", "code": "invalid_request", "http_status": 400, "retryable": false, "active_mode": null, "next_action": "Correct the request under the original key before any new mutation."},
+    {"case": "unsupported_protocol", "code": "unsupported_version", "http_status": 400, "retryable": false, "active_mode": null, "next_action": "Use a reviewed supported version."}
+  ]
+}

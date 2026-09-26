@@ -23,6 +23,11 @@
 //   - Each team has one ordered inbox (messages.go). A read always starts at
 //     the caller's oldest unacknowledged message, so nothing delivered but
 //     unacknowledged is ever skipped, even across a restart.
+//   - An attempt offers a task to one worker and holds the worker's one
+//     execution capacity (attempts.go). Aimem decides who holds the task:
+//     each step records its intent, calls the reservation port with no
+//     transaction open, then commits the confirmed outcome. An unknown
+//     outcome keeps the capacity and reconciles by receipt.
 //   - Reads that span several statements see one consistent snapshot.
 //   - Each mutation commits its state change, audit record and idempotency
 //     receipt in one transaction.
@@ -48,7 +53,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 5
+const schemaVersion = 6
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -72,9 +77,8 @@ type Store struct {
 	afterReceiptLookup func(op string)
 
 	// outstandingWork reports whether an agent holds work that must be
-	// reconciled before its identity changes. Offers and attempts arrive
-	// with crew-execution, which must extend this check; until then an agent
-	// has none. Tests replace it to exercise the refusal.
+	// reconciled before its identity changes: an open attempt or an offer
+	// not yet running (attempts.go). Tests may replace it.
 	outstandingWork func(ctx context.Context, tx *sql.Tx, agentID string) (bool, error)
 }
 
@@ -110,8 +114,8 @@ func Open(ctx context.Context, path string) (_ *Store, err error) {
 		lock:       lock,
 		now:        func() time.Time { return time.Now().UTC() },
 		flightWait: defaultInflightWait,
-		outstandingWork: func(context.Context, *sql.Tx, string) (bool, error) {
-			return false, nil
+		outstandingWork: func(ctx context.Context, tx *sql.Tx, agentID string) (bool, error) {
+			return openWork(ctx, tx, agentID, "")
 		},
 	}
 	if err := s.migrate(ctx); err != nil {
@@ -173,7 +177,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return tx.Commit()
 	}
 	// Each step upgrades the schema by one version; steps are additive.
-	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5}
+	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -335,6 +339,59 @@ var schemaV5 = []string{
 		PRIMARY KEY (message_id, agent_id)
 	)`,
 	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
+}
+
+// schemaV6 adds execution attempts. An attempt that is not closed holds its
+// worker's one execution capacity: the partial unique index allows one open
+// attempt per worker agent across all teams. attempt_steps keeps the known
+// outcome of each reservation step by its request key, so a retried command
+// reports its own step's outcome.
+var schemaV6 = []string{
+	`CREATE TABLE attempts (
+		id                     TEXT PRIMARY KEY,
+		team_id                TEXT NOT NULL REFERENCES teams (id),
+		task_hub_id            TEXT NOT NULL,
+		task_project_id        TEXT NOT NULL,
+		task_id                TEXT NOT NULL,
+		worker_agent_id        TEXT NOT NULL REFERENCES agents (id),
+		coordinator_agent_id   TEXT NOT NULL REFERENCES agents (id),
+		coordinator_session_id TEXT NOT NULL,
+		coordinator_generation INTEGER NOT NULL,
+		state                  TEXT NOT NULL CHECK (state IN
+			('offering', 'offered', 'accepting', 'running', 'releasing', 'reconciling', 'closed')),
+		close_reason           TEXT NOT NULL DEFAULT '',
+		declined               INTEGER NOT NULL DEFAULT 0 CHECK (declined IN (0, 1)),
+		base_commit            TEXT NOT NULL,
+		branch                 TEXT NOT NULL,
+		process_repository     TEXT NOT NULL,
+		process_commit         TEXT NOT NULL,
+		process_manifest       TEXT NOT NULL,
+		instruction_digest     TEXT NOT NULL,
+		offer_expires_at       TEXT NOT NULL,
+		task_revision          INTEGER NOT NULL,
+		reservation_id         TEXT NOT NULL DEFAULT '',
+		fence                  TEXT NOT NULL DEFAULT '',
+		last_receipt_id        TEXT NOT NULL DEFAULT '',
+		last_refusal           TEXT NOT NULL DEFAULT '',
+		pending_op             TEXT NOT NULL DEFAULT '',
+		pending_key            TEXT NOT NULL DEFAULT '',
+		pending_from           TEXT NOT NULL DEFAULT '',
+		intents                INTEGER NOT NULL DEFAULT 0,
+		revision               INTEGER NOT NULL,
+		created_at             TEXT NOT NULL,
+		updated_at             TEXT NOT NULL
+	)`,
+	`CREATE UNIQUE INDEX attempts_one_open_per_worker ON attempts (worker_agent_id) WHERE state != 'closed'`,
+	`CREATE TABLE attempt_steps (
+		request_key TEXT PRIMARY KEY,
+		attempt_id  TEXT NOT NULL REFERENCES attempts (id),
+		operation   TEXT NOT NULL,
+		outcome     TEXT NOT NULL CHECK (outcome IN ('committed', 'refused', 'not_committed')),
+		refusal     TEXT NOT NULL DEFAULT '',
+		receipt_id  TEXT NOT NULL DEFAULT '',
+		settled_at  TEXT NOT NULL
+	)`,
+	`CREATE INDEX attempts_coordinator ON attempts (coordinator_agent_id) WHERE state != 'closed'`,
 }
 
 // timeLayout is fixed width so stored timestamps sort correctly as text.

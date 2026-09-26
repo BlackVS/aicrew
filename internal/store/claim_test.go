@@ -459,3 +459,61 @@ func TestInconsistentClaimReplyIsNotTrusted(t *testing.T) {
 		})
 	}
 }
+
+// A member who becomes the team's coordinator still never reviews its own
+// result nor requests its own stop, whether its attempt began as a claim or
+// as an offer; the operator may still stop it.
+func TestPromotedWorkerCannotReviewOrStopItself(t *testing.T) {
+	ctx := context.Background()
+	for _, origin := range []AttemptOrigin{OriginClaim, OriginOffer} {
+		t.Run(string(origin), func(t *testing.T) {
+			s, _ := openTemp(t)
+			e := newClaimTeam(t, s)
+			worker := e.solo
+			var a Attempt
+			var err error
+			if origin == OriginClaim {
+				a, err = e.claim(t, "c1", worker, "task-1")
+			} else {
+				worker = e.builder
+				a, err = s.AcceptOffer(ctx, worker.caller, e.port, "a1", e.offer(t, "o1", "task-1").ID, e.acceptReq())
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.UpdateWork(ctx, worker.caller, e.port, "submit", a.ID, WorkUpdate{
+				SessionID: worker.sess.ID, Generation: worker.sess.Generation,
+				Intent: IntentSubmit, Detail: "https://example.invalid/pull/1"}); err != nil {
+				t.Fatal(err)
+			}
+			// The coordinator leaves; the operator makes the worker coordinator
+			// and it starts a coordinator session.
+			if _, err := s.StopSession(ctx, operator(t), "end-lead", e.lead.sess.ID); err != nil {
+				t.Fatal(err)
+			}
+			ms, err := getMembership(ctx, s.rdb, e.tm.ID, worker.agent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.SetMemberRole(ctx, operator(t), "promote", e.tm.ID, worker.agent.ID, ms.Revision, RoleCoordinator); err != nil {
+				t.Fatal(err)
+			}
+			promoted := worker
+			if promoted.sess, err = s.StartSession(ctx, worker.caller, "start-as-lead", e.tm.ID); err != nil || promoted.sess.Role != RoleCoordinator {
+				t.Fatalf("coordinator session = %+v, %v", promoted.sess, err)
+			}
+			if _, err := e.review(t, "self-review", a, promoted, 1, ReviewAccept); !errors.Is(err, ErrForbidden) {
+				t.Fatalf("review of its own result as coordinator: got %v, want ErrForbidden", err)
+			}
+			if _, err := e.requestStop(t, "self-stop", a, promoted, "done"); !errors.Is(err, ErrForbidden) {
+				t.Fatalf("stop of its own attempt as coordinator: got %v, want ErrForbidden", err)
+			}
+			if got := mustState(t, s, a.ID, AttemptRunning); got.Phase != PhaseSubmitted || got.AcceptedResult != 0 || got.Stop != StopNone {
+				t.Fatalf("attempt = %+v; want it unchanged", got)
+			}
+			if _, err := s.RequestStop(ctx, operator(t), "op-stop", a.ID, StopRequest{Reason: "reassigning"}); err != nil {
+				t.Fatalf("operator stop: %v", err)
+			}
+		})
+	}
+}

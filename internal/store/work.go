@@ -187,6 +187,11 @@ func (s *Store) ReviewResult(ctx context.Context, c Caller, key, attemptID strin
 			if a.TeamID != sess.TeamID {
 				return nil, fmt.Errorf("attempt %s: %w", attemptID, ErrNotFound)
 			}
+			// A member never reviews its own result, even after becoming the
+			// team's coordinator.
+			if a.WorkerAgentID == sess.AgentID {
+				return nil, fmt.Errorf("%w: the worker of attempt %s cannot review its own result", ErrForbidden, a.ID)
+			}
 			if err := workable(a); err != nil {
 				return nil, err
 			}

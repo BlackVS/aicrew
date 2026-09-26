@@ -215,7 +215,8 @@ follows automatically.
 history per attempt; none is ever changed. The team's current coordinator,
 including a successor, reviews the latest result: accepting it records that
 exact result and the reviewing session and generation; returning it for
-rework clears the acceptance, so a later result needs its own review. A
+rework clears the acceptance, so a later result needs its own review. No
+member reviews its own result, even after becoming the coordinator. A
 coordinator may finalize only from the session and generation that
 recorded the acceptance, so a successor, or a coordinator after a resume,
 reviews the result itself first; succession alone is not review. The
@@ -229,7 +230,8 @@ cancelling belongs to the stop and recovery flow.
 
 **Stop.** The team's current coordinator, including a successor, or the
 operator requests the stop of a running attempt in any work phase before
-finalize, with a reason; the worker cannot request its own stop. The
+finalize, with a reason; the worker cannot request its own stop, even
+after becoming the coordinator. The
 request is local: it sends nothing to aimem, and the hold and the worker's
 capacity stay. A requested stop cannot be withdrawn and voids a recorded
 acceptance, returning the result to submitted; while it stands, no work

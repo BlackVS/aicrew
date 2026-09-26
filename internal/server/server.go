@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/store"
@@ -33,8 +35,9 @@ type Server struct {
 	store *store.Store
 	log   *slog.Logger
 	tls   *tls.Config
-	mux   *http.ServeMux
-	http  *http.Server
+	// routes maps an exact path, then an exact method, to its handler.
+	routes map[string]map[string]http.HandlerFunc
+	http   *http.Server
 }
 
 // New builds the service over an open store. It loads the certificate and
@@ -48,16 +51,16 @@ func New(cfg Config, st *store.Store, log *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("load tls_cert_file and tls_key_file: %w", err)
 	}
 	s := &Server{
-		cfg: cfg, store: st, log: log, mux: http.NewServeMux(),
+		cfg: cfg, store: st, log: log, routes: map[string]map[string]http.HandlerFunc{},
 		tls: &tls.Config{
 			MinVersion:   tls.VersionTLS12,
 			Certificates: []tls.Certificate{cert},
 			NextProtos:   []string{"http/1.1"},
 		},
 	}
-	s.mux.HandleFunc("GET /healthz", s.health)
+	s.handle(http.MethodGet, "/healthz", s.health)
 	s.http = &http.Server{
-		Handler:           s.logged(limitBody(s.mux)),
+		Handler:           s.logged(limitBody(http.HandlerFunc(s.dispatch))),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -102,6 +105,47 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	return err
 }
 
+// handle registers h for exactly one method on exactly one path.
+func (s *Server) handle(method, path string, h http.HandlerFunc) {
+	if s.routes[path] == nil {
+		s.routes[path] = map[string]http.HandlerFunc{}
+	}
+	s.routes[path][method] = h
+}
+
+// dispatch matches the request path and method exactly. There is no
+// pattern matching, no path cleaning and no redirect: any other path is 404,
+// and any other method on a known path, HEAD included, is 405.
+func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
+	methods, ok := s.routes[r.URL.Path]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"code": "not_found"})
+		return
+	}
+	h, ok := methods[r.Method]
+	if !ok {
+		allowed := make([]string, 0, len(methods))
+		for m := range methods {
+			allowed = append(allowed, m)
+		}
+		sort.Strings(allowed)
+		w.Header().Set("Allow", strings.Join(allowed, ", "))
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"code": "method_not_allowed"})
+		return
+	}
+	h(w, r)
+}
+
+// routeOf names the route a request matches, for the log: the method and
+// the registered path, or "unmatched". It never returns request text that
+// no route registered.
+func (s *Server) routeOf(r *http.Request) string {
+	if _, ok := s.routes[r.URL.Path][r.Method]; ok {
+		return r.Method + " " + r.URL.Path
+	}
+	return "unmatched"
+}
+
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -137,11 +181,7 @@ func (s *Server) logged(next http.Handler) http.Handler {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		route := r.Pattern
-		if route == "" {
-			route = "unmatched"
-		}
-		s.log.Info("request", "method", r.Method, "route", route, "status", rec.status,
+		s.log.Info("request", "method", r.Method, "route", s.routeOf(r), "status", rec.status,
 			"duration_ms", time.Since(start).Milliseconds())
 	})
 }

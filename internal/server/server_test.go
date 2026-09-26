@@ -94,7 +94,7 @@ type running struct {
 	done   chan error
 }
 
-func start(t *testing.T, register func(*http.ServeMux)) *running {
+func start(t *testing.T, register func(*Server)) *running {
 	t.Helper()
 	certFile, keyFile, pool := testCert(t)
 	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "aicrew.db"))
@@ -110,7 +110,7 @@ func start(t *testing.T, register func(*http.ServeMux)) *running {
 		t.Fatal(err)
 	}
 	if register != nil {
-		register(srv.mux)
+		register(srv)
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -165,18 +165,47 @@ func (r *running) do(t *testing.T, method, path string, body io.Reader) (int, st
 	return resp.StatusCode, string(b)
 }
 
-// The only route is GET /healthz; other paths and methods are refused.
+// raw sends one request line exactly as given, with no body, and returns
+// the response's status and Allow header. Nothing cleans the path first.
+func (r *running) raw(t *testing.T, method, target string) (int, string) {
+	t.Helper()
+	conn, err := tls.Dial("tcp", r.addr, &tls.Config{RootCAs: r.pool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", method, target); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: method})
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, target, err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode, resp.Header.Get("Allow")
+}
+
+// The only route is GET /healthz, matched exactly: any other method on it,
+// HEAD included, is 405, and any other path, however spelled, is 404, never
+// a redirect.
 func TestRoutes(t *testing.T) {
 	r := start(t, nil)
 	if code, body := r.do(t, http.MethodGet, "/healthz", nil); code != http.StatusOK || strings.TrimSpace(body) != `{"status":"ok"}` {
 		t.Fatalf("GET /healthz = %d %q", code, body)
 	}
-	if code, _ := r.do(t, http.MethodPost, "/healthz", nil); code != http.StatusMethodNotAllowed {
-		t.Fatalf("POST /healthz = %d, want 405", code)
+	for _, method := range []string{http.MethodHead, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions} {
+		if code, allow := r.raw(t, method, "/healthz"); code != http.StatusMethodNotAllowed || allow != "GET" {
+			t.Fatalf("%s /healthz = %d, Allow %q; want 405, Allow GET", method, code, allow)
+		}
 	}
-	for _, path := range []string{"/", "/v1/crew/introspect", "/healthz/x"} {
-		if code, _ := r.do(t, http.MethodGet, path, nil); code != http.StatusNotFound {
-			t.Fatalf("GET %s = %d, want 404", path, code)
+	for _, target := range []string{"/", "/v1/crew/introspect", "/healthz/", "/healthz/x", "//healthz",
+		"/./healthz", "/missing//child", "/a/../healthz", "/HEALTHZ"} {
+		if code, _ := r.raw(t, http.MethodGet, target); code != http.StatusNotFound {
+			t.Fatalf("GET %s = %d, want 404", target, code)
+		}
+		if code, _ := r.raw(t, http.MethodHead, target); code != http.StatusNotFound {
+			t.Fatalf("HEAD %s = %d, want 404", target, code)
 		}
 	}
 }
@@ -220,8 +249,8 @@ func TestBounds(t *testing.T) {
 		err error
 	}
 	reads := make(chan readResult, 4)
-	r := start(t, func(mux *http.ServeMux) {
-		mux.HandleFunc("POST /echo", func(w http.ResponseWriter, req *http.Request) {
+	r := start(t, func(s *Server) {
+		s.handle(http.MethodPost, "/echo", func(w http.ResponseWriter, req *http.Request) {
 			n, err := io.Copy(io.Discard, req.Body)
 			reads <- readResult{n, err}
 			w.WriteHeader(http.StatusNoContent)
@@ -298,8 +327,8 @@ func TestGracefulShutdown(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
-	r := start(t, func(mux *http.ServeMux) {
-		mux.HandleFunc("GET /slow", func(w http.ResponseWriter, _ *http.Request) {
+	r := start(t, func(s *Server) {
+		s.handle(http.MethodGet, "/slow", func(w http.ResponseWriter, _ *http.Request) {
 			close(entered)
 			<-release
 			w.WriteHeader(http.StatusOK)

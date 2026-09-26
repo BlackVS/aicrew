@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -109,25 +110,36 @@ type Attempt struct {
 	// WorkerSessionFloor is the worker's latest session number in the team
 	// when the offer was issued, or -1 if unknown (an offer from before it
 	// was recorded). Only the next session may accept an offline offer.
-	WorkerSessionFloor int64          `json:"worker_session_floor"`
-	State              AttemptState   `json:"state"`
-	CloseReason        string         `json:"close_reason,omitempty"`
-	Declined           bool           `json:"declined"`
-	BaseCommit         string         `json:"base_commit"`
-	Branch             string         `json:"branch"`
-	Process            TrustedProcess `json:"process"`
-	OfferExpiresAt     time.Time      `json:"offer_expires_at"`
-	TaskRevision       int64          `json:"task_revision"`
-	ReservationID      string         `json:"reservation_id,omitempty"`
-	Fence              string         `json:"fence,omitempty"`
-	LastReceiptID      string         `json:"last_receipt_id,omitempty"`
-	LastRefusal        string         `json:"last_refusal,omitempty"`
-	PendingOp          ReservationOp  `json:"pending_op,omitempty"`
-	PendingKey         string         `json:"pending_key,omitempty"`
-	PendingFrom        AttemptState   `json:"pending_from,omitempty"`
-	Revision           int64          `json:"revision"`
-	CreatedAt          time.Time      `json:"created_at"`
-	UpdatedAt          time.Time      `json:"updated_at"`
+	WorkerSessionFloor int64 `json:"worker_session_floor"`
+	// The work lifecycle of a running attempt (work.go).
+	Phase                AttemptPhase   `json:"phase,omitempty"`
+	PendingIntent        string         `json:"pending_intent,omitempty"`
+	PendingDetail        string         `json:"pending_detail,omitempty"`
+	PendingEvidence      string         `json:"pending_evidence,omitempty"`
+	PendingMessage       string         `json:"pending_message,omitempty"`
+	AcceptedResult       int64          `json:"accepted_result,omitempty"`
+	AcceptedBySession    string         `json:"accepted_by_session,omitempty"`
+	AcceptedByGeneration int64          `json:"accepted_by_generation,omitempty"`
+	FinalizedResult      int64          `json:"finalized_result,omitempty"`
+	TerminalEvidence     string         `json:"terminal_evidence,omitempty"`
+	State                AttemptState   `json:"state"`
+	CloseReason          string         `json:"close_reason,omitempty"`
+	Declined             bool           `json:"declined"`
+	BaseCommit           string         `json:"base_commit"`
+	Branch               string         `json:"branch"`
+	Process              TrustedProcess `json:"process"`
+	OfferExpiresAt       time.Time      `json:"offer_expires_at"`
+	TaskRevision         int64          `json:"task_revision"`
+	ReservationID        string         `json:"reservation_id,omitempty"`
+	Fence                string         `json:"fence,omitempty"`
+	LastReceiptID        string         `json:"last_receipt_id,omitempty"`
+	LastRefusal          string         `json:"last_refusal,omitempty"`
+	PendingOp            ReservationOp  `json:"pending_op,omitempty"`
+	PendingKey           string         `json:"pending_key,omitempty"`
+	PendingFrom          AttemptState   `json:"pending_from,omitempty"`
+	Revision             int64          `json:"revision"`
+	CreatedAt            time.Time      `json:"created_at"`
+	UpdatedAt            time.Time      `json:"updated_at"`
 }
 
 // offerRef and attemptRef are the work references aimem records for the
@@ -466,6 +478,9 @@ func (s *Store) ReconcileAttempt(ctx context.Context, c Caller, port Reservation
 		}
 		switch {
 		case st.State == "held" && st.OwnWorkRef == ref && st.ReservationID == a.ReservationID:
+			if st.TaskRevision > a.TaskRevision {
+				return s.refreshRevision(ctx, c, a, st.TaskRevision)
+			}
 			return a, nil
 		case st.State == "none":
 			return s.settle(ctx, c, a, callOutcome{kind: outcomeRecovered})
@@ -571,8 +586,11 @@ func classify(a Attempt, res ReservationResult, err error) callOutcome {
 		ok = r.Active && r.ID != "" && r.OwnWorkRef == a.offerRef()
 	case ReservationTransfer:
 		ok = r.Active && r.ID == a.ReservationID && r.OwnWorkRef == a.attemptRef()
-	case ReservationRelease:
+	case ReservationRelease, ReservationFinalize:
 		ok = !r.Active
+	case ReservationUpdate:
+		// An update keeps the hold and its fence.
+		ok = r.Active && r.ID == a.ReservationID && r.OwnWorkRef == a.attemptRef() && r.Fence == a.Fence
 	}
 	if !ok || r.Fence == "" || res.TaskRevision < 1 {
 		return callOutcome{kind: outcomeUnknown, detail: "the committed reservation does not match the pending request"}
@@ -601,6 +619,26 @@ func reservationRequest(a Attempt) ReservationRequest {
 		if a.Declined {
 			req.Reason = "declined offer"
 		}
+	case ReservationUpdate:
+		// The holder updates its own hold; no coordination reference.
+		req.ReservationID, req.Fence, req.Intent, req.CoordinationProof = a.ReservationID, a.Fence, a.PendingIntent, ""
+		owned := &OwnedTaskFields{State: taskStateFor(a.PendingOp, WorkIntent(a.PendingIntent))}
+		switch WorkIntent(a.PendingIntent) {
+		case IntentBlock:
+			owned.Blocker = a.PendingDetail
+		case IntentSubmit:
+			owned.ResultRef = a.PendingDetail
+		}
+		req.Owned = owned
+	case ReservationFinalize:
+		req.ReservationID, req.Fence, req.Reason = a.ReservationID, a.Fence, "reviewed delivery"
+		var evidence []Evidence
+		if err := json.Unmarshal([]byte(a.PendingEvidence), &evidence); err == nil {
+			for _, e := range evidence {
+				req.TerminalEvidence = append(req.TerminalEvidence, e.Ref)
+			}
+		}
+		req.Owned = &OwnedTaskFields{State: taskStateFor(a.PendingOp, ""), Evidence: evidence}
 	}
 	return req
 }
@@ -693,7 +731,7 @@ func (s *Store) settle(ctx context.Context, c Caller, a Attempt, o callOutcome) 
 }
 
 func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now time.Time) (Attempt, error) {
-	const clearPending = `pending_op = '', pending_key = '', pending_from = ''`
+	const clearPending = pendingColumnsCleared
 	var err error
 	switch o.kind {
 	case outcomeUnknown:
@@ -714,7 +752,7 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 				`state = 'closed', close_reason = ?, last_refusal = ?, `+clearPending, "claim "+reason, reason)
 		} else {
 			err = updateAttempt(ctx, tx, a.ID, now,
-				`state = ?, last_refusal = ?, `+clearPending, string(AttemptOffered), reason)
+				`state = ?, last_refusal = ?, `+clearPending, string(a.PendingFrom), reason)
 		}
 	case outcomeCommitted:
 		r := o.result
@@ -729,7 +767,7 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 			}
 		case ReservationTransfer:
 			err = updateAttempt(ctx, tx, a.ID, now,
-				`state = 'running', fence = ?, task_revision = ?, last_receipt_id = ?, `+clearPending,
+				`state = 'running', phase = 'working', fence = ?, task_revision = ?, last_receipt_id = ?, `+clearPending,
 				r.Reservation.Fence, r.TaskRevision, r.Receipt.ID)
 			if err == nil {
 				err = announce(ctx, tx, a, a.WorkerAgentID, "%s accepted task %s and started work.",
@@ -747,6 +785,8 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 				err = announce(ctx, tx, a, "", "The offer of task %s to %s was released.",
 					now, taskName(a.Task), labelOf(a.WorkerAgentID))
 			}
+		case ReservationUpdate, ReservationFinalize:
+			err = applyWorkOutcome(ctx, tx, a, r, now)
 		}
 	}
 	if err != nil {
@@ -757,6 +797,10 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 	}
 	return getAttempt(ctx, tx, a.ID)
 }
+
+// pendingColumnsCleared resets every pending-step column.
+const pendingColumnsCleared = `pending_op = '', pending_key = '', pending_from = '', pending_intent = '',
+	pending_detail = '', pending_evidence = '', pending_message = ''`
 
 // recordStep keeps the known outcome of a pending step by its request key.
 func recordStep(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now time.Time) error {
@@ -924,12 +968,14 @@ const attemptColumns = `id, team_id, task_hub_id, task_project_id, task_id, work
 	coordinator_session_id, coordinator_generation, state, close_reason, declined, base_commit, branch,
 	process_repository, process_commit, process_manifest, instruction_digest, offer_expires_at, task_revision,
 	reservation_id, fence, last_receipt_id, last_refusal, pending_op, pending_key, pending_from,
-	worker_session_id, worker_generation, worker_session_floor, revision, created_at, updated_at`
+	worker_session_id, worker_generation, worker_session_floor, phase, pending_intent, pending_detail,
+	pending_evidence, pending_message, accepted_result, accepted_by_session, accepted_by_generation, finalized_result,
+	terminal_evidence, revision, created_at, updated_at`
 
 func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 	var (
 		a                         Attempt
-		state, op, from           string
+		state, op, from, phase    string
 		declined                  int
 		expires, created, updated string
 	)
@@ -939,7 +985,9 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		&a.Process.Identity.Repository, &a.Process.Identity.Commit, &a.Process.Identity.Manifest,
 		&a.Process.InstructionDigest, &expires, &a.TaskRevision, &a.ReservationID, &a.Fence, &a.LastReceiptID,
 		&a.LastRefusal, &op, &a.PendingKey, &from, &a.WorkerSessionID, &a.WorkerGeneration,
-		&a.WorkerSessionFloor, &a.Revision, &created, &updated)
+		&a.WorkerSessionFloor, &phase, &a.PendingIntent, &a.PendingDetail, &a.PendingEvidence, &a.PendingMessage,
+		&a.AcceptedResult, &a.AcceptedBySession, &a.AcceptedByGeneration, &a.FinalizedResult,
+		&a.TerminalEvidence, &a.Revision, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Attempt{}, fmt.Errorf("attempt %s: %w", id, ErrNotFound)
 	}
@@ -947,6 +995,7 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		return Attempt{}, fmt.Errorf("read attempt: %w", err)
 	}
 	a.State, a.PendingOp, a.PendingFrom, a.Declined = AttemptState(state), ReservationOp(op), AttemptState(from), declined == 1
+	a.Phase = AttemptPhase(phase)
 	for _, t := range []struct {
 		dst *time.Time
 		src string

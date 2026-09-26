@@ -28,6 +28,10 @@
 //     each step records its intent, calls the reservation port with no
 //     transaction open, then commits the confirmed outcome. An unknown
 //     outcome keeps the capacity and reconciles by receipt.
+//   - A running attempt's work (work.go) keeps an append-only result
+//     history; an acceptance names one result and one reviewing session,
+//     and finalizing as DONE needs the process's delivery evidence
+//     (delivery.go), supplied by a trusted internal caller.
 //   - Reads that span several statements see one consistent snapshot.
 //   - Each mutation commits its state change, audit record and idempotency
 //     receipt in one transaction.
@@ -53,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 8
+const schemaVersion = 9
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -177,7 +181,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return tx.Commit()
 	}
 	// Each step upgrades the schema by one version; steps are additive.
-	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8}
+	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -339,6 +343,34 @@ var schemaV5 = []string{
 		PRIMARY KEY (message_id, agent_id)
 	)`,
 	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
+}
+
+// schemaV9 adds the work lifecycle of a running attempt (work.go): its
+// phase, the pending work step, the acceptance of one result by one
+// reviewing session, the finalized result and its delivery evidence, and an
+// append-only history of submitted results.
+var schemaV9 = []string{
+	`ALTER TABLE attempts ADD COLUMN phase TEXT NOT NULL DEFAULT '' CHECK (phase IN
+		('', 'working', 'blocked', 'submitted', 'rework', 'accepted', 'finalized'))`,
+	`UPDATE attempts SET phase = 'working' WHERE state = 'running'`,
+	`ALTER TABLE attempts ADD COLUMN pending_intent TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN pending_detail TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN pending_evidence TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN pending_message TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN accepted_result INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE attempts ADD COLUMN accepted_by_session TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN accepted_by_generation INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE attempts ADD COLUMN finalized_result INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE attempts ADD COLUMN terminal_evidence TEXT NOT NULL DEFAULT ''`,
+	`CREATE TABLE attempt_results (
+		attempt_id   TEXT NOT NULL REFERENCES attempts (id),
+		seq          INTEGER NOT NULL CHECK (seq > 0),
+		result_ref   TEXT NOT NULL,
+		request_key  TEXT NOT NULL,
+		receipt_id   TEXT NOT NULL,
+		submitted_at TEXT NOT NULL,
+		PRIMARY KEY (attempt_id, seq)
+	)`,
 }
 
 // schemaV8 keeps a monotonic history of each member's sessions in a team,

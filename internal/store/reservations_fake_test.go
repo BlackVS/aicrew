@@ -124,6 +124,10 @@ type fakeReservations struct {
 	mu       sync.Mutex
 	holds    map[string]*fakeHold
 	revision map[string]int64
+	// content models the task content the integration adapter must keep:
+	// it merges only aicrew's owned fields and keeps every other field.
+	// This models the adapter obligation; it does not prove a real adapter.
+	content  map[string]map[string]any
 	receipts map[string]ReservationResult
 	inputs   map[string][]byte
 	nextID   int
@@ -146,7 +150,7 @@ type fakeReservations struct {
 func newFakeReservations(t *testing.T) *fakeReservations {
 	loadFixture(t)
 	return &fakeReservations{
-		t: t, holds: map[string]*fakeHold{}, revision: map[string]int64{},
+		t: t, holds: map[string]*fakeHold{}, revision: map[string]int64{}, content: map[string]map[string]any{},
 		receipts: map[string]ReservationResult{}, inputs: map[string][]byte{},
 		faults: map[ReservationOp]simFault{}, refuse: map[ReservationOp]*ReservationRefusal{},
 		unresolved: map[string]bool{},
@@ -211,6 +215,20 @@ func (f *fakeReservations) Mutate(_ context.Context, op ReservationOp, req Reser
 			h.active, h.id, h.workRef = false, "", ""
 			f.revision[task]++
 		}
+	case ReservationUpdate, ReservationFinalize:
+		if h == nil || !h.active || h.id != req.ReservationID || strconv.Itoa(h.fence) != req.Fence {
+			return ReservationResult{}, fixtureRefusal(f.t, "stale_worker")
+		}
+		if req.ExpectedRevision != f.revision[task] {
+			// A concurrent change: refused, never overwritten.
+			return ReservationResult{}, fixtureRefusal(f.t, "changed_task")
+		}
+		f.mergeOwned(task, req.Owned)
+		f.revision[task]++
+		if op == ReservationFinalize {
+			h.fence++
+			h.active, h.id, h.workRef = false, "", ""
+		}
 	}
 	res := ReservationResult{
 		Receipt: ReservationReceipt{
@@ -263,6 +281,56 @@ func (f *fakeReservations) Status(_ context.Context, task TaskRef) (HoldStatus, 
 	}
 	return HoldStatus{State: "held", ReservationID: h.id, Fence: strconv.Itoa(h.fence),
 		OwnWorkRef: h.workRef, TaskRevision: f.revision[taskKey(task)]}, nil
+}
+
+// taskFields returns the fake task content, creating the fields aimem owns
+// the first time a task is touched.
+func (f *fakeReservations) taskFields(task string) map[string]any {
+	c := f.content[task]
+	if c == nil {
+		c = map[string]any{"title": "Example task", "notes": "Written by a person in aimem.", "state": "IN_PROGRESS"}
+		f.content[task] = c
+	}
+	return c
+}
+
+// mergeOwned applies only aicrew's owned fields to the task content.
+func (f *fakeReservations) mergeOwned(task string, owned *OwnedTaskFields) {
+	c := f.taskFields(task)
+	if owned == nil {
+		return
+	}
+	c["state"] = owned.State
+	if owned.Blocker != "" {
+		c["blocker"] = owned.Blocker
+	}
+	if owned.ResultRef != "" {
+		refs, _ := c["candidate_refs"].([]string)
+		c["candidate_refs"] = append(refs, owned.ResultRef)
+	}
+	for _, e := range owned.Evidence {
+		refs, _ := c["evidence_refs"].([]string)
+		c["evidence_refs"] = append(refs, e.Kind+"="+e.Ref)
+	}
+}
+
+// editTask models a person changing a field in aimem concurrently.
+func (f *fakeReservations) editTask(task TaskRef, field, value string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.taskFields(taskKey(task))[field] = value
+	f.revision[taskKey(task)]++
+}
+
+// taskContent returns a copy of the fake task content.
+func (f *fakeReservations) taskContent(task TaskRef) map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]any{}
+	for k, v := range f.taskFields(taskKey(task)) {
+		out[k] = v
+	}
+	return out
 }
 
 // holdOf returns the fake's hold on a task.
@@ -320,7 +388,9 @@ func TestReservationFixtureConformance(t *testing.T) {
 	known := map[ReservationOp]map[string]bool{}
 	for _, m := range fx.Mutations {
 		op := ReservationOp(m.Operation)
-		if op != ReservationClaim && op != ReservationTransfer && op != ReservationRelease {
+		switch op {
+		case ReservationClaim, ReservationTransfer, ReservationRelease, ReservationUpdate, ReservationFinalize:
+		default:
 			continue
 		}
 		var res ReservationResult
@@ -341,12 +411,14 @@ func TestReservationFixtureConformance(t *testing.T) {
 			known[op][f] = true
 		}
 	}
-	for _, op := range []ReservationOp{ReservationClaim, ReservationTransfer, ReservationRelease} {
+	for _, op := range []ReservationOp{ReservationClaim, ReservationTransfer, ReservationRelease, ReservationUpdate, ReservationFinalize} {
 		if known[op] == nil {
 			t.Errorf("fixture has no %s example", op)
 			continue
 		}
-		a := Attempt{ID: "x", PendingOp: op, PendingKey: "k", ReservationID: "r", Fence: "1", TaskRevision: 3}
+		a := Attempt{ID: "x", PendingOp: op, PendingKey: "k", ReservationID: "r", Fence: "1", TaskRevision: 3,
+			PendingIntent: string(IntentSubmit), PendingDetail: "https://example.invalid/pull/1",
+			PendingEvidence: `[{"kind":"reviewed_head","ref":"abc"}]`}
 		ours, _ := json.Marshal(reservationRequest(a))
 		var sent map[string]json.RawMessage
 		if err := json.Unmarshal(ours, &sent); err != nil {

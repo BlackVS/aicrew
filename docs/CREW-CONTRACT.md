@@ -185,12 +185,18 @@ are listed under open questions.
 An offer can be accepted only while the team's coordinator generation is
 the one it was made under; after a coordinator change, the current
 coordinator releases or re-issues it. An offer is also bound to the
-worker's session context when it was issued: acceptance must come from the
-same session at the same generation, or, if the worker had no active
-session then, from a session still at its first generation. So a resume, a
-credential rotation or a replacement session makes a pending offer
-unacceptable, as "Sessions and generation fencing" requires for resume; the
-hold and the worker's capacity stay until the coordinator's release is
+worker's session context when it was issued. If the worker had an active
+session then, acceptance must come from that session at that generation, so
+a resume, a credential rotation or a replacement session makes the offer
+unacceptable, as "Sessions and generation fencing" requires for resume. If
+the worker had no active session then, acceptance must come from a session
+at its first generation. That leaves a known gap for such offline offers,
+to be closed by a follow-up change: a session that replaces the worker's
+first session after the offer (for example after an operator stop) starts
+again at its first generation and can accept the offer, even if the first
+session had resumed and was refused. Offers recorded before this rule
+behave the same way. A refused acceptance changes nothing:
+the hold and the worker's capacity stay until the coordinator's release is
 confirmed. A worker's decline is recorded in
 aicrew and releases nothing: the coordinator releases the offer's hold. An
 expired offer cannot be accepted, and expiry releases nothing by itself.

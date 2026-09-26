@@ -466,6 +466,17 @@ func TestStopReleaseOutcomes(t *testing.T) {
 		if e.port.taskContent(a.Task)["notes"] != "changed in aimem" {
 			t.Fatal("the concurrent change was overwritten")
 		}
+		// The attempt refreshes its revision from its hold and releases
+		// under a new key, keeping the change.
+		if _, err := e.s.ReconcileAttempt(ctx, e.builder.caller, e.port, a.ID); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := e.releaseStopped(t, "release-2", a, ReleaseReady, ""); err != nil || got.State != AttemptClosed {
+			t.Fatalf("release after refreshing the revision = %+v, %v", got, err)
+		}
+		if c := e.port.taskContent(a.Task); c["notes"] != "changed in aimem" || c["state"] != "READY" {
+			t.Fatalf("task content = %+v", c)
+		}
 	})
 }
 

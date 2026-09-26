@@ -260,7 +260,7 @@ func TestClaimCapacityAcrossTeams(t *testing.T) {
 	setup := func(t *testing.T) (claimTeam, execTeam) {
 		s, _ := openTemp(t)
 		e := newClaimTeam(t, s)
-		t2 := mustTeam(t, s, "t2", "other")
+		t2 := mustTeam(t, s, "t2", "other", projectA)
 		lead2 := joinCrew(t, s, t2.ID, "lead2", RoleCoordinator)
 		if _, err := s.AddMember(ctx, operator(t), "member-solo-t2", t2.ID, e.solo.agent.ID, RoleWorker); err != nil {
 			t.Fatal(err)

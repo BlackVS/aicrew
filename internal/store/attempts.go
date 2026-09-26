@@ -257,6 +257,11 @@ func (s *Store) OfferTask(ctx context.Context, c Caller, port Reservations, key 
 		if err != nil {
 			return nil, err
 		}
+		// Only a task in one of the team's projects may be offered; removing
+		// a project from the team blocks new offers for it.
+		if err := requireTeamProject(ctx, tx, sess.TeamID, ProjectRef{HubID: in.Task.HubID, ProjectID: in.Task.ProjectID}); err != nil {
+			return nil, err
+		}
 		if !in.ExpiresAt.After(now) || in.ExpiresAt.After(now.Add(maxOfferLifetime)) {
 			return nil, fmt.Errorf("%w: an offer must expire within %s from now", ErrInvalid, maxOfferLifetime)
 		}

@@ -28,7 +28,7 @@ type execTeam struct {
 
 func newExecTeam(t *testing.T, s *Store) execTeam {
 	t.Helper()
-	tm := mustTeam(t, s, "t1", "crew")
+	tm := mustTeam(t, s, "t1", "crew", projectA)
 	return execTeam{s: s, tm: tm,
 		lead:    joinCrew(t, s, tm.ID, "lead", RoleCoordinator),
 		builder: joinCrew(t, s, tm.ID, "builder", RoleWorker),
@@ -155,7 +155,7 @@ func TestOneCapacityPerAgentAcrossTeams(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTemp(t)
 	e := newExecTeam(t, s)
-	t2 := mustTeam(t, s, "t2", "crew-two")
+	t2 := mustTeam(t, s, "t2", "crew-two", projectA)
 	lead2 := joinCrew(t, s, t2.ID, "lead2", RoleCoordinator)
 	if _, err := s.AddMember(ctx, operator(t), "member-builder-t2", t2.ID, e.builder.agent.ID, RoleWorker); err != nil {
 		t.Fatal(err)
@@ -888,7 +888,7 @@ func TestOfflineOfferHistoryRule(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := openTemp(t)
-			tm := mustTeam(t, s, "t1", "crew")
+			tm := mustTeam(t, s, "t1", "crew", projectA)
 			lead := joinCrew(t, s, tm.ID, "lead", RoleCoordinator)
 			agent, caller := member(t, s, tm.ID, "builder", RoleWorker)
 			w := &world{e: execTeam{s: s, tm: tm, lead: lead, builder: crewMember{agent: agent, caller: caller},
@@ -922,7 +922,7 @@ func TestOfflineOfferHistoryRule(t *testing.T) {
 func TestSessionOrdinalBackfill(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTemp(t)
-	tm := mustTeam(t, s, "t1", "crew")
+	tm := mustTeam(t, s, "t1", "crew", projectA)
 	_, lc := member(t, s, tm.ID, "lead", RoleCoordinator)
 	b, bc := member(t, s, tm.ID, "builder", RoleWorker)
 	ids := []string{}
@@ -966,7 +966,7 @@ func TestSessionOrdinalBackfill(t *testing.T) {
 func TestOfflineOfferAfterEarlierSessions(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTemp(t)
-	tm := mustTeam(t, s, "t1", "crew")
+	tm := mustTeam(t, s, "t1", "crew", projectA)
 	lead := joinCrew(t, s, tm.ID, "lead", RoleCoordinator)
 	agent, caller := member(t, s, tm.ID, "builder", RoleWorker)
 	for i := range 2 {
@@ -990,5 +990,49 @@ func TestOfflineOfferAfterEarlierSessions(t *testing.T) {
 	e.builder.sess = sess
 	if got := e.accept(t, "a1", a); got.State != AttemptRunning {
 		t.Fatalf("acceptance from the first session after the offer = %+v", got)
+	}
+}
+
+// Only a task in one of the team's projects may be offered, and removing a
+// project blocks new offers for it; running work there goes on until it is
+// finished or stopped explicitly (docs/CREW-CONTRACT.md).
+func TestOfferNeedsATeamProject(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	e := newExecTeam(t, s)
+	refused := func(what string, ex execTeam, req OfferRequest) {
+		t.Helper()
+		before, calls := count(t, s, "attempts"), len(e.port.callLog())
+		if _, err := s.OfferTask(ctx, e.lead.caller, e.port, "o-"+what, req); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("%s: got %v, want ErrInvalid", what, err)
+		}
+		if count(t, s, "attempts") != before || len(e.port.callLog()) != calls || busy(t, s, ex.builder.agent.ID) {
+			t.Fatalf("%s: recorded or sent something", what)
+		}
+	}
+	outside := e.offerReq("task-1")
+	outside.Task.ProjectID = "project-b"
+	refused("project outside the set", e, outside)
+
+	running := e.accept(t, "a1", e.offer(t, "o1", "task-1"))
+	tm, err := s.GetTeam(ctx, e.tm.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetTeamProjects(ctx, operator(t), "remove-project-a", tm.ID, tm.Revision,
+		[]ProjectRef{{HubID: "hub-a", ProjectID: "project-b"}}); err != nil {
+		t.Fatal(err)
+	}
+	other := e
+	other.builder = joinCrew(t, s, e.tm.ID, "other", RoleWorker)
+	refused("project removed from the team", other, other.offerReq("task-2"))
+
+	// The running attempt in the removed project is finished as usual.
+	e.mustWork(t, "submit", running, IntentSubmit, "https://example.invalid/pull/1")
+	if _, err := e.review(t, "accept", running, e.lead, 1, ReviewAccept); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.finalize(t, "final", running, e.builder, 1, devDelivery("1")); err != nil || got.State != AttemptClosed {
+		t.Fatalf("finalize in a removed project = %+v, %v", got, err)
 	}
 }

@@ -154,7 +154,7 @@ func (s *Store) UpdateWork(ctx context.Context, c Caller, port Reservations, key
 			if err := validateMessageText(text); err != nil {
 				return nil, fmt.Errorf("%w: the %s detail is too long for its team message", ErrInvalid, in.Intent)
 			}
-			return startWorkIntent(ctx, tx, a, ReservationUpdate, in.Intent, detail, "", now)
+			return startWorkIntent(ctx, tx, a, ReservationUpdate, in.Intent, detail, "", text, now)
 		},
 	}
 	return s.transition(ctx, c, port, cmd, attemptID)
@@ -288,7 +288,7 @@ func (s *Store) FinalizeWork(ctx context.Context, c Caller, port Reservations, k
 			if err != nil {
 				return nil, fmt.Errorf("encode delivery evidence: %w", err)
 			}
-			return startWorkIntent(ctx, tx, a, ReservationFinalize, "", "", string(evidence), now)
+			return startWorkIntent(ctx, tx, a, ReservationFinalize, "", "", string(evidence), "", now)
 		},
 	}
 	return s.transition(ctx, c, port, cmd, attemptID)
@@ -363,12 +363,14 @@ func latestResult(ctx context.Context, q querier, attemptID string) (int64, erro
 }
 
 // startWorkIntent records a pending update or finalize on a running attempt.
-func startWorkIntent(ctx context.Context, tx *sql.Tx, a Attempt, op ReservationOp, intent WorkIntent, detail, evidence string, now time.Time) (Attempt, error) {
+func startWorkIntent(ctx context.Context, tx *sql.Tx, a Attempt, op ReservationOp, intent WorkIntent,
+	detail, evidence, message string, now time.Time) (Attempt, error) {
 	if _, err := startIntent(ctx, tx, a, op, AttemptRunning, now); err != nil {
 		return Attempt{}, err
 	}
 	if err := updateAttempt(ctx, tx, a.ID, now,
-		`pending_intent = ?, pending_detail = ?, pending_evidence = ?`, string(intent), detail, evidence); err != nil {
+		`pending_intent = ?, pending_detail = ?, pending_evidence = ?, pending_message = ?`,
+		string(intent), detail, evidence, message); err != nil {
 		return Attempt{}, err
 	}
 	return getAttempt(ctx, tx, a.ID)
@@ -426,18 +428,16 @@ func applyWorkOutcome(ctx context.Context, tx *sql.Tx, a Attempt, r ReservationR
 		string(phase), r.Reservation.Fence, r.TaskRevision, r.Receipt.ID); err != nil {
 		return err
 	}
-	text, err := workMessage(ctx, tx, a, WorkIntent(a.PendingIntent), a.PendingDetail)
-	if err != nil {
-		return err
-	}
+	// The message was built and checked when the step was recorded, and is
+	// posted as it was then, so a later rename cannot make it too long.
 	task := a.Task
-	_, err = postLifecycle(ctx, tx, a.TeamID, a.WorkerAgentID, text, &task, now)
+	_, err := postLifecycle(ctx, tx, a.TeamID, a.WorkerAgentID, a.PendingMessage, &task, now)
 	return err
 }
 
 // workMessage is the lifecycle message a committed work update posts. The
-// update's intent checks it before anything is recorded or sent, so a step
-// aimem commits can always be settled.
+// update's intent builds and checks it, and records it with the step, so a
+// step aimem commits can always be settled.
 func workMessage(ctx context.Context, q querier, a Attempt, intent WorkIntent, detail string) (string, error) {
 	worker, err := getAgent(ctx, q, a.WorkerAgentID)
 	if err != nil {

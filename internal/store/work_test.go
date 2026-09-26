@@ -455,9 +455,29 @@ func TestBlockerFitsItsTeamMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	longest := strings.Repeat("x", maxMessageText-len(prefix))
-	got := e.mustWork(t, "w-max", a, IntentBlock, longest)
-	if got.Phase != PhaseBlocked || got.State != AttemptRunning {
-		t.Fatalf("maximum blocker = %+v", got)
+
+	// The largest blocker commits with a lost reply; the worker is renamed
+	// to a longer label before the step is reconciled. The settle posts the
+	// message checked with the step, so it still fits and the work resumes.
+	ctx := context.Background()
+	e.port.faults[ReservationUpdate] = faultLostReply
+	if _, err := e.work(t, "w-max", a, IntentBlock, longest); !errors.Is(err, ErrOutcomeUnknown) {
+		t.Fatalf("maximum blocker with a lost reply: %v", err)
+	}
+	worker, err := e.s.GetAgent(ctx, e.builder.agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.s.RenameAgent(ctx, operator(t), "rename", worker.ID, worker.Revision, "builder-with-a-longer-label"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.s.ReconcileAttempt(ctx, e.builder.caller, e.port, a.ID)
+	if err != nil || got.Phase != PhaseBlocked || got.State != AttemptRunning {
+		t.Fatalf("reconcile after the rename = %+v, %v", got, err)
+	}
+	items := read(t, e.s, e.lead, 20)
+	if last := items[len(items)-1]; last.Text != prefix+longest {
+		t.Fatalf("the settled message was rebuilt: %d bytes, want the checked %d", len(last.Text), len(prefix+longest))
 	}
 	e.mustWork(t, "w-resume", a, IntentResume, "")
 }

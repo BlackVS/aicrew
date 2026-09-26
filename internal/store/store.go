@@ -356,6 +356,7 @@ var schemaV9 = []string{
 	`ALTER TABLE attempts ADD COLUMN pending_intent TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE attempts ADD COLUMN pending_detail TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE attempts ADD COLUMN pending_evidence TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN pending_message TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE attempts ADD COLUMN accepted_result INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE attempts ADD COLUMN accepted_by_session TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE attempts ADD COLUMN accepted_by_generation INTEGER NOT NULL DEFAULT 0`,

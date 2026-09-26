@@ -116,6 +116,7 @@ type Attempt struct {
 	PendingIntent        string         `json:"pending_intent,omitempty"`
 	PendingDetail        string         `json:"pending_detail,omitempty"`
 	PendingEvidence      string         `json:"pending_evidence,omitempty"`
+	PendingMessage       string         `json:"pending_message,omitempty"`
 	AcceptedResult       int64          `json:"accepted_result,omitempty"`
 	AcceptedBySession    string         `json:"accepted_by_session,omitempty"`
 	AcceptedByGeneration int64          `json:"accepted_by_generation,omitempty"`
@@ -799,7 +800,7 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 
 // pendingColumnsCleared resets every pending-step column.
 const pendingColumnsCleared = `pending_op = '', pending_key = '', pending_from = '', pending_intent = '',
-	pending_detail = '', pending_evidence = ''`
+	pending_detail = '', pending_evidence = '', pending_message = ''`
 
 // recordStep keeps the known outcome of a pending step by its request key.
 func recordStep(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now time.Time) error {
@@ -968,7 +969,7 @@ const attemptColumns = `id, team_id, task_hub_id, task_project_id, task_id, work
 	process_repository, process_commit, process_manifest, instruction_digest, offer_expires_at, task_revision,
 	reservation_id, fence, last_receipt_id, last_refusal, pending_op, pending_key, pending_from,
 	worker_session_id, worker_generation, worker_session_floor, phase, pending_intent, pending_detail,
-	pending_evidence, accepted_result, accepted_by_session, accepted_by_generation, finalized_result,
+	pending_evidence, pending_message, accepted_result, accepted_by_session, accepted_by_generation, finalized_result,
 	terminal_evidence, revision, created_at, updated_at`
 
 func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
@@ -984,7 +985,7 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		&a.Process.Identity.Repository, &a.Process.Identity.Commit, &a.Process.Identity.Manifest,
 		&a.Process.InstructionDigest, &expires, &a.TaskRevision, &a.ReservationID, &a.Fence, &a.LastReceiptID,
 		&a.LastRefusal, &op, &a.PendingKey, &from, &a.WorkerSessionID, &a.WorkerGeneration,
-		&a.WorkerSessionFloor, &phase, &a.PendingIntent, &a.PendingDetail, &a.PendingEvidence,
+		&a.WorkerSessionFloor, &phase, &a.PendingIntent, &a.PendingDetail, &a.PendingEvidence, &a.PendingMessage,
 		&a.AcceptedResult, &a.AcceptedBySession, &a.AcceptedByGeneration, &a.FinalizedResult,
 		&a.TerminalEvidence, &a.Revision, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {

@@ -102,6 +102,51 @@ and changes nothing.
   generation before returning an earlier result, so an old session cannot
   learn more than a current one.
 
+## Session introspection (aimem → aicrew)
+
+Aimem admits a team-mode request only after asking aicrew, online, whether
+the request's aimem-scoped handle names a current aicrew session
+(identity.v1 §3 in aimem's `DESIGN-AIFORGE-IDENTITY-WIRE.md`). Aicrew serves
+that question at `POST /v1/crew/introspect` on its HTTPS service; the
+registered endpoint is the full https URL of this route.
+
+- **Handles.** Aicrew issues a handle (`acs1_` followed by 43 base64url
+  characters, 256 random bits) to a session's own agent, at the session's
+  current generation. It is bound to the agent's linked aimem hub, this
+  service, the session and that generation, and lives at most 15 minutes.
+  Issuing again for the same session and generation is the refresh: the
+  handles it replaces stay valid for at most 60 more seconds, never past
+  their own expiry. A handle is active only while its session is active at
+  its generation, so a resume, rotation, role change, leave, removal or
+  operator stop makes every handle of the session inactive at once, with no
+  separate revocation. The client receives a first handle when it starts,
+  resumes or re-proves a session. Aicrew stores only a handle's digest.
+- **Credential.** Aimem authenticates with an introspection credential that
+  aicrew issues (`aicrew_introspect_` followed by 256 random bits in hex).
+  It is bound to one aimem hub, lives at most 366 days, and aicrew stores
+  only its digest; the bearer exists once, in the file the operator's
+  command creates privately for it. At most two are active per hub, so a
+  rotation overlaps: issue a second, move aimem to it, revoke the first.
+  Only the operator issues, lists or revokes one.
+- **Request.** The body is `{version, hub_id, nonce, handle}` and at most
+  4 KiB. The version is required as `1` both in `X-Aimem-Identity-Version`
+  and in the body; otherwise aicrew answers `400 unsupported_version` and
+  evaluates nothing. A missing, unknown, revoked or expired credential gets
+  `401 peer_unauthenticated`, a credential bound to another hub
+  `403 peer_forbidden`, and any other malformed request
+  `400 invalid_request`. Refusals use the context contract's envelope and
+  never echo the request.
+- **Answer.** An active handle gets `200` with `{nonce, active: true,
+  service_id, hub_id, identity: {user_id, token_id}, agent_id, team_id,
+  role, session_id, generation, handle_expires_at}`. Every value comes from
+  aicrew's own state: the session's role, the token the session is bound
+  to (which must still be the agent's linked token), and the time the
+  handle stops being active. Every other state, unknown, expired, replaced,
+  ended, fenced by a generation change, another hub or service, or a
+  malformed handle, gets `200` with `{nonce, active: false}` and no reason.
+  Introspection reads one snapshot and changes nothing: it never ends a
+  session, frees capacity or stands in for a stop or a leave.
+
 ## Execution capacity
 
 Each agent has exactly one execution capacity across all its teams and

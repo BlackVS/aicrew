@@ -35,8 +35,8 @@ type Server struct {
 	store *store.Store
 	log   *slog.Logger
 	tls   *tls.Config
-	// routes maps an exact path, then an exact method, to its handler.
-	routes map[string]map[string]http.HandlerFunc
+	// routes maps an exact path, then an exact method, to its route.
+	routes map[string]map[string]route
 	http   *http.Server
 }
 
@@ -51,7 +51,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("load tls_cert_file and tls_key_file: %w", err)
 	}
 	s := &Server{
-		cfg: cfg, store: st, log: log, routes: map[string]map[string]http.HandlerFunc{},
+		cfg: cfg, store: st, log: log, routes: map[string]map[string]route{},
 		tls: &tls.Config{
 			MinVersion:   tls.VersionTLS12,
 			Certificates: []tls.Certificate{cert},
@@ -59,8 +59,9 @@ func New(cfg Config, st *store.Store, log *slog.Logger) (*Server, error) {
 		},
 	}
 	s.handle(http.MethodGet, "/healthz", s.health)
+	s.handleOwnBody(http.MethodPost, IntrospectPath, s.introspect)
 	s.http = &http.Server{
-		Handler:           s.logged(limitBody(http.HandlerFunc(s.dispatch))),
+		Handler:           s.logged(s.limitBody(http.HandlerFunc(s.dispatch))),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -105,12 +106,29 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	return err
 }
 
+// route is one registered handler. A route that owns its body refuses an
+// oversized one by its own contract instead of the generic 413, and must do
+// so after its own authentication.
+type route struct {
+	h        http.HandlerFunc
+	ownsBody bool
+}
+
 // handle registers h for exactly one method on exactly one path.
 func (s *Server) handle(method, path string, h http.HandlerFunc) {
+	s.register(method, path, route{h: h})
+}
+
+// handleOwnBody registers a route that refuses an oversized body itself.
+func (s *Server) handleOwnBody(method, path string, h http.HandlerFunc) {
+	s.register(method, path, route{h: h, ownsBody: true})
+}
+
+func (s *Server) register(method, path string, rt route) {
 	if s.routes[path] == nil {
-		s.routes[path] = map[string]http.HandlerFunc{}
+		s.routes[path] = map[string]route{}
 	}
-	s.routes[path][method] = h
+	s.routes[path][method] = rt
 }
 
 // dispatch matches the request path and method exactly. There is no
@@ -122,7 +140,7 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "not_found"})
 		return
 	}
-	h, ok := methods[r.Method]
+	rt, ok := methods[r.Method]
 	if !ok {
 		allowed := make([]string, 0, len(methods))
 		for m := range methods {
@@ -133,14 +151,15 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"code": "method_not_allowed"})
 		return
 	}
-	h(w, r)
+	rt.h(w, r)
 }
 
 // routeOf names the route a request matches, for the log: the method and
 // the registered path, or "unmatched". It never returns request text that
 // no route registered.
 func (s *Server) routeOf(r *http.Request) string {
-	if path := requestPath(r); s.routes[path][r.Method] != nil {
+	path := requestPath(r)
+	if _, ok := s.routes[path][r.Method]; ok {
 		return r.Method + " " + path
 	}
 	return "unmatched"
@@ -166,10 +185,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // limitBody refuses a declared body over MaxBodyBytes before any handler
-// runs, and caps what a handler can read of an undeclared one.
-func limitBody(next http.Handler) http.Handler {
+// runs, unless the matched route owns its body, and caps what any handler can
+// read of a body.
+func (s *Server) limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.ContentLength > MaxBodyBytes {
+		if r.ContentLength > MaxBodyBytes && !s.routes[requestPath(r)][r.Method].ownsBody {
 			// Closing the connection keeps the HTTP server from reading
 			// the refused body to reuse the connection.
 			w.Header().Set("Connection", "close")

@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 11
+const schemaVersion = 12
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -208,7 +208,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	}
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
-		schemaV10, schemaV11}
+		schemaV10, schemaV11, schemaV12}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -392,6 +392,32 @@ var schemaV5 = []string{
 		PRIMARY KEY (message_id, agent_id)
 	)`,
 	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
+}
+
+// schemaV12 adds session introspection for aimem (introspection.go): the
+// introspection credentials aicrew issues, one hub each, and the
+// aimem-scoped session handles. Both keep a SHA-256 digest only, never the
+// secret.
+var schemaV12 = []string{
+	`CREATE TABLE introspection_credentials (
+		id         TEXT PRIMARY KEY,
+		hub_id     TEXT NOT NULL,
+		digest     TEXT NOT NULL UNIQUE,
+		created_at TEXT NOT NULL,
+		expires_at TEXT NOT NULL,
+		revoked_at TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE TABLE session_handles (
+		digest        TEXT PRIMARY KEY,
+		session_id    TEXT NOT NULL REFERENCES sessions (id),
+		generation    INTEGER NOT NULL CHECK (generation > 0),
+		hub_id        TEXT NOT NULL,
+		service_id    TEXT NOT NULL,
+		issued_at     TEXT NOT NULL,
+		expires_at    TEXT NOT NULL,
+		superseded_at TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX session_handles_by_session ON session_handles (session_id, generation)`,
 }
 
 // schemaV11 lets an attempt start from an independent member's claim as

@@ -61,11 +61,14 @@ CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,
 ## Layout
 
 - `cmd/aicrewd`: the aicrew HTTPS service (below).
+- `cmd/aicrew`: the operator's command line (below).
 - `internal/server`: the service's configuration, TLS listener, request
-  bounds and logging.
+  bounds, logging and routes, including aimem's session introspection.
 - `internal/store`: the aicrew coordination store. It is internal and has
-  no CLI or MCP surface; only `aicrewd` exposes anything over the network.
+  no MCP surface; only `aicrewd` exposes anything over the network.
   See the package documentation for the rules it enforces.
+- `internal/privatefile`: creates a file for a secret, exclusively and
+  readable by its owner only.
 
 ## Running aicrewd
 
@@ -104,3 +107,33 @@ body is capped at 64 KiB and headers at 16 KiB; the server also sets
 read-header, read, write and idle timeouts. On SIGINT or SIGTERM it stops
 accepting connections, lets requests in flight finish within
 `shutdown_timeout`, closes the store and exits 0.
+
+Besides `GET /healthz`, it serves aimem's session introspection,
+`POST /v1/crew/introspect` (`docs/CREW-CONTRACT.md`, "Session
+introspection"). Aimem registers this service with the route's full https
+URL, the service ID and the TLS trust binding of this certificate.
+
+## Introspection credentials
+
+Aimem authenticates its introspection calls with a credential that aicrew
+issues for one aimem hub. The operator manages them with `aicrew`, which
+opens the store file directly: only one process may hold a store, so stop
+`aicrewd` first.
+
+```sh
+CGO_ENABLED=0 go build -o bin/aicrew ./cmd/aicrew
+bin/aicrew introspection-credential issue  -store aicrew.db -hub HUB -secret-file introspection.secret
+bin/aicrew introspection-credential list   -store aicrew.db
+bin/aicrew introspection-credential rotate -store aicrew.db -hub HUB -secret-file introspection-2.secret
+bin/aicrew introspection-credential revoke -store aicrew.db -id ID
+```
+
+- The bearer is written only to the `-secret-file`, which must not exist;
+  it is created readable by its owner only (mode 0600, or an owner-only
+  protected DACL on Windows). The command prints the credential's metadata,
+  never the bearer. If the file cannot be written, the credential just
+  issued is revoked.
+- Hand the file to aimem's operator through a private channel; aimem reads
+  it from `AIMEM_INTROSPECTION_TOKEN_FILE`. Delete aicrew's copy afterwards.
+- A hub has at most two active credentials. To rotate: `rotate` issues the
+  second, aimem moves to it, then `revoke` the first.

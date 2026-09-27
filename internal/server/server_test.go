@@ -92,18 +92,27 @@ type running struct {
 	pool   *x509.CertPool
 	cancel context.CancelFunc
 	done   chan error
+	// The service's store and its file, for tests that seed state.
+	store     *store.Store
+	storePath string
 }
 
 func start(t *testing.T, register func(*Server)) *running {
 	t.Helper()
+	return startWith(t, "aicrew-test", register)
+}
+
+func startWith(t *testing.T, serviceID string, register func(*Server)) *running {
+	t.Helper()
 	certFile, keyFile, pool := testCert(t)
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "aicrew.db"))
+	storePath := filepath.Join(t.TempDir(), "aicrew.db")
+	st, err := store.Open(context.Background(), storePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	cfg := Config{StorePath: "unused", ListenAddr: "127.0.0.1:0", TLSCertFile: certFile, TLSKeyFile: keyFile,
-		ServiceID: "aicrew-test", ShutdownTimeout: Duration(5 * time.Second)}
+	cfg := Config{StorePath: storePath, ListenAddr: "127.0.0.1:0", TLSCertFile: certFile, TLSKeyFile: keyFile,
+		ServiceID: serviceID, ShutdownTimeout: Duration(5 * time.Second)}
 	logs := &syncBuffer{}
 	srv, err := New(cfg, st, slog.New(slog.NewJSONHandler(logs, nil)))
 	if err != nil {
@@ -117,7 +126,8 @@ func start(t *testing.T, register func(*Server)) *running {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &running{srv: srv, addr: ln.Addr().String(), logs: logs, pool: pool, cancel: cancel, done: make(chan error, 1)}
+	r := &running{srv: srv, addr: ln.Addr().String(), logs: logs, pool: pool, cancel: cancel, done: make(chan error, 1),
+		store: st, storePath: storePath}
 	go func() { r.done <- srv.Serve(ctx, ln) }()
 	r.client = &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: pool}, DisableKeepAlives: true}}
@@ -203,7 +213,7 @@ func TestRoutes(t *testing.T) {
 	if code, _ := r.raw(t, http.MethodGet, "/healthz?probe=1"); code != http.StatusOK {
 		t.Fatalf("GET /healthz?probe=1 = %d, want 200", code)
 	}
-	for _, target := range []string{"/", "/v1/crew/introspect", "/healthz/", "/healthz/x", "//healthz",
+	for _, target := range []string{"/", "/v1/crew/introspect/", "/v1/crew/Introspect", "/healthz/", "/healthz/x", "//healthz",
 		"/./healthz", "/missing//child", "/a/../healthz", "/HEALTHZ",
 		"/%68ealthz", "/healt%68z", "/%2Fhealthz", "/healthz%2F", "/healthz%3F", "https://x/healthz"} {
 		if code, _ := r.raw(t, http.MethodGet, target); code != http.StatusNotFound {

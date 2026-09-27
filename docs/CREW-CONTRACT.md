@@ -286,7 +286,8 @@ given, and a test enforces that.
 ### Working in a team session: a fresh conversation
 
 A team session belongs to one conversation, never to the machine. The
-client starts it, and aimem binds it, like this:
+client (`aicrew-agent session start`, `docs/DEVELOPMENT.md`) starts it, and
+aimem binds it, like this:
 
 1. `POST /v1/crew/challenges` for the agent.
 2. `aimem identity proof --peer <service_id> --hub-id <hub_id> --challenge

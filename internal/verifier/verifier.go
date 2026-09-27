@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -36,6 +35,7 @@ import (
 
 	"github.com/BlackVS/aicrew/internal/privatefile"
 	"github.com/BlackVS/aicrew/internal/store"
+	"github.com/BlackVS/aicrew/internal/tlstrust"
 )
 
 const (
@@ -52,8 +52,8 @@ const (
 
 // Trust modes for aimem's TLS identity.
 const (
-	TrustCADNS = "ca_dns"
-	TrustSPKI  = "spki_sha256"
+	TrustCADNS = tlstrust.CADNS
+	TrustSPKI  = tlstrust.SPKI
 )
 
 // Codes this client reports besides aimem's own refusal codes.
@@ -86,8 +86,6 @@ var (
 		"request_in_progress":  true,
 		"identity_unavailable": true,
 	}
-
-	errPinMismatch = errors.New("aimem's certificate does not match the configured SPKI pin")
 )
 
 // Error is a failed redemption. Code is an identity.v1 refusal code,
@@ -156,33 +154,13 @@ func newClient(cfg Config, roots *x509.CertPool) (*Client, error) {
 	if cfg.TokenFile == "" {
 		return nil, errors.New("verifier: no redemption credential file is configured")
 	}
-	tc := &tls.Config{MinVersion: tls.VersionTLS12}
-	switch cfg.TLSMode {
-	case TrustCADNS:
-		if cfg.TLSValue != u.Hostname() {
-			return nil, errors.New("verifier: ca_dns trust must name the aimem URL's host")
-		}
-		tc.RootCAs, tc.ServerName = roots, cfg.TLSValue
-	case TrustSPKI:
-		pin, err := decodePin(cfg.TLSValue)
-		if err != nil {
-			return nil, err
-		}
-		// The pin replaces the chain check, never drops it: the handshake
-		// fails unless the leaf's public key hashes to the pin.
-		tc.InsecureSkipVerify = true
-		tc.VerifyConnection = func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return errPinMismatch
-			}
-			sum := sha256.Sum256(cs.PeerCertificates[0].RawSubjectPublicKeyInfo)
-			if subtle.ConstantTimeCompare(sum[:], pin) != 1 {
-				return errPinMismatch
-			}
-			return nil
-		}
-	default:
-		return nil, errors.New("verifier: the TLS trust mode must be ca_dns or spki_sha256")
+	trust := tlstrust.Binding{Mode: cfg.TLSMode, Value: cfg.TLSValue}
+	if err := trust.Check(u.Hostname()); err != nil {
+		return nil, fmt.Errorf("verifier: %w", err)
+	}
+	tc, err := trust.ClientConfig(roots)
+	if err != nil {
+		return nil, fmt.Errorf("verifier: %w", err)
 	}
 	origin := strings.TrimSuffix(cfg.BaseURL, "/")
 	return &Client{
@@ -191,15 +169,6 @@ func newClient(cfg Config, roots *x509.CertPool) (*Client, error) {
 		tls:      tc,
 		budget:   Budget,
 	}, nil
-}
-
-func decodePin(v string) ([]byte, error) {
-	b64, ok := strings.CutPrefix(v, "sha256-")
-	pin, err := base64.StdEncoding.DecodeString(b64)
-	if !ok || err != nil || len(pin) != sha256.Size {
-		return nil, errors.New("verifier: spki_sha256 trust must be sha256- followed by a base64 SHA-256")
-	}
-	return pin, nil
 }
 
 // CheckCredential reads the redemption bearer file as a call would, so a
@@ -324,9 +293,6 @@ func (c *Client) httpClient() *http.Client {
 // the call budget, aimem's TLS identity, or any other transport error. The
 // outcome at aimem is unknown in every case, so each is retryable.
 func transportFailure(caller, call context.Context, err error) *Error {
-	var verr *tls.CertificateVerificationError
-	var herr x509.HostnameError
-	var uerr x509.UnknownAuthorityError
 	switch {
 	case caller.Err() != nil:
 		e := unavailable("cancelled")
@@ -334,7 +300,7 @@ func transportFailure(caller, call context.Context, err error) *Error {
 		return e
 	case call.Err() != nil:
 		return unavailable("timeout")
-	case errors.Is(err, errPinMismatch), errors.As(err, &verr), errors.As(err, &herr), errors.As(err, &uerr):
+	case tlstrust.Untrusted(err):
 		return unavailable("tls_untrusted")
 	}
 	return unavailable("transport")

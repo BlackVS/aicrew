@@ -62,6 +62,7 @@ CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,
 
 - `cmd/aicrewd`: the aicrew HTTPS service (below).
 - `cmd/aicrew`: the operator's command line (below).
+- `cmd/aicrew-agent`: an agent's client; it holds no store (below).
 - `internal/server`: the service's configuration, TLS listener, request
   bounds, logging and routes, including aimem's session introspection.
 - `internal/store`: the aicrew coordination store. It is internal and has
@@ -70,6 +71,10 @@ CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,
 - `internal/verifier`: the store's production verifier, which redeems
   aimem proof receipts (`docs/CREW-CONTRACT.md`, "Receipt redemption").
   `aicrewd` configures it from the `aimem` section below.
+- `internal/agent`: the agent client's session engine: proof, entry or
+  resume, aimem's binding, handle refresh and leave.
+- `internal/tlstrust`: the TLS trust bindings (`ca_dns`, `spki_sha256`)
+  shared by the verifier and the agent client.
 - `internal/privatefile`: creates a file for a secret, exclusively and
   readable by its owner only, and checks that an existing secret file is
   private (mode bits on Unix, the effective DACL on Windows).
@@ -162,3 +167,55 @@ bin/aicrew introspection-credential revoke -store aicrew.db -id ID
   it from `AIMEM_INTROSPECTION_TOKEN_FILE`. Delete aicrew's copy afterwards.
 - A hub has at most two active credentials. To rotate: `rotate` issues the
   second, aimem moves to it, then `revoke` the first.
+
+## Running aicrew-agent
+
+`aicrew-agent` is an agent's client. It opens no store and needs no operator
+authority: it proves the agent's aimem identity and keeps the agent's team
+session through `aicrewd`'s client session API (`docs/CREW-CONTRACT.md`,
+"Client session API").
+
+```sh
+CGO_ENABLED=0 go build -o bin/aicrew-agent ./cmd/aicrew-agent
+bin/aicrew-agent session start  -home ~/aicrew/agents/builder
+bin/aicrew-agent session status -home ~/aicrew/agents/builder
+bin/aicrew-agent session leave  -home ~/aicrew/agents/builder
+```
+
+It reads the `aicrew` section of the agent home's `agent.json`, which holds
+no secret; other sections belong to onboarding:
+
+```json
+"aicrew": {
+  "url": "https://aicrew.example:8443",
+  "tls_trust_mode": "ca_dns",
+  "tls_trust_value": "aicrew.example",
+  "agent_id": "01a0...",
+  "team_id": "01a0...",
+  "aimem_command": "aimem",
+  "aimem_hub": "main"
+}
+```
+
+- `session start` enters the team, or resumes the session a previous run
+  recorded, binds aimem to it with `aimem team-session open` (or `refresh`
+  when aimem already holds the session's file), prints
+  `AIMEM_TEAM_SESSION=<path>`, and keeps the session until interrupted: it
+  refreshes the handle when a third of its life remains (never later than
+  90 s before it expires) and resumes with a new proof 10 minutes before
+  the session token's 8-hour ceiling. On SIGINT or SIGTERM it leaves, then
+  runs `aimem team-session close`; a second interrupt stops it at once, and
+  the next `start` resumes the session.
+- `session status` shows the recorded session and aimem's binding, without
+  secrets and without calling `aicrewd`.
+- `session leave` proves afresh and resumes the recorded session, which
+  fences any client still holding it, then leaves.
+- Exit codes: 0 done, 1 failed (the refusal's next action is logged),
+  2 usage, 3 the session was kept because the member has open work
+  (reconcile it through aicrew, then leave again).
+- The session token, the proof receipt and the handle stay in memory and
+  reach aimem only on stdin or through a pipe. The agent home's
+  `state/aicrew-session.json` records only the session, team, service, hub
+  and aimem file path, so that a restarted client resumes.
+- aimem's lifecycle commands for one session never overlap: a close issued
+  while a refresh runs waits for it.

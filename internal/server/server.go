@@ -47,9 +47,16 @@ type Server struct {
 	challengeLimit, tokenLimit, refreshLimit *limiter
 }
 
+// Option adjusts a Server before it serves.
+type Option func(*Server)
+
+// WithVerifier replaces the aimem verifier the configuration would build. It
+// exists for tests of the service's clients, which stand in for aimem.
+func WithVerifier(v store.Verifier) Option { return func(s *Server) { s.verifier = v } }
+
 // New builds the service over an open store. It loads the certificate and
 // key now, so a bad pair fails at start rather than at the first handshake.
-func New(cfg Config, st *store.Store, log *slog.Logger) (*Server, error) {
+func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server, error) {
 	if st == nil || log == nil {
 		return nil, errors.New("server: a store and a logger are required")
 	}
@@ -74,6 +81,9 @@ func New(cfg Config, st *store.Store, log *slog.Logger) (*Server, error) {
 			return nil, fmt.Errorf("aimem.redemption_token_file: %w", err)
 		}
 		s.verifier = v
+	}
+	for _, o := range opts {
+		o(s)
 	}
 	s.challengeLimit = newLimiter(ChallengesPerMinute, time.Minute)
 	s.tokenLimit = newLimiter(ExchangesPerMinute, time.Minute)

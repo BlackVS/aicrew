@@ -60,6 +60,47 @@ CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,
 
 ## Layout
 
+- `cmd/aicrewd`: the aicrew HTTPS service (below).
+- `internal/server`: the service's configuration, TLS listener, request
+  bounds and logging.
 - `internal/store`: the aicrew coordination store. It is internal and has
-  no CLI, MCP or network surface. See the package documentation for the
-  rules it enforces.
+  no CLI or MCP surface; only `aicrewd` exposes anything over the network.
+  See the package documentation for the rules it enforces.
+
+## Running aicrewd
+
+`aicrewd` opens the store and serves HTTPS on one listener, over TLS it
+terminates itself (TLS 1.2 or later). It has no plain-HTTP listener and does
+not run behind a TLS-terminating proxy. It currently answers only
+`GET /healthz`.
+
+```sh
+CGO_ENABLED=0 go build -o bin/aicrewd ./cmd/aicrewd
+bin/aicrewd -config aicrewd.json
+```
+
+The configuration file is JSON with no unknown fields. It names files and
+an address; it holds no secret itself:
+
+```json
+{
+  "store_path": "/var/lib/aicrew/aicrew.db",
+  "listen_addr": "0.0.0.0:8443",
+  "tls_cert_file": "/etc/aicrew/tls/cert.pem",
+  "tls_key_file": "/etc/aicrew/tls/key.pem",
+  "service_id": "aicrew-example",
+  "shutdown_timeout": "15s"
+}
+```
+
+- `service_id` is the ID aimem registers this service under (identity.v1:
+  1 to 128 characters from `[A-Za-z0-9._:-]`).
+- `shutdown_timeout` is optional (default 15 s, at most 5 min).
+- Keep the TLS key readable only by the service's account.
+
+The service logs JSON lines to stderr: each request's method, matched route,
+status and duration, never its headers, body, query or raw path. A request
+body is capped at 64 KiB and headers at 16 KiB; the server also sets
+read-header, read, write and idle timeouts. On SIGINT or SIGTERM it stops
+accepting connections, lets requests in flight finish within
+`shutdown_timeout`, closes the store and exits 0.

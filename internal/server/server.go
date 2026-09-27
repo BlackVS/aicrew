@@ -59,6 +59,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger) (*Server, error) {
 		},
 	}
 	s.handle(http.MethodGet, "/healthz", s.health)
+	s.handle(http.MethodPost, IntrospectPath, s.introspect)
 	s.http = &http.Server{
 		Handler:           s.logged(limitBody(http.HandlerFunc(s.dispatch))),
 		ReadHeaderTimeout: readHeaderTimeout,

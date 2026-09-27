@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "contract": "identity.v1",
+  "status": "contract",
+  "note": "Design fixture for task E2. Every value is synthetic. The sample secrets exist only so the fake-consumer test can prove they never appear in a response, audit or refusal.",
+  "sample_secrets": {
+    "individual_bearer": "sample-individual-bearer-not-real",
+    "receipt": "amr1_SAMPLEreceiptSAMPLEreceiptSAMPLEreceiptABCD",
+    "superseded_receipt": "amr1_OLDreceiptOLDreceiptOLDreceiptOLDreceiptOLD",
+    "aimem_handle": "acs1_SAMPLEhandleSAMPLEhandleSAMPLEhandleSAMPLEX",
+    "redemption_credential": "sample-aicrew-redemption-credential-not-real",
+    "introspection_credential": "sample-aimem-introspection-credential-not-real",
+    "enrollment_subcode": "sample-d1-enrollment-subcode-not-real"
+  },
+  "bounds": {
+    "challenge_max_seconds": 300,
+    "receipt_max_seconds": 60,
+    "live_receipts_per_token_peer_challenge": 1,
+    "receipts_per_token_per_minute": 10,
+    "redemption_retention_seconds": 900,
+    "server_same_key_wait_seconds": 5,
+    "redemption_call_timeout_seconds": 10,
+    "aicrew_inflight_wait_seconds": 30,
+    "introspection_attempts": 1,
+    "introspection_budget_ms": 2000,
+    "introspection_max_response_bytes": 16384,
+    "handle_max_seconds": 900,
+    "handle_refresh_overlap_seconds": 60
+  },
+  "request_key_encoding": {"scheme": "k1_ + unpadded base64url(SHA-256(UTF-8 request key))", "cases": [{"case": "ascii", "raw_request_key": "redeem:01a0dbee-0000-7000-8000-00000000c001:complete-1", "idempotency_key": "k1_2IQCL8m83eJDh40yzY28RSvS9Y2E7TBl3dkZxDZJZ0M"}, {"case": "space", "raw_request_key": "redeem:01a0dbee-0000-7000-8000-00000000c001:complete 1", "idempotency_key": "k1_IECxZIo2zezwemyIDXbOdtQCS-dw5FdoezwjuObnHGc"}, {"case": "non_ascii", "raw_request_key": "agent-proof:01a0dbee-0000-7000-8000-00000000c002:é", "idempotency_key": "k1_w4S8h7VVOqv9osTS7ZTCrUUsHwIswB1ZPpsGAHFAR-Y"}, {"case": "control_character", "raw_request_key": "redeem:01a0dbee-0000-7000-8000-00000000c001:line\nbreak", "idempotency_key": "k1_Tsdcj3lAs9qandWbx8ymL0IwH7T2oX3147pd25RsC2M"}, {"case": "max_length_key", "raw_request_key": "redeem:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk", "idempotency_key": "k1_eveici6pT97KTiPrzAn1v1sdDcNpRy6XJefE4ljnoRY"}]},
+  "introspection_version": {"rule": "header X-Aimem-Identity-Version and body version are both required and must both be 1", "cases": [{"case": "both_present_equal", "header": "1", "body": 1, "accepted": true}, {"case": "header_missing", "header": null, "body": 1, "accepted": false}, {"case": "body_missing", "header": "1", "body": null, "accepted": false}, {"case": "header_body_conflict", "header": "1", "body": 2, "accepted": false}, {"case": "both_unsupported", "header": "2", "body": 2, "accepted": false}], "rejection": {"aicrew_status": 400, "aicrew_code": "unsupported_version", "evaluated": false, "aimem_outcome": "context_unavailable", "applied": false}},
+  "introspection_response_size": {"cases": [{"case": "at_ceiling", "body_bytes": 16384, "accepted": true}, {"case": "one_byte_over", "body_bytes": 16385, "accepted": false}], "rejection": {"aimem_outcome": "context_unavailable", "parsed": false, "applied": false}},
+  "secret_location_rejections": [{"case": "receipt_in_audit", "path": "team_request.audit_example.note", "value": "{receipt}"}, {"case": "receipt_in_refusal_message", "path": "refusal_envelope_example.message", "value": "receipt {receipt} was spent"}, {"case": "sample_receipt_in_refusal", "path": "refusals[redeem_expired_receipt].next_action", "value": "retry with amr1_SAMPLEreceiptSAMPLEreceiptSAMPLEreceiptABCD"}, {"case": "receipt_in_redemption_response", "path": "exchanges[redemption].response.body.receipt", "value": "{receipt}"}, {"case": "handle_in_introspection_reply", "path": "exchanges[introspection_active].response.body.handle", "value": "{aimem_handle}"}, {"case": "bearer_in_rotation_step", "path": "rotation_sequence[2].effect", "value": "Bearer {individual_bearer}"}, {"case": "redemption_credential_in_proof_header", "path": "exchanges[proof_issue].http.headers.Authorization", "value": "Bearer {redemption_credential}"}],
+  "peer_registration": {
+    "authorized_by": "hub_admin",
+    "audited": true,
+    "record": {
+      "service_id": "aicrew-example",
+      "hub_id": "hub-example",
+      "operations": ["identity.redeem"],
+      "introspection_endpoint": "https://aicrew.example/v1/crew/introspect",
+      "tls_trust": {"mode": "spki_sha256", "pin": "sha256-EXAMPLEpinEXAMPLEpinEXAMPLEpinEXAMPLEpin0="},
+      "inbound_credentials": [{"id": "peercred-example-1", "digest_only": true, "state": "active"}],
+      "outbound_credential": {"id": "introspect-cred-example-1", "storage": "protected", "state": "active"},
+      "state": "active"
+    },
+    "grants_nothing": ["project_access", "enrollment", "token_issuance", "agent_action"]
+  },
+  "exchanges": [
+    {
+      "case": "proof_issue",
+      "operation": "proof",
+      "caller": "individual",
+      "http": {"method": "POST", "path": "/v1/identity/proofs", "headers": {"Authorization": "Bearer {individual_bearer}", "X-Aimem-Identity-Version": "1"}},
+      "request": {"peer_service_id": "aicrew-example", "hub_id": "hub-example", "challenge_id": "01a0dbee-0000-7000-8000-00000000c001"},
+      "response": {
+        "status": 200,
+        "body": {
+          "receipt": "{receipt}",
+          "receipt_id": "01a0dbee-0000-7000-8000-00000000r001",
+          "expires_at": "2026-09-26T05:01:00Z",
+          "binding": {"hub_id": "hub-example", "peer_service_id": "aicrew-example", "challenge_id": "01a0dbee-0000-7000-8000-00000000c001", "user_id": "user-example", "token_id": "token-example-1"}
+        }
+      }
+    },
+    {
+      "case": "redemption",
+      "operation": "redeem",
+      "caller": "peer",
+      "http": {"method": "POST", "path": "/v1/identity/peers/aicrew-example/redemptions", "headers": {"Authorization": "Bearer {redemption_credential}", "Idempotency-Key": "k1_2IQCL8m83eJDh40yzY28RSvS9Y2E7TBl3dkZxDZJZ0M", "X-Aimem-Identity-Version": "1"}},
+      "request": {"hub_id": "hub-example", "challenge_id": "01a0dbee-0000-7000-8000-00000000c001", "receipt": "{receipt}"},
+      "response": {
+        "status": 200,
+        "body": {
+          "redemption_id": "01a0dbee-0000-7000-8000-00000000d001",
+          "request_key": "k1_2IQCL8m83eJDh40yzY28RSvS9Y2E7TBl3dkZxDZJZ0M",
+          "replayed": false,
+          "peer_service_id": "aicrew-example",
+          "challenge_id": "01a0dbee-0000-7000-8000-00000000c001",
+          "identity": {"hub_id": "hub-example", "user_id": "user-example", "token_id": "token-example-1"},
+          "token_state": "active",
+          "redeemed_at": "2026-09-26T05:00:20Z"
+        }
+      }
+    },
+    {
+      "case": "redemption_identical_replay",
+      "operation": "redeem",
+      "caller": "peer",
+      "http": {"method": "POST", "path": "/v1/identity/peers/aicrew-example/redemptions", "headers": {"Authorization": "Bearer {redemption_credential}", "Idempotency-Key": "k1_2IQCL8m83eJDh40yzY28RSvS9Y2E7TBl3dkZxDZJZ0M", "X-Aimem-Identity-Version": "1"}},
+      "request": {"hub_id": "hub-example", "challenge_id": "01a0dbee-0000-7000-8000-00000000c001", "receipt": "{receipt}"},
+      "response": {
+        "status": 200,
+        "body": {
+          "redemption_id": "01a0dbee-0000-7000-8000-00000000d001",
+          "request_key": "k1_2IQCL8m83eJDh40yzY28RSvS9Y2E7TBl3dkZxDZJZ0M",
+          "replayed": true,
+          "peer_service_id": "aicrew-example",
+          "challenge_id": "01a0dbee-0000-7000-8000-00000000c001",
+          "identity": {"hub_id": "hub-example", "user_id": "user-example", "token_id": "token-example-1"},
+          "token_state": "active",
+          "redeemed_at": "2026-09-26T05:00:20Z"
+        }
+      }
+    },
+    {
+      "case": "introspection_active",
+      "operation": "introspect",
+      "caller": "aimem",
+      "http": {"method": "POST", "path": "/v1/crew/introspect", "owner": "aicrew", "headers": {"Authorization": "Bearer {introspection_credential}", "X-Aimem-Identity-Version": "1"}},
+      "request": {"version": 1, "hub_id": "hub-example", "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a6b", "handle": "{aimem_handle}"},
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a6b",
+          "active": true,
+          "service_id": "aicrew-example",
+          "hub_id": "hub-example",
+          "identity": {"user_id": "user-example", "token_id": "token-example-1"},
+          "agent_id": "agent-example",
+          "team_id": "team-example",
+          "role": "worker",
+          "session_id": "session-example-1",
+          "generation": "4",
+          "handle_expires_at": "2026-09-26T05:15:00Z"
+        }
+      }
+    },
+    {
+      "case": "introspection_inactive",
+      "operation": "introspect",
+      "caller": "aimem",
+      "http": {"method": "POST", "path": "/v1/crew/introspect", "owner": "aicrew", "headers": {"Authorization": "Bearer {introspection_credential}", "X-Aimem-Identity-Version": "1"}},
+      "request": {"version": 1, "hub_id": "hub-example", "nonce": "n-0a1b2c3d4e5f60718293a4b5c6d7e8f9", "handle": "{aimem_handle}"},
+      "response": {"status": 200, "body": {"nonce": "n-0a1b2c3d4e5f60718293a4b5c6d7e8f9", "active": false}}
+    }
+  ],
+  "team_request": {
+    "headers": {"Authorization": "Bearer {individual_bearer}", "X-Aimem-Team-Context": "{aimem_handle}"},
+    "authenticated": {"hub_id": "hub-example", "user_id": "user-example", "token_id": "token-example-1"},
+    "linked_profile": {"service_id": "aicrew-example", "team_id": "team-example", "profile_id": "profile-example"},
+    "verifier_order": ["authenticate_individual_bearer", "introspect_handle", "compare_exact_binding", "evaluate_profile_grants_only", "role_and_reservation_policy"],
+    "audit_example": {"actor_user_id": "user-example", "mode": "team", "service_id": "aicrew-example", "team_id": "team-example", "session_id": "session-example-1", "generation": "4", "correlation_id": "corr-example-1"}
+  },
+  "concurrent_sessions": [
+    {"connection": "personal-1", "handle_attached": false, "introspection_calls": 0, "grants": "personal_only", "outcome": "allowed_by_personal_grants"},
+    {"connection": "team-a", "handle_attached": true, "introspection_calls": 1, "grants": "profile_only", "session_id": "session-example-1", "outcome": "allowed_by_profile_grants"},
+    {"connection": "team-b", "handle_attached": true, "introspection_calls": 1, "grants": "profile_only", "session_id": "session-example-2", "outcome": "context_stale"}
+  ],
+  "rotation_sequence": [
+    {"step": "d1_reissue_commits", "effect": "token-example-1 revoked; token-example-2 issued for user-example in one aimem transaction"},
+    {"step": "old_receipt_redeemed", "code": "credential_inactive"},
+    {"step": "request_with_old_token", "code": "invalid_credential", "introspection_calls": 0},
+    {"step": "request_with_new_token_old_session", "introspected_token_id": "token-example-1", "authenticated_token_id": "token-example-2", "code": "context_stale"},
+    {"step": "aicrew_reproof", "effect": "same hub and user with new token: session rebound, generation advanced, new aimem handle"},
+    {"step": "request_with_new_token_new_handle", "outcome": "allowed_by_profile_grants"}
+  ],
+  "refusal_envelope_example": {"code": "context_unavailable", "message": "Team context could not be verified; nothing was applied.", "active_mode": "team", "retryable": true, "next_action": "Retry later with the same context.", "correlation_id": "corr-example-2"},
+  "refusals": [
+    {"case": "proof_revoked_token", "operation": "proof", "code": "invalid_credential", "http_status": 401, "retryable": false, "next_action": "Recover the individual credential through its authorized flow."},
+    {"case": "proof_project_scoped_token", "operation": "proof", "code": "credential_scope_forbidden", "http_status": 403, "retryable": false, "next_action": "Use the installation's user-scoped individual credential."},
+    {"case": "proof_enrollment_subcode_as_bearer", "operation": "proof", "code": "invalid_credential", "http_status": 401, "retryable": false, "next_action": "Complete enrollment first, then use the issued individual credential."},
+    {"case": "proof_unknown_peer_or_hub", "operation": "proof", "code": "peer_unknown", "http_status": 403, "retryable": false, "next_action": "Verify the hub and aicrew service locators."},
+    {"case": "proof_rate_limited", "operation": "proof", "code": "rate_limited", "http_status": 429, "retryable": true, "next_action": "Wait, then request a new receipt."},
+    {"case": "proof_unsupported_version", "operation": "proof", "code": "unsupported_version", "http_status": 400, "retryable": false, "next_action": "Use identity version 1."},
+    {"case": "proof_malformed_challenge", "operation": "proof", "code": "invalid_request", "http_status": 400, "retryable": false, "next_action": "Send the challenge ID exactly as aicrew issued it."},
+    {"case": "proof_plain_http", "operation": "proof", "code": "tls_required", "http_status": 403, "retryable": false, "next_action": "Connect to the hub's TLS listener with certificate verification."},
+    {"case": "redeem_unix_socket", "operation": "redeem", "code": "tls_required", "http_status": 403, "retryable": false, "next_action": "Connect to the hub's TLS listener with certificate verification."},
+    {"case": "redeem_unregistered_credential", "operation": "redeem", "code": "peer_unauthenticated", "http_status": 401, "retryable": false, "next_action": "Operator checks the peer registration and credential."},
+    {"case": "redeem_path_service_mismatch", "operation": "redeem", "code": "peer_forbidden", "http_status": 403, "retryable": false, "next_action": "Operator checks the peer's permitted operations."},
+    {"case": "redeem_expired_receipt", "operation": "redeem", "code": "proof_invalid", "http_status": 403, "retryable": false, "next_action": "Obtain a new receipt for the challenge, or begin a new challenge."},
+    {"case": "redeem_superseded_receipt", "operation": "redeem", "code": "proof_invalid", "http_status": 403, "retryable": false, "next_action": "Obtain a new receipt for the challenge, or begin a new challenge."},
+    {"case": "redeem_wrong_peer_receipt", "operation": "redeem", "code": "proof_invalid", "http_status": 403, "retryable": false, "next_action": "Obtain a new receipt for the challenge, or begin a new challenge."},
+    {"case": "redeem_wrong_challenge", "operation": "redeem", "code": "proof_invalid", "http_status": 403, "retryable": false, "next_action": "Obtain a new receipt for the challenge, or begin a new challenge."},
+    {"case": "redeem_second_key_same_receipt", "operation": "redeem", "code": "proof_invalid", "http_status": 403, "retryable": false, "next_action": "Obtain a new receipt for the challenge, or begin a new challenge."},
+    {"case": "redeem_replay_after_retention", "operation": "redeem", "code": "proof_invalid", "http_status": 403, "retryable": false, "next_action": "Obtain a new receipt for the challenge, or begin a new challenge."},
+    {"case": "redeem_changed_input_same_key", "operation": "redeem", "code": "idempotency_conflict", "http_status": 409, "retryable": false, "next_action": "Investigate the changed input; never reuse the key for other input."},
+    {"case": "redeem_same_key_in_flight", "operation": "redeem", "code": "request_in_progress", "http_status": 503, "retryable": true, "next_action": "Retry with the same key; nothing was applied."},
+    {"case": "redeem_token_revoked_after_issue", "operation": "redeem", "code": "credential_inactive", "http_status": 403, "retryable": false, "next_action": "Recover the individual credential; do not link."},
+    {"case": "redeem_replay_after_revocation", "operation": "redeem", "code": "credential_inactive", "http_status": 403, "retryable": false, "next_action": "Recover the individual credential; do not link."},
+    {"case": "redeem_store_unavailable", "operation": "redeem", "code": "identity_unavailable", "http_status": 503, "retryable": true, "next_action": "Retry with the same key; nothing was applied."},
+    {"case": "team_revoked_bearer", "operation": "team_request", "code": "invalid_credential", "http_status": 401, "retryable": false, "next_action": "Recover the individual credential through its authorized flow."},
+    {"case": "team_user_mismatch", "operation": "team_request", "code": "identity_mismatch", "http_status": 403, "retryable": false, "next_action": "Stop and reconcile the configured identity through aicrew."},
+    {"case": "team_unlinked_agent", "operation": "team_request", "code": "identity_link_required", "http_status": 403, "retryable": false, "next_action": "Complete the aicrew identity proof."},
+    {"case": "team_rotation_pending", "operation": "team_request", "code": "context_stale", "http_status": 403, "retryable": false, "next_action": "Re-prove through aicrew to rebind the session."},
+    {"case": "team_generation_advanced", "operation": "team_request", "code": "context_stale", "http_status": 403, "retryable": false, "next_action": "Resume the session through aicrew and reconcile pending work."},
+    {"case": "team_no_handle_for_team_tool", "operation": "team_request", "code": "context_missing", "http_status": 403, "retryable": false, "next_action": "Start or resume the aicrew session in this conversation."},
+    {"case": "team_handle_on_personal_connection", "operation": "team_request", "code": "invalid_request", "http_status": 400, "retryable": false, "next_action": "Open a team conversation for team work."},
+    {"case": "team_introspection_timeout", "operation": "team_request", "code": "context_unavailable", "http_status": 503, "retryable": true, "next_action": "Retry later with the same context."},
+    {"case": "team_introspection_tls_mismatch", "operation": "team_request", "code": "context_unavailable", "http_status": 503, "retryable": true, "next_action": "Retry later with the same context."},
+    {"case": "team_introspection_nonce_mismatch", "operation": "team_request", "code": "context_unavailable", "http_status": 503, "retryable": true, "next_action": "Retry later with the same context."},
+    {"case": "team_introspection_version_rejected", "operation": "team_request", "code": "context_unavailable", "http_status": 503, "retryable": true, "next_action": "Retry later with the same context."},
+    {"case": "team_introspection_oversize", "operation": "team_request", "code": "context_unavailable", "http_status": 503, "retryable": true, "next_action": "Retry later with the same context."},
+    {"case": "team_operation_not_served", "operation": "team_request", "code": "team_operation_unsupported", "http_status": 403, "retryable": false, "next_action": "Use the aicrew flow for this work; team mode does not serve this operation."},
+    {"case": "team_profile_not_granted", "operation": "team_request", "code": "grant_denied", "http_status": 403, "retryable": false, "next_action": "Request an authorized grant change."},
+    {"case": "team_role_downgrade", "operation": "team_request", "code": "role_forbidden", "http_status": 403, "retryable": false, "next_action": "Use the role's permitted aicrew flow."}
+  ]
+}

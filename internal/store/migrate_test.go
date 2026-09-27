@@ -110,6 +110,8 @@ func downgradeToV10(t *testing.T, path string) {
 		`DROP TABLE attempts`,
 		`ALTER TABLE attempts_v10 RENAME TO attempts`,
 		schemaV6[1], schemaV6[3],
+		// Tables added after v10.
+		`DROP TABLE session_handles`, `DROP TABLE introspection_credentials`,
 		`UPDATE schema_version SET version = 10`)
 	tx, err := db.Begin()
 	if err != nil {
@@ -202,7 +204,7 @@ func TestMigrationV11KeepsEveryAttempt(t *testing.T) {
 	}
 	defer s2.Close()
 	var version int
-	if err := s2.db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 11 {
+	if err := s2.db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != schemaVersion {
 		t.Fatalf("schema version = %d, %v", version, err)
 	}
 	if got := rowsOf(t, s2.db, attemptRows); !reflect.DeepEqual(got, wantAttempts) {
@@ -292,4 +294,36 @@ func mustTeamByName(t *testing.T, s *Store, name string) Team {
 		t.Fatal(err)
 	}
 	return tm
+}
+
+// Schema v12 adds the introspection tables to a v11 store and keeps every
+// reference; the store then issues and answers as usual.
+func TestMigrationV12AddsIntrospectionTables(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	for _, stmt := range []string{`DROP TABLE session_handles`, `DROP TABLE introspection_credentials`,
+		`UPDATE schema_version SET version = 11`} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v11 store: %v", err)
+	}
+	defer s2.Close()
+	var version int
+	if err := s2.db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 12 {
+		t.Fatalf("schema version = %d, %v", version, err)
+	}
+	if err := foreignKeyCheck(ctx, s2.db); err != nil {
+		t.Fatal(err)
+	}
+	if _, bearer, err := s2.IssueIntrospectionCredential(ctx, operator(t), "k1", "hub-test"); err != nil || bearer == "" {
+		t.Fatalf("issue after the migration: %v", err)
+	}
 }

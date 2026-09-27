@@ -238,34 +238,44 @@ func TestLeaveRules(t *testing.T) {
 }
 
 // The operator's condition: aimem's lifecycle commands never overlap for one
-// session. A close issued while a refresh runs starts only once the refresh
-// has finished; another session is not held up.
+// session, across clients of the same agent home. Two independent wrappers
+// stand for two processes: a close and a status issued through the second
+// while the first holds a refresh run only after the refresh finishes;
+// another session is not held up.
 func TestCloseWaitsForRefresh(t *testing.T) {
 	stub := &stubAimem{gate: make(chan struct{}), inside: make(chan struct{})}
-	a := Serialize(stub)
+	dir := t.TempDir()
+	first, second := Serialize(stub, dir), Aimem(&serialAimem{Aimem: stub, dir: dir})
 	ctx := context.Background()
 	refreshed := make(chan struct{})
 	go func() {
-		a.Refresh(ctx, "sess", "acs1_x")
+		first.Refresh(ctx, "sess", "acs1_x")
 		close(refreshed)
 	}()
 	<-stub.inside
-	closed := make(chan struct{})
+	closed, statused := make(chan struct{}), make(chan struct{})
 	go func() {
-		a.Close(ctx, "sess")
+		second.Close(ctx, "sess")
 		close(closed)
 	}()
-	if err := a.Close(ctx, "other"); err != nil {
+	go func() {
+		second.Status(ctx, "sess")
+		close(statused)
+	}()
+	if err := second.Close(ctx, "other"); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case <-closed:
 		t.Fatal("close ran while the refresh was in flight")
+	case <-statused:
+		t.Fatal("status ran while the refresh was in flight")
 	case <-time.After(200 * time.Millisecond):
 	}
 	close(stub.gate)
 	<-refreshed
 	<-closed
+	<-statused
 	stub.mu.Lock()
 	defer stub.mu.Unlock()
 	end, closeAt := -1, -1
@@ -289,7 +299,7 @@ func TestEngineSerializes(t *testing.T) {
 	if _, ok := e.Aimem.(*serialAimem); !ok {
 		t.Fatalf("the engine's aimem runner is %T, not serialized", e.Aimem)
 	}
-	if Serialize(e.Aimem) != e.Aimem {
+	if Serialize(e.Aimem, t.TempDir()) != e.Aimem {
 		t.Fatal("serializing twice wrapped again")
 	}
 }

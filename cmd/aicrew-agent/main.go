@@ -123,7 +123,7 @@ func status(ctx context.Context, cfg agent.Config, stdout io.Writer, log *slog.L
 		fmt.Fprintln(stdout, `{"session": null}`)
 		return exitOK
 	}
-	a := agent.ExecAimem{Command: cfg.AimemCommand, Hub: cfg.AimemHub}
+	a := agent.Serialize(agent.ExecAimem{Command: cfg.AimemCommand, Hub: cfg.AimemHub}, agent.LockDir(cfg.Home))
 	path, bound, err := a.Status(ctx, st.SessionID)
 	view := map[string]any{"session": st, "aimem_bound": bound}
 	if err != nil {

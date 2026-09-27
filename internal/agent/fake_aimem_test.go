@@ -85,6 +85,9 @@ func fakeAimem(root string, args []string) int {
 		if !ok {
 			return fail("stdin holds no handle")
 		}
+		if _, err := os.Stat(filepath.Join(root, "fail-open")); err == nil {
+			return fail("the hub cannot be reached")
+		}
 		id := flagValue(args, "--session")
 		path := sessionFile(root, id)
 		if _, err := os.Stat(path); err == nil {

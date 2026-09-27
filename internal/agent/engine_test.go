@@ -396,3 +396,33 @@ func (f *fakeClock) advance(d time.Duration) {
 	f.t = f.t.Add(d)
 	f.mu.Unlock()
 }
+
+// A binding that fails leaves the session recorded, so a restarted client
+// resumes it instead of trying to enter the team beside it.
+func TestFailedBindStillResumes(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	flag := filepath.Join(c.root, "fail-open")
+	if err := os.WriteFile(flag, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := c.engine(t)
+	if err := a.Start(ctx); err == nil || !strings.Contains(err.Error(), "cannot be reached") {
+		t.Fatalf("start with aimem failing: %v", err)
+	}
+	st, ok, err := LoadState(c.cfg.Home)
+	if err != nil || !ok || st.SessionID != a.SessionID() {
+		t.Fatalf("no record of the entered session: %+v %v %v", st, ok, err)
+	}
+	os.Remove(flag)
+	b := c.engine(t)
+	if err := b.Start(ctx); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if b.SessionID() != a.SessionID() || b.session.Generation != "2" {
+		t.Fatalf("restart gave %s at generation %s, want %s resumed", b.SessionID(), b.session.Generation, a.SessionID())
+	}
+	if !c.handleActive(t, c.fileHandle(t, b.SessionID())) {
+		t.Fatal("aimem holds no active handle after the restart")
+	}
+}

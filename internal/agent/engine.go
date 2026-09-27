@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"time"
 )
 
@@ -69,7 +70,7 @@ type Engine struct {
 // NewEngine assembles an engine for cfg. Aimem's lifecycle commands are
 // always serialized per session.
 func NewEngine(cfg Config, crew CrewAPI, aimem Aimem, log *slog.Logger) *Engine {
-	return &Engine{Cfg: cfg, Crew: crew, Aimem: Serialize(aimem), Log: log, Now: time.Now, Sleep: sleepCtx}
+	return &Engine{Cfg: cfg, Crew: crew, Aimem: Serialize(aimem, LockDir(cfg.Home)), Log: log, Now: time.Now, Sleep: sleepCtx}
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -85,6 +86,9 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 		return nil
 	}
 }
+
+// LockDir is where an agent home keeps its per-session aimem locks.
+func LockDir(home string) string { return filepath.Join(home, "state", "locks") }
 
 func newKey(purpose string) string {
 	var b [16]byte
@@ -209,6 +213,12 @@ func (e *Engine) adopt(entry Entry, ch Challenge) {
 func (e *Engine) bind(ctx context.Context) error {
 	handle := e.pendingHandle
 	e.pendingHandle = ""
+	// The session is recorded before aimem is asked: if the binding fails,
+	// a restarted client still resumes this session instead of trying to
+	// enter the team beside it.
+	if err := e.record(e.aimemFile); err != nil {
+		return err
+	}
 	path, open, err := e.Aimem.Status(ctx, e.session.ID)
 	if err != nil {
 		return err
@@ -222,8 +232,13 @@ func (e *Engine) bind(ctx context.Context) error {
 	}
 	e.aimemFile = path
 	e.Log.Info("in session", "session", e.session.ID, "team", e.session.TeamID, "generation", e.session.Generation)
+	return e.record(path)
+}
+
+// record saves the nonsecret recovery record of the held session.
+func (e *Engine) record(aimemFile string) error {
 	return SaveState(e.Cfg.Home, State{AgentID: e.Cfg.AgentID, TeamID: e.session.TeamID, ServiceID: e.serviceID,
-		HubID: e.hubID, SessionID: e.session.ID, AimemFile: path, UpdatedAt: e.Now().UTC()})
+		HubID: e.hubID, SessionID: e.session.ID, AimemFile: aimemFile, UpdatedAt: e.Now().UTC()})
 }
 
 // next is when the engine acts again, and whether that is a resume (before

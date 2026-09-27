@@ -75,6 +75,7 @@ CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,
   resume, aimem's binding, handle refresh and leave.
 - `internal/tlstrust`: the TLS trust bindings (`ca_dns`, `spki_sha256`)
   shared by the verifier and the agent client.
+- `internal/filelock`: a waiting, exclusive operating-system file lock.
 - `internal/privatefile`: creates a file for a secret, exclusively and
   readable by its owner only, and checks that an existing secret file is
   private (mode bits on Unix, the effective DACL on Windows).
@@ -217,5 +218,9 @@ no secret; other sections belong to onboarding:
   reach aimem only on stdin or through a pipe. The agent home's
   `state/aicrew-session.json` records only the session, team, service, hub
   and aimem file path, so that a restarted client resumes.
-- aimem's lifecycle commands for one session never overlap: a close issued
-  while a refresh runs waits for it.
+- aimem's lifecycle commands for one session never overlap, across every
+  `aicrew-agent` process of the agent home: each holds an exclusive lock on
+  a file under `state/locks/` named for the session, so a close issued
+  while a refresh runs, here or in another process, waits for it.
+- The session is recorded before aimem is asked to bind it, so a binding
+  that fails still leaves a session the next `start` resumes.

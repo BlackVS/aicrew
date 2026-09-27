@@ -3,12 +3,17 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
-	"sync"
+
+	"github.com/BlackVS/aicrew/internal/filelock"
 )
 
 // Aimem is aimem's client commands for an aicrew team session
@@ -122,55 +127,69 @@ func (a ExecAimem) Status(ctx context.Context, sessionID string) (string, bool, 
 	return st.Path, true, nil
 }
 
-// serialAimem runs aimem's lifecycle commands for one session one at a time:
-// an open, a refresh, a close or a status for a session waits for any other
-// in flight for the same session, so a close issued during a refresh runs
+// serialAimem runs aimem's lifecycle commands for one session one at a time,
+// across processes: an open, a refresh, a close or a status for a session
+// holds an exclusive lock on a file named for that session under the agent
+// home, and waits while another holds it. A close issued during a refresh,
+// by this process or another client of the same agent home, therefore runs
 // only once the refresh has finished. Overlapping them could let a close
-// drop the file a refresh has just written. Different sessions do not wait
-// on each other; a proof is bound to no session and is not serialized.
+// drop the file a refresh has just written, or a late refresh recreate a
+// binding a close has just removed. Different sessions do not wait on each
+// other; a proof is bound to no session and is not serialized.
 type serialAimem struct {
 	Aimem
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+	dir string
 }
 
 // Serialize wraps a so that its lifecycle commands never overlap for one
-// session.
-func Serialize(a Aimem) Aimem {
+// session, with the locks under lockDir (the agent home's state/locks).
+func Serialize(a Aimem, lockDir string) Aimem {
 	if s, ok := a.(*serialAimem); ok {
 		return s
 	}
-	return &serialAimem{Aimem: a, locks: map[string]*sync.Mutex{}}
+	return &serialAimem{Aimem: a, dir: lockDir}
 }
 
-func (s *serialAimem) lock(sessionID string) func() {
-	s.mu.Lock()
-	l, ok := s.locks[sessionID]
-	if !ok {
-		l = &sync.Mutex{}
-		s.locks[sessionID] = l
+func (s *serialAimem) lock(ctx context.Context, sessionID string) (func(), error) {
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+		return nil, err
 	}
-	s.mu.Unlock()
-	l.Lock()
-	return l.Unlock
+	sum := sha256.Sum256([]byte(sessionID))
+	return filelock.Lock(ctx, filepath.Join(s.dir, "aimem-"+hex.EncodeToString(sum[:8])+".lock"))
 }
 
 func (s *serialAimem) Open(ctx context.Context, serviceID, teamID, sessionID, handle string) (string, error) {
-	defer s.lock(sessionID)()
+	unlock, err := s.lock(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	return s.Aimem.Open(ctx, serviceID, teamID, sessionID, handle)
 }
 
 func (s *serialAimem) Refresh(ctx context.Context, sessionID, handle string) error {
-	defer s.lock(sessionID)()
+	unlock, err := s.lock(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return s.Aimem.Refresh(ctx, sessionID, handle)
 }
 
 func (s *serialAimem) Close(ctx context.Context, sessionID string) error {
-	defer s.lock(sessionID)()
+	unlock, err := s.lock(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return s.Aimem.Close(ctx, sessionID)
 }
 
 func (s *serialAimem) Status(ctx context.Context, sessionID string) (string, bool, error) {
-	defer s.lock(sessionID)()
+	unlock, err := s.lock(ctx, sessionID)
+	if err != nil {
+		return "", false, err
+	}
+	defer unlock()
 	return s.Aimem.Status(ctx, sessionID)
 }

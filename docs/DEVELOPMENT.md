@@ -69,11 +69,7 @@ CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,
   See the package documentation for the rules it enforces.
 - `internal/verifier`: the store's production verifier, which redeems
   aimem proof receipts (`docs/CREW-CONTRACT.md`, "Receipt redemption").
-  It is not wired into `aicrewd` yet; the first route that completes a
-  proof configures it with aimem's https origin, this service's peer ID,
-  the TLS trust binding (`ca_dns` with the origin's host, or `spki_sha256`
-  with `sha256-` and the base64 SHA-256 of aimem's public key) and the
-  redemption bearer file.
+  `aicrewd` configures it from the `aimem` section below.
 - `internal/privatefile`: creates a file for a secret, exclusively and
   readable by its owner only, and checks that an existing secret file is
   private (mode bits on Unix, the effective DACL on Windows).
@@ -83,8 +79,7 @@ CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,
 
 `aicrewd` opens the store and serves HTTPS on one listener, over TLS it
 terminates itself (TLS 1.2 or later). It has no plain-HTTP listener and does
-not run behind a TLS-terminating proxy. It currently answers only
-`GET /healthz`.
+not run behind a TLS-terminating proxy. Its routes are listed below.
 
 ```sh
 CGO_ENABLED=0 go build -o bin/aicrewd ./cmd/aicrewd
@@ -108,6 +103,24 @@ an address; it holds no secret itself:
 - `service_id` is the ID aimem registers this service under (identity.v1:
   1 to 128 characters from `[A-Za-z0-9._:-]`).
 - `shutdown_timeout` is optional (default 15 s, at most 5 min).
+- `aimem` is optional. Without it, session entry and resume are refused;
+  with it, the service redeems agents' proofs with that aimem hub:
+
+  ```json
+  "aimem": {
+    "base_url": "https://aimem.example:8443",
+    "tls_trust_mode": "ca_dns",
+    "tls_trust_value": "aimem.example",
+    "redemption_token_file": "/etc/aicrew/aimem-redemption.token"
+  }
+  ```
+
+  `base_url` is aimem's https origin. `tls_trust_mode` is `ca_dns` (the
+  value is the origin's host) or `spki_sha256` (`sha256-` and the base64
+  SHA-256 of aimem's public key). The token file holds the redemption
+  bearer aimem issued to this service; it must be readable by the service's
+  account only, and the service refuses to start otherwise. It is read on
+  every redemption, so replacing it rotates the bearer without a restart.
 - Keep the TLS key readable only by the service's account.
 
 The service logs JSON lines to stderr: each request's method, matched route,
@@ -120,7 +133,10 @@ accepting connections, lets requests in flight finish within
 Besides `GET /healthz`, it serves aimem's session introspection,
 `POST /v1/crew/introspect` (`docs/CREW-CONTRACT.md`, "Session
 introspection"). Aimem registers this service with the route's full https
-URL, the service ID and the TLS trust binding of this certificate.
+URL, the service ID and the TLS trust binding of this certificate. It also
+serves agents' clients: `POST /v1/crew/challenges`, `POST /v1/crew/token`,
+`GET /v1/crew/session` and `POST /v1/crew/session/leave`
+(`docs/CREW-CONTRACT.md`, "Client session API").
 
 ## Introspection credentials
 

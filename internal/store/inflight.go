@@ -40,24 +40,14 @@ type flight struct {
 // flight until it finishes, ctx ends or maxWait passes. The returned release
 // must be called exactly once.
 func (f *inflight) acquire(ctx context.Context, c Caller, cmd command, maxWait time.Duration) (func(), error) {
-	key := fmt.Sprintf("%q %q %q %q %q", c.kind.String(), c.id, cmd.op, cmd.scope, cmd.key)
+	key := flightKey(c, cmd)
 	var timeout <-chan time.Time
 	for {
 		f.mu.Lock()
-		if f.entries == nil {
-			f.entries = map[string]*flight{}
-		}
-		cur, busy := f.entries[key]
-		if !busy {
-			own := &flight{done: make(chan struct{})}
-			f.entries[key] = own
+		cur, release := f.take(key)
+		if release != nil {
 			f.mu.Unlock()
-			return func() {
-				f.mu.Lock()
-				delete(f.entries, key)
-				f.mu.Unlock()
-				close(own.done)
-			}, nil
+			return release, nil
 		}
 		cur.waiters++
 		f.mu.Unlock()
@@ -80,5 +70,40 @@ func (f *inflight) acquire(ctx context.Context, c Caller, cmd command, maxWait t
 		if err != nil {
 			return nil, err
 		}
+	}
+}
+
+// tryAcquire takes the entry for c and cmd only if no identical command is
+// in flight; otherwise it refuses at once with ErrInProgress. Commands whose
+// retry would undo what the running original is about to return use it.
+func (f *inflight) tryAcquire(c Caller, cmd command) (func(), error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, release := f.take(flightKey(c, cmd)); release != nil {
+		return release, nil
+	}
+	return nil, fmt.Errorf("%s key %q: %w", cmd.op, cmd.key, ErrInProgress)
+}
+
+func flightKey(c Caller, cmd command) string {
+	return fmt.Sprintf("%q %q %q %q %q", c.kind.String(), c.id, cmd.op, cmd.scope, cmd.key)
+}
+
+// take claims key for the caller, with f.mu held. It returns the flight in
+// progress instead when there is one.
+func (f *inflight) take(key string) (*flight, func()) {
+	if f.entries == nil {
+		f.entries = map[string]*flight{}
+	}
+	if cur, busy := f.entries[key]; busy {
+		return cur, nil
+	}
+	own := &flight{done: make(chan struct{})}
+	f.entries[key] = own
+	return nil, func() {
+		f.mu.Lock()
+		delete(f.entries, key)
+		f.mu.Unlock()
+		close(own.done)
 	}
 }

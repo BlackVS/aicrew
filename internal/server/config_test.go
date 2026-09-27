@@ -70,3 +70,30 @@ func TestLoadConfig(t *testing.T) {
 		t.Fatalf("an oversized config = %v", err)
 	}
 }
+
+func withAimem(section string) string {
+	return strings.Replace(validConfig, "}", `,"aimem":`+section+`}`, 1)
+}
+
+const validAimem = `{"base_url":"https://hub.example:8443","tls_trust_mode":"ca_dns",
+	"tls_trust_value":"hub.example","redemption_token_file":"/etc/aicrew/redemption.token"}`
+
+// The aimem section is optional; when present it is checked offline as the
+// verifier checks it.
+func TestConfigAimem(t *testing.T) {
+	c, err := ParseConfig([]byte(withAimem(validAimem)))
+	if err != nil || c.Aimem == nil || c.Aimem.TLSTrustValue != "hub.example" {
+		t.Fatalf("aimem section = %+v, %v", c.Aimem, err)
+	}
+	for name, section := range map[string]string{
+		"plain http":    strings.Replace(validAimem, "https://", "http://", 1),
+		"no trust":      strings.Replace(validAimem, `"ca_dns"`, `""`, 1),
+		"other host":    strings.Replace(validAimem, `"tls_trust_value":"hub.example"`, `"tls_trust_value":"other.example"`, 1),
+		"no token file": strings.Replace(validAimem, `"/etc/aicrew/redemption.token"`, `""`, 1),
+		"unknown field": strings.Replace(validAimem, "}", `,"insecure":true}`, 1),
+	} {
+		if _, err := ParseConfig([]byte(withAimem(section))); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

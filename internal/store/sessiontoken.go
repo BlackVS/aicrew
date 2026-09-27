@@ -35,7 +35,8 @@ import (
 //
 // A lost entry reply is recovered by a retry with the same key and exactly
 // the same input, the receipt included, while the challenge's deadline has
-// not passed. The retry returns the recorded session with a fresh token and
+// not passed; a retry while the original still runs is refused as
+// ErrInProgress. The retry returns the recorded session with a fresh token and
 // handle, and deletes the token and handles of that session and generation,
 // which only the lost reply carried, in one transaction. It never starts a
 // second session. Neither secret is ever part of a recorded result, an audit
@@ -159,7 +160,8 @@ func (s *Store) ResumeSessionWithProof(ctx context.Context, v Verifier, key, cha
 }
 
 // enterWithProof is the shared order of work of a proof entry:
-//  0. An identical entry still running is waited for (inflight.go).
+//  0. An identical entry still running is refused with ErrInProgress, so
+//     at most one request per key is in flight (inflight.go).
 //  1. A retry of a committed entry is a lost reply: reissueEntry.
 //  2. Pre-checks on a read snapshot, writing nothing, so aimem is not asked
 //     about an entry that cannot succeed.
@@ -181,7 +183,10 @@ func (s *Store) enterWithProof(ctx context.Context, v Verifier, op, key string, 
 	}
 	in.ReceiptDigest = secretDigest(receipt.Reveal())
 	cmd := command{op: op, scope: in.ChallengeID, key: key, input: in, authorize: anyCaller}
-	release, err := s.flights.acquire(ctx, entrant, cmd, s.flightWait)
+	// An identical entry still running is refused rather than waited for:
+	// answering it after the original commits would reissue, revoking the
+	// secrets the original is about to return.
+	release, err := s.flights.tryAcquire(entrant, cmd)
 	if err != nil {
 		return out, secrets, err
 	}

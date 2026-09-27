@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strconv"
 	"time"
+
+	"github.com/BlackVS/aicrew/internal/verifier"
 )
 
 // Config is the service's configuration file. It names files and addresses
@@ -25,6 +27,28 @@ type Config struct {
 	TLSKeyFile      string   `json:"tls_key_file"`
 	ServiceID       string   `json:"service_id"`
 	ShutdownTimeout Duration `json:"shutdown_timeout,omitempty"`
+	// Aimem names the aimem hub that vouches for agents' proofs. Without it
+	// the service refuses session entry and resume; everything else works.
+	Aimem *AimemConfig `json:"aimem,omitempty"`
+}
+
+// AimemConfig is how aicrew reaches aimem to redeem proof receipts
+// (docs/CREW-CONTRACT.md, "Receipt redemption").
+type AimemConfig struct {
+	// BaseURL is aimem's https origin.
+	BaseURL string `json:"base_url"`
+	// TLSTrustMode is ca_dns or spki_sha256, and TLSTrustValue the host
+	// name or the sha256- pin.
+	TLSTrustMode  string `json:"tls_trust_mode"`
+	TLSTrustValue string `json:"tls_trust_value"`
+	// RedemptionTokenFile is the private file holding the redemption bearer
+	// aimem issued to this service.
+	RedemptionTokenFile string `json:"redemption_token_file"`
+}
+
+func (a AimemConfig) verifierConfig(serviceID string) verifier.Config {
+	return verifier.Config{BaseURL: a.BaseURL, ServiceID: serviceID, TLSMode: a.TLSTrustMode,
+		TLSValue: a.TLSTrustValue, TokenFile: a.RedemptionTokenFile}
 }
 
 // Duration is a time.Duration written as a Go duration string, like "15s".
@@ -110,6 +134,11 @@ func (c Config) validate() error {
 	}
 	if d := time.Duration(c.ShutdownTimeout); d <= 0 || d > maxShutdownTimeout {
 		return fmt.Errorf("config: shutdown_timeout must be positive and at most %s", maxShutdownTimeout)
+	}
+	if c.Aimem != nil {
+		if _, err := verifier.New(c.Aimem.verifierConfig(c.ServiceID)); err != nil {
+			return fmt.Errorf("config: aimem: %w", err)
+		}
 	}
 	return nil
 }

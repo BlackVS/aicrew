@@ -202,6 +202,14 @@ func decodePin(v string) ([]byte, error) {
 	return pin, nil
 }
 
+// CheckCredential reads the redemption bearer file as a call would, so a
+// missing, readable-by-others or malformed file is found at start. Its error
+// names the file and the fix, never the content.
+func (c *Client) CheckCredential() error {
+	_, err := readCredential(c.cfg.TokenFile)
+	return err
+}
+
 // IdempotencyKey encodes a request key for the Idempotency-Key header: "k1_"
 // and the unpadded base64url SHA-256 of its UTF-8 bytes. The raw key never
 // leaves aicrew.

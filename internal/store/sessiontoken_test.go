@@ -346,7 +346,7 @@ func TestConcurrentEntries(t *testing.T) {
 		switch {
 		case err == nil:
 			ok++
-		case errors.Is(err, ErrChallengeInvalid), errors.Is(err, ErrSessionActive):
+		case errors.Is(err, ErrChallengeInvalid), errors.Is(err, ErrSessionActive), errors.Is(err, ErrInProgress):
 		default:
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -513,4 +513,53 @@ func TestLeaveWithToken(t *testing.T) {
 		t.Fatalf("refresh with the left session's token: %v", err)
 	}
 	_ = lead
+}
+
+// D-2a: an identical entry still in flight is refused at once and changes
+// nothing; once the original has committed, the same retry reissues.
+func TestInFlightDuplicateEntryRefused(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	tm := mustTeam(t, s, "t1", "crew")
+	a, _ := member(t, s, tm.ID, "builder", RoleWorker)
+	p := newProver(t, s)
+	ch, receipt := p.proof(a.ID, "token-"+a.ID)
+	inside, release := make(chan struct{}), make(chan struct{})
+	p.v.onRedeem = func() {
+		close(inside)
+		<-release
+	}
+	type result struct {
+		sec EntrySecrets
+		err error
+	}
+	first := make(chan result, 1)
+	go func() {
+		_, sec, err := s.EnterSession(ctx, p.v, "enter", ch.ID, receipt, tm.ID, testService)
+		first <- result{sec, err}
+	}()
+	<-inside
+	p.v.onRedeem = nil
+	start := time.Now()
+	if _, _, err := s.EnterSession(ctx, p.v, "enter", ch.ID, receipt, tm.ID, testService); !errors.Is(err, ErrInProgress) {
+		t.Fatalf("duplicate in flight: got %v, want ErrInProgress", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("the duplicate waited %v", d)
+	}
+	close(release)
+	orig := <-first
+	if orig.err != nil {
+		t.Fatal(orig.err)
+	}
+	mustBind(t, s, orig.sec.Token) // the duplicate revoked nothing
+	_, again, err := s.EnterSession(ctx, p.v, "enter", ch.ID, receipt, tm.ID, testService)
+	if err != nil {
+		t.Fatalf("sequential retry: %v", err)
+	}
+	tokenDead(t, s, orig.sec.Token, "after the sequential retry reissued")
+	mustBind(t, s, again.Token)
+	if n := sessionCount(t, s, a.ID); n != 1 {
+		t.Fatalf("%d sessions", n)
+	}
 }

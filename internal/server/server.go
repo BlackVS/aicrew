@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/store"
+	"github.com/BlackVS/aicrew/internal/verifier"
 )
 
 // Bounds of every request.
@@ -38,6 +39,12 @@ type Server struct {
 	// routes maps an exact path, then an exact method, to its route.
 	routes map[string]map[string]route
 	http   *http.Server
+	// verifier redeems aimem proofs at session entry; nil when no aimem
+	// hub is configured.
+	verifier store.Verifier
+	// Per-address limits on the unauthenticated routes, and per-session on
+	// handle refresh.
+	challengeLimit, tokenLimit, refreshLimit *limiter
 }
 
 // New builds the service over an open store. It loads the certificate and
@@ -58,8 +65,25 @@ func New(cfg Config, st *store.Store, log *slog.Logger) (*Server, error) {
 			NextProtos:   []string{"http/1.1"},
 		},
 	}
+	if cfg.Aimem != nil {
+		v, err := verifier.New(cfg.Aimem.verifierConfig(cfg.ServiceID))
+		if err != nil {
+			return nil, fmt.Errorf("aimem: %w", err)
+		}
+		if err := v.CheckCredential(); err != nil {
+			return nil, fmt.Errorf("aimem.redemption_token_file: %w", err)
+		}
+		s.verifier = v
+	}
+	s.challengeLimit = newLimiter(ChallengesPerMinute, time.Minute)
+	s.tokenLimit = newLimiter(ExchangesPerMinute, time.Minute)
+	s.refreshLimit = newLimiter(RefreshesPerMinute, time.Minute)
 	s.handle(http.MethodGet, "/healthz", s.health)
 	s.handleOwnBody(http.MethodPost, IntrospectPath, s.introspect)
+	s.handleOwnBody(http.MethodPost, ChallengesPath, s.challenge)
+	s.handleOwnBody(http.MethodPost, TokenPath, s.token)
+	s.handle(http.MethodGet, SessionPath, s.sessionStatus)
+	s.handleOwnBody(http.MethodPost, LeavePath, s.leave)
 	s.http = &http.Server{
 		Handler:           s.logged(s.limitBody(http.HandlerFunc(s.dispatch))),
 		ReadHeaderTimeout: readHeaderTimeout,

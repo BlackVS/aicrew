@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"testing"
@@ -82,6 +83,9 @@ type stubAimem struct {
 	gate   chan struct{}
 	inside chan struct{}
 	order  *[]string
+	// proofs counts proofs issued, and proofChallenges their challenges.
+	proofs          int
+	proofChallenges []string
 }
 
 func (a *stubAimem) log(ev string) {
@@ -93,8 +97,12 @@ func (a *stubAimem) log(ev string) {
 	a.mu.Unlock()
 }
 
-func (a *stubAimem) Proof(context.Context, string, string, string) (string, error) {
-	return "amr1_receipt", nil
+func (a *stubAimem) Proof(_ context.Context, _, _, challengeID string) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.proofs++
+	a.proofChallenges = append(a.proofChallenges, challengeID)
+	return fmt.Sprintf("amr1_receipt%d", a.proofs), nil
 }
 
 func (a *stubAimem) Open(context.Context, string, string, string, string) (string, error) {
@@ -301,5 +309,39 @@ func TestEngineSerializes(t *testing.T) {
 	}
 	if Serialize(e.Aimem, t.TempDir()) != e.Aimem {
 		t.Fatal("serializing twice wrapped again")
+	}
+}
+
+// An expired receipt under a still-valid challenge is renewed: a fresh proof
+// for the same challenge, under a new key; retries of an unknown outcome
+// keep theirs.
+func TestProofRenewedUnderValidChallenge(t *testing.T) {
+	crew := &stubCrew{enterErrs: []error{unreachable(), refused("proof_invalid", false)}}
+	aimem := &stubAimem{}
+	e := stubEngine(t, crew, aimem)
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	k := crew.enterKeys
+	if crew.challenges != 1 || aimem.proofs != 2 || len(k) != 3 || k[0] != k[1] || k[2] == k[1] {
+		t.Fatalf("%d challenges, %d proofs, keys %v", crew.challenges, aimem.proofs, k)
+	}
+	if aimem.proofChallenges[0] != aimem.proofChallenges[1] {
+		t.Fatalf("the fresh proof was for another challenge: %v", aimem.proofChallenges)
+	}
+}
+
+// A proof that keeps being refused fails closed after the bound.
+func TestPersistentProofInvalidFails(t *testing.T) {
+	errs := make([]error, proofRenewals+1)
+	for i := range errs {
+		errs[i] = refused("proof_invalid", false)
+	}
+	crew := &stubCrew{enterErrs: errs}
+	aimem := &stubAimem{}
+	e := stubEngine(t, crew, aimem)
+	err := e.Start(context.Background())
+	if codeOf(err) != "proof_invalid" || aimem.proofs != proofRenewals+1 || crew.challenges != 1 {
+		t.Fatalf("got %v after %d proofs, %d challenges", err, aimem.proofs, crew.challenges)
 	}
 }

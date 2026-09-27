@@ -41,13 +41,14 @@ func (testVerifier) Redeem(_ context.Context, req store.RedeemRequest) (store.Ve
 }
 
 type crewEnv struct {
-	store    *store.Store
-	cfg      Config
-	root     string // the fake aimem's state root
-	logs     *bytes.Buffer
-	agentID  string
-	teamID   string
-	operator store.Caller
+	store     *store.Store
+	storePath string
+	cfg       Config
+	root      string // the fake aimem's state root
+	logs      *bytes.Buffer
+	agentID   string
+	teamID    string
+	operator  store.Caller
 }
 
 // setupCrew starts aicrewd over real TLS with the test verifier, seeds one
@@ -110,7 +111,7 @@ func setupCrew(t *testing.T) *crewEnv {
 	}
 	cfg := Config{Home: home, URL: "https://" + ln.Addr().String(), Trust: tlstrust.Binding{Mode: tlstrust.SPKI, Value: pin},
 		AgentID: a.ID, TeamID: tm.ID, AimemCommand: self}
-	return &crewEnv{store: st, cfg: cfg, root: root, logs: new(bytes.Buffer), agentID: a.ID, teamID: tm.ID, operator: op}
+	return &crewEnv{store: st, storePath: storePath, cfg: cfg, root: root, logs: new(bytes.Buffer), agentID: a.ID, teamID: tm.ID, operator: op}
 }
 
 func writeCert(t *testing.T, dir string) (certFile, keyFile, pin string) {
@@ -424,5 +425,73 @@ func TestFailedBindStillResumes(t *testing.T) {
 	}
 	if !c.handleActive(t, c.fileHandle(t, b.SessionID())) {
 		t.Fatal("aimem holds no active handle after the restart")
+	}
+}
+
+func (c *crewEnv) sessionsOf(t *testing.T) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", c.storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE agent_id = ?`, c.agentID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// Leaving a recorded session that has already ended enters nothing: it
+// closes aimem's binding of that session and clears the record.
+func TestLeaveRecordedEndedSession(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	a := c.engine(t)
+	if err := a.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.store.StopSession(ctx, c.operator, "stop", a.SessionID()); err != nil {
+		t.Fatal(err)
+	}
+	b := c.engine(t)
+	if err := b.LeaveRecorded(ctx); err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+	if n := c.sessionsOf(t); n != 1 {
+		t.Fatalf("%d sessions: the leave entered the team", n)
+	}
+	if _, err := os.Stat(sessionFile(c.root, a.SessionID())); !os.IsNotExist(err) {
+		t.Fatal("the original binding was not closed")
+	}
+	if _, ok, _ := LoadState(c.cfg.Home); ok {
+		t.Fatal("the record outlived the ended session")
+	}
+	for _, call := range fakeCalls(t, c.root) {
+		if call.Event == "open" && flagValue(call.Args, "--session") != a.SessionID() {
+			t.Fatal("aimem was bound to another session")
+		}
+	}
+}
+
+// Leaving a recorded session that is still active resumes it and leaves.
+func TestLeaveRecordedActiveSession(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	a := c.engine(t)
+	if err := a.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.engine(t).LeaveRecorded(ctx); err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+	if sess, _ := c.store.GetSession(ctx, a.SessionID()); sess.State != store.SessionLeft {
+		t.Fatalf("session after leave: %s", sess.State)
+	}
+	if c.sessionsOf(t) != 1 {
+		t.Fatal("the leave entered the team")
+	}
+	if _, ok, _ := LoadState(c.cfg.Home); ok {
+		t.Fatal("the record outlived the session")
 	}
 }

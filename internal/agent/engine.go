@@ -23,8 +23,11 @@ const (
 	// refreshes keeps within aicrewd's 6 refreshes a minute.
 	retryBase = 10 * time.Second
 	retryCap  = 60 * time.Second
-	// entryRounds bounds how many challenges one entry may use.
-	entryRounds = 5
+	// entryRounds bounds how many challenges one entry may use, and
+	// proofRenewals how many fresh proofs one challenge may use after its
+	// proof was refused.
+	entryRounds   = 5
+	proofRenewals = 3
 	// leaveAttempts bounds the retries of a leave whose outcome is unknown.
 	leaveAttempts = 6
 )
@@ -166,6 +169,7 @@ func (e *Engine) enter(ctx context.Context, sessionID string) error {
 		if sessionID == "" {
 			team = e.Cfg.TeamID
 		}
+		renewals := 0
 		for attempt := 0; ; attempt++ {
 			entry, err := e.Crew.Enter(ctx, key, receipt, ch.ServiceID, ch.ID, team, sessionID)
 			if err == nil {
@@ -174,6 +178,21 @@ func (e *Engine) enter(ctx context.Context, sessionID string) error {
 			}
 			if codeOf(err) == "challenge_invalid" || !e.Now().Before(ch.ExpiresAt) {
 				break // a new challenge and a new proof
+			}
+			// A refused proof is a known outcome: aicrewd refused before
+			// committing anything. The receipt may have outlived its 60 s
+			// while the challenge is still valid, so a fresh proof for the
+			// same challenge is tried, a bounded number of times. It is new
+			// input, so it goes under a new key; a key whose request did
+			// commit is answered by aicrewd's reissue, never by this refusal.
+			if codeOf(err) == "proof_invalid" && renewals < proofRenewals {
+				renewals++
+				e.Log.Info("the proof was refused; obtaining a fresh one for the same challenge")
+				if receipt, err = e.Aimem.Proof(ctx, ch.ServiceID, ch.HubID, ch.ID); err != nil {
+					return err
+				}
+				key = newKey("enter")
+				continue
 			}
 			if !Retryable(err) {
 				return err
@@ -321,6 +340,34 @@ func (e *Engine) refresh(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// LeaveRecorded leaves the session this agent home recorded, from a client
+// that does not hold it (aicrew-agent session leave). It proves afresh and
+// resumes that session, which fences any client still holding it, then
+// leaves. It never enters the team: if the recorded session has already
+// ended, it only closes aimem's binding of it and clears the record.
+func (e *Engine) LeaveRecorded(ctx context.Context) error {
+	st, ok, err := LoadState(e.Cfg.Home)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("no team session is recorded in this agent home")
+	}
+	err = e.enter(ctx, st.SessionID)
+	switch code := codeOf(err); {
+	case err == nil:
+		return e.leave(ctx)
+	case code == "context_stale" || code == "role_forbidden":
+		e.session = Session{ID: st.SessionID, TeamID: st.TeamID}
+		if err := e.Aimem.Close(ctx, st.SessionID); err != nil {
+			return fmt.Errorf("the session has ended, but aimem kept its binding: %w", err)
+		}
+		e.Log.Info("the recorded session had already ended; its binding is closed", "session", st.SessionID)
+		return ClearState(e.Cfg.Home)
+	}
+	return err
 }
 
 // Leave ends the held session: aicrew first, then aimem's binding, which

@@ -210,7 +210,12 @@ no secret; other sections belong to onboarding:
 - `session status` shows the recorded session and aimem's binding, without
   secrets and without calling `aicrewd`.
 - `session leave` proves afresh and resumes the recorded session, which
-  fences any client still holding it, then leaves.
+  fences any client still holding it, then leaves. It never enters the
+  team: if the recorded session has already ended, it only closes aimem's
+  binding of it and clears the record.
+- A proof that aicrewd refuses while its challenge is still valid (the
+  receipt lives only 60 s) is renewed for the same challenge, at most three
+  times, under a new request key.
 - Exit codes: 0 done, 1 failed (the refusal's next action is logged),
   2 usage, 3 the session was kept because the member has open work
   (reconcile it through aicrew, then leave again).

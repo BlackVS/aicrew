@@ -90,27 +90,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, build eng
 		return exitFailed
 	}
 	if verb == "leave" {
-		return finish(log, leave(ctx, e, cfg))
+		return finish(log, e.LeaveRecorded(ctx))
 	}
 	if err := e.Start(ctx); err != nil {
 		return finish(log, err)
 	}
 	fmt.Fprintf(stdout, "AIMEM_TEAM_SESSION=%s\n", e.AimemFile())
 	return finish(log, e.Run(ctx))
-}
-
-// leave proves afresh and resumes the recorded session, which fences any
-// client still holding it, then leaves.
-func leave(ctx context.Context, e *agent.Engine, cfg agent.Config) error {
-	if _, ok, err := agent.LoadState(cfg.Home); err != nil {
-		return err
-	} else if !ok {
-		return errors.New("no team session is recorded in this agent home")
-	}
-	if err := e.Start(ctx); err != nil {
-		return err
-	}
-	return e.Leave(ctx)
 }
 
 func status(ctx context.Context, cfg agent.Config, stdout io.Writer, log *slog.Logger) int {

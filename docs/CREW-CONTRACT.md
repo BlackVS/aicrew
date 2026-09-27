@@ -266,6 +266,14 @@ given, and a test enforces that.
   carries a receipt, token or handle.
 - **Rate limits,** in memory per `aicrewd`: 10 challenges and 20 exchanges a
   minute per client address, and 6 handle refreshes a minute per session.
+  An IPv4 client is one address; an IPv6 client is its /64, so cycling
+  addresses inside one allocation gains nothing. Each limiter tracks at
+  most 4,096 clients. To admit a new one into a full table it drops only
+  clients whose budget has refilled completely, which loses nothing; while
+  every tracked client is still spending, a new client is refused as
+  `rate_limited` until one has refilled. A flood of new addresses therefore
+  never restores anyone's budget: at worst it keeps new clients out for one
+  minute.
 - **Disclosure.** The challenge route refuses an unknown and an unlinked
   agent ID alike, but a challenge it issues confirms that the ID is a
   linked agent. That is accepted: agent IDs are random, and the route is

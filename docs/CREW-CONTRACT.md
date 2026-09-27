@@ -286,8 +286,8 @@ given, and a test enforces that.
 ### Working in a team session: a fresh conversation
 
 A team session belongs to one conversation, never to the machine. The
-client (`aicrew-agent session start`, `docs/DEVELOPMENT.md`) starts it, and
-aimem binds it, like this:
+client (`aicrew-agent run`, or `aicrew-agent session start`;
+`docs/DEVELOPMENT.md`) starts it, and aimem binds it, like this:
 
 1. `POST /v1/crew/challenges` for the agent.
 2. `aimem identity proof --peer <service_id> --hub-id <hub_id> --challenge
@@ -301,6 +301,18 @@ aimem binds it, like this:
    `aimem team-session refresh`, on stdin.
 6. To finish, reconcile any open work through aicrew, then
    `POST /v1/crew/session/leave` and `aimem team-session close`.
+
+`aicrew-agent run` does all of this around one agent client (Claude Code
+or OpenCode), which it starts as its child in the agent home with
+`AIMEM_TEAM_SESSION` set in that child's environment only; the client's
+`aimem mcp` inherits it (observed for both clients). When the client exits,
+the launcher leaves, keeping the session instead if the member still has
+open work. Ctrl-C and SIGTERM stop the client on every platform. If the
+launcher itself is killed, Linux and Windows stop the client with it. macOS
+cannot: a client that outlives a killed launcher keeps running, but its
+handle is no longer refreshed, so aimem refuses its team tools within the
+handle's lifetime of at most 15 minutes, and the next run resumes the
+session under a new generation, which ends the old handle at once.
 
 Start a new conversation for team work rather than switching an existing
 personal one. When the context fails, the conversation stops dependent work

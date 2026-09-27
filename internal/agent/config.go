@@ -35,6 +35,9 @@ type Config struct {
 	TeamID       string
 	AimemCommand string // the aimem executable; "aimem" by default
 	AimemHub     string // aimem's hub name, if not the default
+	// ClientCommand overrides the client executable `run` starts; by
+	// default it is the client's own name looked up in PATH.
+	ClientCommand string
 }
 
 type aicrewSection struct {
@@ -45,6 +48,7 @@ type aicrewSection struct {
 	TeamID        string `json:"team_id"`
 	AimemCommand  string `json:"aimem_command,omitempty"`
 	AimemHub      string `json:"aimem_hub,omitempty"`
+	ClientCommand string `json:"client_command,omitempty"`
 }
 
 const maxAgentJSON = 64 << 10
@@ -82,7 +86,8 @@ func LoadConfig(home string) (Config, error) {
 		return Config{}, fmt.Errorf("agent.json aicrew: %w", err)
 	}
 	c := Config{Home: home, URL: s.URL, Trust: tlstrust.Binding{Mode: s.TLSTrustMode, Value: s.TLSTrustValue},
-		AgentID: s.AgentID, TeamID: s.TeamID, AimemCommand: s.AimemCommand, AimemHub: s.AimemHub}
+		AgentID: s.AgentID, TeamID: s.TeamID, AimemCommand: s.AimemCommand, AimemHub: s.AimemHub,
+		ClientCommand: s.ClientCommand}
 	if c.AimemCommand == "" {
 		c.AimemCommand = "aimem"
 	}

@@ -1,0 +1,144 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"syscall"
+	"time"
+)
+
+// SessionEnv is the variable through which aimem's MCP server in the
+// client's process tree finds this conversation's session file.
+const SessionEnv = "AIMEM_TEAM_SESSION"
+
+// termGrace is how long a client has to exit after the launcher forwards
+// SIGTERM, before it is killed.
+const termGrace = 10 * time.Second
+
+// Client is the agent client the launcher runs: Claude Code or OpenCode.
+type Client struct {
+	Path string // the executable
+	Args []string
+}
+
+// Stdio is the client's standard streams; normally the launcher's own.
+type Stdio struct {
+	In       io.Reader
+	Out, Err io.Writer
+}
+
+// ScopedEnv returns env with SessionEnv set to path, replacing any value it
+// already had. Only the client's process tree receives it: nothing else in
+// the environment, the user's shell or the host changes. No secret is ever
+// added.
+func ScopedEnv(env []string, path string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if name == SessionEnv || (runtime.GOOS == "windows" && strings.EqualFold(name, SessionEnv)) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, SessionEnv+"="+path)
+}
+
+// RunClient starts the agent's team session, runs the client as a child in
+// the agent home with the session bound to it, keeps the session alive
+// while the child runs, and leaves once the child exits. It returns the
+// child's exit code and the session's outcome: nil, a *WorkOutstanding when
+// the session was kept for open work, or an error.
+//
+// Ctrl-C reaches the child through the terminal or console, which delivers
+// it to the whole foreground process group or console; the launcher does not
+// exit on it but waits for the child. SIGTERM sent to the launcher is
+// forwarded to the child, which is killed if it has not exited after
+// termGrace. If the launcher itself dies, the child is stopped with it on
+// Linux (parent-death signal) and Windows (kill-on-close job object). On
+// macOS nothing can stop it, and the handle is the guarantee: no longer
+// refreshed, it gives the child no team access within 15 minutes, and the
+// next run resumes the session under a new generation.
+func RunClient(ctx context.Context, e *Engine, c Client, stdio Stdio, signals <-chan os.Signal) (int, error) {
+	if err := e.Start(ctx); err != nil {
+		return 0, err
+	}
+	cmd := exec.Command(c.Path, c.Args...)
+	cmd.Dir = e.Cfg.Home
+	cmd.Env = ScopedEnv(os.Environ(), e.AimemFile())
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio.In, stdio.Out, stdio.Err
+	bindToLauncher(cmd)
+	if err := cmd.Start(); err != nil {
+		// Nothing ran: the session is left as any stop would leave it.
+		return 0, errors.Join(fmt.Errorf("start the client: %w", err), e.Leave(context.WithoutCancel(ctx)))
+	}
+	release, err := afterStart(cmd)
+	if err != nil {
+		e.Log.Warn("the client will not be stopped if the launcher is killed", "error", err.Error())
+	}
+	defer release()
+
+	runCtx, stopRun := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopRun()
+	ran := make(chan error, 1)
+	go func() { ran <- e.Run(runCtx) }()
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+
+	var (
+		runErr  error
+		runDone bool
+		kill    <-chan time.Time
+	)
+	for {
+		select {
+		case sig := <-signals:
+			if sig == syscall.SIGTERM && runtime.GOOS != "windows" {
+				e.Log.Info("forwarding SIGTERM to the client")
+				_ = cmd.Process.Signal(syscall.SIGTERM)
+				if kill == nil {
+					kill = time.After(termGrace)
+				}
+			}
+		case <-kill:
+			e.Log.Warn("the client did not exit after SIGTERM; killing it")
+			_ = cmd.Process.Kill()
+		case err := <-ran:
+			// The session ended while the client runs (an operator stop, a
+			// removal). aimem already refuses the client's team tools; the
+			// client keeps running until it exits.
+			runErr, runDone = err, true
+			if err != nil {
+				e.Log.Warn("the team session is no longer held", "error", err.Error())
+			}
+		case err := <-exited:
+			code := exitCode(err)
+			if runDone {
+				return code, runErr
+			}
+			stopRun()
+			return code, <-ran
+		}
+	}
+}
+
+// exitCode is the client's exit status as a shell reports it: a client
+// ended by a signal gives 128 plus the signal's number.
+func exitCode(err error) int {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		if ws, ok := exit.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			return 128 + int(ws.Signal())
+		}
+		return exit.ExitCode()
+	}
+	if err != nil {
+		return 1
+	}
+	return 0
+}

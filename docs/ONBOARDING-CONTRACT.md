@@ -23,9 +23,11 @@ design needs something the aimem contracts do not provide, it says so under
    aimem credential the only persistent agent secret: one per installation,
    issued and verified by aimem and never seen by aicrew. Aicrew therefore
    issues no persistent credential of its own. It recognizes an agent by a
-   fresh identity proof and then issues only the short-lived session handle
-   the context contract allows. "Before the agent has an aicrew credential"
-   is simply the normal state.
+   fresh identity proof and then issues only short-lived secrets scoped to
+   one session: its own session token, which authorizes that session's
+   handle refresh and leave, and the aimem-scoped handle the context
+   contract allows (`docs/CREW-CONTRACT.md`, "Session tokens"). "Before the
+   agent has an aicrew credential" is simply the normal state.
 2. **Authority to join comes from an invitation.** An operator issues a
    single-use invitation scoped to one team, role and hub. Whoever holds the
    invitation may start linking for it; completion also needs a valid aimem
@@ -268,7 +270,8 @@ context contract.
   agent record". No change.
 - **D4: re-proof at session start.** This uses the context contract's proof
   and session-handle rules unchanged. Handle refresh without a new proof
-  follows that contract's implementation review.
+  is authorized by the session token issued at entry (identity.v1 fixes the
+  handle's lifetime and refresh overlap).
 
 ## Deferred
 

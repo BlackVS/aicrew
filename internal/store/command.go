@@ -60,17 +60,10 @@ func (s *Store) run(ctx context.Context, c Caller, cmd command, out any) error {
 			return err
 		}
 	}
-	// JSON encoding replaces invalid UTF-8 with U+FFFD, which would give
-	// distinct inputs the same digest. Refuse such text before hashing.
-	if err := validateText(reflect.ValueOf(cmd.input)); err != nil {
+	input, digest, err := inputDigest(cmd.input)
+	if err != nil {
 		return err
 	}
-	input, err := json.Marshal(cmd.input)
-	if err != nil {
-		return fmt.Errorf("encode input: %w", err)
-	}
-	sum := sha256.Sum256(input)
-	digest := hex.EncodeToString(sum[:])
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -116,7 +109,7 @@ func (s *Store) run(ctx context.Context, c Caller, cmd command, out any) error {
 	auditRes, err := tx.ExecContext(ctx,
 		`INSERT INTO audit (at, caller_kind, caller_id, operation, scope, key, input_digest, input, result)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		at, c.kind.String(), c.id, cmd.op, cmd.scope, cmd.key, digest, string(input), string(result))
+		at, c.kind.String(), c.id, cmd.op, cmd.scope, cmd.key, digest, input, string(result))
 	if err != nil {
 		return fmt.Errorf("write audit: %w", err)
 	}
@@ -139,6 +132,21 @@ func (s *Store) run(ctx context.Context, c Caller, cmd command, out any) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	return decodeResult(string(result), out)
+}
+
+// inputDigest encodes a command's input and returns it with its SHA-256.
+// JSON encoding replaces invalid UTF-8 with U+FFFD, which would give distinct
+// inputs the same digest, so such text is refused before hashing.
+func inputDigest(in any) (string, string, error) {
+	if err := validateText(reflect.ValueOf(in)); err != nil {
+		return "", "", err
+	}
+	input, err := json.Marshal(in)
+	if err != nil {
+		return "", "", fmt.Errorf("encode input: %w", err)
+	}
+	sum := sha256.Sum256(input)
+	return string(input), hex.EncodeToString(sum[:]), nil
 }
 
 func checkKeyAndScope(cmd command) error {

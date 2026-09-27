@@ -95,7 +95,10 @@ var refusals = map[string]struct {
 		"Retry later with the same context; nothing was applied."},
 }
 
+// refuse answers with the envelope and closes the connection, so the server
+// never reads a request body it has refused.
 func (s *Server) refuse(w http.ResponseWriter, code string) {
+	w.Header().Set("Connection", "close")
 	r := refusals[code]
 	var id [8]byte
 	_, _ = rand.Read(id[:])
@@ -136,6 +139,10 @@ func (s *Server) introspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+		s.refuse(w, "invalid_request")
+		return
+	}
+	if r.ContentLength > maxIntrospectBody {
 		s.refuse(w, "invalid_request")
 		return
 	}

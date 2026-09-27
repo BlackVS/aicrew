@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -589,5 +591,73 @@ func TestIntrospectCarriesNoSecrets(t *testing.T) {
 	}
 	if !strings.Contains(logs, `"route":"POST /v1/crew/introspect"`) {
 		t.Fatalf("logs lack the introspection route:\n%s", logs)
+	}
+}
+
+// rawDeclared sends only the headers of an introspection request declaring
+// a body of n bytes, and returns the status and body of the response.
+func (e introspectEnv) rawDeclared(t *testing.T, bearer string, n int) (int, []byte) {
+	t.Helper()
+	conn, err := tls.Dial("tcp", e.addr, &tls.Config{RootCAs: e.pool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	auth := ""
+	if bearer != "" {
+		auth = "Authorization: Bearer " + bearer + "\r\n"
+	}
+	if _, err := fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: x\r\n%sContent-Type: application/json\r\n%s: 1\r\nContent-Length: %d\r\n\r\n",
+		IntrospectPath, auth, VersionHeader, n); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		t.Fatalf("declared %d bytes: %v", n, err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, b
+}
+
+// The route owns its body limit: an oversized body, declared or not, is
+// refused by the route's own contract after authentication, never with the
+// generic 413.
+func TestIntrospectOversizedBody(t *testing.T) {
+	e := setupIntrospect(t, "aicrew-example", testLink)
+	for _, n := range []int{MaxBodyBytes + 1, maxIntrospectBody + 1} {
+		if code, reply := e.rawDeclared(t, e.bearer, n); code != http.StatusBadRequest || refusalOf(t, reply) != "invalid_request" {
+			t.Fatalf("authenticated, declared %d bytes = %d %s; want 400 invalid_request", n, code, reply)
+		}
+		for _, bearer := range []string{"", "aicrew_introspect_" + strings.Repeat("0", 64)} {
+			if code, reply := e.rawDeclared(t, bearer, n); code != http.StatusUnauthorized || refusalOf(t, reply) != "peer_unauthenticated" {
+				t.Fatalf("unauthenticated (%q), declared %d bytes = %d %s; want 401", bearer, n, code, reply)
+			}
+		}
+	}
+	// An undeclared (chunked) body over the route's limit: a valid request
+	// padded with whitespace, so only the limit can refuse it.
+	valid, _ := json.Marshal(map[string]any{"version": 1, "hub_id": e.hub, "nonce": newNonce(t), "handle": e.handle})
+	padded := append(valid, bytes.Repeat([]byte(" "), maxIntrospectBody)...)
+	pr, pw := io.Pipe()
+	go func() {
+		_, _ = pw.Write(padded)
+		pw.Close()
+	}()
+	req, _ := http.NewRequest(http.MethodPost, e.url(IntrospectPath), pr)
+	req.Header.Set("Authorization", "Bearer "+e.bearer)
+	req.Header.Set(VersionHeader, "1")
+	req.Header.Set("Content-Type", "application/json")
+	if resp, err := e.client.Do(req); err == nil {
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest || refusalOf(t, b) != "invalid_request" {
+			t.Fatalf("chunked oversized body = %d %s; want 400 invalid_request", resp.StatusCode, b)
+		}
+	}
+	// Other methods on the path are not the route: the generic limit applies.
+	if status := e.declare(t, http.MethodPut, IntrospectPath, MaxBodyBytes+1); !strings.Contains(status, "413") {
+		t.Fatalf("PUT with an oversized body = %q, want the generic 413", status)
 	}
 }

@@ -221,6 +221,85 @@ session.
   refresh replay returns the metadata without a handle, and a leave replay
   returns the recorded session although the leave ended the token.
 
+## Client session API
+
+`aicrewd` serves an agent's client these routes over its TLS listener. They
+call only the store operations that authenticate by an aimem proof or a
+session token; no route reaches an operation that trusts a caller it is
+given, and a test enforces that.
+
+| Route | Authentication | Purpose |
+| --- | --- | --- |
+| `POST /v1/crew/challenges`, JSON `{"agent_id"}` | none; rate-limited | Issue a challenge. Reply: `challenge_id`, `hub_id`, `service_id`, `expires_at`. |
+| `POST /v1/crew/token`, form-encoded | the proof, or the session token | RFC 8693 exchange: entry, resume or handle refresh ("Standards mapping"). |
+| `GET /v1/crew/session` | `Authorization: Bearer` session token | The token's session, hub, user and token ID and expiry. Changes nothing. |
+| `POST /v1/crew/session/leave`, empty body or `{}` | `Authorization: Bearer` session token | Leave under the leave rules. |
+
+- **Entry and resume.** The exchange names the proof type, this service as
+  `audience`, the `challenge_id`, and either `team_id` (enter) or
+  `session_id` (resume). The reply carries the session token
+  (`access_token`), the session, and the first aimem-scoped handle as the
+  extensions `aimem_handle` and `aimem_handle_expires_in`. A handle refresh
+  names the session token, the session's aimem hub as `audience` and the
+  handle type; a replay of a refresh key is refused as `refresh_replayed`,
+  and the client refreshes again with a new key.
+- **Retries.** Every route but the status read requires an
+  `Idempotency-Key`. An entry whose identical request (same key) is still
+  running is refused at once with the retryable `request_in_progress`,
+  never answered after the original commits, which would revoke what the
+  original returns. The client therefore retries only after abandoning the
+  earlier attempt, and keeps the secrets from the latest request it sent.
+- **Refusals** carry the context contract's envelope (`code`, `message`,
+  `retryable`, `next_action`, `correlation_id`); on the token endpoint they
+  also carry RFC 6749's `error` and `error_description`. There, a refused
+  subject token or an exchange the policy will not honour
+  (`challenge_invalid`, `proof_invalid`, `credential_inactive`,
+  `identity_mismatch`, `identity_link_required`, `role_forbidden`,
+  `context_stale`, `invalid_token`) is `400 invalid_request`, as RFC 8693
+  §2.2.2 requires; `session_active` and `coordinator_active` are `409` with
+  the same error. On the session routes an
+  invalid token is `401` with `WWW-Authenticate: Bearer
+  error="invalid_token"`, and `work_outstanding` and `idempotency_conflict`
+  are `409`. Everywhere, `rate_limited` is `429` with `Retry-After`, and
+  `request_in_progress` and `identity_unavailable` are the retryable `503`.
+  No next action points to personal credentials, and no refusal or log line
+  carries a receipt, token or handle.
+- **Rate limits,** in memory per `aicrewd`: 10 challenges and 20 exchanges a
+  minute per client address, and 6 handle refreshes a minute per session.
+- **Disclosure.** The challenge route refuses an unknown and an unlinked
+  agent ID alike, but a challenge it issues confirms that the ID is a
+  linked agent. That is accepted: agent IDs are random, and the route is
+  rate-limited.
+- **Configuration.** Entry and resume need the `aimem` section of the
+  service's configuration (the hub's origin, TLS trust and the redemption
+  bearer file); without it they are refused as `aimem_unconfigured`, and
+  the other routes work.
+
+### Working in a team session: a fresh conversation
+
+A team session belongs to one conversation, never to the machine. The
+client starts it, and aimem binds it, like this:
+
+1. `POST /v1/crew/challenges` for the agent.
+2. `aimem identity proof --peer <service_id> --hub-id <hub_id> --challenge
+   <challenge_id>` writes the receipt into a pipe.
+3. The entry exchange returns the session token, kept in the client's
+   memory only, and the first handle.
+4. `aimem team-session open --service <service_id> --team <team_id>
+   --session <session_id>` reads the handle from stdin; the client sets
+   `AIMEM_TEAM_SESSION` for that agent process only.
+5. Before the handle expires, a refresh exchange returns a new one for
+   `aimem team-session refresh`, on stdin.
+6. To finish, reconcile any open work through aicrew, then
+   `POST /v1/crew/session/leave` and `aimem team-session close`.
+
+Start a new conversation for team work rather than switching an existing
+personal one. When the context fails, the conversation stops dependent work
+and follows the refusal's next action: resume with a new proof, or ask the
+operator. The session token dies after 8 hours, and a restarted client
+resumes with a new proof. aimem's team access comes from the session's team
+profile only, never from personal grants (aimem's context contract).
+
 ## Standards mapping
 
 The identity flows follow OAuth 2.0 where a standard fits, so that a
@@ -230,13 +309,20 @@ changing what clients hold.
 - **Session entry is an RFC 8693 token exchange.** The exchange endpoint
   (served by the client session API, form-encoded as the RFC requires) takes
   `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`, the aimem
-  proof receipt as `subject_token` with an aicrew-defined
-  `subject_token_type` URN, this aicrew service as `audience`, and
+  proof receipt as `subject_token` of the aimem-proof-receipt type below,
+  this aicrew service as `audience`, and
   `requested_token_type=urn:ietf:params:oauth:token-type:access_token`. The
   reply uses the RFC's `access_token`, `issued_token_type`,
   `token_type=Bearer` and `expires_in`. Handle refresh is a second exchange:
-  the session token is the `subject_token` and the aimem hub is the
-  `audience`; the issued token type of the handle is aicrew-defined.
+  the session token is the `subject_token` (the RFC's access-token type),
+  the aimem hub is the `audience`, and the requested and issued type is the
+  aimem-handle type below, with `token_type=N_A` because a handle is not an
+  OAuth access token (RFC 8693 §2.2.1).
+- **Token-type identifiers** are absolute https URIs in a namespace the
+  project owns, as RFC 8693 allows any absolute URI. They identify; nothing
+  fetches them. A move to a standard authorization server keeps them or
+  maps them in its configuration. Each is defined under its own heading
+  below, which is the URI's anchor.
 - **Deliberate differences from RFC 8693.**
   - There is no client authentication. The agent is a public client; the
     single-use receipt, bound by aimem to this service and one challenge, is
@@ -265,6 +351,18 @@ changing what clients hold.
   library's random source, SHA-256 and constant-time comparison suffice,
   as for handles. The choice is revisited if aicrew adopts a standard
   authorization server.
+
+### token-type-aimem-proof-receipt
+
+`https://github.com/BlackVS/aicrew/blob/main/docs/CREW-CONTRACT.md#token-type-aimem-proof-receipt`
+identifies an aimem proof receipt (`amr1_` and 43 base64url characters,
+identity.v1) for an aicrew challenge: single-use, and valid at most 60 s.
+
+### token-type-aimem-handle
+
+`https://github.com/BlackVS/aicrew/blob/main/docs/CREW-CONTRACT.md#token-type-aimem-handle`
+identifies an aimem-scoped session handle (`acs1_` and 43 base64url
+characters; "Session introspection"), whose audience is one aimem hub.
 
 ## Execution capacity
 

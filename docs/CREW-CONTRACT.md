@@ -147,6 +147,40 @@ registered endpoint is the full https URL of this route.
   Introspection reads one snapshot and changes nothing: it never ends a
   session, frees capacity or stands in for a stop or a leave.
 
+## Receipt redemption (aicrew → aimem)
+
+An identity proof completes only when aimem vouches for the receipt the
+client obtained. Aicrew redeems it with aimem's
+`POST /v1/identity/peers/{service_id}/redemptions` (identity.v1 §2), as the
+store's verifier (`internal/verifier`).
+
+- **Peer.** Aimem is named by its https origin and trusted only through the
+  configured binding: a CA-issued certificate for the origin's DNS name, or
+  a SHA-256 pin of its public key, which then replaces the chain check.
+  Plain HTTP, trust on first use and disabled verification cannot be
+  configured. Aicrew authenticates with the redemption bearer that aimem
+  issued it, read on every call from a file only its owner can read.
+- **Request.** The body is `{hub_id, challenge_id, receipt}`, with the
+  version header and an `Idempotency-Key` of `k1_` and the unpadded
+  base64url SHA-256 of the store's full request key; the raw key never
+  leaves aicrew. Malformed IDs or a malformed receipt are refused before
+  anything is sent.
+- **One attempt.** At most 10 s, no retry, no redirect, no proxy and no
+  connection reuse; a reply body over 16,384 bytes is refused unread. The
+  store's same-key retry is the recovery: aimem answers an identical
+  request with its recorded outcome.
+- **Answer.** Only a `200` that echoes this request's key, service and
+  challenge, names the requested hub and an active token, and carries
+  well-formed IDs yields an identity; a replay is accepted like the
+  original. Anything else is an error, never a partial identity.
+- **Failures** carry a code and whether a same-key retry may succeed. Aimem's
+  refusal codes keep identity.v1's table: `rate_limited`,
+  `request_in_progress` and `identity_unavailable` are retryable; the rest
+  are not. A transport failure, timeout, unreadable or unrecognized reply
+  leaves the outcome unknown and is the retryable `identity_unavailable`. A
+  `200` that does not answer the request is `invalid_reply`, not retried.
+  No error carries the bearer or the receipt.
+
 ## Execution capacity
 
 Each agent has exactly one execution capacity across all its teams and

@@ -69,8 +69,9 @@ type RedeemRequest struct {
 	RequestKey  string
 }
 
-// Verifier redeems aimem receipts. A production implementation calls aimem
-// service-to-service; none exists yet, and tests use fakes. An implementation
+// Verifier redeems aimem receipts. The production implementation is
+// internal/verifier, which calls aimem service-to-service; store tests use
+// fakes. An implementation
 // returns an error, never a partial identity, when verification fails or
 // aimem is unavailable.
 type Verifier interface {

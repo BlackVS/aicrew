@@ -1,9 +1,12 @@
 # Provenance of `examples.json`
 
 `examples.json` is a verbatim copy of aimem's identity.v1 example matrix. It
-is used only by tests, to keep aicrew's session introspection route
-(`POST /v1/crew/introspect`, identity.v1 §3) consistent with the reviewed
-contract that aimem's introspection client consumes.
+is used only by tests, to keep aicrew consistent with the reviewed contract:
+the session introspection route (`POST /v1/crew/introspect`, identity.v1 §3)
+that aimem's introspection client consumes, and the receipt redemption
+client in `internal/verifier` (identity.v1 §2), whose tests replay its
+redemption exchanges, refusals and request-key vectors. It was rechecked
+unchanged at aimem master `f50fd68`.
 
 - Source repository: <https://github.com/BlackVS/aimem>
 - Source path: `docs/fixtures/identity-v1/examples.json`

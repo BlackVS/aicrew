@@ -358,6 +358,13 @@ func (e *Engine) LeaveRecorded(ctx context.Context) error {
 	err = e.enter(ctx, st.SessionID)
 	switch code := codeOf(err); {
 	case err == nil:
+		// The resume moved the session to a new generation. aimem is given
+		// its handle before the leave, so that a leave refused for open work
+		// keeps the session with a binding that still works.
+		e.aimemFile = st.AimemFile
+		if err := e.bind(ctx); err != nil {
+			return err
+		}
 		return e.leave(ctx)
 	case code == "context_stale" || code == "role_forbidden":
 		e.session = Session{ID: st.SessionID, TeamID: st.TeamID}

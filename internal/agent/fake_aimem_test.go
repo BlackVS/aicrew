@@ -121,6 +121,9 @@ func fakeAimem(root string, args []string) int {
 		return 0
 	case "team-session close":
 		record(root, fakeCall{Args: args, Event: "close"})
+		if _, err := os.Stat(filepath.Join(root, "fail-close")); err == nil {
+			return fail("the hub could not confirm it has ended")
+		}
 		os.Remove(sessionFile(root, args[2]))
 		return 0
 	case "team-session status":

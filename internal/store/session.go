@@ -76,62 +76,67 @@ func (s *Store) StartSession(ctx context.Context, c Caller, key, teamID string) 
 		op: opStartSession, scope: teamID, key: key, input: sessionStart{TeamID: teamID},
 		authorize: requireAgent, replayCheck: sessionStillAt,
 		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
-			agent, err := getAgent(ctx, tx, c.id)
-			if err != nil {
-				return nil, err
-			}
-			if agent.Linked == nil {
-				return nil, fmt.Errorf("agent %s: %w", agent.ID, ErrIdentityLinkRequired)
-			}
-			m, err := getMembership(ctx, tx, teamID, c.id)
-			if errors.Is(err, ErrNotFound) {
-				return nil, fmt.Errorf("%w: agent %s is not a member of team %s", ErrForbidden, c.id, teamID)
-			}
-			if err != nil {
-				return nil, err
-			}
-			if _, err := activeSession(ctx, tx, teamID, c.id); err == nil {
-				return nil, fmt.Errorf("team %s agent %s: %w", teamID, c.id, ErrSessionActive)
-			} else if !errors.Is(err, ErrNotFound) {
-				return nil, err
-			}
-			var coordGen int64
-			if m.Role == RoleCoordinator {
-				var active int
-				if err := tx.QueryRowContext(ctx,
-					`SELECT COUNT(*) FROM sessions WHERE team_id = ? AND state = 'active' AND role = 'coordinator'`,
-					teamID).Scan(&active); err != nil {
-					return nil, fmt.Errorf("check coordinator: %w", err)
-				}
-				if active > 0 {
-					return nil, fmt.Errorf("team %s: %w", teamID, ErrCoordinatorActive)
-				}
-				if coordGen, err = bumpCoordinatorGeneration(ctx, tx, teamID); err != nil {
-					return nil, err
-				}
-			}
-			id, err := newID(now)
-			if err != nil {
-				return nil, err
-			}
-			at := formatTime(now)
-			// A member's sessions are numbered in the order they start; the
-			// write lock makes the number monotonic (attempts.go uses it).
-			ordinal, err := lastSessionOrdinal(ctx, tx, teamID, c.id)
-			if err != nil {
-				return nil, err
-			}
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO sessions (id, team_id, agent_id, role, state, generation, coordinator_generation,
-				                       token_id, last_seen_at, created_at, updated_at, ordinal)
-				 VALUES (?, ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?, ?)`,
-				id, teamID, c.id, string(m.Role), coordGen, agent.Linked.TokenID, at, at, at, ordinal+1); err != nil {
-				return nil, fmt.Errorf("insert session: %w", err)
-			}
-			return getSession(ctx, tx, id)
+			return startSessionTx(ctx, tx, c, teamID, now)
 		},
 	}, &out)
 	return out, err
+}
+
+// startSessionTx starts c's session in a team inside tx; see StartSession.
+func startSessionTx(ctx context.Context, tx *sql.Tx, c Caller, teamID string, now time.Time) (Session, error) {
+	agent, err := getAgent(ctx, tx, c.id)
+	if err != nil {
+		return Session{}, err
+	}
+	if agent.Linked == nil {
+		return Session{}, fmt.Errorf("agent %s: %w", agent.ID, ErrIdentityLinkRequired)
+	}
+	m, err := getMembership(ctx, tx, teamID, c.id)
+	if errors.Is(err, ErrNotFound) {
+		return Session{}, fmt.Errorf("%w: agent %s is not a member of team %s", ErrForbidden, c.id, teamID)
+	}
+	if err != nil {
+		return Session{}, err
+	}
+	if _, err := activeSession(ctx, tx, teamID, c.id); err == nil {
+		return Session{}, fmt.Errorf("team %s agent %s: %w", teamID, c.id, ErrSessionActive)
+	} else if !errors.Is(err, ErrNotFound) {
+		return Session{}, err
+	}
+	var coordGen int64
+	if m.Role == RoleCoordinator {
+		var active int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sessions WHERE team_id = ? AND state = 'active' AND role = 'coordinator'`,
+			teamID).Scan(&active); err != nil {
+			return Session{}, fmt.Errorf("check coordinator: %w", err)
+		}
+		if active > 0 {
+			return Session{}, fmt.Errorf("team %s: %w", teamID, ErrCoordinatorActive)
+		}
+		if coordGen, err = bumpCoordinatorGeneration(ctx, tx, teamID); err != nil {
+			return Session{}, err
+		}
+	}
+	id, err := newID(now)
+	if err != nil {
+		return Session{}, err
+	}
+	at := formatTime(now)
+	// A member's sessions are numbered in the order they start; the
+	// write lock makes the number monotonic (attempts.go uses it).
+	ordinal, err := lastSessionOrdinal(ctx, tx, teamID, c.id)
+	if err != nil {
+		return Session{}, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO sessions (id, team_id, agent_id, role, state, generation, coordinator_generation,
+		                       token_id, last_seen_at, created_at, updated_at, ordinal)
+		 VALUES (?, ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?, ?)`,
+		id, teamID, c.id, string(m.Role), coordGen, agent.Linked.TokenID, at, at, at, ordinal+1); err != nil {
+		return Session{}, fmt.Errorf("insert session: %w", err)
+	}
+	return getSession(ctx, tx, id)
 }
 
 type sessionRef struct {
@@ -148,38 +153,43 @@ func (s *Store) ResumeSession(ctx context.Context, c Caller, key, sessionID stri
 		op: opResumeSession, scope: sessionID, key: key, input: sessionRef{SessionID: sessionID},
 		authorize: requireAgent, replayCheck: sessionStillAt,
 		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
-			sess, err := ownSession(ctx, tx, c, sessionID)
-			if err != nil {
-				return nil, err
-			}
-			if sess.State != SessionActive {
-				return nil, fmt.Errorf("session %s is %s: %w", sessionID, sess.State, ErrContextStale)
-			}
-			agent, err := getAgent(ctx, tx, c.id)
-			if err != nil {
-				return nil, err
-			}
-			if agent.Linked == nil {
-				return nil, fmt.Errorf("agent %s: %w", agent.ID, ErrIdentityLinkRequired)
-			}
-			coordGen := sess.CoordinatorGeneration
-			if sess.Role == RoleCoordinator {
-				if coordGen, err = bumpCoordinatorGeneration(ctx, tx, sess.TeamID); err != nil {
-					return nil, err
-				}
-			}
-			at := formatTime(now)
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE sessions SET generation = generation + 1, coordinator_generation = ?,
-				        last_seen_at = ?, updated_at = ?
-				 WHERE id = ? AND state = 'active'`,
-				coordGen, at, at, sessionID); err != nil {
-				return nil, fmt.Errorf("resume session: %w", err)
-			}
-			return getSession(ctx, tx, sessionID)
+			return resumeSessionTx(ctx, tx, c, sessionID, now)
 		},
 	}, &out)
 	return out, err
+}
+
+// resumeSessionTx resumes c's own session inside tx; see ResumeSession.
+func resumeSessionTx(ctx context.Context, tx *sql.Tx, c Caller, sessionID string, now time.Time) (Session, error) {
+	sess, err := ownSession(ctx, tx, c, sessionID)
+	if err != nil {
+		return Session{}, err
+	}
+	if sess.State != SessionActive {
+		return Session{}, fmt.Errorf("session %s is %s: %w", sessionID, sess.State, ErrContextStale)
+	}
+	agent, err := getAgent(ctx, tx, c.id)
+	if err != nil {
+		return Session{}, err
+	}
+	if agent.Linked == nil {
+		return Session{}, fmt.Errorf("agent %s: %w", agent.ID, ErrIdentityLinkRequired)
+	}
+	coordGen := sess.CoordinatorGeneration
+	if sess.Role == RoleCoordinator {
+		if coordGen, err = bumpCoordinatorGeneration(ctx, tx, sess.TeamID); err != nil {
+			return Session{}, err
+		}
+	}
+	at := formatTime(now)
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE sessions SET generation = generation + 1, coordinator_generation = ?,
+		        last_seen_at = ?, updated_at = ?
+		 WHERE id = ? AND state = 'active'`,
+		coordGen, at, at, sessionID); err != nil {
+		return Session{}, fmt.Errorf("resume session: %w", err)
+	}
+	return getSession(ctx, tx, sessionID)
 }
 
 type sessionAt struct {
@@ -217,7 +227,12 @@ func (s *Store) Heartbeat(ctx context.Context, c Caller, key, sessionID string, 
 // an attempt it works on, or an offer it made that is not yet running.
 func (s *Store) LeaveSession(ctx context.Context, c Caller, key, sessionID string, generation int64) (Session, error) {
 	var out Session
-	err := s.run(ctx, c, command{
+	err := s.run(ctx, c, leaveCommand(c, key, sessionID, generation), &out)
+	return out, err
+}
+
+func leaveCommand(c Caller, key, sessionID string, generation int64) command {
+	return command{
 		op: opLeaveSession, scope: sessionID, key: key, input: sessionAt{SessionID: sessionID, Generation: generation},
 		authorize: requireAgent, replayCheck: sessionStillAt,
 		check: func(ctx context.Context, tx *sql.Tx) error {
@@ -242,8 +257,7 @@ func (s *Store) LeaveSession(ctx context.Context, c Caller, key, sessionID strin
 			}
 			return getSession(ctx, tx, sessionID)
 		},
-	}, &out)
-	return out, err
+	}
 }
 
 // StopSession ends an active session. Operator only.

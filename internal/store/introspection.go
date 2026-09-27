@@ -292,38 +292,9 @@ func (s *Store) IssueSessionHandle(ctx context.Context, c Caller, key, sessionID
 			if err != nil {
 				return nil, err
 			}
-			agent, err := getAgent(ctx, tx, sess.AgentID)
+			h, secret, err := issueHandle(ctx, tx, sess, serviceID, now, time.Time{})
 			if err != nil {
 				return nil, err
-			}
-			if agent.Linked == nil {
-				return nil, fmt.Errorf("agent %s: %w", agent.ID, ErrIdentityLinkRequired)
-			}
-			if agent.Linked.TokenID != sess.TokenID {
-				return nil, fmt.Errorf("session %s is bound to an earlier credential: %w", sess.ID, ErrContextStale)
-			}
-			var raw [32]byte
-			if _, err := rand.Read(raw[:]); err != nil {
-				return nil, err
-			}
-			secret := handlePrefix + base64.RawURLEncoding.EncodeToString(raw[:])
-			at := formatTime(now)
-			if _, err := tx.ExecContext(ctx,
-				`DELETE FROM session_handles WHERE session_id = ? AND expires_at <= ?`, sess.ID, at); err != nil {
-				return nil, fmt.Errorf("prune handles: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE session_handles SET superseded_at = ? WHERE session_id = ? AND generation = ? AND superseded_at = ''`,
-				at, sess.ID, sess.Generation); err != nil {
-				return nil, fmt.Errorf("supersede handles: %w", err)
-			}
-			h := SessionHandle{SessionID: sess.ID, Generation: sess.Generation, HubID: agent.Linked.HubID,
-				ServiceID: serviceID, IssuedAt: now, ExpiresAt: now.Add(HandleLifetime)}
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO session_handles (digest, session_id, generation, hub_id, service_id, issued_at, expires_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				secretDigest(secret), h.SessionID, h.Generation, h.HubID, h.ServiceID, at, formatTime(h.ExpiresAt)); err != nil {
-				return nil, fmt.Errorf("insert handle: %w", err)
 			}
 			handle = secret
 			return h, nil
@@ -333,6 +304,52 @@ func (s *Store) IssueSessionHandle(ctx context.Context, c Caller, key, sessionID
 		return SessionHandle{}, "", err
 	}
 	return out, handle, nil
+}
+
+// issueHandle issues a handle for sess at its current generation, bound to
+// the agent's linked hub and to serviceID, and supersedes the session's
+// earlier handles of that generation. It expires after HandleLifetime, or at
+// notAfter if that is sooner (the session token's expiry). It returns the
+// metadata and the handle.
+func issueHandle(ctx context.Context, tx *sql.Tx, sess Session, serviceID string, now, notAfter time.Time) (SessionHandle, string, error) {
+	agent, err := getAgent(ctx, tx, sess.AgentID)
+	if err != nil {
+		return SessionHandle{}, "", err
+	}
+	if agent.Linked == nil {
+		return SessionHandle{}, "", fmt.Errorf("agent %s: %w", agent.ID, ErrIdentityLinkRequired)
+	}
+	if agent.Linked.TokenID != sess.TokenID {
+		return SessionHandle{}, "", fmt.Errorf("session %s is bound to an earlier credential: %w", sess.ID, ErrContextStale)
+	}
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return SessionHandle{}, "", err
+	}
+	secret := handlePrefix + base64.RawURLEncoding.EncodeToString(raw[:])
+	at := formatTime(now)
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM session_handles WHERE session_id = ? AND expires_at <= ?`, sess.ID, at); err != nil {
+		return SessionHandle{}, "", fmt.Errorf("prune handles: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE session_handles SET superseded_at = ? WHERE session_id = ? AND generation = ? AND superseded_at = ''`,
+		at, sess.ID, sess.Generation); err != nil {
+		return SessionHandle{}, "", fmt.Errorf("supersede handles: %w", err)
+	}
+	expires := now.Add(HandleLifetime)
+	if !notAfter.IsZero() && notAfter.Before(expires) {
+		expires = notAfter
+	}
+	h := SessionHandle{SessionID: sess.ID, Generation: sess.Generation, HubID: agent.Linked.HubID,
+		ServiceID: serviceID, IssuedAt: now, ExpiresAt: expires}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO session_handles (digest, session_id, generation, hub_id, service_id, issued_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		secretDigest(secret), h.SessionID, h.Generation, h.HubID, h.ServiceID, at, formatTime(h.ExpiresAt)); err != nil {
+		return SessionHandle{}, "", fmt.Errorf("insert handle: %w", err)
+	}
+	return h, secret, nil
 }
 
 // Introspection is aicrew's answer about one handle. When Active is false

@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 12
+const schemaVersion = 13
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -208,7 +208,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	}
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
-		schemaV10, schemaV11, schemaV12}
+		schemaV10, schemaV11, schemaV12, schemaV13}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -392,6 +392,21 @@ var schemaV5 = []string{
 		PRIMARY KEY (message_id, agent_id)
 	)`,
 	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
+}
+
+// schemaV13 adds the aicrew session tokens an agent receives when it enters
+// or resumes a session with an aimem proof (sessiontoken.go). Like handles,
+// a token keeps a SHA-256 digest only and is bound to one session and
+// generation.
+var schemaV13 = []string{
+	`CREATE TABLE session_tokens (
+		digest     TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL REFERENCES sessions (id),
+		generation INTEGER NOT NULL CHECK (generation > 0),
+		issued_at  TEXT NOT NULL,
+		expires_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX session_tokens_by_session ON session_tokens (session_id, generation)`,
 }
 
 // schemaV12 adds session introspection for aimem (introspection.go): the

@@ -181,6 +181,91 @@ store's verifier (`internal/verifier`).
   `200` that does not answer the request is `invalid_reply`, not retried.
   No error carries the bearer or the receipt.
 
+## Session tokens
+
+Aicrew issues no persistent agent credential (`docs/ONBOARDING-CONTRACT.md`,
+model point 1): an agent proves its aimem identity afresh whenever it enters
+or resumes a team session, and receives a short-lived session token for that
+session.
+
+- **Entry.** The agent asks for an agent challenge, obtains an aimem receipt
+  for it with its individual credential, and enters a team, or resumes its
+  own active session, with the receipt. Aicrew redeems the receipt
+  ("Receipt redemption") and requires the linked identity; a new aimem
+  token ID for the same user is a rotation. Before asking aimem it checks
+  that the entry could succeed (membership and no active session, or the
+  agent's own active session). One transaction then consumes the challenge,
+  applies the rotation, starts or resumes the session, and issues a token
+  and a first aimem-scoped handle. A failed or unavailable verification
+  changes nothing.
+- **Token.** `ast1_` followed by 43 base64url characters (256 random bits),
+  stored as a digest only. It lives at most 8 hours and is never refreshed:
+  after that the agent resumes with a new proof. It is valid only while its
+  session is active at the generation it was issued for, the session is
+  bound to the agent's current aimem credential and the agent is still a
+  member, so leave, stop, removal, resume, re-proof and rotation end it with
+  no separate revocation. A handle issued under it never outlives it.
+- **Authority.** The token authorizes its own session's handle refresh and
+  leave, nothing else. Leave keeps its rules, `work_outstanding` included.
+  A token is never a handle and never the introspection credential, and
+  neither of those is ever a token; each has its own prefix and table. Aimem
+  never receives the token.
+- **Lost replies.** An entry retried with the same key and exactly the same
+  input (challenge, team or session, service and receipt) before the
+  challenge's deadline returns the recorded session with a fresh token and
+  handle, and revokes those of the lost reply, in one transaction. It never
+  starts a second session. The same key with any other input is an
+  idempotency conflict; after the deadline, or once the session's generation
+  has moved on, the retry is refused and the agent enters again with a new
+  proof. A handle refresh or a leave is retried with the same key: a
+  refresh replay returns the metadata without a handle, and a leave replay
+  returns the recorded session although the leave ended the token.
+
+## Standards mapping
+
+The identity flows follow OAuth 2.0 where a standard fits, so that a
+standard authorization server can later issue aicrew's tokens without
+changing what clients hold.
+
+- **Session entry is an RFC 8693 token exchange.** The exchange endpoint
+  (served by the client session API, form-encoded as the RFC requires) takes
+  `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`, the aimem
+  proof receipt as `subject_token` with an aicrew-defined
+  `subject_token_type` URN, this aicrew service as `audience`, and
+  `requested_token_type=urn:ietf:params:oauth:token-type:access_token`. The
+  reply uses the RFC's `access_token`, `issued_token_type`,
+  `token_type=Bearer` and `expires_in`. Handle refresh is a second exchange:
+  the session token is the `subject_token` and the aimem hub is the
+  `audience`; the issued token type of the handle is aicrew-defined.
+- **Deliberate differences from RFC 8693.**
+  - There is no client authentication. The agent is a public client; the
+    single-use receipt, bound by aimem to this service and one challenge, is
+    what authenticates it.
+  - Entry carries an `Idempotency-Key`. OAuth has no idempotent retry, but
+    a lost reply must not spend a second proof.
+  - The team, the session to resume and the challenge travel as extension
+    parameters, because an entry selects a session as well as a token.
+- **Introspection follows RFC 7662's semantics.** The caller is the resource
+  server authenticated by its own credential; `active` is the one field
+  every answer has; an inactive answer carries no other field and no
+  reason. identity.v1 fixes the deliberate differences: a JSON request, the
+  presented value named `handle`, a `nonce` and version fields binding the
+  answer to one call, and identity.v1's field names instead of `sub`, `aud`,
+  `exp` and `client_id`. A later identity.v2 could add the RFC names beside
+  them.
+- **Opaque reference tokens.** No JWT or self-contained claim is issued: the
+  holder of a token or handle learns nothing from it, and a resource server
+  asks its issuer. A standard server can issue such tokens and answer
+  introspection for them.
+- **No OAuth library.** `ory/fosite` is a whole authorization-server
+  framework with its own client, session and storage model, which would
+  duplicate the store's receipts, generations and fencing; `go-jose` serves
+  JWT, JWS and JWE, which opaque tokens do not need; `golang.org/x/oauth2`
+  is a client library for a later client of a standard server. The standard
+  library's random source, SHA-256 and constant-time comparison suffice,
+  as for handles. The choice is revisited if aicrew adopts a standard
+  authorization server.
+
 ## Execution capacity
 
 Each agent has exactly one execution capacity across all its teams and

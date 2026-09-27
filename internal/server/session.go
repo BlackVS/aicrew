@@ -76,28 +76,28 @@ var sessionRefusals = map[string]struct {
 		"Name this aicrew service for entry, or the session's aimem hub for a handle."},
 	"invalid_scope": {http.StatusBadRequest, "invalid_scope", false,
 		"Scopes are not supported.", "Omit scope."},
-	"challenge_invalid": {http.StatusBadRequest, "invalid_grant", false,
+	"challenge_invalid": {http.StatusBadRequest, "invalid_request", false,
 		"The challenge is unknown, used or expired.", "Request a new challenge and a new aimem proof."},
-	"proof_invalid": {http.StatusBadRequest, "invalid_grant", false,
+	"proof_invalid": {http.StatusBadRequest, "invalid_request", false,
 		"aimem did not vouch for the proof.", "Obtain a new aimem receipt for the challenge, or request a new challenge."},
-	"credential_inactive": {http.StatusBadRequest, "invalid_grant", false,
+	"credential_inactive": {http.StatusBadRequest, "invalid_request", false,
 		"The aimem credential behind the proof is not active.",
 		"Recover the individual aimem credential through its authorized flow."},
-	"identity_mismatch": {http.StatusForbidden, "invalid_grant", false,
+	"identity_mismatch": {http.StatusForbidden, "invalid_request", false,
 		"The proof names another identity than the agent's link.",
 		"Stop and reconcile the configured identity; nothing is rebound automatically."},
-	"identity_link_required": {http.StatusForbidden, "invalid_grant", false,
+	"identity_link_required": {http.StatusForbidden, "invalid_request", false,
 		"No linked agent has this ID.", "Complete onboarding for this agent first."},
-	"role_forbidden": {http.StatusForbidden, "invalid_grant", false,
+	"role_forbidden": {http.StatusForbidden, "invalid_request", false,
 		"The agent cannot enter this team or resume this session.",
 		"Use the agent's own team and session, or ask the operator for a membership."},
-	"session_active": {http.StatusConflict, "invalid_grant", false,
+	"session_active": {http.StatusConflict, "invalid_request", false,
 		"The agent already has an active session in this team.", "Resume that session with a new proof."},
-	"coordinator_active": {http.StatusConflict, "invalid_grant", false,
+	"coordinator_active": {http.StatusConflict, "invalid_request", false,
 		"The team already has an active coordinator session.", "Wait for that session to end, or ask the operator."},
-	"context_stale": {http.StatusForbidden, "invalid_grant", false,
+	"context_stale": {http.StatusForbidden, "invalid_request", false,
 		"The session has ended or moved to a newer generation.", "Enter or resume again with a new proof."},
-	"invalid_token": {http.StatusUnauthorized, "invalid_grant", false,
+	"invalid_token": {http.StatusUnauthorized, "invalid_request", false,
 		"The session token is not valid.", "Resume the session with a new proof."},
 	"work_outstanding": {http.StatusConflict, "", false,
 		"The member still has open work in the team.", "Reconcile the open work through aicrew, then leave again."},
@@ -130,7 +130,9 @@ type envelope struct {
 }
 
 // refuseSession answers with the envelope. On the token endpoint (oauth) it
-// adds the RFC 6749 members, and an invalid_grant is 400 as that RFC asks.
+// adds the RFC 6749 members; there a refused subject token, or a request
+// the policy will not honour, is 400 invalid_request (RFC 8693 §2.2.2), and
+// only a conflict, a rate limit or unavailability keeps its own status.
 // The route and code are logged; nothing the client sent is.
 func (s *Server) refuseSession(w http.ResponseWriter, r *http.Request, code string, oauth bool, retryAfter time.Duration) {
 	ref := sessionRefusals[code]
@@ -138,7 +140,7 @@ func (s *Server) refuseSession(w http.ResponseWriter, r *http.Request, code stri
 	body := envelope{Code: code, Message: ref.message, Retryable: ref.retryable, NextAction: ref.nextAction}
 	if oauth && ref.oauth != "" {
 		body.Error, body.ErrorDescription = ref.oauth, ref.message
-		if ref.oauth == "invalid_grant" {
+		if status == http.StatusUnauthorized || status == http.StatusForbidden {
 			status = http.StatusBadRequest
 		}
 	}

@@ -288,7 +288,8 @@ func TestResumeExchange(t *testing.T) {
 }
 
 // Every refusal of the token endpoint carries the envelope and RFC 6749's
-// members, and nothing it refuses changes anything.
+// members, a refused subject token being invalid_request (RFC 8693 §2.2.2),
+// and nothing it refuses changes anything.
 func TestTokenEndpointRefusals(t *testing.T) {
 	// TestRateLimits covers the limit.
 	e := setupAPI(t, func(s *Server) { s.tokenLimit = newLimiter(1000, time.Minute) })
@@ -321,15 +322,22 @@ func TestTokenEndpointRefusals(t *testing.T) {
 		{"team and session", with(func(v url.Values) { v.Set("session_id", "s") }), 400, "invalid_request", "invalid_request"},
 		{"neither team nor session", with(func(v url.Values) { v.Del("team_id") }), 400, "invalid_request", "invalid_request"},
 		{"bad challenge id", with(func(v url.Values) { v.Set("challenge_id", "a b") }), 400, "invalid_request", "invalid_request"},
-		{"unknown challenge", with(func(v url.Values) { v.Set("challenge_id", "missing") }), 400, "challenge_invalid", "invalid_grant"},
-		{"refused proof", with(func(v url.Values) { v.Set("subject_token", "amr1_"+strings.Repeat("z", 43)) }), 400, "proof_invalid", "invalid_grant"},
-		{"handle as receipt", with(func(v url.Values) { v.Set("subject_token", "acs1_"+strings.Repeat("z", 43)) }), 400, "proof_invalid", "invalid_grant"},
+		{"unknown challenge", with(func(v url.Values) { v.Set("challenge_id", "missing") }), 400, "challenge_invalid", "invalid_request"},
+		{"refused proof", with(func(v url.Values) { v.Set("subject_token", "amr1_"+strings.Repeat("z", 43)) }), 400, "proof_invalid", "invalid_request"},
+		{"handle as receipt", with(func(v url.Values) { v.Set("subject_token", "acs1_"+strings.Repeat("z", 43)) }), 400, "proof_invalid", "invalid_request"},
 		{"refresh with a handle", with(func(v url.Values) {
 			v.Set("subject_token_type", AccessTokenType)
 			v.Set("subject_token", "acs1_"+strings.Repeat("z", 43))
 			v.Set("requested_token_type", HandleTokenType)
 			v.Set("audience", "hub-test")
-		}), 400, "invalid_token", "invalid_grant"},
+		}), 400, "invalid_token", "invalid_request"},
+		{"another identity's proof", with(func(v url.Values) {
+			other := "amr1_" + strings.Repeat("o", 43)
+			e.v.mu.Lock()
+			e.v.ids[other] = store.VerifiedIdentity{HubID: "hub-test", UserID: "user-other", TokenID: "tok-o"}
+			e.v.mu.Unlock()
+			v.Set("subject_token", other)
+		}), 400, "identity_mismatch", "invalid_request"},
 		{"refresh without the handle type", with(func(v url.Values) { v.Set("subject_token_type", AccessTokenType) }), 400, "invalid_target", "invalid_target"},
 	}
 	for i, c := range cases {

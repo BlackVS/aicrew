@@ -251,11 +251,13 @@ given, and a test enforces that.
   earlier attempt, and keeps the secrets from the latest request it sent.
 - **Refusals** carry the context contract's envelope (`code`, `message`,
   `retryable`, `next_action`, `correlation_id`); on the token endpoint they
-  also carry RFC 6749's `error` and `error_description`. A grant that
-  cannot be honoured (`challenge_invalid`, `proof_invalid`,
-  `credential_inactive`, `identity_mismatch`, `identity_link_required`,
-  `role_forbidden`, `session_active`, `coordinator_active`, `context_stale`,
-  `invalid_token`) is `400 invalid_grant` there. On the session routes an
+  also carry RFC 6749's `error` and `error_description`. There, a refused
+  subject token or an exchange the policy will not honour
+  (`challenge_invalid`, `proof_invalid`, `credential_inactive`,
+  `identity_mismatch`, `identity_link_required`, `role_forbidden`,
+  `context_stale`, `invalid_token`) is `400 invalid_request`, as RFC 8693
+  §2.2.2 requires; `session_active` and `coordinator_active` are `409` with
+  the same error. On the session routes an
   invalid token is `401` with `WWW-Authenticate: Bearer
   error="invalid_token"`, and `work_outstanding` and `idempotency_conflict`
   are `409`. Everywhere, `rate_limited` is `429` with `Retry-After`, and

@@ -495,3 +495,92 @@ func TestLeaveRecordedActiveSession(t *testing.T) {
 		t.Fatal("the record outlived the session")
 	}
 }
+
+// seedOpenWork gives the agent a running claimed attempt in its team, which
+// makes aicrew refuse its leave with work_outstanding.
+func (c *crewEnv) seedOpenWork(t *testing.T) {
+	t.Helper()
+	db, err := sql.Open("sqlite", c.storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`INSERT INTO attempts (id, team_id, task_hub_id, task_project_id, task_id, worker_agent_id, origin,
+		coordinator_session_id, coordinator_generation, state, base_commit, branch, process_repository, process_commit,
+		process_manifest, instruction_digest, offer_expires_at, task_revision, revision, created_at, updated_at, phase)
+		VALUES ('attempt-open', ?, 'hub-test', 'project-a', 'task-1', ?, 'claim', '', 0, 'running', 'base', 'work/task-1',
+		'github.com/example/process', 'abc1234', 'process.yaml', 'sha256:x', '', 1, 1, ?, ?, 'working')`,
+		c.teamID, c.agentID, now, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A leave refused for open work keeps the session with a working binding:
+// aimem holds the current generation's active handle, not the one the
+// resume fenced.
+func TestRefusedLeaveKeepsWorkingBinding(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	a := c.engine(t)
+	if err := a.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c.seedOpenWork(t)
+	b := c.engine(t)
+	var kept *WorkOutstanding
+	if err := b.LeaveRecorded(ctx); !errors.As(err, &kept) {
+		t.Fatalf("leave with open work: %v", err)
+	}
+	sess, err := c.store.GetSession(ctx, a.SessionID())
+	if err != nil || sess.State != store.SessionActive || sess.Generation != 2 {
+		t.Fatalf("session after the refused leave: %+v, %v", sess, err)
+	}
+	got, err := c.store.Introspect(ctx, c.fileHandle(t, a.SessionID()), "hub-test", "aicrew-test")
+	if err != nil || !got.Active || got.Generation != sess.Generation {
+		t.Fatalf("aimem's handle after the refused leave: %+v, %v", got, err)
+	}
+	if st, ok, _ := LoadState(c.cfg.Home); !ok || st.SessionID != a.SessionID() {
+		t.Fatal("the record of the kept session was lost")
+	}
+}
+
+// A close aimem refuses keeps the binding and the record; a retry then
+// removes both, and neither attempt enters the team.
+func TestLeaveRecordedCloseFailsThenRetries(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	a := c.engine(t)
+	if err := a.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.store.StopSession(ctx, c.operator, "stop", a.SessionID()); err != nil {
+		t.Fatal(err)
+	}
+	flag := filepath.Join(c.root, "fail-close")
+	if err := os.WriteFile(flag, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.engine(t).LeaveRecorded(ctx); err == nil {
+		t.Fatal("a refused close was reported as done")
+	}
+	if _, err := os.Stat(sessionFile(c.root, a.SessionID())); err != nil {
+		t.Fatal("the binding went although aimem refused the close")
+	}
+	if _, ok, _ := LoadState(c.cfg.Home); !ok {
+		t.Fatal("the record went although aimem refused the close")
+	}
+	os.Remove(flag)
+	if err := c.engine(t).LeaveRecorded(ctx); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if _, err := os.Stat(sessionFile(c.root, a.SessionID())); !os.IsNotExist(err) {
+		t.Fatal("the retry did not close the binding")
+	}
+	if _, ok, _ := LoadState(c.cfg.Home); ok {
+		t.Fatal("the retry did not clear the record")
+	}
+	if n := c.sessionsOf(t); n != 1 {
+		t.Fatalf("%d sessions: a leave entered the team", n)
+	}
+}

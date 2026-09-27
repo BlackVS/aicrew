@@ -67,8 +67,17 @@ CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,
 - `internal/store`: the aicrew coordination store. It is internal and has
   no MCP surface; only `aicrewd` exposes anything over the network.
   See the package documentation for the rules it enforces.
+- `internal/verifier`: the store's production verifier, which redeems
+  aimem proof receipts (`docs/CREW-CONTRACT.md`, "Receipt redemption").
+  It is not wired into `aicrewd` yet; the first route that completes a
+  proof configures it with aimem's https origin, this service's peer ID,
+  the TLS trust binding (`ca_dns` with the origin's host, or `spki_sha256`
+  with `sha256-` and the base64 SHA-256 of aimem's public key) and the
+  redemption bearer file.
 - `internal/privatefile`: creates a file for a secret, exclusively and
-  readable by its owner only.
+  readable by its owner only, and checks that an existing secret file is
+  private (mode bits on Unix, the effective DACL on Windows).
+  `privatefiletest` weakens a file for tests only.
 
 ## Running aicrewd
 

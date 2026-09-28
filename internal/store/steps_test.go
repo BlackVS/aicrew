@@ -169,8 +169,18 @@ func TestBeginOfferReturnsTheStep(t *testing.T) {
 // under it still settles the step.
 func TestBeginReplayReplacesTheProof(t *testing.T) {
 	e := newStepEnv(t)
-	a, first := e.begin(t, "offer", "task-1")
-	again, second := e.begin(t, "offer", "task-1")
+	ctx := context.Background()
+	req := e.offerReq("task-1")
+	req.ExpiresAt = e.s.now().Add(time.Hour)
+	a, first, err := e.s.BeginOffer(ctx, e.lead.caller, "offer", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.advance(time.Second) // the replacement is the later proof, whatever the digests
+	again, second, err := e.s.BeginOffer(ctx, e.lead.caller, "offer", req)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if again.ID != a.ID || second.RequestKey != first.RequestKey || second.CoordinationProof == first.CoordinationProof {
 		t.Fatalf("replay: attempt %s key %s proof reused %v", again.ID, second.RequestKey, second.CoordinationProof == first.CoordinationProof)
 	}
@@ -183,12 +193,9 @@ func TestBeginReplayReplacesTheProof(t *testing.T) {
 		t.Fatalf("settle under the replaced proof: %+v %+v %v", got, st, err)
 	}
 	// A replay after the step settled reports it, with nothing to send.
-	after, step, err := e.s.BeginOffer(context.Background(), e.lead.caller, "offer", e.offerReq("task-1"))
-	if err != nil && !errors.Is(err, ErrIdempotencyConflict) {
-		t.Fatalf("replay after settle: %v", err)
-	}
-	if err == nil && (after.ID != a.ID || step.CoordinationProof != "") {
-		t.Fatalf("replay after settle gave %+v %+v", after, step)
+	after, step, err := e.s.BeginOffer(ctx, e.lead.caller, "offer", req)
+	if err != nil || after.ID != a.ID || after.State != AttemptOffered || step != (Step{}) {
+		t.Fatalf("replay after settle gave %+v %+v %v", after, step, err)
 	}
 }
 
@@ -382,8 +389,14 @@ func TestOpenAttemptGuardsTheTask(t *testing.T) {
 	if a, set, err := e.settle(t, a, st, HintRefused); err != nil || !set.Settled || a.State != AttemptClosed {
 		t.Fatalf("closing the first offer: %+v %+v %v", a, set, err)
 	}
-	if _, _, err := e.s.BeginOffer(ctx, other.lead.caller, "offer-other-2", req); err != nil {
+	b, _, err := e.s.BeginOffer(ctx, other.lead.caller, "offer-other-2", req)
+	if err != nil {
 		t.Fatalf("an offer once the task's attempt closed: %v", err)
+	}
+	// Another attempt's settled step is no step of this one.
+	if got, set, err := e.s.SettleStep(ctx, other.lead.caller, e.reader, b.ID, st.RequestKey, HintRefused); !errors.Is(err, ErrOutcomeUnknown) ||
+		set.Settled || got.State != AttemptOffering {
+		t.Fatalf("settling another attempt's step: %+v %+v %v", got, set, err)
 	}
 }
 

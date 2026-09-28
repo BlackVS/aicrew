@@ -625,7 +625,7 @@ func (s *Store) ReconcileAttempt(ctx context.Context, c Caller, port Reservation
 func (s *Store) stepOutcome(ctx context.Context, cur Attempt, key string) (Attempt, error) {
 	var outcome, refusal string
 	err := s.snapshot(ctx, func(q querier) error {
-		return q.QueryRowContext(ctx, `SELECT outcome, refusal FROM attempt_steps WHERE request_key = ?`, key).
+		return q.QueryRowContext(ctx, `SELECT outcome, refusal FROM attempt_steps WHERE request_key = ? AND attempt_id = ?`, key, cur.ID).
 			Scan(&outcome, &refusal)
 	})
 	switch {

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -208,8 +209,10 @@ func (s *Store) SettleStep(ctx context.Context, c Caller, reader ReservationRead
 		return Attempt{}, Settlement{}, err
 	}
 	if a.PendingKey != requestKey {
+		// Not the pending step: an earlier step of this attempt, whose
+		// recorded outcome answers, or no step of this attempt at all.
 		out, err := s.stepOutcome(ctx, a, requestKey)
-		return out, Settlement{Settled: true}, err
+		return out, Settlement{Settled: !errors.Is(err, ErrOutcomeUnknown)}, err
 	}
 	proofs, err := s.stepProofs(ctx, a.ID, requestKey)
 	if err != nil {

@@ -75,6 +75,12 @@ func RunClient(ctx context.Context, e *Engine, c Client, stdio Stdio, signals <-
 	cmd.Env = ScopedEnv(os.Environ(), e.AimemFile())
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio.In, stdio.Out, stdio.Err
 	bindToLauncher(cmd)
+	// The launch decision: a stop that arrived after the startup ended
+	// still keeps the client from starting.
+	beforeLaunch()
+	if stopWaiting(signals) {
+		return 0, leaveStopped(ctx, e)
+	}
 	if err := cmd.Start(); err != nil {
 		// Nothing ran: the session is left as any stop would leave it.
 		return 0, errors.Join(fmt.Errorf("start the client: %w", err), e.Leave(context.WithoutCancel(ctx)))
@@ -135,7 +141,6 @@ var ErrStopped = errors.New("stopped before the client started")
 // start starts the session unless a stop (an interrupt or SIGTERM) comes
 // first. A stop cancels the startup and its retries, and a session the
 // startup had already entered is left; the client is then never started.
-// A stop that arrives as the startup ends still counts.
 func start(ctx context.Context, e *Engine, signals <-chan os.Signal) error {
 	startCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -157,19 +162,33 @@ func start(ctx context.Context, e *Engine, signals <-chan os.Signal) error {
 			finished = true
 		}
 	}
-	select {
-	case <-signals:
-		stopped = true
-	default:
-	}
 	if !stopped {
 		return err
 	}
+	return leaveStopped(ctx, e)
+}
+
+// stopWaiting reports whether a stop has arrived and not been handled.
+func stopWaiting(signals <-chan os.Signal) bool {
+	select {
+	case <-signals:
+		return true
+	default:
+		return false
+	}
+}
+
+// leaveStopped leaves the session a stopped startup had entered, if any.
+func leaveStopped(ctx context.Context, e *Engine) error {
 	if e.SessionID() == "" {
 		return ErrStopped
 	}
 	return errors.Join(ErrStopped, e.Leave(context.WithoutCancel(ctx)))
 }
+
+// beforeLaunch runs just before the launch decision; tests use it to stop
+// the launcher at that point.
+var beforeLaunch = func() {}
 
 // exitCode is the client's exit status as a shell reports it: a client
 // ended by a signal gives 128 plus the signal's number.

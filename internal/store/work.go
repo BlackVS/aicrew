@@ -157,7 +157,7 @@ func (s *Store) UpdateWork(ctx context.Context, c Caller, port Reservations, key
 			return startWorkIntent(ctx, tx, a, ReservationUpdate, AttemptRunning, string(in.Intent), detail, "", text, now)
 		},
 	}
-	return s.transition(ctx, c, port, cmd, attemptID)
+	return s.transition(ctx, c, port, cmd, attemptID, nil)
 }
 
 // ReviewResult records the current coordinator's decision on the latest
@@ -239,6 +239,7 @@ func (s *Store) ReviewResult(ctx context.Context, c Caller, key, attemptID strin
 // session and generation that recorded the acceptance: a successor, or the
 // same coordinator after a resume, reviews the result itself first.
 func (s *Store) FinalizeWork(ctx context.Context, c Caller, port Reservations, key, attemptID string, in FinalizeRequest) (Attempt, error) {
+	var proof string
 	cmd := command{
 		op: opFinalizeWork, scope: attemptID, key: key, input: struct {
 			AttemptID string `json:"attempt_id"`
@@ -293,10 +294,15 @@ func (s *Store) FinalizeWork(ctx context.Context, c Caller, port Reservations, k
 			if err != nil {
 				return nil, fmt.Errorf("encode delivery evidence: %w", err)
 			}
-			return startWorkIntent(ctx, tx, a, ReservationFinalize, AttemptRunning, "", "", string(evidence), "", now)
+			a, err = startWorkIntent(ctx, tx, a, ReservationFinalize, AttemptRunning, "", "", string(evidence), "", now)
+			if err != nil {
+				return nil, err
+			}
+			proof, err = issueProof(ctx, tx, a, FactAcceptedForFinalization, sess.ID, sess.Generation, now)
+			return a, err
 		},
 	}
-	return s.transition(ctx, c, port, cmd, attemptID)
+	return s.transition(ctx, c, port, cmd, attemptID, &proof)
 }
 
 // AttemptResults lists an attempt's submitted results in order.

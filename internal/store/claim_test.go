@@ -384,7 +384,7 @@ func TestClaimRequestShape(t *testing.T) {
 		t.Fatal("the fixture has no independent-worker claim")
 	}
 	a := Attempt{ID: "x", Origin: OriginClaim, PendingOp: ReservationClaim, PendingKey: "k", TaskRevision: 3}
-	req := reservationRequest(a)
+	req := reservationRequest(a, "acp1_sample")
 	if req.Holder == nil || req.Holder.Mode != "external" || req.Holder.WorkRef != "aicrew-attempt-x" {
 		t.Fatalf("holder = %+v, want external naming the attempt", req.Holder)
 	}

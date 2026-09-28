@@ -62,6 +62,7 @@ func (s *Store) ClaimTask(ctx context.Context, c Caller, port Reservations, key 
 		return Attempt{}, err
 	}
 	defer release()
+	var proof string
 	cmd.check = func(ctx context.Context, tx *sql.Tx) error {
 		sess, err := currentSession(ctx, tx, c, in.SessionID, in.Generation)
 		if err != nil {
@@ -108,9 +109,14 @@ func (s *Store) ClaimTask(ctx context.Context, c Caller, port Reservations, key 
 			sess.ID, sess.Generation, at, at); err != nil {
 			return nil, fmt.Errorf("insert attempt: %w", err)
 		}
-		return getAttempt(ctx, tx, id)
+		a, err := getAttempt(ctx, tx, id)
+		if err != nil {
+			return nil, err
+		}
+		proof, err = issueProof(ctx, tx, a, FactIndependentClaim, sess.ID, sess.Generation, now)
+		return a, err
 	}
-	return s.transition(ctx, c, port, cmd, "")
+	return s.transition(ctx, c, port, cmd, "", &proof)
 }
 
 // applyClaimRun applies a committed independent claim: the claimer holds the

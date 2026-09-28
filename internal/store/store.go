@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 13
+const schemaVersion = 14
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -208,7 +208,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	}
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
-		schemaV10, schemaV11, schemaV12, schemaV13}
+		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -392,6 +392,26 @@ var schemaV5 = []string{
 		PRIMARY KEY (message_id, agent_id)
 	)`,
 	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
+}
+
+// schemaV14 adds the coordination proofs aicrew issues for aimem's
+// coordination.v1 (coordination.go): one per pending intent that needs a
+// fact, stored as a SHA-256 digest only, never the proof.
+var schemaV14 = []string{
+	`CREATE TABLE coordination_proofs (
+		digest      TEXT PRIMARY KEY,
+		attempt_id  TEXT NOT NULL REFERENCES attempts (id),
+		request_key TEXT NOT NULL,
+		operation   TEXT NOT NULL,
+		kind        TEXT NOT NULL CHECK (kind IN ('offer', 'accepted_attempt', 'never_accepted', 'stopped',
+			'accepted_for_finalization', 'independent_claim')),
+		session_id  TEXT NOT NULL REFERENCES sessions (id),
+		generation  INTEGER NOT NULL CHECK (generation > 0),
+		issued_at   TEXT NOT NULL,
+		expires_at  TEXT NOT NULL,
+		ended_at    TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX coordination_proofs_live ON coordination_proofs (attempt_id) WHERE ended_at = ''`,
 }
 
 // schemaV13 adds the aicrew session tokens an agent receives when it enters

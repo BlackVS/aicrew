@@ -444,7 +444,7 @@ func TestReservationFixtureConformance(t *testing.T) {
 			variants = append(variants, stopped)
 		}
 		for _, v := range variants {
-			ours, _ := json.Marshal(reservationRequest(v))
+			ours, _ := json.Marshal(reservationRequest(v, "acp1_sample"))
 			var sent map[string]json.RawMessage
 			if err := json.Unmarshal(ours, &sent); err != nil {
 				t.Fatal(err)

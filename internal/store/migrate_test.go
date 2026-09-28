@@ -106,6 +106,8 @@ func downgradeToV10(t *testing.T, path string) {
 		}
 	}
 	stmts = append(stmts,
+		// A table added after v10 that references attempts goes first.
+		`DROP TABLE coordination_proofs`,
 		`INSERT INTO attempts_v10 (`+attemptsV10Columns+`) SELECT `+attemptsV10Columns+` FROM attempts`,
 		`DROP TABLE attempts`,
 		`ALTER TABLE attempts_v10 RENAME TO attempts`,
@@ -305,8 +307,8 @@ func TestMigrationV12AddsIntrospectionTables(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := rawDB(t, path)
-	for _, stmt := range []string{`DROP TABLE session_tokens`, `DROP TABLE session_handles`, `DROP TABLE introspection_credentials`,
-		`UPDATE schema_version SET version = 11`} {
+	for _, stmt := range []string{`DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`, `DROP TABLE session_handles`,
+		`DROP TABLE introspection_credentials`, `UPDATE schema_version SET version = 11`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}
@@ -337,7 +339,7 @@ func TestMigrationV13AddsSessionTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := rawDB(t, path)
-	for _, stmt := range []string{`DROP TABLE session_tokens`, `UPDATE schema_version SET version = 12`} {
+	for _, stmt := range []string{`DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`, `UPDATE schema_version SET version = 12`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}
@@ -348,7 +350,7 @@ func TestMigrationV13AddsSessionTokens(t *testing.T) {
 	}
 	defer s2.Close()
 	var version int
-	if err := s2.db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 13 {
+	if err := s2.db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != schemaVersion {
 		t.Fatalf("schema version = %d, %v", version, err)
 	}
 	if err := foreignKeyCheck(ctx, s2.db); err != nil {

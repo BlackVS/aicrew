@@ -384,6 +384,10 @@ func (f *fakeAimem) Mutate(_ context.Context, op store.ReservationOp, req store.
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	h := f.holds[req.Task.TaskID]
+	if op == store.ReservationFinalize && len(req.TerminalEvidence) == 0 {
+		// aimem's ledger: finalizing to DONE needs terminal evidence.
+		return f.refuse("invalid_request", "DONE requires terminal evidence of reviewed delivery and human merge")
+	}
 	if op != store.ReservationUpdate {
 		if f.before != nil {
 			f.before()

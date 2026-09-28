@@ -7,14 +7,19 @@ import (
 	"time"
 )
 
-// claimStopEnv is a team on hub-test with a coordinator and an independent
-// member, both in session with tokens, a store clock and a fake read scope.
+// claimStopEnv is a team on hub-test with a coordinator, an independent
+// member and a worker, all in session with tokens, a store clock and a fake
+// read scope.
 type claimStopEnv struct {
 	s                *Store
 	now              *time.Time
 	reader           *fakeReader
+	p                *prover
+	teamID           string
 	lead, indep      string
+	indepAgent       Agent
 	leadTok, indepTk string
+	workerTok        string
 	expires          time.Time
 }
 
@@ -26,14 +31,19 @@ func newClaimStopEnv(t *testing.T) claimStopEnv {
 	p := newProver(t, s)
 	lead, _ := member(t, s, tm.ID, "lead", RoleCoordinator)
 	indep, _ := member(t, s, tm.ID, "indep", RoleIndependent)
+	worker, _ := member(t, s, tm.ID, "worker", RoleWorker)
 	le, ls := p.enter("e-lead", lead, tm.ID)
 	ie, is := p.enter("e-indep", indep, tm.ID)
+	we, ws := p.enter("e-worker", worker, tm.ID)
 	expires := le.Token.ExpiresAt
-	if ie.Token.ExpiresAt.After(expires) {
-		expires = ie.Token.ExpiresAt
+	for _, x := range []time.Time{ie.Token.ExpiresAt, we.Token.ExpiresAt} {
+		if x.After(expires) {
+			expires = x
+		}
 	}
-	return claimStopEnv{s: s, now: now, reader: newFakeReader(), lead: lead.ID, indep: indep.ID,
-		leadTok: ls.Token.Reveal(), indepTk: is.Token.Reveal(), expires: expires}
+	return claimStopEnv{s: s, now: now, reader: newFakeReader(), p: p, teamID: tm.ID, lead: lead.ID, indep: indep.ID,
+		indepAgent: indep, leadTok: ls.Token.Reveal(), indepTk: is.Token.Reveal(), workerTok: ws.Token.Reveal(),
+		expires: expires}
 }
 
 func (e claimStopEnv) claimInput(taskID string) ClaimInput {

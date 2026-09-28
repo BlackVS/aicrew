@@ -27,7 +27,8 @@ const (
 )
 
 // The actions on one attempt, at AttemptsPath/{id}/{action}.
-var attemptActions = []string{"accept", "decline", "withdraw", "settle", "stop", "confirm-stop", "release"}
+var attemptActions = []string{"accept", "decline", "withdraw", "settle", "stop", "confirm-stop", "release", "review",
+	"confirm-delivery", "finalize"}
 
 var attemptIDShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
@@ -37,7 +38,8 @@ func (s *Server) registerAttempts() {
 	s.handle(http.MethodPost, AttemptsPath, s.offer)
 	s.handle(http.MethodPost, ClaimPath, s.claim)
 	handlers := map[string]http.HandlerFunc{"accept": s.accept, "decline": s.decline, "withdraw": s.withdraw,
-		"settle": s.settle, "stop": s.requestStop, "confirm-stop": s.confirmStop, "release": s.releaseStopped}
+		"settle": s.settle, "stop": s.requestStop, "confirm-stop": s.confirmStop, "release": s.releaseStopped,
+		"review": s.review, "confirm-delivery": s.confirmDelivery, "finalize": s.finalize}
 	for _, action := range attemptActions {
 		s.handle(http.MethodPost, attemptRoute(action), handlers[action])
 	}
@@ -78,6 +80,7 @@ var attemptRefusals = []struct {
 	{store.ErrInstructionMismatch, "instruction_mismatch"},
 	{store.ErrProcessChanged, "process_changed"},
 	{store.ErrStepUnknown, "step_unknown"},
+	{store.ErrDeliveryUnconfirmed, "delivery_unconfirmed"},
 	{store.ErrOutcomeUnknown, "outcome_unknown"},
 }
 
@@ -208,7 +211,12 @@ type attemptView struct {
 	State       string `json:"state"`
 	Declined    bool   `json:"declined"`
 	Stop        string `json:"stop,omitempty"`
+	Phase       string `json:"phase,omitempty"`
 	CloseReason string `json:"close_reason,omitempty"`
+	// AcceptedResult is the result the current coordinator accepted, and
+	// DeliveryResult the one whose delivery a team member confirmed.
+	AcceptedResult int64 `json:"accepted_result,omitempty"`
+	DeliveryResult int64 `json:"delivery_result,omitempty"`
 	// ProcessVerifiedReceipt names the committed claim receipt under which
 	// aimem verified the attempt's process pin; absent while the pin is
 	// unverified input.
@@ -216,8 +224,9 @@ type attemptView struct {
 }
 
 func viewOf(a store.Attempt) attemptView {
-	return attemptView{ID: a.ID, State: string(a.State), Declined: a.Declined, Stop: string(a.Stop),
-		CloseReason: a.CloseReason, ProcessVerifiedReceipt: a.ProcessVerifiedReceipt}
+	return attemptView{ID: a.ID, State: string(a.State), Declined: a.Declined, Stop: string(a.Stop), Phase: string(a.Phase),
+		CloseReason: a.CloseReason, AcceptedResult: a.AcceptedResult, DeliveryResult: a.DeliveryResult,
+		ProcessVerifiedReceipt: a.ProcessVerifiedReceipt}
 }
 
 // writeAttempt answers a local step with the attempt.
@@ -350,4 +359,53 @@ func (s *Server) settle(w http.ResponseWriter, r *http.Request) {
 // retrySeconds is Retry-After in whole seconds, rounded up, at least one.
 func retrySeconds(d time.Duration) int {
 	return max(int((d+time.Second-1)/time.Second), 1)
+}
+
+// review records the team's current coordinator's decision on the latest
+// submitted result: accept or rework. It is local.
+func (s *Server) review(w http.ResponseWriter, r *http.Request) {
+	id, _, _ := attemptPath(requestPath(r))
+	var in struct {
+		ResultSeq int64                `json:"result_seq"`
+		Decision  store.ReviewDecision `json:"decision"`
+	}
+	token, key, ok := s.stepRequest(w, r, true, &in)
+	if !ok {
+		return
+	}
+	a, err := s.store.ReviewWithToken(r.Context(), key, token, id, in.ResultSeq, in.Decision)
+	s.writeAttempt(w, r, a, err)
+}
+
+// confirmDelivery records the team's current coordinator's confirmation that
+// the accepted result was delivered, with the evidence it gathered from the
+// forge. It is local; aicrew queries no forge.
+func (s *Server) confirmDelivery(w http.ResponseWriter, r *http.Request) {
+	id, _, _ := attemptPath(requestPath(r))
+	var in struct {
+		ResultSeq int64            `json:"result_seq"`
+		Evidence  []store.Evidence `json:"evidence"`
+	}
+	token, key, ok := s.stepRequest(w, r, true, &in)
+	if !ok {
+		return
+	}
+	a, err := s.store.ConfirmDeliveryWithToken(r.Context(), key, token, id, in.ResultSeq, in.Evidence)
+	s.writeAttempt(w, r, a, err)
+}
+
+// finalize begins finalizing the accepted result as DONE. The body names the
+// result only: its terminal evidence is the confirmed delivery's, which the
+// begin response returns for the member to send.
+func (s *Server) finalize(w http.ResponseWriter, r *http.Request) {
+	id, _, _ := attemptPath(requestPath(r))
+	var in struct {
+		ResultSeq int64 `json:"result_seq"`
+	}
+	token, key, ok := s.stepRequest(w, r, true, &in)
+	if !ok {
+		return
+	}
+	a, step, err := s.store.BeginFinalizeWithToken(r.Context(), key, token, id, in.ResultSeq)
+	s.writeStep(w, r, a, step, err)
 }

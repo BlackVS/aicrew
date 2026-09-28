@@ -45,7 +45,7 @@ func (f *fakeAimem) send(t *testing.T, task store.TaskRef, st store.Step) string
 	t.Helper()
 	res, err := f.Mutate(context.Background(), st.Operation, store.ReservationRequest{Task: task, RequestKey: st.RequestKey,
 		ExpectedRevision: st.ExpectedRevision, ReservationID: st.ReservationID, Fence: st.Fence, Holder: st.Holder,
-		CoordinationProof: st.CoordinationProof})
+		CoordinationProof: st.CoordinationProof, TerminalEvidence: st.TerminalEvidence})
 	var refusal *store.ReservationRefusal
 	if errors.As(err, &refusal) {
 		return refusal.Code
@@ -551,5 +551,117 @@ func TestClaimAndStopRouteRefusals(t *testing.T) {
 	for _, path := range []string{ClaimPath, AttemptsPath + "/" + id + "/stop", AttemptsPath + "/" + id + "/confirm-stop",
 		AttemptsPath + "/" + id + "/release"} {
 		refused(t, e.call(t, "", path, "k-1", map[string]any{}), http.StatusUnauthorized, "invalid_token")
+	}
+}
+
+var confirmedEvidence = []store.Evidence{
+	{Kind: "reviewed_head", Ref: "https://forge.example/pull/7#review-1"},
+	{Kind: "human_merge", Ref: "https://forge.example/commit/merge-7"},
+	{Kind: "post_merge_ci", Ref: "https://forge.example/actions/runs/7"},
+}
+
+// runningOffer offers task-1 to the worker, which accepts; both steps are
+// sent and settled through the routes.
+func (e *coordEnv) runningOffer(t *testing.T) string {
+	t.Helper()
+	id, _ := e.offerAndSettle(t, "offer-1", "task-1", time.Now().Add(time.Hour))
+	acc := e.accept(t, id, "accept-1")
+	if code := e.aimem.send(t, e.task("task-1"), acc); code != "" {
+		t.Fatalf("aimem refused the transfer: %s %v", code, e.aimem.refused)
+	}
+	settled(t, e.settleAs(t, e.worker, id, acc, "committed", ""), "committed", "running")
+	return id
+}
+
+// submit submits a result as the worker, through the one-shot update path
+// until b1b-3 serves it as a step, and returns the result's sequence.
+func (e *coordEnv) submit(t *testing.T, id, key string) int64 {
+	t.Helper()
+	ctx := context.Background()
+	b, err := e.store.AuthenticateSessionToken(ctx, e.worker.token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.UpdateWork(ctx, e.worker.caller, e.aimem, key, id, store.WorkUpdate{SessionID: b.SessionID,
+		Generation: b.Generation, Intent: store.IntentSubmit, Detail: "https://forge.example/pull/7"}); err != nil {
+		t.Fatalf("submit: %v %v", err, e.aimem.refused)
+	}
+	res, err := e.store.AttemptResults(ctx, id)
+	if err != nil || len(res) == 0 {
+		t.Fatalf("results: %v %v", res, err)
+	}
+	return res[len(res)-1].Seq
+}
+
+// Review, confirmed delivery and finalize end to end. The coordinator reviews
+// the result and confirms its delivery with the evidence it gathered; the
+// finalize names the result only, and its begin response carries the
+// confirmed evidence as the terminal evidence the member sends. aimem
+// verifies the accepted_for_finalization fact and, as its ledger requires,
+// the terminal evidence.
+func TestReviewDeliveryFinalizeEndToEnd(t *testing.T) {
+	e := setupCoordination(t)
+	id := e.runningOffer(t)
+	seq := e.submit(t, id, "submit-1")
+	path := func(action string) string { return AttemptsPath + "/" + id + "/" + action }
+	review := map[string]any{"result_seq": seq, "decision": "accept"}
+	refused(t, e.call(t, e.worker.token, path("review"), "review-self", review), http.StatusForbidden, "attempt_forbidden")
+	if got := e.call(t, e.lead.token, path("review"), "review-1", review); got.status != http.StatusOK ||
+		got.body["phase"] != "accepted" || got.body["accepted_result"] != float64(seq) {
+		t.Fatalf("review: %d %s", got.status, got.raw)
+	}
+
+	fin := map[string]any{"result_seq": seq}
+	refused(t, e.call(t, e.worker.token, path("finalize"), "fin-1", fin), http.StatusConflict, "delivery_unconfirmed")
+	// Evidence the finalizer supplies itself unlocks nothing: a finalize
+	// carries no evidence.
+	refused(t, e.call(t, e.worker.token, path("finalize"), "fin-2",
+		map[string]any{"result_seq": seq, "terminal_evidence": []string{"https://forge.example/pull/7"}}),
+		http.StatusBadRequest, "invalid_request")
+	confirm := map[string]any{"result_seq": seq, "evidence": confirmedEvidence}
+	refused(t, e.call(t, e.worker.token, path("confirm-delivery"), "confirm-self", confirm), http.StatusForbidden, "attempt_forbidden")
+	refused(t, e.call(t, e.lead.token, path("confirm-delivery"), "confirm-thin",
+		map[string]any{"result_seq": seq, "evidence": confirmedEvidence[:2]}), http.StatusBadRequest, "invalid_request")
+	if got := e.call(t, e.lead.token, path("confirm-delivery"), "confirm-1", confirm); got.status != http.StatusOK ||
+		got.body["delivery_result"] != float64(seq) {
+		t.Fatalf("confirm-delivery: %d %s", got.status, got.raw)
+	}
+
+	// The reviewing coordinator finalizes.
+	st := stepOf(t, e.call(t, e.lead.token, path("finalize"), "fin-3", fin))
+	want := []string{confirmedEvidence[0].Ref, confirmedEvidence[1].Ref, confirmedEvidence[2].Ref}
+	if st.Operation != store.ReservationFinalize || st.TargetState != "DONE" || st.Reason == "" ||
+		strings.Join(st.TerminalEvidence, "|") != strings.Join(want, "|") {
+		t.Fatalf("finalize begin %+v", st)
+	}
+	if code := e.aimem.send(t, e.task("task-1"), st); code != "" {
+		t.Fatalf("aimem refused the finalize: %s %v", code, e.aimem.refused)
+	}
+	if a := settled(t, e.settleAs(t, e.worker, id, st, "unknown", ""), "committed", "closed"); a["close_reason"] != "finalized" {
+		t.Fatalf("closed as %v", a["close_reason"])
+	}
+	if kinds := e.seenKinds(); kinds != "offer,accepted_attempt,accepted_for_finalization" {
+		t.Fatalf("aimem accepted %s", kinds)
+	}
+}
+
+// A finalize sent without its terminal evidence is refused by aimem, as its
+// ledger requires: the evidence travels only in the begin response.
+func TestFinalizeWithoutEvidenceIsRefusedByAimem(t *testing.T) {
+	e := setupCoordination(t)
+	id := e.runningOffer(t)
+	seq := e.submit(t, id, "submit-1")
+	path := func(action string) string { return AttemptsPath + "/" + id + "/" + action }
+	if got := e.call(t, e.lead.token, path("review"), "review-1", map[string]any{"result_seq": seq, "decision": "accept"}); got.status != http.StatusOK {
+		t.Fatalf("review: %d %s", got.status, got.raw)
+	}
+	if got := e.call(t, e.lead.token, path("confirm-delivery"), "confirm-1",
+		map[string]any{"result_seq": seq, "evidence": confirmedEvidence}); got.status != http.StatusOK {
+		t.Fatalf("confirm: %d %s", got.status, got.raw)
+	}
+	st := stepOf(t, e.call(t, e.worker.token, path("finalize"), "fin-1", map[string]any{"result_seq": seq}))
+	st.TerminalEvidence = nil
+	if code := e.aimem.send(t, e.task("task-1"), st); code != "invalid_request" {
+		t.Fatalf("a finalize without its evidence: aimem answered %q", code)
 	}
 }

@@ -39,9 +39,10 @@ const (
 
 // Step is one coordinated step as begin returns it: coordination.v1's begin
 // response. CoordinationProof is a secret, returned by this answer only.
-// TargetState, Reason and Blocker are the values of a stopped attempt's
-// release the member sends aimem with the step (D-b1b-2); no other step
-// carries them.
+// TargetState, Reason, Blocker and TerminalEvidence are the values the member
+// sends aimem with the step (D-b1b-2): a stopped attempt's release carries the
+// first three, a finalize its target, reason and the confirmed delivery's
+// references. No other step carries them.
 type Step struct {
 	Operation         ReservationOp      `json:"operation"`
 	RequestKey        string             `json:"request_key"`
@@ -52,6 +53,7 @@ type Step struct {
 	TargetState       string             `json:"target_state,omitempty"`
 	Reason            string             `json:"reason,omitempty"`
 	Blocker           string             `json:"blocker,omitempty"`
+	TerminalEvidence  []string           `json:"terminal_evidence,omitempty"`
 	CoordinationProof string             `json:"coordination_proof"`
 }
 
@@ -59,8 +61,11 @@ func stepFor(a Attempt, proof string) Step {
 	req := reservationRequest(a, proof)
 	st := Step{Operation: a.PendingOp, RequestKey: a.PendingKey, ExpectedRevision: req.ExpectedRevision,
 		ReservationID: req.ReservationID, Fence: req.Fence, Holder: req.Holder, CoordinationProof: proof}
-	if a.PendingOp == ReservationRelease && a.Stop == StopConfirmed {
+	switch {
+	case a.PendingOp == ReservationRelease && a.Stop == StopConfirmed:
 		st.TargetState, st.Reason, st.Blocker = req.Owned.State, req.Reason, req.Owned.Blocker
+	case a.PendingOp == ReservationFinalize:
+		st.TargetState, st.Reason, st.TerminalEvidence = req.Owned.State, req.Reason, req.TerminalEvidence
 	}
 	return st
 }

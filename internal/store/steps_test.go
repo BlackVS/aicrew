@@ -128,7 +128,12 @@ func report(hint StepHint) StepReport {
 
 func active(t *testing.T, s *Store, proof string) bool {
 	t.Helper()
-	f, err := s.CoordinationFact(context.Background(), proof, "hub-a")
+	return activeOn(t, s, proof, "hub-a")
+}
+
+func activeOn(t *testing.T, s *Store, proof, hub string) bool {
+	t.Helper()
+	f, err := s.CoordinationFact(context.Background(), proof, hub)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,5 +542,77 @@ func TestStepOperationsRecheckTheToken(t *testing.T) {
 	}
 	if _, _, err := s.SettleWithToken(ctx, token, newFakeReader(), a.ID, st.RequestKey, report(HintUnknown)); !errors.Is(err, ErrTokenInvalid) {
 		t.Fatalf("a settle with an expired token: %v", err)
+	}
+}
+
+// openProofs counts the attempt's proofs that have not ended.
+func openProofs(t *testing.T, s *Store, attemptID string) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM coordination_proofs WHERE attempt_id = ? AND ended_at = ''`, attemptID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// Every write a token operation makes checks the token inside its own
+// transaction: a token that dies after the operation authenticated it, while
+// the operation waits, replaces, voids and settles nothing.
+func TestStepWritesRecheckTheToken(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	now := clock(s)
+	tm := mustTeam(t, s, "t1", "crew", ProjectRef{HubID: "hub-test", ProjectID: "project-t"})
+	p := newProver(t, s)
+	lead, _ := member(t, s, tm.ID, "lead", RoleCoordinator)
+	worker, _ := member(t, s, tm.ID, "worker", RoleWorker)
+	entry, sec := p.enter("e-lead", lead, tm.ID)
+	p.enter("e-worker", worker, tm.ID)
+	token, alive := sec.Token.Reveal(), *now
+	die := func() { *now = entry.Token.ExpiresAt }
+	in := OfferInput{WorkerAgentID: worker.ID, Task: TaskRef{HubID: "hub-test", ProjectID: "project-t", TaskID: "task-1"},
+		ExpectedRevision: 3, BaseCommit: "base-1", Branch: "work/task-1", Process: testPin, ExpiresAt: now.Add(time.Hour)}
+	a, st, err := s.BeginOfferWithToken(ctx, "offer-1", token, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.beforeProofReplace = die
+	if _, _, err := s.BeginOfferWithToken(ctx, "offer-1", token, in); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("a replacement after the token died: %v", err)
+	}
+	s.beforeProofReplace, *now = nil, alive
+	if openProofs(t, s, a.ID) != 1 || !activeOn(t, s, st.CoordinationProof, "hub-test") {
+		t.Fatal("a dead token replaced the step's proof")
+	}
+
+	reader := newFakeReader()
+	reader.answered = die
+	if _, _, err := s.SettleWithToken(ctx, token, reader, a.ID, st.RequestKey, report(HintUnknown)); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("a void after the token died: %v", err)
+	}
+	*now = alive
+	if openProofs(t, s, a.ID) != 1 {
+		t.Fatal("a dead token voided the step")
+	}
+
+	reader.commit(st.CoordinationProof, receiptFor(a, st, "res-1", "1", 4))
+	reader.answered = die
+	if _, _, err := s.SettleWithToken(ctx, token, reader, a.ID, st.RequestKey, report(HintCommitted)); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("a settle after the token died: %v", err)
+	}
+	*now = alive
+	if got, err := s.GetAttempt(ctx, a.ID); err != nil || got.State != AttemptOffering {
+		t.Fatalf("a dead token settled the step: %+v %v", got, err)
+	}
+	if got, set, err := s.SettleWithToken(ctx, token, reader, a.ID, st.RequestKey, report(HintCommitted)); err != nil ||
+		!set.Settled || got.State != AttemptOffered {
+		t.Fatalf("the live token's settle: %+v %+v %v", got, set, err)
+	}
+	// A replay of the settled step replaces nothing; the replay itself
+	// checks the token.
+	die()
+	if _, _, err := s.BeginOfferWithToken(ctx, "offer-1", token, in); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("a replay of a settled step with a dead token: %v", err)
 	}
 }

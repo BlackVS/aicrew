@@ -27,10 +27,28 @@ type OfferInput struct {
 	ExpiresAt        time.Time      `json:"expires_at"`
 }
 
+// guard is a check a write runs first inside its transaction; nil checks
+// nothing.
+type guard func(context.Context, *sql.Tx) error
+
+// then runs g, then next.
+func (g guard) then(next func(context.Context, *sql.Tx) error) func(context.Context, *sql.Tx) error {
+	if g == nil {
+		return next
+	}
+	return func(ctx context.Context, tx *sql.Tx) error {
+		if err := g(ctx, tx); err != nil {
+			return err
+		}
+		return next(ctx, tx)
+	}
+}
+
 // withToken makes cmd require token, still valid for its session at its
 // generation, inside the command's transaction, on a new command and on a
-// replay alike.
-func (s *Store) withToken(cmd command, token string, t storedToken) command {
+// replay alike. The same check guards every later write of the step
+// operation.
+func (s *Store) withToken(cmd command, token string, t storedToken) (command, guard) {
 	valid := s.requireToken(token, t.sessionID, t.generation, nil)
 	check, replay := cmd.check, cmd.replayCheck
 	cmd.check = func(ctx context.Context, tx *sql.Tx) error {
@@ -51,7 +69,7 @@ func (s *Store) withToken(cmd command, token string, t storedToken) command {
 		}
 		return nil
 	}
-	return cmd
+	return cmd, valid
 }
 
 // tokenCaller finds the token's session and agent; the command then checks
@@ -72,10 +90,10 @@ func (s *Store) BeginOfferWithToken(ctx context.Context, key, token string, in O
 		return Attempt{}, Step{}, err
 	}
 	var proof string
-	cmd := offerCommand(c, key, OfferRequest{SessionID: t.sessionID, Generation: t.generation,
+	cmd, g := s.withToken(offerCommand(c, key, OfferRequest{SessionID: t.sessionID, Generation: t.generation,
 		WorkerAgentID: in.WorkerAgentID, Task: in.Task, ExpectedRevision: in.ExpectedRevision, BaseCommit: in.BaseCommit,
-		Branch: in.Branch, Process: in.Process, ExpiresAt: in.ExpiresAt}, &proof)
-	return s.beginOffer(ctx, c, s.withToken(cmd, token, t), &proof, t.sessionID, t.generation)
+		Branch: in.Branch, Process: in.Process, ExpiresAt: in.ExpiresAt}, &proof), token, t)
+	return s.beginOffer(ctx, c, cmd, &proof, t.sessionID, t.generation, g)
 }
 
 // BeginAcceptWithToken begins the acceptance of an offer by its worker, as
@@ -88,8 +106,8 @@ func (s *Store) BeginAcceptWithToken(ctx context.Context, key, token, attemptID,
 	}
 	var proof string
 	in := AcceptRequest{SessionID: t.sessionID, Generation: t.generation, InstructionDigest: instructionDigest}
-	cmd := s.withToken(acceptCommand(c, key, attemptID, in, false, &proof), token, t)
-	return s.begin(ctx, c, cmd, attemptID, &proof, FactAcceptedAttempt, t.sessionID, t.generation)
+	cmd, g := s.withToken(acceptCommand(c, key, attemptID, in, false, &proof), token, t)
+	return s.begin(ctx, c, cmd, attemptID, &proof, FactAcceptedAttempt, t.sessionID, t.generation, g)
 }
 
 // DeclineWithToken records the worker's decline, as the token's session. It
@@ -99,7 +117,8 @@ func (s *Store) DeclineWithToken(ctx context.Context, key, token, attemptID stri
 	if err != nil {
 		return Attempt{}, err
 	}
-	return s.decline(ctx, c, s.withToken(declineCommand(c, key, attemptID, t.sessionID, t.generation), token, t), attemptID)
+	cmd, _ := s.withToken(declineCommand(c, key, attemptID, t.sessionID, t.generation), token, t)
+	return s.decline(ctx, c, cmd, attemptID)
 }
 
 // BeginWithdrawWithToken begins the release of an offer never accepted, as
@@ -110,13 +129,14 @@ func (s *Store) BeginWithdrawWithToken(ctx context.Context, key, token, attemptI
 		return Attempt{}, Step{}, err
 	}
 	var proof string
-	cmd := s.withToken(releaseCommand(c, key, attemptID, t.sessionID, t.generation, &proof), token, t)
-	return s.begin(ctx, c, cmd, attemptID, &proof, FactNeverAccepted, t.sessionID, t.generation)
+	cmd, g := s.withToken(releaseCommand(c, key, attemptID, t.sessionID, t.generation, &proof), token, t)
+	return s.begin(ctx, c, cmd, attemptID, &proof, FactNeverAccepted, t.sessionID, t.generation, g)
 }
 
 // SettleWithToken settles the attempt's step with requestKey for the token's
 // session, which must be in the attempt's team. reader is aimem's read scope,
-// or nil while aicrew has none (the step then stays pending).
+// or nil while aicrew has none (the step then stays pending). The token is
+// checked again inside the transaction of every write the settle makes.
 func (s *Store) SettleWithToken(ctx context.Context, token string, reader ReservationReader, attemptID, requestKey string,
 	report StepReport) (Attempt, Settlement, error) {
 	b, err := s.AuthenticateSessionToken(ctx, token)
@@ -130,5 +150,6 @@ func (s *Store) SettleWithToken(ctx context.Context, token string, reader Reserv
 	if a.TeamID != b.TeamID {
 		return Attempt{}, Settlement{}, fmt.Errorf("attempt %s: %w", attemptID, ErrNotFound)
 	}
-	return s.SettleStep(ctx, Caller{kind: callerAgent, id: b.AgentID}, reader, attemptID, requestKey, report)
+	return s.settleStep(ctx, Caller{kind: callerAgent, id: b.AgentID}, reader, attemptID, requestKey, report,
+		s.requireToken(token, b.SessionID, b.Generation, nil))
 }

@@ -836,6 +836,12 @@ var errSettled = errors.New("already settled")
 // record. It changes nothing if the attempt has moved on since the outcome's
 // step was recorded.
 func (s *Store) settle(ctx context.Context, c Caller, a Attempt, o callOutcome) (Attempt, error) {
+	return s.settleGuarded(ctx, c, a, o, nil)
+}
+
+// settleGuarded is settle with g, if set, checked first inside the
+// command's transaction.
+func (s *Store) settleGuarded(ctx context.Context, c Caller, a Attempt, o callOutcome, g guard) (Attempt, error) {
 	in := settleInput{AttemptID: a.ID, PendingKey: a.PendingKey, Outcome: o.kind, ReceiptID: o.result.Receipt.ID, Detail: o.detail}
 	if o.refusal != nil {
 		in.Refusal = o.refusal.Code
@@ -847,7 +853,7 @@ func (s *Store) settle(ctx context.Context, c Caller, a Attempt, o callOutcome) 
 	var out Attempt
 	err = s.run(ctx, c, command{
 		op: opSettle, scope: a.ID, key: key, input: in, authorize: anyCaller,
-		check: func(ctx context.Context, tx *sql.Tx) error {
+		check: g.then(func(ctx context.Context, tx *sql.Tx) error {
 			cur, err := getAttempt(ctx, tx, a.ID)
 			if err != nil {
 				return err
@@ -859,7 +865,7 @@ func (s *Store) settle(ctx context.Context, c Caller, a Attempt, o callOutcome) 
 				return errSettled
 			}
 			return nil
-		},
+		}),
 		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
 			return applyOutcome(ctx, tx, a, o, now)
 		},

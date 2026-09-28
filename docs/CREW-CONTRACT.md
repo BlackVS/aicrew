@@ -251,7 +251,11 @@ given, and a test enforces that.
   earlier attempt, and keeps the secrets from the latest request it sent.
 - **Refusals** carry the context contract's envelope (`code`, `message`,
   `retryable`, `next_action`, `correlation_id`); on the token endpoint they
-  also carry RFC 6749's `error` and `error_description`. There, a refused
+  also carry RFC 6749's `error` and `error_description`. That includes the
+  refusals made before a route's handler runs: a method the path does not
+  serve is `405 method_not_allowed` with `Allow`, and a declared body over
+  the service's limit is `413 request_too_large`, both with `error:
+  invalid_request` on the token endpoint. There, a refused
   subject token or an exchange the policy will not honour
   (`challenge_invalid`, `proof_invalid`, `credential_inactive`,
   `identity_mismatch`, `identity_link_required`, `role_forbidden`,

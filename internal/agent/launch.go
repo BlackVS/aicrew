@@ -99,8 +99,6 @@ func RunClient(ctx context.Context, e *Engine, c Client, stdio Stdio, signals <-
 	afterLaunch()
 	if stopWaiting(signals) {
 		e.Log.Info("stop requested as the client started; stopping it")
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
 		return 0, leaveStopped(ctx, e)
 	}
 

@@ -1,9 +1,15 @@
 // Command aicrew is aicrew's operator command line.
 //
-//	aicrew introspection-credential issue  -store PATH -hub HUB -secret-file PATH
-//	aicrew introspection-credential rotate -store PATH -hub HUB -secret-file PATH
+//	aicrew introspection-credential issue  -store PATH -hub HUB -secret-file PATH [-operations LIST]
+//	aicrew introspection-credential rotate -store PATH -hub HUB -secret-file PATH [-operations LIST]
 //	aicrew introspection-credential list   -store PATH [-hub HUB]
 //	aicrew introspection-credential revoke -store PATH -id ID
+//
+// -operations names what the new credential permits, comma-separated:
+// introspection (identity.v1 session introspection), coordination
+// (coordination.v1 facts), or both, which is the default. A credential issued
+// before coordination existed permits introspection only; rotating it gives
+// aimem one that permits both.
 //
 // It opens the store file directly. Only one process may hold a store, so run
 // it while aicrewd is stopped. A credential's bearer is written only to the
@@ -21,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/privatefile"
@@ -32,8 +39,8 @@ func main() {
 }
 
 const usage = `usage:
-  aicrew introspection-credential issue  -store PATH -hub HUB -secret-file PATH
-  aicrew introspection-credential rotate -store PATH -hub HUB -secret-file PATH
+  aicrew introspection-credential issue  -store PATH -hub HUB -secret-file PATH [-operations LIST]
+  aicrew introspection-credential rotate -store PATH -hub HUB -secret-file PATH [-operations LIST]
   aicrew introspection-credential list   -store PATH [-hub HUB]
   aicrew introspection-credential revoke -store PATH -id ID
 `
@@ -59,23 +66,24 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	hub := fs.String("hub", "", "the aimem hub the credential is bound to")
 	secretFile := fs.String("secret-file", "", "new private file that receives the bearer")
 	id := fs.String("id", "", "credential ID")
+	opsFlag := fs.String("operations", "", "what the credential permits: introspection, coordination, or both (default)")
 	if err := fs.Parse(args[2:]); err != nil || fs.NArg() != 0 || *storePath == "" {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
 	switch verb {
 	case "issue", "rotate":
-		if *hub == "" || *secretFile == "" || *id != "" {
+		if *hub == "" || *secretFile == "" || *id != "" || parseOps(*opsFlag) == nil {
 			fmt.Fprint(stderr, usage)
 			return 2
 		}
 	case "list":
-		if *secretFile != "" || *id != "" {
+		if *secretFile != "" || *id != "" || *opsFlag != "" {
 			fmt.Fprint(stderr, usage)
 			return 2
 		}
 	case "revoke":
-		if *id == "" || *hub != "" || *secretFile != "" {
+		if *id == "" || *hub != "" || *secretFile != "" || *opsFlag != "" {
 			fmt.Fprint(stderr, usage)
 			return 2
 		}
@@ -149,7 +157,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "aicrew: create the secret file (it must not exist):", err)
 		return 1
 	}
-	c, bearer, err := st.IssueIntrospectionCredential(ctx, op, newKey(), *hub)
+	c, bearer, err := st.IssueIntrospectionCredential(ctx, op, newKey(), *hub, parseOps(*opsFlag)...)
 	if err != nil {
 		f.Close()
 		os.Remove(*secretFile)
@@ -184,6 +192,7 @@ type credentialView struct {
 	CreatedAt  time.Time `json:"created_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
 	RevokedAt  time.Time `json:"revoked_at,omitzero"`
+	Operations []string  `json:"operations"`
 	SecretFile string    `json:"secret_file,omitempty"`
 	Replaces   string    `json:"replaces,omitempty"`
 	Next       string    `json:"next,omitempty"`
@@ -191,7 +200,27 @@ type credentialView struct {
 
 func view(c store.IntrospectionCredential, now time.Time) credentialView {
 	return credentialView{ID: c.ID, HubID: c.HubID, Active: c.Active(now), CreatedAt: c.CreatedAt,
-		ExpiresAt: c.ExpiresAt, RevokedAt: c.RevokedAt}
+		ExpiresAt: c.ExpiresAt, RevokedAt: c.RevokedAt, Operations: c.Operations}
+}
+
+// parseOps reads -operations: the store's operation names, or nil for a
+// malformed list. An empty flag is an empty list: the store's default.
+func parseOps(flag string) []string {
+	ops := []string{}
+	if flag == "" {
+		return ops
+	}
+	for _, name := range strings.Split(flag, ",") {
+		switch strings.TrimSpace(name) {
+		case "introspection":
+			ops = append(ops, store.OpIntrospection)
+		case "coordination":
+			ops = append(ops, store.OpCoordination)
+		default:
+			return nil
+		}
+	}
+	return ops
 }
 
 // newKey is a fresh command key: an operator's issue is never replayed.

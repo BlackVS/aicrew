@@ -90,6 +90,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 	s.refreshLimit = newLimiter(RefreshesPerMinute, time.Minute)
 	s.handle(http.MethodGet, "/healthz", s.health)
 	s.handleOwnBody(http.MethodPost, IntrospectPath, s.introspect)
+	s.handleOwnBody(http.MethodPost, CoordinationPath, s.coordination)
 	s.handleOwnBody(http.MethodPost, ChallengesPath, s.challenge)
 	s.handleOwnBody(http.MethodPost, TokenPath, s.token)
 	s.handle(http.MethodGet, SessionPath, s.sessionStatus)

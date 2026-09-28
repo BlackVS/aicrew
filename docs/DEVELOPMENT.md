@@ -146,8 +146,8 @@ serves agents' clients: `POST /v1/crew/challenges`, `POST /v1/crew/token`,
 
 ## Introspection credentials
 
-Aimem authenticates its introspection calls with a credential that aicrew
-issues for one aimem hub. The operator manages them with `aicrew`, which
+Aimem authenticates its introspection and coordination-fact calls with a
+credential that aicrew issues for one aimem hub. The operator manages them with `aicrew`, which
 opens the store file directly: only one process may hold a store, so stop
 `aicrewd` first.
 
@@ -156,6 +156,7 @@ CGO_ENABLED=0 go build -o bin/aicrew ./cmd/aicrew
 bin/aicrew introspection-credential issue  -store aicrew.db -hub HUB -secret-file introspection.secret
 bin/aicrew introspection-credential list   -store aicrew.db
 bin/aicrew introspection-credential rotate -store aicrew.db -hub HUB -secret-file introspection-2.secret
+bin/aicrew introspection-credential issue  -store aicrew.db -hub HUB -secret-file intro-only.secret -operations introspection
 bin/aicrew introspection-credential revoke -store aicrew.db -id ID
 ```
 
@@ -168,6 +169,13 @@ bin/aicrew introspection-credential revoke -store aicrew.db -id ID
   it from `AIMEM_INTROSPECTION_TOKEN_FILE`. Delete aicrew's copy afterwards.
 - A hub has at most two active credentials. To rotate: `rotate` issues the
   second, aimem moves to it, then `revoke` the first.
+- `-operations` names what a new credential permits: `introspection`,
+  `coordination`, or both, which is the default. `list` shows each
+  credential's operations.
+- A credential issued before coordination facts existed permits
+  introspection only. To enable coordination for that hub, `rotate` it:
+  the new credential permits both, aimem moves to it, then `revoke` the old
+  one.
 
 ## Running aicrew-agent
 

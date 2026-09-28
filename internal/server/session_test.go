@@ -570,11 +570,13 @@ func TestLimiterRefills(t *testing.T) {
 	}
 }
 
-// The routes agents reach call only the store operations that authenticate
-// by proof or session token: never one that trusts a caller it is given.
+// The routes agents and aimem reach call only the store operations that
+// authenticate by proof, session token or peer credential: never one that
+// trusts a caller it is given.
 func TestExposureGuard(t *testing.T) {
 	allowed := map[string]bool{
 		"AuthenticateIntrospection": true, "Introspect": true,
+		"AuthenticateCoordination": true, "CoordinationFact": true,
 		"IssueAgentChallenge": true, "EnterSession": true, "ResumeSessionWithProof": true,
 		"RefreshHandle": true, "LeaveWithToken": true, "AuthenticateSessionToken": true,
 	}
@@ -628,8 +630,8 @@ func TestRouteInventory(t *testing.T) {
 		}
 	}
 	sort.Strings(got)
-	want := []string{"GET /healthz", "GET /v1/crew/session", "POST /v1/crew/challenges", "POST /v1/crew/introspect",
-		"POST /v1/crew/session/leave", "POST /v1/crew/token"}
+	want := []string{"GET /healthz", "GET /v1/crew/session", "POST /v1/crew/challenges", "POST /v1/crew/coordination",
+		"POST /v1/crew/introspect", "POST /v1/crew/session/leave", "POST /v1/crew/token"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("routes = %v, want %v", got, want)
 	}

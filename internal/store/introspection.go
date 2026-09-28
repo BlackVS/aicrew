@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -40,6 +42,39 @@ import (
 // ErrUnauthenticated refuses an introspection credential that is unknown,
 // revoked or expired.
 var ErrUnauthenticated = errors.New("peer_unauthenticated")
+
+// OpIntrospection and OpCoordination are the operations an introspection
+// credential may permit: session introspection (identity.v1 §3) and
+// coordination facts (coordination.v1). A credential permits one or both.
+const (
+	OpIntrospection = "crew.introspection"
+	OpCoordination  = "crew.coordination"
+)
+
+// peerOperations is every operation, in their stored order.
+var peerOperations = []string{OpCoordination, OpIntrospection}
+
+// peerOps returns the operations to record for a new credential: both by
+// default, since aimem uses one credential for both routes.
+func peerOps(ops []string) ([]string, error) {
+	if len(ops) == 0 {
+		return slices.Clone(peerOperations), nil
+	}
+	want := map[string]bool{}
+	for _, op := range ops {
+		if !slices.Contains(peerOperations, op) {
+			return nil, fmt.Errorf("%w: unknown operation %q; use %s", ErrInvalid, op, strings.Join(peerOperations, " or "))
+		}
+		want[op] = true
+	}
+	var out []string
+	for _, op := range peerOperations {
+		if want[op] {
+			out = append(out, op)
+		}
+	}
+	return out, nil
+}
 
 // ErrCredentialLimit refuses a third active introspection credential for a
 // hub.
@@ -80,6 +115,13 @@ type IntrospectionCredential struct {
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
 	RevokedAt time.Time `json:"revoked_at,omitzero"`
+	// Operations are the operations the credential permits.
+	Operations []string `json:"operations"`
+}
+
+// Permits reports whether the credential permits the operation.
+func (c IntrospectionCredential) Permits(op string) bool {
+	return slices.Contains(c.Operations, op)
 }
 
 // Active reports whether the credential authenticates at now.
@@ -88,22 +130,24 @@ func (c IntrospectionCredential) Active(now time.Time) bool {
 }
 
 // IssueIntrospectionCredential issues aimem's introspection credential for
-// one hub. The operator only. It returns the metadata and the bearer, which
-// exists nowhere else: a replay of the same key returns the metadata and an
-// empty bearer.
-func (s *Store) IssueIntrospectionCredential(ctx context.Context, c Caller, key, hubID string) (IntrospectionCredential, string, error) {
+// one hub, permitting the given operations (both when none are given). The
+// operator only. It returns the metadata and the bearer, which exists nowhere
+// else: a replay of the same key returns the metadata and an empty bearer.
+func (s *Store) IssueIntrospectionCredential(ctx context.Context, c Caller, key, hubID string, ops ...string) (IntrospectionCredential, string, error) {
 	var out IntrospectionCredential
 	var bearer string
+	permitted, opsErr := peerOps(ops)
 	err := s.run(ctx, c, command{
 		op: opIssueCredential, scope: hubID, key: key, input: struct {
-			HubID string `json:"hub_id"`
-		}{hubID},
+			HubID      string   `json:"hub_id"`
+			Operations []string `json:"operations"`
+		}{hubID, permitted},
 		authorize: requireOperator,
 		validate: func() error {
 			if !peerIDShape.MatchString(hubID) {
 				return fmt.Errorf("%w: hub ID must be 1 to 128 characters from [A-Za-z0-9._:-]", ErrInvalid)
 			}
-			return nil
+			return opsErr
 		},
 		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
 			var active int
@@ -124,10 +168,13 @@ func (s *Store) IssueIntrospectionCredential(ctx context.Context, c Caller, key,
 			if err != nil {
 				return nil, err
 			}
-			cred := IntrospectionCredential{ID: id, HubID: hubID, CreatedAt: now, ExpiresAt: now.Add(CredentialLifetime)}
+			cred := IntrospectionCredential{ID: id, HubID: hubID, CreatedAt: now, ExpiresAt: now.Add(CredentialLifetime),
+				Operations: permitted}
 			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO introspection_credentials (id, hub_id, digest, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-				cred.ID, hubID, secretDigest(secret), formatTime(cred.CreatedAt), formatTime(cred.ExpiresAt)); err != nil {
+				`INSERT INTO introspection_credentials (id, hub_id, digest, created_at, expires_at, operations)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+				cred.ID, hubID, secretDigest(secret), formatTime(cred.CreatedAt), formatTime(cred.ExpiresAt),
+				strings.Join(permitted, ",")); err != nil {
 				return nil, fmt.Errorf("insert credential: %w", err)
 			}
 			bearer = secret
@@ -170,8 +217,7 @@ func (s *Store) ListIntrospectionCredentials(ctx context.Context, c Caller) ([]I
 	var out []IntrospectionCredential
 	err := s.snapshot(ctx, func(q querier) error {
 		rows, err := q.QueryContext(ctx,
-			`SELECT id, hub_id, created_at, expires_at, revoked_at FROM introspection_credentials
-			 ORDER BY created_at DESC, id DESC`)
+			`SELECT `+credentialColumns+` FROM introspection_credentials ORDER BY created_at DESC, id DESC`)
 		if err != nil {
 			return fmt.Errorf("list credentials: %w", err)
 		}
@@ -190,15 +236,27 @@ func (s *Store) ListIntrospectionCredentials(ctx context.Context, c Caller) ([]I
 }
 
 // AuthenticateIntrospection returns the hub an introspection bearer is
-// bound to, or ErrUnauthenticated.
+// bound to, or ErrUnauthenticated, including for a credential that does not
+// permit introspection.
 func (s *Store) AuthenticateIntrospection(ctx context.Context, bearer string) (string, error) {
+	return s.authenticatePeer(ctx, bearer, OpIntrospection)
+}
+
+// AuthenticateCoordination returns the hub a bearer is bound to if it
+// permits coordination facts, or ErrUnauthenticated: a credential without the
+// operation answers exactly like an unknown one.
+func (s *Store) AuthenticateCoordination(ctx context.Context, bearer string) (string, error) {
+	return s.authenticatePeer(ctx, bearer, OpCoordination)
+}
+
+func (s *Store) authenticatePeer(ctx context.Context, bearer, op string) (string, error) {
 	if !credentialShape.MatchString(bearer) {
 		return "", ErrUnauthenticated
 	}
 	var cred IntrospectionCredential
 	err := s.snapshot(ctx, func(q querier) error {
 		row := q.QueryRowContext(ctx,
-			`SELECT id, hub_id, created_at, expires_at, revoked_at FROM introspection_credentials WHERE digest = ?`,
+			`SELECT `+credentialColumns+` FROM introspection_credentials WHERE digest = ?`,
 			secretDigest(bearer))
 		var err error
 		cred, err = scanCredential(row)
@@ -210,7 +268,7 @@ func (s *Store) AuthenticateIntrospection(ctx context.Context, bearer string) (s
 	if err != nil {
 		return "", err
 	}
-	if !cred.Active(s.now()) {
+	if !cred.Active(s.now()) || !cred.Permits(op) {
 		return "", ErrUnauthenticated
 	}
 	return cred.HubID, nil
@@ -218,12 +276,14 @@ func (s *Store) AuthenticateIntrospection(ctx context.Context, bearer string) (s
 
 type rowScanner interface{ Scan(dest ...any) error }
 
+const credentialColumns = `id, hub_id, created_at, expires_at, revoked_at, operations`
+
 func scanCredential(r rowScanner) (IntrospectionCredential, error) {
 	var (
-		c                         IntrospectionCredential
-		created, expires, revoked string
+		c                              IntrospectionCredential
+		created, expires, revoked, ops string
 	)
-	if err := r.Scan(&c.ID, &c.HubID, &created, &expires, &revoked); err != nil {
+	if err := r.Scan(&c.ID, &c.HubID, &created, &expires, &revoked, &ops); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return c, fmt.Errorf("introspection credential: %w", ErrNotFound)
 		}
@@ -241,12 +301,13 @@ func scanCredential(r rowScanner) (IntrospectionCredential, error) {
 			return c, err
 		}
 	}
+	c.Operations = strings.Split(ops, ",")
 	return c, nil
 }
 
 func getCredential(ctx context.Context, q querier, id string) (IntrospectionCredential, error) {
 	return scanCredential(q.QueryRowContext(ctx,
-		`SELECT id, hub_id, created_at, expires_at, revoked_at FROM introspection_credentials WHERE id = ?`, id))
+		`SELECT `+credentialColumns+` FROM introspection_credentials WHERE id = ?`, id))
 }
 
 // SessionHandle is an issued handle's metadata; never the handle.

@@ -147,7 +147,75 @@ registered endpoint is the full https URL of this route.
   Introspection reads one snapshot and changes nothing: it never ends a
   session, frees capacity or stands in for a stop or a leave.
 
-## Receipt redemption (aicrew → aimem)
+## Coordination facts (aimem → aicrew)
+
+Before it commits a coordinated reservation step, aimem asks aicrew, online,
+whether the step's coordination proof names a fact that is still true
+(coordination.v1 in aimem's `DESIGN-AIFORGE-COORDINATION-WIRE.md`, frozen at
+aimem `8ac4ef1`). Aicrew serves that question at
+`POST /v1/crew/coordination`, on the same origin as introspection.
+
+- **Proofs.**
+  - Each step that needs a fact gets an `acp1_` proof (256 random bits). It
+    is issued in the transaction that starts the step's intent, and it is
+    bound to that one intent: the operation, the acting session and
+    generation, the attempt and the request key. The six steps are the offer
+    claim, the transfer on accept, the release of an offer never accepted,
+    the independent claim, the finalize and the stop release.
+  - A holder's `update` needs no proof.
+  - A proof lives at most 15 minutes and ends when its step settles.
+  - Aicrew stores only a proof's digest.
+  - The proof travels only in the step's `coordination_proof` and in
+    aimem's question. It never appears in an answer, a receipt, a log or a
+    refusal.
+- **Credential.**
+  - Aimem uses its introspection credential. An introspection credential
+    permits `crew.introspection`, `crew.coordination`, or both.
+  - A credential without `crew.coordination` gets `401
+    peer_unauthenticated` here, exactly like an unknown one.
+  - A credential issued before coordination existed permits introspection
+    only. Rotating it gives aimem one that permits both, which is the
+    default for a new issue.
+- **Request.**
+  - The body is `{version, hub_id, nonce, proof}`, at most 4 KiB.
+  - The version must be `1`, both in `X-Aimem-Coordination-Version` and in
+    the body. Otherwise the answer is `400 unsupported_version`, and nothing
+    is evaluated.
+  - A credential bound to another hub gets `403 peer_forbidden`, and any
+    other malformed request gets `400 invalid_request`. Refusals use the
+    context contract's envelope.
+- **Answer.**
+  - An active proof gets `200` with `{nonce, active: true, service_id,
+    hub_id, fact}`.
+  - `fact` carries the kind, the operation and the task, the `k1_` digest of
+    the step's request key, and the acting member (user, agent, team, role,
+    session and generation). It also carries the references the kind
+    requires: the offer and attempt references, the intended worker of an
+    offer, and the process pin. `expires_at` is truncated to the second.
+  - Every value comes from one snapshot of aicrew's current state, never
+    from the proof alone.
+  - Every other state gets `200` with `{nonce, active: false}`, with no
+    reason. That includes an unknown, expired, ended or superseded proof, a
+    session that ended or moved to another generation, a changed role or
+    membership, a moved coordinator generation, a withdrawn acceptance, and
+    another hub.
+  - A step reconciling after a lost reply still answers, because the member
+    may retry the same key while the proof lives.
+- **Process pin.**
+  - `offer`, `accepted_attempt` and `independent_claim`, the steps that
+    start work, carry `process: {repo, commit, manifest}`. It is aicrew's
+    recorded pin, copied verbatim with no normalization, because aimem
+    compares it byte for byte with the project's current selection before
+    it commits, and refuses a mismatch with `process_mismatch`. No other
+    kind carries a pin.
+  - Aicrew records a pin only in the hub selection's forms:
+    - a Git URL of at most 512 bytes, starting with `https://`, `ssh://` or
+      `git@`, with no whitespace, quote or leading `-`;
+    - the full 40-character lowercase commit;
+    - a clean relative manifest path of at most 256 bytes that stays inside
+      the repository, and is not `..`.
+  - A pin recorded in any other form answers inactive, never malformed.
+
 
 An identity proof completes only when aimem vouches for the receipt the
 client obtained. Aicrew redeems it with aimem's
@@ -431,8 +499,9 @@ retries with a fresh key. While the receipt is unresolved, the attempt is
 for the pending request and the expected hold, or a refusal that is not
 retryable, is a known outcome. A transport error, a timeout, a retryable
 refusal and a receipt that does not match the request are all unknown: the
-attempt keeps the worker's capacity and reconciles. A reservation
-`coordination_proof` is an opaque reference that grants nothing in aicrew.
+attempt keeps the worker's capacity and reconciles. A reservation's
+`coordination_proof` grants nothing by itself: aimem asks aicrew about it
+before committing ("Coordination facts").
 When the two stores disagree, aicrew conforms to aimem:
 
 | Aicrew shows | Aimem shows | Resolution |
@@ -588,7 +657,9 @@ the offer is withdrawn and re-issued under the new pin; a recorded pin is
 never updated. A matching instruction digest shows the worker has the
 recorded instructions, not that it read or understood them. The pin comes
 from a trusted reader of the project's selection, never from what a caller
-sends. Every audit record carries the attempt's pin.
+sends. Every audit record carries the attempt's pin. The steps that start
+work carry the pin in their coordination fact, so aimem confirms it is still
+the project's selection when the hold is taken ("Coordination facts").
 
 ## Inbox, receipts and audit
 

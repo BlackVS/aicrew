@@ -65,8 +65,9 @@ type Fact struct {
 	OfferRef         string
 	AttemptRef       string
 	IntendedWorker   *FactWorker
-	// Process is the pin aicrew recorded for an offer or an acceptance, for
-	// aimem to check against the project's current selection (D-b1(a)).
+	// Process is the pin aicrew recorded for a step that starts work (an
+	// offer, an acceptance or an independent claim), for aimem to check
+	// against the project's current selection (coordination.v1 C5-w2).
 	Process   *TrustedProcess
 	ExpiresAt time.Time
 }
@@ -255,8 +256,13 @@ func (f *Fact) fill(ctx context.Context, q querier, a Attempt, hubID string) (bo
 			m.SessionID != a.WorkerSessionID || m.Generation != a.WorkerGeneration {
 			return false, nil
 		}
-		f.AttemptRef = a.attemptRef()
+		f.AttemptRef, f.Process = a.attemptRef(), &a.Process
 	default:
+		return false, nil
+	}
+	// A pinned fact carries only a pin in the hub selection's forms; one
+	// recorded otherwise answers inactive rather than reach aimem malformed.
+	if f.Process != nil && !ValidProcessIdentity(f.Process.Identity) {
 		return false, nil
 	}
 	return true, nil

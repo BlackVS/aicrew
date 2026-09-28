@@ -1,0 +1,1950 @@
+{
+  "version": 1,
+  "contract": "coordination.v1",
+  "status": "contract",
+  "note": "Design fixture for task C5w. Every value is synthetic. The sample secrets exist only so the fake-consumer test can prove they appear only where the contract permits.",
+  "sample_secrets": {
+    "individual_bearer": "sample-individual-bearer-not-real",
+    "aimem_handle": "acs1_SAMPLEhandleSAMPLEhandleSAMPLEhandleSAMPLEX",
+    "coordination_credential": "sample-aimem-introspection-credential-not-real",
+    "read_credential": "aimem_peer_0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    "aicrew_session_token": "sample-aicrew-session-token-not-real",
+    "proof_offer": "acp1_SAMPLEofferSAMPLEofferSAMPLEofferSAMPLEoffe",
+    "proof_accepted_attempt": "acp1_SAMPLEacceptSAMPLEacceptSAMPLEacceptSAMPLEa",
+    "proof_never_accepted": "acp1_SAMPLEneverSAMPLEneverSAMPLEneverSAMPLEneve",
+    "proof_stopped": "acp1_SAMPLEstoppedSAMPLEstoppedSAMPLEstoppedSAMP",
+    "proof_accepted_for_finalization": "acp1_SAMPLEfinalSAMPLEfinalSAMPLEfinalSAMPLEfina",
+    "proof_independent_claim": "acp1_SAMPLEindepSAMPLEindepSAMPLEindepSAMPLEinde"
+  },
+  "bounds": {
+    "proof_max_seconds": 900,
+    "coordination_attempts": 1,
+    "coordination_budget_ms": 2000,
+    "coordination_max_response_bytes": 16384,
+    "answer_max_age_at_commit_seconds": 5,
+    "read_none_final_after_seconds": 10,
+    "read_requests_per_credential_per_minute": 60,
+    "read_credential_max_days": 366,
+    "read_credentials_active_per_peer": 2
+  },
+  "digests": {
+    "request_key": {
+      "scheme": "k1_ + unpadded base64url(SHA-256(UTF-8 request key))",
+      "cases": [
+        {
+          "raw": "offer:attempt-example-7:claim",
+          "digest": "k1_aAVM8iXGC4dl2JY8N4wNh1AjLUhdr4mZD3ok9q9QWfE"
+        },
+        {
+          "raw": "accept:attempt-example-7:transfer",
+          "digest": "k1_vCoj2A4FJgrYHDOgZK_zKDJejJRbKHUu0UcwxjdELLI"
+        },
+        {
+          "raw": "release:offer-example-7:never-accepted",
+          "digest": "k1_tU7rkDfF7uAe8tp2WTzGa8vrBHoj0BDYrh7McAL-lP4"
+        },
+        {
+          "raw": "stop:attempt-example-8:release",
+          "digest": "k1_oZ3T5EoxFHAk-wZW2D6d4KaJSAWGyfeIDjAjonMoI0Y"
+        },
+        {
+          "raw": "finalize:attempt-example-8:done",
+          "digest": "k1_UIA1CMggikrw5bFSOAyoRKsaCY-hfFPwSsmhsRAnb4I"
+        },
+        {
+          "raw": "claim:attempt-example-9:independent",
+          "digest": "k1_WHocELQa8FAwpb8aGk3O6-8JyhTzZqxzmED_-rZlKSM"
+        }
+      ]
+    },
+    "proof": {
+      "scheme": "p1_ + unpadded base64url(SHA-256(proof))",
+      "cases": [
+        {
+          "proof": "{proof_offer}",
+          "digest": "p1_VrTtQF4u9wOUqP4EMe6sh162MMlWZ61LYOnoJgdepmA"
+        },
+        {
+          "proof": "{proof_accepted_attempt}",
+          "digest": "p1_nzF7rp0dEZsGKnCn70VnvSoxlGXk0MAFo1SrGi89VGU"
+        },
+        {
+          "proof": "{proof_never_accepted}",
+          "digest": "p1_whgj7igp6SK8O8w73RjeFxY8vsUXM4xHI4maBvSLhBM"
+        },
+        {
+          "proof": "{proof_stopped}",
+          "digest": "p1_OCKGJNkwOChT43DiZiSJRPqTqaCJKZ-vPRCvjx3Zo2g"
+        },
+        {
+          "proof": "{proof_accepted_for_finalization}",
+          "digest": "p1_1HMf4wdJXvPRon4VpF3QYl8x4FOtKFJmpAqONOwXBSA"
+        },
+        {
+          "proof": "{proof_independent_claim}",
+          "digest": "p1_sUvSnuUzk-y3DCJSW8uVzRtXPMiTD-7Dw3o2rU2LAdc"
+        }
+      ]
+    }
+  },
+  "coordination_version": {
+    "rule": "header X-Aimem-Coordination-Version and body version are both required and must both be 1",
+    "cases": [
+      {
+        "case": "both_present_equal",
+        "header": "1",
+        "body": 1,
+        "accepted": true
+      },
+      {
+        "case": "header_missing",
+        "header": null,
+        "body": 1,
+        "accepted": false
+      },
+      {
+        "case": "body_missing",
+        "header": "1",
+        "body": null,
+        "accepted": false
+      },
+      {
+        "case": "header_body_conflict",
+        "header": "1",
+        "body": 2,
+        "accepted": false
+      },
+      {
+        "case": "both_unsupported",
+        "header": "2",
+        "body": 2,
+        "accepted": false
+      }
+    ],
+    "rejection": {
+      "aicrew_status": 400,
+      "aicrew_code": "unsupported_version",
+      "evaluated": false,
+      "aimem_outcome": "context_unavailable",
+      "applied": false
+    }
+  },
+  "response_size": {
+    "cases": [
+      {
+        "case": "at_ceiling",
+        "body_bytes": 16384,
+        "accepted": true
+      },
+      {
+        "case": "one_byte_over",
+        "body_bytes": 16385,
+        "accepted": false
+      }
+    ],
+    "rejection": {
+      "aimem_outcome": "context_unavailable",
+      "parsed": false,
+      "applied": false
+    }
+  },
+  "fact_kinds": {
+    "offer": {
+      "operation": "claim",
+      "roles": [
+        "coordinator"
+      ],
+      "requires": [
+        "offer_ref",
+        "intended_worker",
+        "process"
+      ]
+    },
+    "accepted_attempt": {
+      "operation": "transfer",
+      "roles": [
+        "worker"
+      ],
+      "requires": [
+        "offer_ref",
+        "attempt_ref",
+        "process"
+      ]
+    },
+    "never_accepted": {
+      "operation": "release",
+      "roles": [
+        "coordinator"
+      ],
+      "requires": [
+        "offer_ref"
+      ]
+    },
+    "stopped": {
+      "operation": "release",
+      "roles": [
+        "worker",
+        "independent"
+      ],
+      "requires": [
+        "attempt_ref"
+      ]
+    },
+    "accepted_for_finalization": {
+      "operation": "finalize",
+      "roles": [
+        "worker",
+        "independent",
+        "coordinator"
+      ],
+      "requires": [
+        "attempt_ref"
+      ]
+    },
+    "independent_claim": {
+      "operation": "claim",
+      "roles": [
+        "independent"
+      ],
+      "requires": [
+        "attempt_ref",
+        "process"
+      ]
+    }
+  },
+  "no_fact_operations": [
+    "update"
+  ],
+  "begin_exchange": {
+    "owner": "aicrew",
+    "caller": "member_client",
+    "http": {
+      "method": "POST",
+      "path": "aicrew session API (owned by aicrew)",
+      "headers": {
+        "Authorization": "Bearer {aicrew_session_token}"
+      }
+    },
+    "response": {
+      "status": 200,
+      "body": {
+        "operation": "transfer",
+        "request_key": "accept:attempt-example-7:transfer",
+        "expected_revision": 3,
+        "reservation_id": "01a0e39c-0000-7000-8000-00000000c510",
+        "fence": "1",
+        "holder": {
+          "mode": "external",
+          "work_ref": "attempt-example-7"
+        },
+        "coordination_proof": "{proof_accepted_attempt}"
+      }
+    }
+  },
+  "exchanges": [
+    {
+      "case": "offer",
+      "http": {
+        "method": "POST",
+        "path": "/v1/crew/coordination",
+        "owner": "aicrew",
+        "headers": {
+          "Authorization": "Bearer {coordination_credential}",
+          "X-Aimem-Coordination-Version": "1"
+        }
+      },
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a60",
+        "proof": "{proof_offer}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a60",
+          "active": true,
+          "service_id": "aicrew-example",
+          "hub_id": "hub-example",
+          "fact": {
+            "kind": "offer",
+            "operation": "claim",
+            "task_id": "01a0e39c-0000-7000-8000-00000000c501",
+            "request_key_digest": "k1_aAVM8iXGC4dl2JY8N4wNh1AjLUhdr4mZD3ok9q9QWfE",
+            "member": {
+              "user_id": "user-coordinator",
+              "agent_id": "agent-coordinator",
+              "team_id": "team-1",
+              "role": "coordinator",
+              "session_id": "sess-coord-1",
+              "generation": "3"
+            },
+            "offer_ref": "offer-example-7",
+            "intended_worker": {
+              "user_id": "user-worker",
+              "agent_id": "agent-worker"
+            },
+            "process": {
+              "repo": "https://git.example/team/process.git",
+              "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+              "manifest": "process/manifest.json"
+            },
+            "expires_at": "2026-09-27T18:15:00Z"
+          }
+        }
+      },
+      "member_request": {
+        "http": {
+          "method": "POST",
+          "path": "/v1/projects/project-example/tasks/01a0e39c-0000-7000-8000-00000000c501/reservation/claim",
+          "headers": {
+            "Authorization": "Bearer {individual_bearer}",
+            "X-Aimem-Team-Context": "{aimem_handle}",
+            "X-Aimem-Reservation-Version": "1",
+            "Idempotency-Key": "offer:attempt-example-7:claim"
+          }
+        },
+        "verified_context": {
+          "user_id": "user-coordinator",
+          "agent_id": "agent-coordinator",
+          "team_id": "team-1",
+          "role": "coordinator",
+          "session_id": "sess-coord-1",
+          "generation": "3"
+        },
+        "coordination_proof": "{proof_offer}",
+        "checks": {
+          "operation": "claim",
+          "holder": {
+            "mode": "external",
+            "work_ref": "offer-example-7"
+          },
+          "current_process": {
+            "repo": "https://git.example/team/process.git",
+            "ref": "main",
+            "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+            "manifest": "process/manifest.json",
+            "selected_at": "2026-09-28T06:00:00Z",
+            "selected_by": "user-lead"
+          }
+        }
+      }
+    },
+    {
+      "case": "accepted_attempt",
+      "http": {
+        "method": "POST",
+        "path": "/v1/crew/coordination",
+        "owner": "aicrew",
+        "headers": {
+          "Authorization": "Bearer {coordination_credential}",
+          "X-Aimem-Coordination-Version": "1"
+        }
+      },
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a61",
+        "proof": "{proof_accepted_attempt}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a61",
+          "active": true,
+          "service_id": "aicrew-example",
+          "hub_id": "hub-example",
+          "fact": {
+            "kind": "accepted_attempt",
+            "operation": "transfer",
+            "task_id": "01a0e39c-0000-7000-8000-00000000c501",
+            "request_key_digest": "k1_vCoj2A4FJgrYHDOgZK_zKDJejJRbKHUu0UcwxjdELLI",
+            "member": {
+              "user_id": "user-worker",
+              "agent_id": "agent-worker",
+              "team_id": "team-1",
+              "role": "worker",
+              "session_id": "sess-worker-1",
+              "generation": "5"
+            },
+            "offer_ref": "offer-example-7",
+            "attempt_ref": "attempt-example-7",
+            "process": {
+              "repo": "https://git.example/team/process.git",
+              "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+              "manifest": "process/manifest.json"
+            },
+            "expires_at": "2026-09-27T18:15:00Z"
+          }
+        }
+      },
+      "member_request": {
+        "http": {
+          "method": "POST",
+          "path": "/v1/projects/project-example/tasks/01a0e39c-0000-7000-8000-00000000c501/reservation/transfer",
+          "headers": {
+            "Authorization": "Bearer {individual_bearer}",
+            "X-Aimem-Team-Context": "{aimem_handle}",
+            "X-Aimem-Reservation-Version": "1",
+            "Idempotency-Key": "accept:attempt-example-7:transfer"
+          }
+        },
+        "verified_context": {
+          "user_id": "user-worker",
+          "agent_id": "agent-worker",
+          "team_id": "team-1",
+          "role": "worker",
+          "session_id": "sess-worker-1",
+          "generation": "5"
+        },
+        "coordination_proof": "{proof_accepted_attempt}",
+        "checks": {
+          "operation": "transfer",
+          "current_work_ref": "offer-example-7",
+          "holder": {
+            "mode": "external",
+            "work_ref": "attempt-example-7"
+          },
+          "current_process": {
+            "repo": "https://git.example/team/process.git",
+            "ref": "main",
+            "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+            "manifest": "process/manifest.json",
+            "selected_at": "2026-09-28T06:00:00Z",
+            "selected_by": "user-lead"
+          }
+        }
+      }
+    },
+    {
+      "case": "never_accepted",
+      "http": {
+        "method": "POST",
+        "path": "/v1/crew/coordination",
+        "owner": "aicrew",
+        "headers": {
+          "Authorization": "Bearer {coordination_credential}",
+          "X-Aimem-Coordination-Version": "1"
+        }
+      },
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a62",
+        "proof": "{proof_never_accepted}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a62",
+          "active": true,
+          "service_id": "aicrew-example",
+          "hub_id": "hub-example",
+          "fact": {
+            "kind": "never_accepted",
+            "operation": "release",
+            "task_id": "01a0e39c-0000-7000-8000-00000000c501",
+            "request_key_digest": "k1_tU7rkDfF7uAe8tp2WTzGa8vrBHoj0BDYrh7McAL-lP4",
+            "member": {
+              "user_id": "user-coordinator",
+              "agent_id": "agent-coordinator",
+              "team_id": "team-1",
+              "role": "coordinator",
+              "session_id": "sess-coord-1",
+              "generation": "3"
+            },
+            "offer_ref": "offer-example-7",
+            "expires_at": "2026-09-27T18:15:00Z"
+          }
+        }
+      },
+      "member_request": {
+        "http": {
+          "method": "POST",
+          "path": "/v1/projects/project-example/tasks/01a0e39c-0000-7000-8000-00000000c501/reservation/release",
+          "headers": {
+            "Authorization": "Bearer {individual_bearer}",
+            "X-Aimem-Team-Context": "{aimem_handle}",
+            "X-Aimem-Reservation-Version": "1",
+            "Idempotency-Key": "release:offer-example-7:never-accepted"
+          }
+        },
+        "verified_context": {
+          "user_id": "user-coordinator",
+          "agent_id": "agent-coordinator",
+          "team_id": "team-1",
+          "role": "coordinator",
+          "session_id": "sess-coord-1",
+          "generation": "3"
+        },
+        "coordination_proof": "{proof_never_accepted}",
+        "checks": {
+          "operation": "release",
+          "current_work_ref": "offer-example-7"
+        }
+      }
+    },
+    {
+      "case": "stopped",
+      "http": {
+        "method": "POST",
+        "path": "/v1/crew/coordination",
+        "owner": "aicrew",
+        "headers": {
+          "Authorization": "Bearer {coordination_credential}",
+          "X-Aimem-Coordination-Version": "1"
+        }
+      },
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a63",
+        "proof": "{proof_stopped}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a63",
+          "active": true,
+          "service_id": "aicrew-example",
+          "hub_id": "hub-example",
+          "fact": {
+            "kind": "stopped",
+            "operation": "release",
+            "task_id": "01a0e39c-0000-7000-8000-00000000c501",
+            "request_key_digest": "k1_oZ3T5EoxFHAk-wZW2D6d4KaJSAWGyfeIDjAjonMoI0Y",
+            "member": {
+              "user_id": "user-worker",
+              "agent_id": "agent-worker",
+              "team_id": "team-1",
+              "role": "worker",
+              "session_id": "sess-worker-1",
+              "generation": "5"
+            },
+            "attempt_ref": "attempt-example-8",
+            "expires_at": "2026-09-27T18:15:00Z"
+          }
+        }
+      },
+      "member_request": {
+        "http": {
+          "method": "POST",
+          "path": "/v1/projects/project-example/tasks/01a0e39c-0000-7000-8000-00000000c501/reservation/release",
+          "headers": {
+            "Authorization": "Bearer {individual_bearer}",
+            "X-Aimem-Team-Context": "{aimem_handle}",
+            "X-Aimem-Reservation-Version": "1",
+            "Idempotency-Key": "stop:attempt-example-8:release"
+          }
+        },
+        "verified_context": {
+          "user_id": "user-worker",
+          "agent_id": "agent-worker",
+          "team_id": "team-1",
+          "role": "worker",
+          "session_id": "sess-worker-1",
+          "generation": "5"
+        },
+        "coordination_proof": "{proof_stopped}",
+        "checks": {
+          "operation": "release",
+          "current_work_ref": "attempt-example-8"
+        }
+      }
+    },
+    {
+      "case": "accepted_for_finalization",
+      "http": {
+        "method": "POST",
+        "path": "/v1/crew/coordination",
+        "owner": "aicrew",
+        "headers": {
+          "Authorization": "Bearer {coordination_credential}",
+          "X-Aimem-Coordination-Version": "1"
+        }
+      },
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a64",
+        "proof": "{proof_accepted_for_finalization}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a64",
+          "active": true,
+          "service_id": "aicrew-example",
+          "hub_id": "hub-example",
+          "fact": {
+            "kind": "accepted_for_finalization",
+            "operation": "finalize",
+            "task_id": "01a0e39c-0000-7000-8000-00000000c501",
+            "request_key_digest": "k1_UIA1CMggikrw5bFSOAyoRKsaCY-hfFPwSsmhsRAnb4I",
+            "member": {
+              "user_id": "user-coordinator",
+              "agent_id": "agent-coordinator",
+              "team_id": "team-1",
+              "role": "coordinator",
+              "session_id": "sess-coord-1",
+              "generation": "3"
+            },
+            "attempt_ref": "attempt-example-8",
+            "expires_at": "2026-09-27T18:15:00Z"
+          }
+        }
+      },
+      "member_request": {
+        "http": {
+          "method": "POST",
+          "path": "/v1/projects/project-example/tasks/01a0e39c-0000-7000-8000-00000000c501/reservation/finalize",
+          "headers": {
+            "Authorization": "Bearer {individual_bearer}",
+            "X-Aimem-Team-Context": "{aimem_handle}",
+            "X-Aimem-Reservation-Version": "1",
+            "Idempotency-Key": "finalize:attempt-example-8:done"
+          }
+        },
+        "verified_context": {
+          "user_id": "user-coordinator",
+          "agent_id": "agent-coordinator",
+          "team_id": "team-1",
+          "role": "coordinator",
+          "session_id": "sess-coord-1",
+          "generation": "3"
+        },
+        "coordination_proof": "{proof_accepted_for_finalization}",
+        "checks": {
+          "operation": "finalize",
+          "current_work_ref": "attempt-example-8",
+          "terminal_evidence": true
+        }
+      }
+    },
+    {
+      "case": "independent_claim",
+      "http": {
+        "method": "POST",
+        "path": "/v1/crew/coordination",
+        "owner": "aicrew",
+        "headers": {
+          "Authorization": "Bearer {coordination_credential}",
+          "X-Aimem-Coordination-Version": "1"
+        }
+      },
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a65",
+        "proof": "{proof_independent_claim}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-7f3c9a1e5b2d4c6f8a0b1c2d3e4f5a65",
+          "active": true,
+          "service_id": "aicrew-example",
+          "hub_id": "hub-example",
+          "fact": {
+            "kind": "independent_claim",
+            "operation": "claim",
+            "task_id": "01a0e39c-0000-7000-8000-00000000c501",
+            "request_key_digest": "k1_WHocELQa8FAwpb8aGk3O6-8JyhTzZqxzmED_-rZlKSM",
+            "member": {
+              "user_id": "user-independent",
+              "agent_id": "agent-independent",
+              "team_id": "team-1",
+              "role": "independent",
+              "session_id": "sess-indep-1",
+              "generation": "2"
+            },
+            "attempt_ref": "attempt-example-9",
+            "process": {
+              "repo": "https://git.example/team/process.git",
+              "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+              "manifest": "process/manifest.json"
+            },
+            "expires_at": "2026-09-27T18:15:00Z"
+          }
+        }
+      },
+      "member_request": {
+        "http": {
+          "method": "POST",
+          "path": "/v1/projects/project-example/tasks/01a0e39c-0000-7000-8000-00000000c501/reservation/claim",
+          "headers": {
+            "Authorization": "Bearer {individual_bearer}",
+            "X-Aimem-Team-Context": "{aimem_handle}",
+            "X-Aimem-Reservation-Version": "1",
+            "Idempotency-Key": "claim:attempt-example-9:independent"
+          }
+        },
+        "verified_context": {
+          "user_id": "user-independent",
+          "agent_id": "agent-independent",
+          "team_id": "team-1",
+          "role": "independent",
+          "session_id": "sess-indep-1",
+          "generation": "2"
+        },
+        "coordination_proof": "{proof_independent_claim}",
+        "checks": {
+          "operation": "claim",
+          "holder": {
+            "mode": "external",
+            "work_ref": "attempt-example-9"
+          },
+          "current_process": {
+            "repo": "https://git.example/team/process.git",
+            "ref": "main",
+            "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+            "manifest": "process/manifest.json",
+            "selected_at": "2026-09-28T06:00:00Z",
+            "selected_by": "user-lead"
+          }
+        }
+      }
+    }
+  ],
+  "inactive": [
+    {
+      "state": "unknown",
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f800",
+        "proof": "{proof_offer}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f800",
+          "active": false
+        }
+      }
+    },
+    {
+      "state": "expired",
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f801",
+        "proof": "{proof_offer}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f801",
+          "active": false
+        }
+      }
+    },
+    {
+      "state": "settled",
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f802",
+        "proof": "{proof_offer}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f802",
+          "active": false
+        }
+      }
+    },
+    {
+      "state": "voided_intent",
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f803",
+        "proof": "{proof_offer}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f803",
+          "active": false
+        }
+      }
+    },
+    {
+      "state": "withdrawn_offer",
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f804",
+        "proof": "{proof_offer}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f804",
+          "active": false
+        }
+      }
+    },
+    {
+      "state": "fenced_generation",
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f805",
+        "proof": "{proof_offer}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f805",
+          "active": false
+        }
+      }
+    },
+    {
+      "state": "role_changed",
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f806",
+        "proof": "{proof_offer}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f806",
+          "active": false
+        }
+      }
+    },
+    {
+      "state": "acceptance_voided_by_stop",
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f807",
+        "proof": "{proof_offer}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f807",
+          "active": false
+        }
+      }
+    },
+    {
+      "state": "other_hub",
+      "request": {
+        "version": 1,
+        "hub_id": "hub-example",
+        "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f808",
+        "proof": "{proof_offer}"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nonce": "n-1a2b3c4d5e6f708192a3b4c5d6e7f808",
+          "active": false
+        }
+      }
+    }
+  ],
+  "acceptance": [
+    {
+      "case": "inactive_reply",
+      "outcome": "coordination_rejected"
+    },
+    {
+      "case": "fact_expired_by_hub_clock",
+      "outcome": "coordination_rejected"
+    },
+    {
+      "case": "operation_differs",
+      "outcome": "coordination_rejected"
+    },
+    {
+      "case": "kind_not_allowed_for_operation",
+      "outcome": "coordination_rejected"
+    },
+    {
+      "case": "other_task",
+      "outcome": "coordination_rejected"
+    },
+    {
+      "case": "request_key_digest_differs",
+      "outcome": "coordination_rejected"
+    },
+    {
+      "case": "member_session_differs",
+      "outcome": "coordination_rejected"
+    },
+    {
+      "case": "member_generation_differs",
+      "outcome": "coordination_rejected"
+    },
+    {
+      "case": "member_role_differs",
+      "outcome": "coordination_rejected"
+    },
+    {
+      "case": "reference_differs_from_hold_or_request",
+      "outcome": "coordination_rejected"
+    },
+    {
+      "case": "transfer_by_another_user_than_intended",
+      "outcome": "coordination_rejected"
+    },
+    {
+      "case": "transfer_by_another_agent_of_the_intended_user",
+      "outcome": "coordination_rejected",
+      "offer_intended_worker": {
+        "user_id": "user-worker",
+        "agent_id": "agent-worker"
+      },
+      "transfer_member": {
+        "user_id": "user-worker",
+        "agent_id": "agent-worker-2"
+      }
+    },
+    {
+      "case": "unreachable_or_timeout",
+      "outcome": "context_unavailable"
+    },
+    {
+      "case": "tls_identity_mismatch",
+      "outcome": "context_unavailable"
+    },
+    {
+      "case": "nonce_mismatch",
+      "outcome": "context_unavailable"
+    },
+    {
+      "case": "other_service_or_hub",
+      "outcome": "context_unavailable"
+    },
+    {
+      "case": "malformed_or_unknown_field",
+      "outcome": "context_unavailable"
+    },
+    {
+      "case": "reply_over_size_ceiling",
+      "outcome": "context_unavailable"
+    },
+    {
+      "case": "unsupported_version_refusal",
+      "outcome": "context_unavailable"
+    },
+    {
+      "case": "process_missing_on_a_pinned_kind",
+      "outcome": "context_unavailable"
+    },
+    {
+      "case": "process_malformed",
+      "outcome": "context_unavailable"
+    },
+    {
+      "case": "process_with_another_field",
+      "outcome": "context_unavailable"
+    },
+    {
+      "case": "process_on_another_kind",
+      "outcome": "context_unavailable"
+    }
+  ],
+  "replay": [
+    {
+      "case": "identical_replay_after_proof_settled",
+      "receipt_state": "committed",
+      "coordination_calls": 0,
+      "rechecks": [
+        "token",
+        "grant",
+        "profile",
+        "acting_member"
+      ],
+      "result": "recorded_outcome",
+      "replayed": true
+    },
+    {
+      "case": "coordinator_finalize_replay",
+      "receipt_state": "committed",
+      "coordination_calls": 0,
+      "acting_member": {
+        "role": "coordinator",
+        "session_id": "sess-coord-1"
+      },
+      "caller_session_id": "sess-coord-1",
+      "rechecks": [
+        "token",
+        "grant",
+        "profile",
+        "acting_member"
+      ],
+      "result": "recorded_outcome",
+      "replayed": true
+    },
+    {
+      "case": "coordinator_finalize_replay_other_session",
+      "receipt_state": "committed",
+      "coordination_calls": 0,
+      "acting_member": {
+        "role": "coordinator",
+        "session_id": "sess-coord-1"
+      },
+      "caller_session_id": "sess-coord-2",
+      "rechecks": [
+        "token",
+        "grant",
+        "profile",
+        "acting_member"
+      ],
+      "result": "reservation_conflict",
+      "replayed": false
+    },
+    {
+      "case": "retry_after_not_committed",
+      "receipt_state": "not_committed",
+      "coordination_calls": 1,
+      "rechecks": [
+        "token",
+        "grant",
+        "profile",
+        "coordination_fact"
+      ],
+      "result": "new_attempt",
+      "replayed": false
+    }
+  ],
+  "read_scope": {
+    "credential": {
+      "format": "aimem_peer_ + 64 lowercase hex",
+      "operation": "reservation.read",
+      "digest_only": true,
+      "issued_by": "hub_admin",
+      "audited": true,
+      "max_days": 366,
+      "active_per_peer": 2,
+      "grants_nothing": [
+        "mutation",
+        "task_content",
+        "other_holders",
+        "proof_redemption",
+        "introspection"
+      ]
+    },
+    "exchanges": [
+      {
+        "case": "receipt_committed",
+        "http": {
+          "method": "GET",
+          "path": "/v1/identity/peers/aicrew-example/reservation-receipts/p1_nzF7rp0dEZsGKnCn70VnvSoxlGXk0MAFo1SrGi89VGU",
+          "headers": {
+            "Authorization": "Bearer {read_credential}",
+            "X-Aimem-Reservation-Version": "1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "state": "committed",
+            "receipt": {
+              "id": "receipt-transfer-7",
+              "operation": "transfer",
+              "task_id": "01a0e39c-0000-7000-8000-00000000c501",
+              "request_key_digest": "k1_vCoj2A4FJgrYHDOgZK_zKDJejJRbKHUu0UcwxjdELLI",
+              "reservation_id": "01a0e39c-0000-7000-8000-00000000c510",
+              "fence": "2",
+              "task_revision": 3,
+              "member_user_id": "user-worker",
+              "verified_mode": "team",
+              "committed_at": "2026-09-27T18:01:02Z"
+            }
+          }
+        }
+      },
+      {
+        "case": "receipt_none",
+        "http": {
+          "method": "GET",
+          "path": "/v1/identity/peers/aicrew-example/reservation-receipts/p1_OCKGJNkwOChT43DiZiSJRPqTqaCJKZ-vPRCvjx3Zo2g",
+          "headers": {
+            "Authorization": "Bearer {read_credential}",
+            "X-Aimem-Reservation-Version": "1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "state": "none"
+          }
+        }
+      },
+      {
+        "case": "update_receipt_by_key",
+        "http": {
+          "method": "GET",
+          "path": "/v1/identity/peers/aicrew-example/reservations/01a0e39c-0000-7000-8000-00000000c501/receipts/update/k1_9svAO90Pfq8X2wdd-Oe5mAzACzlWX0HgNAoKiTInH44",
+          "headers": {
+            "Authorization": "Bearer {read_credential}",
+            "X-Aimem-Reservation-Version": "1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "state": "committed",
+            "receipt": {
+              "id": "receipt-update-7",
+              "operation": "update",
+              "task_id": "01a0e39c-0000-7000-8000-00000000c501",
+              "request_key_digest": "k1_9svAO90Pfq8X2wdd-Oe5mAzACzlWX0HgNAoKiTInH44",
+              "reservation_id": "01a0e39c-0000-7000-8000-00000000c510",
+              "fence": "2",
+              "task_revision": 4,
+              "member_user_id": "user-worker",
+              "verified_mode": "team",
+              "committed_at": "2026-09-27T18:05:40Z"
+            }
+          }
+        }
+      },
+      {
+        "case": "hold_under_own_proof",
+        "http": {
+          "method": "GET",
+          "path": "/v1/identity/peers/aicrew-example/reservations/01a0e39c-0000-7000-8000-00000000c501",
+          "headers": {
+            "Authorization": "Bearer {read_credential}",
+            "X-Aimem-Reservation-Version": "1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "state": "held",
+            "reservation_id": "01a0e39c-0000-7000-8000-00000000c510",
+            "fence": "2",
+            "holder_mode": "external",
+            "own_work_ref": "attempt-example-7",
+            "task_revision": 3
+          }
+        }
+      },
+      {
+        "case": "closed_holder_release",
+        "context": {
+          "last_active_fence": "2",
+          "closing_transition": "stop release by the holder"
+        },
+        "http": {
+          "method": "GET",
+          "path": "/v1/identity/peers/aicrew-example/reservations/01a0e39c-0000-7000-8000-00000000c521",
+          "headers": {
+            "Authorization": "Bearer {read_credential}",
+            "X-Aimem-Reservation-Version": "1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "state": "closed",
+            "reservation_id": "01a0e39c-0000-7000-8000-00000000c531",
+            "closing_fence": "3",
+            "closed_by": "holder_release",
+            "closed_at": "2026-09-28T04:10:00Z",
+            "task_revision": 5
+          }
+        }
+      },
+      {
+        "case": "closed_holder_finalize",
+        "context": {
+          "last_active_fence": "3",
+          "closing_transition": "finalize DONE by the reviewing coordinator"
+        },
+        "http": {
+          "method": "GET",
+          "path": "/v1/identity/peers/aicrew-example/reservations/01a0e39c-0000-7000-8000-00000000c522",
+          "headers": {
+            "Authorization": "Bearer {read_credential}",
+            "X-Aimem-Reservation-Version": "1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "state": "closed",
+            "reservation_id": "01a0e39c-0000-7000-8000-00000000c532",
+            "closing_fence": "4",
+            "closed_by": "holder_finalize",
+            "closed_at": "2026-09-28T04:11:00Z",
+            "task_revision": 7
+          }
+        }
+      },
+      {
+        "case": "closed_recovery_release",
+        "context": {
+          "last_active_fence": "2",
+          "closing_transition": "recovery release on an operator attestation",
+          "recovery_admin": "admin-recovery-example",
+          "attestation_id": "ticket-4711",
+          "attestation": "worker machine decommissioned; attempt abandoned"
+        },
+        "http": {
+          "method": "GET",
+          "path": "/v1/identity/peers/aicrew-example/reservations/01a0e39c-0000-7000-8000-00000000c523",
+          "headers": {
+            "Authorization": "Bearer {read_credential}",
+            "X-Aimem-Reservation-Version": "1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "state": "closed",
+            "reservation_id": "01a0e39c-0000-7000-8000-00000000c533",
+            "closing_fence": "3",
+            "closed_by": "recovery_release",
+            "closed_at": "2026-09-28T04:12:00Z",
+            "task_revision": 6
+          }
+        }
+      },
+      {
+        "case": "closed_recovery_cancel",
+        "context": {
+          "last_active_fence": "5",
+          "closing_transition": "recovery finalize CANCELLED on aicrew stop evidence",
+          "recovery_admin": "admin-recovery-example",
+          "reason": "stopped attempt, work abandoned"
+        },
+        "http": {
+          "method": "GET",
+          "path": "/v1/identity/peers/aicrew-example/reservations/01a0e39c-0000-7000-8000-00000000c524",
+          "headers": {
+            "Authorization": "Bearer {read_credential}",
+            "X-Aimem-Reservation-Version": "1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "state": "closed",
+            "reservation_id": "01a0e39c-0000-7000-8000-00000000c534",
+            "closing_fence": "6",
+            "closed_by": "recovery_cancel",
+            "closed_at": "2026-09-28T04:13:00Z",
+            "task_revision": 9
+          }
+        }
+      },
+      {
+        "case": "closed_while_another_holds_the_task",
+        "context": {
+          "last_active_fence": "2",
+          "closing_transition": "recovery release",
+          "recovery_admin": "admin-recovery-example",
+          "current_holder": "user-personal-other",
+          "current_holder_ref": "work-personal-other"
+        },
+        "http": {
+          "method": "GET",
+          "path": "/v1/identity/peers/aicrew-example/reservations/01a0e39c-0000-7000-8000-00000000c525",
+          "headers": {
+            "Authorization": "Bearer {read_credential}",
+            "X-Aimem-Reservation-Version": "1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "state": "closed",
+            "reservation_id": "01a0e39c-0000-7000-8000-00000000c535",
+            "closing_fence": "3",
+            "closed_by": "recovery_release",
+            "closed_at": "2026-09-28T04:14:00Z",
+            "task_revision": 6
+          }
+        }
+      },
+      {
+        "case": "hold_outside_scope",
+        "http": {
+          "method": "GET",
+          "path": "/v1/identity/peers/aicrew-example/reservations/01a0e39c-0000-7000-8000-00000000c599",
+          "headers": {
+            "Authorization": "Bearer {read_credential}",
+            "X-Aimem-Reservation-Version": "1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "state": "none"
+          }
+        }
+      }
+    ],
+    "closure_use": {
+      "rule": "close the attempt only when reservation_id equals the attempt's exactly and closing_fence is greater than the attempt's last confirmed fence",
+      "cases": [
+        {
+          "case": "own_reservation_closed",
+          "attempt": {
+            "reservation_id": "r-7",
+            "fence": "2"
+          },
+          "answer": {
+            "state": "closed",
+            "reservation_id": "r-7",
+            "closing_fence": "3"
+          },
+          "action": "close"
+        },
+        {
+          "case": "other_reservation_closed",
+          "attempt": {
+            "reservation_id": "r-7",
+            "fence": "2"
+          },
+          "answer": {
+            "state": "closed",
+            "reservation_id": "r-8",
+            "closing_fence": "9"
+          },
+          "action": "keep_open"
+        },
+        {
+          "case": "fence_not_advanced",
+          "attempt": {
+            "reservation_id": "r-7",
+            "fence": "3"
+          },
+          "answer": {
+            "state": "closed",
+            "reservation_id": "r-7",
+            "closing_fence": "3"
+          },
+          "action": "keep_open"
+        },
+        {
+          "case": "none_is_not_closure",
+          "attempt": {
+            "reservation_id": "r-7",
+            "fence": "2"
+          },
+          "answer": {
+            "state": "none"
+          },
+          "action": "keep_open"
+        },
+        {
+          "case": "held_is_not_closure",
+          "attempt": {
+            "reservation_id": "r-7",
+            "fence": "2"
+          },
+          "answer": {
+            "state": "held",
+            "reservation_id": "r-7",
+            "fence": "2"
+          },
+          "action": "keep_open"
+        }
+      ]
+    },
+    "none_finality": {
+      "proof_backed": {
+        "rule": "a receipt-by-proof none is final only after aicrew settled or voided the proof's intent and at least read_none_final_after_seconds passed since",
+        "before_final": "wait",
+        "after_final": "not_committed"
+      },
+      "proofless_update": {
+        "rule": "a receipt-by-key none for an update stays unresolved until the hold's fence or revision is observed past the request's and the receipt is read after that, or the same key replays",
+        "delayed_update": {
+          "request": {
+            "operation": "update",
+            "request_key_digest": "k1_ZOJxnDmdAtq9L0Vfm5EBYo1xvD9xsW10vDpa44n6gUk",
+            "reservation_id": "01a0e39c-0000-7000-8000-00000000c510",
+            "fence": "2",
+            "expected_revision": 4
+          },
+          "cases": [
+            {
+              "case": "none_long_after_abandoning",
+              "evidence": null,
+              "receipt": "none",
+              "outcome": "unresolved"
+            },
+            {
+              "case": "fence_moved_then_none",
+              "evidence": {
+                "source": "hold_status",
+                "fence": "3"
+              },
+              "receipt_read_after_evidence": true,
+              "receipt": "none",
+              "outcome": "not_committed"
+            },
+            {
+              "case": "revision_moved_then_none",
+              "evidence": {
+                "source": "receipt",
+                "task_revision": 5
+              },
+              "receipt_read_after_evidence": true,
+              "receipt": "none",
+              "outcome": "not_committed"
+            },
+            {
+              "case": "none_read_before_the_evidence",
+              "evidence": {
+                "source": "hold_status",
+                "fence": "3"
+              },
+              "receipt_read_after_evidence": false,
+              "receipt": "none",
+              "outcome": "unresolved"
+            },
+            {
+              "case": "evidence_not_past_the_request",
+              "evidence": {
+                "source": "hold_status",
+                "fence": "2"
+              },
+              "receipt_read_after_evidence": true,
+              "receipt": "none",
+              "outcome": "unresolved"
+            },
+            {
+              "case": "update_committed_late",
+              "evidence": {
+                "source": "hold_status",
+                "fence": "3"
+              },
+              "receipt_read_after_evidence": true,
+              "receipt": "committed",
+              "outcome": "committed"
+            },
+            {
+              "case": "same_key_replay",
+              "evidence": {
+                "source": "same_key_replay",
+                "result": "committed"
+              },
+              "receipt": "none",
+              "outcome": "committed"
+            }
+          ]
+        }
+      }
+    },
+    "refusals": [
+      {
+        "case": "missing_version",
+        "code": "unsupported_version",
+        "http_status": 400,
+        "retryable": false
+      },
+      {
+        "case": "unknown_credential",
+        "code": "peer_unauthenticated",
+        "http_status": 401,
+        "retryable": false
+      },
+      {
+        "case": "redemption_credential_used",
+        "code": "peer_forbidden",
+        "http_status": 403,
+        "retryable": false
+      },
+      {
+        "case": "other_service_path",
+        "code": "peer_forbidden",
+        "http_status": 403,
+        "retryable": false
+      },
+      {
+        "case": "plain_http",
+        "code": "tls_required",
+        "http_status": 403,
+        "retryable": false
+      },
+      {
+        "case": "rate_limit",
+        "code": "rate_limited",
+        "http_status": 429,
+        "retryable": true
+      },
+      {
+        "case": "store_busy",
+        "code": "request_in_progress",
+        "http_status": 503,
+        "retryable": true
+      }
+    ]
+  },
+  "cli": {
+    "commands": [
+      "aimem reservation claim",
+      "aimem reservation transfer",
+      "aimem reservation update",
+      "aimem reservation release",
+      "aimem reservation finalize",
+      "aimem reservation receipt",
+      "aimem reservation status"
+    ],
+    "arguments": [
+      "--task",
+      "--key"
+    ],
+    "stdin_only": [
+      "coordination_proof",
+      "content",
+      "holder",
+      "reservation_id",
+      "fence",
+      "expected_revision",
+      "reason",
+      "terminal_evidence"
+    ],
+    "stdin_example": {
+      "expected_revision": 3,
+      "reservation_id": "01a0e39c-0000-7000-8000-00000000c510",
+      "fence": "1",
+      "holder": {
+        "mode": "external",
+        "work_ref": "attempt-example-7"
+      },
+      "coordination_proof": "{proof_accepted_attempt}"
+    },
+    "context": "AIMEM_TEAM_SESSION binding (E5a) or personal mode; never falls back from team to personal",
+    "exit_codes": {
+      "0": "committed_or_replayed",
+      "2": "usage",
+      "3": "final_refusal",
+      "4": "retryable_refusal",
+      "5": "outcome_unknown"
+    }
+  },
+  "secret_locations": {
+    "proof": [
+      "begin_exchange.response.body.coordination_proof",
+      "exchanges[].request.proof",
+      "inactive[].request.proof",
+      "exchanges[].member_request.coordination_proof",
+      "cli.stdin_example.coordination_proof",
+      "digests.proof.cases[].proof"
+    ],
+    "coordination_credential": [
+      "exchanges[].http.headers.Authorization"
+    ],
+    "read_credential": [
+      "read_scope.exchanges[].http.headers.Authorization"
+    ],
+    "individual_bearer": [
+      "exchanges[].member_request.http.headers.Authorization"
+    ],
+    "aimem_handle": [
+      "exchanges[].member_request.http.headers.X-Aimem-Team-Context"
+    ],
+    "aicrew_session_token": [
+      "begin_exchange.http.headers.Authorization"
+    ]
+  },
+  "secret_location_rejections": [
+    {
+      "case": "proof_in_active_reply",
+      "path": "exchanges[offer].response.body.fact.proof",
+      "value": "{proof_offer}"
+    },
+    {
+      "case": "proof_in_read_receipt",
+      "path": "read_scope.exchanges[receipt_committed].response.body.receipt.proof",
+      "value": "{proof_accepted_attempt}"
+    },
+    {
+      "case": "proof_in_url",
+      "path": "read_scope.exchanges[receipt_none].http.path",
+      "value": "/v1/identity/peers/aicrew-example/reservation-receipts/{proof_stopped}"
+    },
+    {
+      "case": "raw_proof_in_refusal",
+      "path": "read_scope.refusals[store_busy].code",
+      "value": "acp1_SAMPLEstoppedSAMPLEstoppedSAMPLEstoppedSAMP"
+    },
+    {
+      "case": "read_credential_on_coordination",
+      "path": "exchanges[stopped].http.headers.Authorization",
+      "value": "Bearer {read_credential}"
+    },
+    {
+      "case": "proof_in_cli_argument",
+      "path": "cli.arguments[]",
+      "value": "--proof={proof_offer}"
+    },
+    {
+      "case": "proof_echoed_in_coordination_reply",
+      "path": "exchanges[accepted_attempt].response.body.proof",
+      "value": "{proof_accepted_attempt}"
+    },
+    {
+      "case": "proof_echoed_in_update_receipt",
+      "path": "read_scope.exchanges[update_receipt_by_key].response.body.receipt.coordination_proof",
+      "value": "{proof_accepted_attempt}"
+    },
+    {
+      "case": "proof_in_reservation_refusal",
+      "path": "reservation_refusal.message",
+      "value": "proof {proof_offer} was rejected"
+    },
+    {
+      "case": "begin_proof_outside_its_field",
+      "path": "begin_exchange.response.body.note",
+      "value": "{proof_accepted_attempt}"
+    },
+    {
+      "case": "session_token_in_member_request",
+      "path": "exchanges[].member_request.http.headers.Authorization",
+      "value": "Bearer {aicrew_session_token}"
+    }
+  ],
+  "process_pin": {
+    "decision": "C5-w2, operator option (a), 2026-09-28: aimem checks the process reference (repo, commit, manifest) against the project's current selection; no digest; extended to independent_claim after aicrew's consumer review (the pin comes from an authoritative aimem check for every claim)",
+    "kinds": [
+      "offer",
+      "accepted_attempt",
+      "independent_claim"
+    ],
+    "fields": [
+      "repo",
+      "commit",
+      "manifest"
+    ],
+    "compared": "byte for byte, in the committing ledger transaction, after every fact check",
+    "refusal": {
+      "code": "process_mismatch",
+      "http_status": 409,
+      "retryable": false,
+      "next_action": "Reload the project's current process, then begin the step again through aicrew under it; never reuse the proof or the key."
+    },
+    "cases": [
+      {
+        "case": "claim_matches_current_selection",
+        "operation": "claim",
+        "fact_process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        },
+        "current_selection": {
+          "repo": "https://git.example/team/process.git",
+          "ref": "main",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json",
+          "selected_at": "2026-09-28T06:00:00Z",
+          "selected_by": "user-lead"
+        },
+        "outcome": "committed"
+      },
+      {
+        "case": "transfer_matches_current_selection",
+        "operation": "transfer",
+        "fact_process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        },
+        "current_selection": {
+          "repo": "https://git.example/team/process.git",
+          "ref": "main",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json",
+          "selected_at": "2026-09-28T06:00:00Z",
+          "selected_by": "user-lead"
+        },
+        "outcome": "committed"
+      },
+      {
+        "case": "independent_claim_matches_current_selection",
+        "kind": "independent_claim",
+        "operation": "claim",
+        "fact_process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        },
+        "current_selection": {
+          "repo": "https://git.example/team/process.git",
+          "ref": "main",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json",
+          "selected_at": "2026-09-28T06:00:00Z",
+          "selected_by": "user-lead"
+        },
+        "outcome": "committed"
+      },
+      {
+        "case": "independent_claim_commit_differs",
+        "kind": "independent_claim",
+        "operation": "claim",
+        "fact_process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        },
+        "current_selection": {
+          "repo": "https://git.example/team/process.git",
+          "ref": "main",
+          "commit": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+          "manifest": "process/manifest.json",
+          "selected_at": "2026-09-28T06:10:00Z",
+          "selected_by": "user-lead"
+        },
+        "outcome": "process_mismatch"
+      },
+      {
+        "case": "commit_differs",
+        "operation": "claim",
+        "fact_process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        },
+        "current_selection": {
+          "repo": "https://git.example/team/process.git",
+          "ref": "main",
+          "commit": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+          "manifest": "process/manifest.json",
+          "selected_at": "2026-09-28T06:10:00Z",
+          "selected_by": "user-lead"
+        },
+        "outcome": "process_mismatch"
+      },
+      {
+        "case": "repo_differs",
+        "operation": "claim",
+        "fact_process": {
+          "repo": "https://git.example/other/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        },
+        "current_selection": {
+          "repo": "https://git.example/team/process.git",
+          "ref": "main",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json",
+          "selected_at": "2026-09-28T06:00:00Z",
+          "selected_by": "user-lead"
+        },
+        "outcome": "process_mismatch"
+      },
+      {
+        "case": "manifest_differs",
+        "operation": "claim",
+        "fact_process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/other.json"
+        },
+        "current_selection": {
+          "repo": "https://git.example/team/process.git",
+          "ref": "main",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json",
+          "selected_at": "2026-09-28T06:00:00Z",
+          "selected_by": "user-lead"
+        },
+        "outcome": "process_mismatch"
+      },
+      {
+        "case": "another_form_of_the_same_repository",
+        "operation": "claim",
+        "fact_process": {
+          "repo": "https://git.example/team/process",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        },
+        "current_selection": {
+          "repo": "https://git.example/team/process.git",
+          "ref": "main",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json",
+          "selected_at": "2026-09-28T06:00:00Z",
+          "selected_by": "user-lead"
+        },
+        "outcome": "process_mismatch"
+      },
+      {
+        "case": "no_selection",
+        "operation": "claim",
+        "fact_process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        },
+        "current_selection": null,
+        "outcome": "process_mismatch"
+      },
+      {
+        "case": "selection_changed_after_the_answer_before_commit",
+        "operation": "claim",
+        "fact_process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        },
+        "current_selection": {
+          "repo": "https://git.example/team/process.git",
+          "ref": "main",
+          "commit": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+          "manifest": "process/manifest.json",
+          "selected_at": "2026-09-28T06:10:00Z",
+          "selected_by": "user-lead"
+        },
+        "outcome": "process_mismatch"
+      },
+      {
+        "case": "selection_changed_between_offer_and_acceptance",
+        "operation": "transfer",
+        "offer_process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        },
+        "fact_process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        },
+        "current_selection": {
+          "repo": "https://git.example/team/process.git",
+          "ref": "main",
+          "commit": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+          "manifest": "process/manifest.json",
+          "selected_at": "2026-09-28T06:10:00Z",
+          "selected_by": "user-lead"
+        },
+        "outcome": "process_mismatch"
+      },
+      {
+        "case": "failing_fact_is_rejected_before_the_pin",
+        "operation": "claim",
+        "fact_valid": false,
+        "fact_process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        },
+        "current_selection": {
+          "repo": "https://git.example/team/process.git",
+          "ref": "main",
+          "commit": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+          "manifest": "process/manifest.json",
+          "selected_at": "2026-09-28T06:10:00Z",
+          "selected_by": "user-lead"
+        },
+        "outcome": "coordination_rejected"
+      },
+      {
+        "case": "replay_after_the_selection_changed",
+        "operation": "claim",
+        "replay": true,
+        "coordination_calls": 0,
+        "fact_process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        },
+        "current_selection": {
+          "repo": "https://git.example/team/process.git",
+          "ref": "main",
+          "commit": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+          "manifest": "process/manifest.json",
+          "selected_at": "2026-09-28T06:10:00Z",
+          "selected_by": "user-lead"
+        },
+        "outcome": "recorded_outcome"
+      }
+    ],
+    "malformed": [
+      {
+        "case": "commit_missing",
+        "process": {
+          "repo": "https://git.example/team/process.git",
+          "manifest": "process/manifest.json"
+        }
+      },
+      {
+        "case": "commit_abbreviated",
+        "process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1",
+          "manifest": "process/manifest.json"
+        }
+      },
+      {
+        "case": "commit_uppercase",
+        "process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3F2A9C1E5B7D4A6C8E0F1A2B3C4D5E6F7A8B9C0D",
+          "manifest": "process/manifest.json"
+        }
+      },
+      {
+        "case": "repo_plain_http",
+        "process": {
+          "repo": "http://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        }
+      },
+      {
+        "case": "repo_leading_dash",
+        "process": {
+          "repo": "-uhttps://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json"
+        }
+      },
+      {
+        "case": "manifest_absolute",
+        "process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "/process/manifest.json"
+        }
+      },
+      {
+        "case": "manifest_leaves_the_repository",
+        "process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "../manifest.json"
+        }
+      },
+      {
+        "case": "carries_a_branch",
+        "process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json",
+          "ref": "main"
+        }
+      },
+      {
+        "case": "carries_a_digest",
+        "process": {
+          "repo": "https://git.example/team/process.git",
+          "commit": "3f2a9c1e5b7d4a6c8e0f1a2b3c4d5e6f7a8b9c0d",
+          "manifest": "process/manifest.json",
+          "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    ]
+  }
+}

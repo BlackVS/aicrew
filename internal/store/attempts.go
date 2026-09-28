@@ -39,6 +39,10 @@ var (
 	// ErrAgentBusy refuses an offer to a worker whose one execution
 	// capacity is taken by an open attempt in any team.
 	ErrAgentBusy = errors.New("agent_busy")
+	// ErrTaskBusy refuses a new offer or claim on a task this service already
+	// has an open attempt on, in any team: a new hold would hide the closure
+	// of the open attempt's reservation from aimem's read scope (01a0e639).
+	ErrTaskBusy = errors.New("task_busy")
 	// ErrAttemptState refuses a transition the attempt's state does not
 	// allow, including any transition while it is reconciling.
 	ErrAttemptState = errors.New("attempt_state")
@@ -55,9 +59,9 @@ var (
 	// is no longer the selected one; the offer is reconciled or re-issued,
 	// never silently re-pinned.
 	ErrProcessChanged = errors.New("process_changed")
-	// ErrProcessMismatch refuses accepting with instructions other than the
+	// ErrInstructionMismatch refuses accepting with instructions other than the
 	// ones recorded on the offer.
-	ErrProcessMismatch = errors.New("process_mismatch")
+	ErrInstructionMismatch = errors.New("instruction_mismatch")
 	// ErrOutcomeUnknown reports that a reservation call's outcome is not
 	// known, so the attempt is reconciling; or that a reconciliation found
 	// no evidence to act on, so the attempt is unchanged and awaits
@@ -268,17 +272,24 @@ func (r OfferRequest) validate() error {
 // be the team's current coordinator. The worker's capacity is taken with the
 // intent, before aimem is asked to claim the task for the offer.
 func (s *Store) OfferTask(ctx context.Context, c Caller, port Reservations, key string, in OfferRequest) (Attempt, error) {
-	cmd := command{
-		op: opOfferTask, scope: in.SessionID, key: key, input: in,
-		authorize: requireAgent, validate: in.validate,
-		replayCheck: sessionCurrent(c, in.SessionID, in.Generation),
-	}
+	var proof string
+	cmd := offerCommand(c, key, in, &proof)
 	release, err := s.flights.acquire(ctx, c, cmd, s.flightWait)
 	if err != nil {
 		return Attempt{}, err
 	}
 	defer release()
-	var proof string
+	return s.transition(ctx, c, port, cmd, "", &proof)
+}
+
+// offerCommand is an offer's intent: it records the attempt with the worker's
+// capacity and issues the offer's coordination proof into proof.
+func offerCommand(c Caller, key string, in OfferRequest, proof *string) command {
+	cmd := command{
+		op: opOfferTask, scope: in.SessionID, key: key, input: in,
+		authorize: requireAgent, validate: in.validate,
+		replayCheck: sessionCurrent(c, in.SessionID, in.Generation),
+	}
 	cmd.check = func(ctx context.Context, tx *sql.Tx) error {
 		_, err := currentCoordinator(ctx, tx, c, in.SessionID, in.Generation)
 		return err
@@ -291,6 +302,9 @@ func (s *Store) OfferTask(ctx context.Context, c Caller, port Reservations, key 
 		// Only a task in one of the team's projects may be offered; removing
 		// a project from the team blocks new offers for it.
 		if err := requireTeamProject(ctx, tx, sess.TeamID, ProjectRef{HubID: in.Task.HubID, ProjectID: in.Task.ProjectID}); err != nil {
+			return nil, err
+		}
+		if err := taskFree(ctx, tx, in.Task); err != nil {
 			return nil, err
 		}
 		if !in.ExpiresAt.After(now) || in.ExpiresAt.After(now.Add(maxOfferLifetime)) {
@@ -345,10 +359,10 @@ func (s *Store) OfferTask(ctx context.Context, c Caller, port Reservations, key 
 		if err != nil {
 			return nil, err
 		}
-		proof, err = issueProof(ctx, tx, a, FactOffer, sess.ID, sess.Generation, now)
+		*proof, err = issueProof(ctx, tx, a, FactOffer, sess.ID, sess.Generation, now)
 		return a, err
 	}
-	return s.transition(ctx, c, port, cmd, "", &proof)
+	return cmd
 }
 
 // AcceptOffer accepts an offer as its named worker. It checks the recorded
@@ -357,7 +371,13 @@ func (s *Store) OfferTask(ctx context.Context, c Caller, port Reservations, key 
 // The worker starts work only once the transfer is confirmed (running).
 func (s *Store) AcceptOffer(ctx context.Context, c Caller, port Reservations, key, attemptID string, in AcceptRequest) (Attempt, error) {
 	var proof string
-	cmd := command{
+	return s.transition(ctx, c, port, acceptCommand(c, key, attemptID, in, &proof), attemptID, &proof)
+}
+
+// acceptCommand is an acceptance's intent: it checks the offer and the
+// worker's instructions, starts the transfer and issues its proof into proof.
+func acceptCommand(c Caller, key, attemptID string, in AcceptRequest, proof *string) command {
+	return command{
 		op: opAcceptOffer, scope: attemptID, key: key, input: struct {
 			AttemptID string `json:"attempt_id"`
 			AcceptRequest
@@ -380,17 +400,16 @@ func (s *Store) AcceptOffer(ctx context.Context, c Caller, port Reservations, ke
 				return nil, fmt.Errorf("attempt %s: %w: reconcile or re-issue the offer", a.ID, ErrProcessChanged)
 			}
 			if in.InstructionDigest != a.Process.InstructionDigest {
-				return nil, fmt.Errorf("attempt %s: %w", a.ID, ErrProcessMismatch)
+				return nil, fmt.Errorf("attempt %s: %w", a.ID, ErrInstructionMismatch)
 			}
 			a, err = startIntent(ctx, tx, a, ReservationTransfer, AttemptAccepting, now)
 			if err != nil {
 				return nil, err
 			}
-			proof, err = issueProof(ctx, tx, a, FactAcceptedAttempt, in.SessionID, in.Generation, now)
+			*proof, err = issueProof(ctx, tx, a, FactAcceptedAttempt, in.SessionID, in.Generation, now)
 			return a, err
 		},
 	}
-	return s.transition(ctx, c, port, cmd, attemptID, &proof)
 }
 
 // DeclineOffer records the worker's decline. It is local only: the hold
@@ -436,7 +455,13 @@ func (s *Store) DeclineOffer(ctx context.Context, c Caller, key, attemptID, sess
 // the offer.
 func (s *Store) ReleaseOffer(ctx context.Context, c Caller, port Reservations, key, attemptID, sessionID string, generation int64) (Attempt, error) {
 	var proof string
-	cmd := command{
+	return s.transition(ctx, c, port, releaseCommand(c, key, attemptID, sessionID, generation, &proof), attemptID, &proof)
+}
+
+// releaseCommand is the release of an offer never accepted: the current
+// coordinator's intent, with the never-accepted proof issued into proof.
+func releaseCommand(c Caller, key, attemptID, sessionID string, generation int64, proof *string) command {
+	return command{
 		op: opReleaseOffer, scope: attemptID, key: key,
 		input:     attemptAt{AttemptID: attemptID, SessionID: sessionID, Generation: generation},
 		authorize: requireAgent, replayCheck: sessionCurrent(c, sessionID, generation),
@@ -463,11 +488,25 @@ func (s *Store) ReleaseOffer(ctx context.Context, c Caller, port Reservations, k
 			if err != nil {
 				return nil, err
 			}
-			proof, err = issueProof(ctx, tx, a, FactNeverAccepted, sess.ID, sess.Generation, now)
+			*proof, err = issueProof(ctx, tx, a, FactNeverAccepted, sess.ID, sess.Generation, now)
 			return a, err
 		},
 	}
-	return s.transition(ctx, c, port, cmd, attemptID, &proof)
+}
+
+// taskFree refuses a task this service already has an open attempt on, in
+// any team (ErrTaskBusy).
+func taskFree(ctx context.Context, q querier, t TaskRef) error {
+	var n int
+	if err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM attempts WHERE task_hub_id = ? AND task_project_id = ? AND task_id = ? AND state != 'closed'`,
+		t.HubID, t.ProjectID, t.TaskID).Scan(&n); err != nil {
+		return fmt.Errorf("read open attempts on the task: %w", err)
+	}
+	if n > 0 {
+		return fmt.Errorf("task %s has an open attempt: %w", taskName(t), ErrTaskBusy)
+	}
+	return nil
 }
 
 // GetAttempt reads an attempt by ID.
@@ -586,7 +625,7 @@ func (s *Store) ReconcileAttempt(ctx context.Context, c Caller, port Reservation
 func (s *Store) stepOutcome(ctx context.Context, cur Attempt, key string) (Attempt, error) {
 	var outcome, refusal string
 	err := s.snapshot(ctx, func(q querier) error {
-		return q.QueryRowContext(ctx, `SELECT outcome, refusal FROM attempt_steps WHERE request_key = ?`, key).
+		return q.QueryRowContext(ctx, `SELECT outcome, refusal FROM attempt_steps WHERE request_key = ? AND attempt_id = ?`, key, cur.ID).
 			Scan(&outcome, &refusal)
 	})
 	switch {

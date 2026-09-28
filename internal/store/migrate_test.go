@@ -42,10 +42,11 @@ func populatedStore(t *testing.T) (*Store, string) {
 	if _, err := withdrawn.release(t, "r-withdrawn", withdrawn.offer(t, "o-withdrawn", "task-withdrawn")); err != nil {
 		t.Fatal(err)
 	}
-	// A second offer of a task aimem already holds is refused at the claim.
+	// An offer of a task aimem holds for someone else is refused at the claim.
 	refused := worker("refused")
-	if _, err := s.OfferTask(ctx, e.lead.caller, e.port, "o-refused", refused.offerReq("task-offered")); err == nil {
-		t.Fatal("a second offer of a held task succeeded")
+	e.port.standaloneHold(task("task-held-elsewhere"), "someone-else")
+	if _, err := s.OfferTask(ctx, e.lead.caller, e.port, "o-refused", refused.offerReq("task-held-elsewhere")); err == nil {
+		t.Fatal("an offer of a task held elsewhere succeeded")
 	}
 
 	running("working", "task-working")

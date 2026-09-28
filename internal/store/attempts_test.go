@@ -569,8 +569,8 @@ func TestAcceptanceMatchesTheRecordedProcess(t *testing.T) {
 	}
 	mismatch := e.acceptReq()
 	mismatch.InstructionDigest = "sha256:something-else"
-	if _, err := s.AcceptOffer(ctx, e.builder.caller, e.port, "a-mismatch", a.ID, mismatch); !errors.Is(err, ErrProcessMismatch) {
-		t.Fatalf("accept with other instructions: got %v, want ErrProcessMismatch", err)
+	if _, err := s.AcceptOffer(ctx, e.builder.caller, e.port, "a-mismatch", a.ID, mismatch); !errors.Is(err, ErrInstructionMismatch) {
+		t.Fatalf("accept with other instructions: got %v, want ErrInstructionMismatch", err)
 	}
 	if got := mustState(t, s, a.ID, AttemptOffered); got.Process != testPin {
 		t.Fatalf("the recorded process changed: %+v", got.Process)

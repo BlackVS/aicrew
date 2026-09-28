@@ -130,7 +130,7 @@ func TestClaimAuthority(t *testing.T) {
 	refused("project outside the set", e.solo.caller, other, ErrInvalid)
 	digest := e.claimReq(e.solo, "task-1")
 	digest.InstructionDigest = "sha256:other-instructions"
-	refused("other instructions", e.solo.caller, digest, ErrProcessMismatch)
+	refused("other instructions", e.solo.caller, digest, ErrInstructionMismatch)
 	noPin := e.claimReq(e.solo, "task-1")
 	noPin.Process = TrustedProcess{}
 	refused("no pin", e.solo.caller, noPin, ErrInvalid)
@@ -216,9 +216,14 @@ func TestClaimOutcomes(t *testing.T) {
 		s, _ := openTemp(t)
 		e := newClaimTeam(t, s)
 		offer := e.offer(t, "o1", "task-1")
-		a, err := e.claim(t, "c1", e.solo, "task-1")
-		if err == nil || mustState(t, s, a.ID, AttemptClosed).CloseReason != "claim reservation_conflict" {
-			t.Fatalf("claim of an offered task = %+v, %v", a, err)
+		calls := len(e.port.callLog())
+		// The task has an open attempt of this service: the claim is refused
+		// locally, before any attempt or call to aimem (01a0e639).
+		if _, err := e.claim(t, "c1", e.solo, "task-1"); !errors.Is(err, ErrTaskBusy) {
+			t.Fatalf("claim of an offered task: %v", err)
+		}
+		if len(e.port.callLog()) != calls || busy(t, s, e.solo.agent.ID) {
+			t.Fatal("a refused claim reached aimem or took the claimer's capacity")
 		}
 		if h := e.port.holdOf(offer.Task); !h.active || h.workRef != offer.offerRef() {
 			t.Fatalf("the offer's hold changed: %+v", h)

@@ -398,13 +398,20 @@ leaving:
 			return &WorkOutstanding{NextAction: r.NextAction}
 		case code == "invalid_token" && !resumed:
 			// The token ended (its ceiling, or a resume elsewhere): prove
-			// afresh, then leave with the new one.
+			// afresh, then leave with the new one. The resume ends the
+			// earlier handle, so aimem gets the new one first: a leave
+			// refused for open work keeps a binding that still works.
 			resumed = true
 			if err := e.enter(ctx, e.session.ID); err != nil {
 				if c := codeOf(err); c == "context_stale" || c == "role_forbidden" {
 					break leaving // the session has already ended
 				}
 				return err
+			}
+			if err := e.bind(ctx); err != nil {
+				// Only a refused leave needs the new binding; the leave
+				// itself does not wait for aimem.
+				e.Log.Warn("aimem's binding was not refreshed after the resume", "error", err.Error())
 			}
 			key = newKey("leave")
 			continue

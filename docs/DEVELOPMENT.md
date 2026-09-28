@@ -208,7 +208,8 @@ no secret; other sections belong to onboarding:
   the client's code (128 plus the signal if a signal ended it), or 3 if
   open work kept the session. Before the client starts, Ctrl-C or SIGTERM
   stops the startup, including its retries, and leaves any session it
-  entered; the client then never starts. Once the client runs, the launcher
+  entered; the client then never starts, and one that races the client's
+  start stops it at once. Once the client runs, the launcher
   does not exit on Ctrl-C, which the terminal delivers to the client;
   SIGTERM is forwarded to the client, which is killed if still running
   10 s later. A killed launcher takes the client with it on Linux

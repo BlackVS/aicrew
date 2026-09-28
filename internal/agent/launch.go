@@ -56,7 +56,8 @@ func ScopedEnv(env []string, path string) []string {
 // the session was kept for open work, or an error.
 //
 // Until the client starts, an interrupt or SIGTERM stops the startup and
-// the client never starts (ErrStopped). Once it runs, Ctrl-C reaches the
+// the client never starts (ErrStopped); a stop that races the client's
+// creation stops it at once. Once it runs, Ctrl-C reaches the
 // child through the terminal or console, which delivers it to the whole
 // foreground process group or console; the launcher does not exit on it but
 // waits for the child. SIGTERM sent to the launcher is forwarded to the
@@ -75,8 +76,8 @@ func RunClient(ctx context.Context, e *Engine, c Client, stdio Stdio, signals <-
 	cmd.Env = ScopedEnv(os.Environ(), e.AimemFile())
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio.In, stdio.Out, stdio.Err
 	bindToLauncher(cmd)
-	// The launch decision: a stop that arrived after the startup ended
-	// still keeps the client from starting.
+	// A stop that arrived after the startup ended keeps the client from
+	// starting.
 	beforeLaunch()
 	if stopWaiting(signals) {
 		return 0, leaveStopped(ctx, e)
@@ -90,6 +91,18 @@ func RunClient(ctx context.Context, e *Engine, c Client, stdio Stdio, signals <-
 		e.Log.Warn("the client will not be stopped if the launcher is killed", "error", err.Error())
 	}
 	defer release()
+	// No check before cmd.Start can be atomic with it: a stop that reached
+	// the launcher while the client was being created is seen here, and the
+	// client is stopped at once, before the running policy (which ignores
+	// an interrupt) applies. Every stop received before cmd.Start returned
+	// is in the channel by now.
+	afterLaunch()
+	if stopWaiting(signals) {
+		e.Log.Info("stop requested as the client started; stopping it")
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return 0, leaveStopped(ctx, e)
+	}
 
 	runCtx, stopRun := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopRun()
@@ -186,9 +199,9 @@ func leaveStopped(ctx context.Context, e *Engine) error {
 	return errors.Join(ErrStopped, e.Leave(context.WithoutCancel(ctx)))
 }
 
-// beforeLaunch runs just before the launch decision; tests use it to stop
-// the launcher at that point.
-var beforeLaunch = func() {}
+// beforeLaunch and afterLaunch run just before the client is started and
+// just after; tests use them to deliver a stop at those points.
+var beforeLaunch, afterLaunch = func() {}, func() {}
 
 // exitCode is the client's exit status as a shell reports it: a client
 // ended by a signal gives 128 plus the signal's number.

@@ -420,12 +420,17 @@ func TestRunClientStopBeforeLaunch(t *testing.T) {
 			e := c.engine(t)
 			sigs := make(chan os.Signal, 1)
 			beforeLaunch = func() { sigs <- sig }
-			t.Cleanup(func() { beforeLaunch = func() {} })
+			launched := false
+			afterLaunch = func() { launched = true }
+			t.Cleanup(func() { beforeLaunch, afterLaunch = func() {}, func() {} })
 			self := selfPath(t)
 			_, err := RunClient(context.Background(), e, Client{Path: self, Args: []string{"probe-client", dir}},
 				Stdio{Out: io.Discard, Err: io.Discard}, sigs)
 			if !errors.Is(err, ErrStopped) {
 				t.Fatalf("run after a stop before the launch: %v", err)
+			}
+			if launched {
+				t.Fatal("the client was started after a stop")
 			}
 			noClientStarted(t, dir)
 			if sess, err := c.store.GetSession(context.Background(), e.SessionID()); err != nil || sess.State != store.SessionLeft {
@@ -433,6 +438,40 @@ func TestRunClientStopBeforeLaunch(t *testing.T) {
 			}
 			if _, err := os.Stat(sessionFile(c.root, e.SessionID())); !os.IsNotExist(err) {
 				t.Fatal("aimem's binding outlived the session")
+			}
+		})
+	}
+}
+
+// A stop that reaches the launcher while the client is being created, too
+// late for the check before the start, stops the client at once instead of
+// being ignored as a running client's interrupt; the session is left.
+func TestRunClientStopAsClientStarts(t *testing.T) {
+	for _, sig := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
+		t.Run(sig.String(), func(t *testing.T) {
+			c := setupCrew(t)
+			probeEnv(t, "")
+			dir := t.TempDir()
+			t.Cleanup(func() { os.WriteFile(filepath.Join(dir, "stop"), nil, 0o600) })
+			e := c.engine(t)
+			sigs := make(chan os.Signal, 1)
+			afterLaunch = func() { sigs <- sig }
+			t.Cleanup(func() { afterLaunch = func() {} })
+			select {
+			case err := <-runInBackground(e, dir, sigs):
+				if !errors.Is(err, ErrStopped) {
+					t.Fatalf("run after a stop as the client started: %v", err)
+				}
+			case <-time.After(20 * time.Second):
+				t.Fatal("the client kept running after a stop that raced its start")
+			}
+			a := heartbeat(dir)
+			time.Sleep(300 * time.Millisecond)
+			if heartbeat(dir) != a {
+				t.Fatal("the client is still running")
+			}
+			if sess, err := c.store.GetSession(context.Background(), e.SessionID()); err != nil || sess.State != store.SessionLeft {
+				t.Fatalf("the session after the stop: %+v, %v", sess, err)
 			}
 		})
 	}

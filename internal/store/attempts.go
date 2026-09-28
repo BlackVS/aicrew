@@ -90,11 +90,13 @@ type ProcessIdentity struct {
 	Manifest   string `json:"manifest"`
 }
 
-// TrustedProcess is a project's selected process as read from aimem by a
-// trusted internal caller: its identity and the digest of the role
-// instructions a worker receives. Only such a reader may construct one;
-// nothing an external caller sends may populate it. Reading and verifying
-// the authoritative selection arrives with crew-execution b.
+// TrustedProcess is a project's selected process: its identity and the
+// digest of the role instructions a worker receives. For the operations
+// aicrewd sends to aimem itself, only a trusted internal reader of the
+// selection may construct one. On the member-driven offer (OfferInput) it is
+// the coordinator's: aimem verifies the pin against its current selection
+// when the claim and the transfer commit (D-b1(a)), and the digest is not
+// authoritative (D-b1a-3).
 type TrustedProcess struct {
 	Identity          ProcessIdentity `json:"identity"`
 	InstructionDigest string          `json:"instruction_digest"`
@@ -371,12 +373,16 @@ func offerCommand(c Caller, key string, in OfferRequest, proof *string) command 
 // The worker starts work only once the transfer is confirmed (running).
 func (s *Store) AcceptOffer(ctx context.Context, c Caller, port Reservations, key, attemptID string, in AcceptRequest) (Attempt, error) {
 	var proof string
-	return s.transition(ctx, c, port, acceptCommand(c, key, attemptID, in, &proof), attemptID, &proof)
+	return s.transition(ctx, c, port, acceptCommand(c, key, attemptID, in, true, &proof), attemptID, &proof)
 }
 
 // acceptCommand is an acceptance's intent: it checks the offer and the
 // worker's instructions, starts the transfer and issues its proof into proof.
-func acceptCommand(c Caller, key, attemptID string, in AcceptRequest, proof *string) command {
+// checkSelected compares the recorded process with in.Selected, a trusted
+// read of the current selection. The member-driven path has no such read:
+// there aimem compares the fact's pin with its current selection at the
+// transfer and refuses a stale one as process_mismatch (D-b1(a)).
+func acceptCommand(c Caller, key, attemptID string, in AcceptRequest, checkSelected bool, proof *string) command {
 	return command{
 		op: opAcceptOffer, scope: attemptID, key: key, input: struct {
 			AttemptID string `json:"attempt_id"`
@@ -396,7 +402,7 @@ func acceptCommand(c Caller, key, attemptID string, in AcceptRequest, proof *str
 			if err := acceptable(ctx, tx, a, in.SessionID, now); err != nil {
 				return nil, err
 			}
-			if in.Selected.Identity != a.Process.Identity || in.Selected.InstructionDigest != a.Process.InstructionDigest {
+			if checkSelected && (in.Selected.Identity != a.Process.Identity || in.Selected.InstructionDigest != a.Process.InstructionDigest) {
 				return nil, fmt.Errorf("attempt %s: %w: reconcile or re-issue the offer", a.ID, ErrProcessChanged)
 			}
 			if in.InstructionDigest != a.Process.InstructionDigest {
@@ -415,8 +421,21 @@ func acceptCommand(c Caller, key, attemptID string, in AcceptRequest, proof *str
 // DeclineOffer records the worker's decline. It is local only: the hold
 // stays with the offer until the team's coordinator releases it.
 func (s *Store) DeclineOffer(ctx context.Context, c Caller, key, attemptID, sessionID string, generation int64) (Attempt, error) {
+	return s.decline(ctx, c, declineCommand(c, key, attemptID, sessionID, generation), attemptID)
+}
+
+func (s *Store) decline(ctx context.Context, c Caller, cmd command, attemptID string) (Attempt, error) {
 	var out Attempt
-	cmd := command{
+	unlock, err := s.lockAttempt(ctx, attemptID)
+	if err != nil {
+		return out, err
+	}
+	defer unlock()
+	return out, s.run(ctx, c, cmd, &out)
+}
+
+func declineCommand(c Caller, key, attemptID, sessionID string, generation int64) command {
+	return command{
 		op: opDeclineOffer, scope: attemptID, key: key,
 		input:     attemptAt{AttemptID: attemptID, SessionID: sessionID, Generation: generation},
 		authorize: requireAgent, replayCheck: sessionCurrent(c, sessionID, generation),
@@ -441,12 +460,6 @@ func (s *Store) DeclineOffer(ctx context.Context, c Caller, key, attemptID, sess
 			return getAttempt(ctx, tx, a.ID)
 		},
 	}
-	unlock, err := s.lockAttempt(ctx, attemptID)
-	if err != nil {
-		return out, err
-	}
-	defer unlock()
-	return out, s.run(ctx, c, cmd, &out)
 }
 
 // ReleaseOffer releases an offer that was not accepted: withdrawn by the
@@ -623,21 +636,31 @@ func (s *Store) ReconcileAttempt(ctx context.Context, c Caller, port Reservation
 
 // stepOutcome reports the recorded outcome of one settled step.
 func (s *Store) stepOutcome(ctx context.Context, cur Attempt, key string) (Attempt, error) {
-	var outcome, refusal string
-	err := s.snapshot(ctx, func(q querier) error {
-		return q.QueryRowContext(ctx, `SELECT outcome, refusal FROM attempt_steps WHERE request_key = ? AND attempt_id = ?`, key, cur.ID).
-			Scan(&outcome, &refusal)
-	})
+	outcome, refusal, err := s.recordedOutcome(ctx, cur, key)
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return cur, fmt.Errorf("attempt %s: step %s has no recorded outcome: %w", cur.ID, key, ErrOutcomeUnknown)
 	case err != nil:
-		return cur, fmt.Errorf("read step outcome: %w", err)
+		return cur, err
 	case outcome == string(outcomeCommitted):
 		return cur, nil
 	default:
 		return cur, fmt.Errorf("attempt %s: step %s was %s %s: %w", cur.ID, key, outcome, refusal, ErrAttemptState)
 	}
+}
+
+// recordedOutcome reads the settled outcome of one of a's steps, or
+// ErrStepUnknown if a has no settled step with that key.
+func (s *Store) recordedOutcome(ctx context.Context, a Attempt, key string) (outcome, refusal string, err error) {
+	err = s.snapshot(ctx, func(q querier) error {
+		return q.QueryRowContext(ctx, `SELECT outcome, refusal FROM attempt_steps WHERE request_key = ? AND attempt_id = ?`, key, a.ID).
+			Scan(&outcome, &refusal)
+	})
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", "", fmt.Errorf("attempt %s: step %s has no recorded outcome: %w", a.ID, key, ErrStepUnknown)
+	case err != nil:
+		return "", "", fmt.Errorf("read step outcome: %w", err)
+	}
+	return outcome, refusal, nil
 }
 
 func (s *Store) reconcilePending(ctx context.Context, c Caller, port Reservations, a Attempt) (Attempt, error) {

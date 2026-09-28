@@ -115,7 +115,15 @@ func (e stepEnv) begin(t *testing.T, key, taskID string) (Attempt, Step) {
 
 func (e stepEnv) settle(t *testing.T, a Attempt, st Step, hint StepHint) (Attempt, Settlement, error) {
 	t.Helper()
-	return e.s.SettleStep(context.Background(), e.lead.caller, e.reader, a.ID, st.RequestKey, hint)
+	return e.s.SettleStep(context.Background(), e.lead.caller, e.reader, a.ID, st.RequestKey, report(hint))
+}
+
+// report is the member's report of hint; a refusal carries aimem's code.
+func report(hint StepHint) StepReport {
+	if hint == HintRefused {
+		return StepReport{Outcome: hint, Code: "coordination_rejected"}
+	}
+	return StepReport{Outcome: hint}
 }
 
 func active(t *testing.T, s *Store, proof string) bool {
@@ -237,7 +245,7 @@ func TestOfferFamilySettlesFromTheReadScope(t *testing.T) {
 		t.Fatalf("begin accept: %+v %v", acc, err)
 	}
 	e.reader.commit(acc.CoordinationProof, receiptFor(a, acc, "res-1", "2", 5))
-	if a, set, err = e.s.SettleStep(ctx, e.builder.caller, e.reader, a.ID, acc.RequestKey, HintCommitted); err != nil ||
+	if a, set, err = e.s.SettleStep(ctx, e.builder.caller, e.reader, a.ID, acc.RequestKey, report(HintCommitted)); err != nil ||
 		!set.Settled || a.State != AttemptRunning || a.Fence != "2" {
 		t.Fatalf("accept settled: %+v %+v %v", a, set, err)
 	}
@@ -345,7 +353,7 @@ func TestSettleWithoutAReaderStaysPending(t *testing.T) {
 	e := newStepEnv(t)
 	a, st := e.begin(t, "offer", "task-1")
 	for i := 0; i < 2; i++ {
-		got, set, err := e.s.SettleStep(context.Background(), e.lead.caller, nil, a.ID, st.RequestKey, HintRefused)
+		got, set, err := e.s.SettleStep(context.Background(), e.lead.caller, nil, a.ID, st.RequestKey, report(HintRefused))
 		if err != nil || set.Settled || got.State != AttemptOffering {
 			t.Fatalf("settle without a reader: %+v %+v %v", got, set, err)
 		}
@@ -386,11 +394,11 @@ func TestRefusedAcceptThenWithdraw(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.s.SettleStep(ctx, e.builder.caller, e.reader, a.ID, acc.RequestKey, HintRefused); err != nil {
+	if _, _, err := e.s.SettleStep(ctx, e.builder.caller, e.reader, a.ID, acc.RequestKey, report(HintRefused)); err != nil {
 		t.Fatal(err)
 	}
 	e.advance(NoneFinalAfter)
-	if a, set, err := e.s.SettleStep(ctx, e.builder.caller, e.reader, a.ID, acc.RequestKey, HintRefused); err != nil ||
+	if a, set, err := e.s.SettleStep(ctx, e.builder.caller, e.reader, a.ID, acc.RequestKey, report(HintRefused)); err != nil ||
 		!set.Settled || a.State != AttemptOffered {
 		t.Fatalf("refused accept: %+v %+v %v", a, set, err)
 	}
@@ -429,7 +437,7 @@ func TestOpenAttemptGuardsTheTask(t *testing.T) {
 		t.Fatalf("an offer once the task's attempt closed: %v", err)
 	}
 	// Another attempt's settled step is no step of this one.
-	if got, set, err := e.s.SettleStep(ctx, other.lead.caller, e.reader, b.ID, st.RequestKey, HintRefused); !errors.Is(err, ErrOutcomeUnknown) ||
+	if got, set, err := e.s.SettleStep(ctx, other.lead.caller, e.reader, b.ID, st.RequestKey, report(HintRefused)); !errors.Is(err, ErrStepUnknown) ||
 		set.Settled || got.State != AttemptOffering {
 		t.Fatalf("settling another attempt's step: %+v %+v %v", got, set, err)
 	}
@@ -440,10 +448,10 @@ func TestSettleNeedsATeamMember(t *testing.T) {
 	e := newStepEnv(t)
 	a, st := e.begin(t, "offer", "task-1")
 	other := newExecTeamNamed(t, e.s, "t2")
-	if _, _, err := e.s.SettleStep(context.Background(), other.lead.caller, e.reader, a.ID, st.RequestKey, HintRefused); !errors.Is(err, ErrForbidden) {
+	if _, _, err := e.s.SettleStep(context.Background(), other.lead.caller, e.reader, a.ID, st.RequestKey, report(HintRefused)); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("settle by another team's member: %v", err)
 	}
-	if _, _, err := e.s.SettleStep(context.Background(), e.lead.caller, e.reader, a.ID, st.RequestKey, "maybe"); !errors.Is(err, ErrInvalid) {
+	if _, _, err := e.s.SettleStep(context.Background(), e.lead.caller, e.reader, a.ID, st.RequestKey, report("maybe")); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("an unknown outcome: %v", err)
 	}
 	if !active(t, e.s, st.CoordinationProof) {
@@ -497,5 +505,37 @@ func TestReadScopeShapes(t *testing.T) {
 	}
 	if d, err := proofDigestP1(secretDigest("acp1_x")); err != nil || d != p1Of("acp1_x") {
 		t.Fatalf("p1 digest %q, %v", d, err)
+	}
+}
+
+// The token operations authenticate the session token inside each command,
+// replays included: a token that died while its session kept its
+// generation, here by expiring, begins nothing, not even as a replay.
+func TestStepOperationsRecheckTheToken(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	now := clock(s)
+	tm := mustTeam(t, s, "t1", "crew", ProjectRef{HubID: "hub-test", ProjectID: "project-t"})
+	p := newProver(t, s)
+	lead, _ := member(t, s, tm.ID, "lead", RoleCoordinator)
+	worker, _ := member(t, s, tm.ID, "worker", RoleWorker)
+	entry, sec := p.enter("e-lead", lead, tm.ID)
+	p.enter("e-worker", worker, tm.ID)
+	token := sec.Token.Reveal()
+	in := OfferInput{WorkerAgentID: worker.ID, Task: TaskRef{HubID: "hub-test", ProjectID: "project-t", TaskID: "task-1"},
+		ExpectedRevision: 3, BaseCommit: "base-1", Branch: "work/task-1", Process: testPin, ExpiresAt: now.Add(time.Hour)}
+	a, st, err := s.BeginOfferWithToken(ctx, "offer-1", token, in)
+	if err != nil || st.CoordinationProof == "" || a.CoordinatorSessionID != entry.Session.ID {
+		t.Fatalf("begin offer: %+v %+v %v", a, st, err)
+	}
+	*now = entry.Token.ExpiresAt
+	if _, _, err := s.BeginOfferWithToken(ctx, "offer-1", token, in); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("a replay with an expired token: %v", err)
+	}
+	if _, _, err := s.BeginWithdrawWithToken(ctx, "withdraw-1", token, a.ID); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("a withdraw with an expired token: %v", err)
+	}
+	if _, _, err := s.SettleWithToken(ctx, token, newFakeReader(), a.ID, st.RequestKey, report(HintUnknown)); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("a settle with an expired token: %v", err)
 	}
 }

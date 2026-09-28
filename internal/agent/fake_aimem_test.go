@@ -110,6 +110,9 @@ func fakeAimem(root string, args []string) int {
 		if !ok {
 			return fail("stdin holds no handle")
 		}
+		if _, err := os.Stat(filepath.Join(root, "fail-refresh")); err == nil {
+			return fail("the hub cannot be reached")
+		}
 		path := sessionFile(root, args[2])
 		raw, err := os.ReadFile(path)
 		if err != nil {

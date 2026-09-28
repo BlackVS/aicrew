@@ -545,6 +545,67 @@ func TestRefusedLeaveKeepsWorkingBinding(t *testing.T) {
 	}
 }
 
+// A leave whose token another client's resume ended resumes the session
+// itself, and gives aimem the new handle before leaving: when the leave is
+// then refused for open work, aimem's binding still works.
+func TestInvalidTokenLeaveKeepsWorkingBinding(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	a := c.engine(t)
+	if err := a.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b := c.engine(t)
+	if err := b.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b.SessionID() != a.SessionID() {
+		t.Fatalf("the second client entered %s beside %s", b.SessionID(), a.SessionID())
+	}
+	c.seedOpenWork(t)
+	var kept *WorkOutstanding
+	if err := a.Leave(ctx); !errors.As(err, &kept) {
+		t.Fatalf("leave with an ended token and open work: %v", err)
+	}
+	sess, err := c.store.GetSession(ctx, a.SessionID())
+	if err != nil || sess.State != store.SessionActive || sess.Generation != 3 {
+		t.Fatalf("session after the refused leave: %+v, %v", sess, err)
+	}
+	got, err := c.store.Introspect(ctx, c.fileHandle(t, a.SessionID()), "hub-test", "aicrew-test")
+	if err != nil || !got.Active || got.Generation != sess.Generation {
+		t.Fatalf("aimem's handle after the refused leave: %+v, %v", got, err)
+	}
+}
+
+// A rebind that fails after the resume does not hold the leave back: with
+// no open work the leave completes, and aimem's binding is closed.
+func TestInvalidTokenLeaveDespiteFailedRebind(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	a := c.engine(t)
+	if err := a.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.engine(t).Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(c.root, "fail-refresh"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Leave(ctx); err != nil {
+		t.Fatalf("leave after a failed rebind: %v", err)
+	}
+	if sess, err := c.store.GetSession(ctx, a.SessionID()); err != nil || sess.State != store.SessionLeft {
+		t.Fatalf("session after the leave: %+v, %v", sess, err)
+	}
+	if _, err := os.Stat(sessionFile(c.root, a.SessionID())); !os.IsNotExist(err) {
+		t.Fatal("aimem's binding outlived the session")
+	}
+	if !strings.Contains(c.logs.String(), "not refreshed after the resume") {
+		t.Fatal("the failed rebind was not reported")
+	}
+}
+
 // A close aimem refuses keeps the binding and the record; a retry then
 // removes both, and neither attempt enters the team.
 func TestLeaveRecordedCloseFailsThenRetries(t *testing.T) {

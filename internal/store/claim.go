@@ -81,8 +81,11 @@ func (s *Store) ClaimTask(ctx context.Context, c Caller, port Reservations, key 
 		if err := requireTeamProject(ctx, tx, sess.TeamID, ProjectRef{HubID: in.Task.HubID, ProjectID: in.Task.ProjectID}); err != nil {
 			return nil, err
 		}
+		if err := taskFree(ctx, tx, in.Task); err != nil {
+			return nil, err
+		}
 		if in.InstructionDigest != in.Process.InstructionDigest {
-			return nil, fmt.Errorf("claim of task %s: %w", taskName(in.Task), ErrProcessMismatch)
+			return nil, fmt.Errorf("claim of task %s: %w", taskName(in.Task), ErrInstructionMismatch)
 		}
 		if busy, err := openWork(ctx, tx, c.id, ""); err != nil {
 			return nil, err

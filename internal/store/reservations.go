@@ -49,9 +49,9 @@ type ReservationHolder struct {
 // ReservationRequest is one v1 mutation. Task and RequestKey travel outside
 // the JSON body (in the path and the idempotency key).
 //
-// CoordinationProof is an opaque reference. Aicrew attaches no authority to
-// it, never checks it and never trusts one it receives; how aimem verifies
-// a transition belongs to the reviewed context and authorization work.
+// CoordinationProof is the proof aicrew issued for the step's intent
+// (coordination.go). It grants nothing by itself: aimem asks aicrew about it
+// through coordination.v1 before it commits. A holder's update carries none.
 type ReservationRequest struct {
 	Task              TaskRef            `json:"-"`
 	RequestKey        string             `json:"-"`

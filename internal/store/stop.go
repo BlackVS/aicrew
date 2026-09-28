@@ -225,6 +225,7 @@ func (r StopRelease) validate() error {
 // attempt closes and the capacity is freed only when aimem commits the
 // release; any other outcome keeps both.
 func (s *Store) ReleaseStopped(ctx context.Context, c Caller, port Reservations, key, attemptID string, in StopRelease) (Attempt, error) {
+	var proof string
 	cmd := command{
 		op: opReleaseStopped, scope: attemptID, key: key, input: struct {
 			AttemptID string `json:"attempt_id"`
@@ -258,10 +259,15 @@ func (s *Store) ReleaseStopped(ctx context.Context, c Caller, port Reservations,
 			if err := validateMessageText(text); err != nil {
 				return nil, fmt.Errorf("%w: the blocker is too long for its team message", ErrInvalid)
 			}
-			return startWorkIntent(ctx, tx, a, ReservationRelease, AttemptReleasing, string(in.Target), in.Blocker, "", text, now)
+			a, err = startWorkIntent(ctx, tx, a, ReservationRelease, AttemptReleasing, string(in.Target), in.Blocker, "", text, now)
+			if err != nil {
+				return nil, err
+			}
+			proof, err = issueProof(ctx, tx, a, FactStopped, in.SessionID, in.Generation, now)
+			return a, err
 		},
 	}
-	return s.transition(ctx, c, port, cmd, attemptID)
+	return s.transition(ctx, c, port, cmd, attemptID, &proof)
 }
 
 // applyStopRelease applies a committed release of a stopped attempt: the

@@ -248,6 +248,7 @@ func (s *Store) OfferTask(ctx context.Context, c Caller, port Reservations, key 
 		return Attempt{}, err
 	}
 	defer release()
+	var proof string
 	cmd.check = func(ctx context.Context, tx *sql.Tx) error {
 		_, err := currentCoordinator(ctx, tx, c, in.SessionID, in.Generation)
 		return err
@@ -310,9 +311,14 @@ func (s *Store) OfferTask(ctx context.Context, c Caller, port Reservations, key 
 			workerSession, workerGeneration, floor, at, at); err != nil {
 			return nil, fmt.Errorf("insert attempt: %w", err)
 		}
-		return getAttempt(ctx, tx, id)
+		a, err := getAttempt(ctx, tx, id)
+		if err != nil {
+			return nil, err
+		}
+		proof, err = issueProof(ctx, tx, a, FactOffer, sess.ID, sess.Generation, now)
+		return a, err
 	}
-	return s.transition(ctx, c, port, cmd, "")
+	return s.transition(ctx, c, port, cmd, "", &proof)
 }
 
 // AcceptOffer accepts an offer as its named worker. It checks the recorded
@@ -320,6 +326,7 @@ func (s *Store) OfferTask(ctx context.Context, c Caller, port Reservations, key 
 // asks aimem to transfer the hold from the offer to the worker's attempt.
 // The worker starts work only once the transfer is confirmed (running).
 func (s *Store) AcceptOffer(ctx context.Context, c Caller, port Reservations, key, attemptID string, in AcceptRequest) (Attempt, error) {
+	var proof string
 	cmd := command{
 		op: opAcceptOffer, scope: attemptID, key: key, input: struct {
 			AttemptID string `json:"attempt_id"`
@@ -345,10 +352,15 @@ func (s *Store) AcceptOffer(ctx context.Context, c Caller, port Reservations, ke
 			if in.InstructionDigest != a.Process.InstructionDigest {
 				return nil, fmt.Errorf("attempt %s: %w", a.ID, ErrProcessMismatch)
 			}
-			return startIntent(ctx, tx, a, ReservationTransfer, AttemptAccepting, now)
+			a, err = startIntent(ctx, tx, a, ReservationTransfer, AttemptAccepting, now)
+			if err != nil {
+				return nil, err
+			}
+			proof, err = issueProof(ctx, tx, a, FactAcceptedAttempt, in.SessionID, in.Generation, now)
+			return a, err
 		},
 	}
-	return s.transition(ctx, c, port, cmd, attemptID)
+	return s.transition(ctx, c, port, cmd, attemptID, &proof)
 }
 
 // DeclineOffer records the worker's decline. It is local only: the hold
@@ -393,6 +405,7 @@ func (s *Store) DeclineOffer(ctx context.Context, c Caller, key, attemptID, sess
 // team's current coordinator, which may be a successor of the one that made
 // the offer.
 func (s *Store) ReleaseOffer(ctx context.Context, c Caller, port Reservations, key, attemptID, sessionID string, generation int64) (Attempt, error) {
+	var proof string
 	cmd := command{
 		op: opReleaseOffer, scope: attemptID, key: key,
 		input:     attemptAt{AttemptID: attemptID, SessionID: sessionID, Generation: generation},
@@ -416,10 +429,15 @@ func (s *Store) ReleaseOffer(ctx context.Context, c Caller, port Reservations, k
 			if a.State != AttemptOffered {
 				return nil, fmt.Errorf("attempt %s is %s: %w", a.ID, a.State, ErrAttemptState)
 			}
-			return startIntent(ctx, tx, a, ReservationRelease, AttemptReleasing, now)
+			a, err = startIntent(ctx, tx, a, ReservationRelease, AttemptReleasing, now)
+			if err != nil {
+				return nil, err
+			}
+			proof, err = issueProof(ctx, tx, a, FactNeverAccepted, sess.ID, sess.Generation, now)
+			return a, err
 		},
 	}
-	return s.transition(ctx, c, port, cmd, attemptID)
+	return s.transition(ctx, c, port, cmd, attemptID, &proof)
 }
 
 // GetAttempt reads an attempt by ID.
@@ -436,8 +454,9 @@ func (s *Store) GetAttempt(ctx context.Context, id string) (Attempt, error) {
 // transition runs a keyed intent command and then its reservation call. A
 // retry of a recorded intent does not call aimem again: it reconciles with a
 // receipt lookup for the same request key. attemptID is empty for an offer,
-// whose attempt the intent creates.
-func (s *Store) transition(ctx context.Context, c Caller, port Reservations, cmd command, attemptID string) (Attempt, error) {
+// whose attempt the intent creates. proof receives the coordination proof the
+// intent issued, if its step needs one; it is sent with this call only.
+func (s *Store) transition(ctx context.Context, c Caller, port Reservations, cmd command, attemptID string, proof *string) (Attempt, error) {
 	if port == nil {
 		return Attempt{}, fmt.Errorf("%w: no reservation service", ErrInvalid)
 	}
@@ -476,7 +495,11 @@ func (s *Store) transition(ctx context.Context, c Caller, port Reservations, cmd
 	if retry {
 		return s.reconcilePending(ctx, c, port, cur)
 	}
-	res, err := port.Mutate(ctx, cur.PendingOp, reservationRequest(cur))
+	var p string
+	if proof != nil {
+		p = *proof
+	}
+	res, err := port.Mutate(ctx, cur.PendingOp, reservationRequest(cur, p))
 	return s.settle(ctx, c, cur, classify(cur, res, err))
 }
 
@@ -637,10 +660,10 @@ func requestKey(attemptID string, op ReservationOp, n int64) string {
 	return fmt.Sprintf("aicrew-%s-%s-%d", attemptID, op, n)
 }
 
-func reservationRequest(a Attempt) ReservationRequest {
+func reservationRequest(a Attempt, proof string) ReservationRequest {
 	req := ReservationRequest{
 		Task: a.Task, RequestKey: a.PendingKey, ExpectedRevision: a.TaskRevision,
-		CoordinationProof: "aicrew-coordination-" + a.PendingKey,
+		CoordinationProof: proof,
 	}
 	switch a.PendingOp {
 	case ReservationClaim:
@@ -652,8 +675,8 @@ func reservationRequest(a Attempt) ReservationRequest {
 		req.ReservationID, req.Fence = a.ReservationID, a.Fence
 		switch {
 		case a.Stop == StopConfirmed:
-			// The holder releases its own hold; no coordination reference.
-			req.Reason, req.CoordinationProof = "stopped", ""
+			// The holder releases its own hold, under the stopped fact.
+			req.Reason = "stopped"
 			req.Owned = &OwnedTaskFields{State: a.PendingIntent, Blocker: a.PendingDetail}
 		case a.Declined:
 			req.Reason = "declined offer"
@@ -850,7 +873,16 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 	if err := recordStep(ctx, tx, a, o, now); err != nil {
 		return Attempt{}, err
 	}
-	return getAttempt(ctx, tx, a.ID)
+	out, err := getAttempt(ctx, tx, a.ID)
+	if err != nil {
+		return Attempt{}, err
+	}
+	if out.PendingKey == "" {
+		if err := endProofs(ctx, tx, a.ID, now); err != nil {
+			return Attempt{}, err
+		}
+	}
+	return out, nil
 }
 
 // pendingColumnsCleared resets every pending-step column.

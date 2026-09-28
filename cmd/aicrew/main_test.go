@@ -158,6 +158,9 @@ func TestUsageAndStoreInUse(t *testing.T) {
 		{"introspection-credential", "issue", "-hub", "hub-a", "-secret-file", "x"},
 		{"introspection-credential", "revoke", "-store", storePath},
 		{"introspection-credential", "list", "-store", storePath, "-id", "x"},
+		{"introspection-credential", "issue", "-store", storePath, "-hub", "hub-a", "-secret-file", "x", "-operations", "everything"},
+		{"introspection-credential", "issue", "-store", storePath, "-hub", "hub-a", "-secret-file", "x", "-operations", "introspection,"},
+		{"introspection-credential", "list", "-store", storePath, "-operations", "coordination"},
 	} {
 		if r := cli(t, args...); r.code != 2 {
 			t.Fatalf("%v: exit %d, want 2", args, r.code)
@@ -175,5 +178,48 @@ func TestUsageAndStoreInUse(t *testing.T) {
 	}
 	if _, err := os.Stat(secret); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("a secret file was created while the store was in use")
+	}
+}
+
+// -operations sets what a new credential permits: both by default, or only
+// the named ones. The listing shows them.
+func TestIssueOperations(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "aicrew.db")
+	for _, tc := range []struct {
+		flag              string
+		want              string
+		introspect, facts bool
+	}{
+		{"", store.OpCoordination + "," + store.OpIntrospection, true, true},
+		{"introspection", store.OpIntrospection, true, false},
+		{"coordination", store.OpCoordination, false, true},
+		{"coordination, introspection", store.OpCoordination + "," + store.OpIntrospection, true, true},
+	} {
+		secret := filepath.Join(dir, "cred-"+strings.NewReplacer(",", "-", " ", "").Replace(tc.flag)+".secret")
+		hub := "hub-" + strings.NewReplacer(",", "-", " ", "").Replace(tc.flag)
+		args := []string{"introspection-credential", "issue", "-store", storePath, "-hub", hub, "-secret-file", secret}
+		if tc.flag != "" {
+			args = append(args, "-operations", tc.flag)
+		}
+		r := cli(t, args...)
+		var v credentialView
+		if r.code != 0 || json.Unmarshal([]byte(r.stdout), &v) != nil || strings.Join(v.Operations, ",") != tc.want {
+			t.Fatalf("-operations %q: %d %s %s", tc.flag, r.code, r.stdout, r.stderr)
+		}
+		bearer, err := os.ReadFile(secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := store.Open(context.Background(), storePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, ierr := st.AuthenticateIntrospection(context.Background(), strings.TrimSpace(string(bearer)))
+		_, cerr := st.AuthenticateCoordination(context.Background(), strings.TrimSpace(string(bearer)))
+		st.Close()
+		if (ierr == nil) != tc.introspect || (cerr == nil) != tc.facts {
+			t.Fatalf("-operations %q: introspection %v, coordination %v", tc.flag, ierr, cerr)
+		}
 	}
 }

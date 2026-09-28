@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -94,7 +97,34 @@ type TrustedProcess struct {
 }
 
 func (p TrustedProcess) valid() bool {
-	return validRefs(p.Identity.Repository, p.Identity.Commit, p.Identity.Manifest, p.InstructionDigest)
+	return ValidProcessIdentity(p.Identity) && validRefs(p.InstructionDigest)
+}
+
+var commitShape = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// ValidProcessIdentity reports whether an identity has the forms of the hub's
+// process selection, which aimem compares with a coordination fact's pin byte
+// for byte (coordination.v1, "Process pin"): a Git URL of at most 512 bytes
+// starting with https://, ssh:// or git@, with no whitespace or quote and no
+// leading "-"; the full lowercase commit; and a clean relative slash path of
+// at most 256 bytes that stays inside the repository. These are aimem's
+// process.Ref rules, except that the manifest may not be exactly "..".
+func ValidProcessIdentity(p ProcessIdentity) bool {
+	r := p.Repository
+	if r == "" || len(r) > 512 || strings.ContainsAny(r, " \t\r\n\"'") || strings.HasPrefix(r, "-") {
+		return false
+	}
+	if !strings.HasPrefix(r, "https://") && !strings.HasPrefix(r, "ssh://") && !strings.HasPrefix(r, "git@") {
+		return false
+	}
+	if !commitShape.MatchString(p.Commit) {
+		return false
+	}
+	m := p.Manifest
+	if m == "" || len(m) > 256 || strings.HasPrefix(m, "/") || strings.Contains(m, "\\") || strings.ContainsAny(m, " \t\r\n") {
+		return false
+	}
+	return path.Clean(m) == m && m != "." && m != ".." && !strings.HasPrefix(m, "../") && !strings.Contains(m, "/../")
 }
 
 // AttemptOrigin is how an attempt began: a coordinator's offer to a named
@@ -229,7 +259,7 @@ func (r OfferRequest) validate() error {
 		return fmt.Errorf("%w: an offer needs a task, a base commit and a branch", ErrInvalid)
 	}
 	if !r.Process.valid() {
-		return fmt.Errorf("%w: an offer needs the process repository, commit, manifest and instruction digest", ErrInvalid)
+		return fmt.Errorf("%w: an offer needs the process pin in the hub selection's forms (a Git URL, the full commit, a relative manifest path) and the instruction digest", ErrInvalid)
 	}
 	return nil
 }

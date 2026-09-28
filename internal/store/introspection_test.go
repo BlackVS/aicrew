@@ -353,3 +353,85 @@ func TestSessionHandleStorage(t *testing.T) {
 		t.Fatal("the schema accepted a handle at generation 0")
 	}
 }
+
+// A credential permits the operations it was issued with; one without an
+// operation authenticates for it exactly like an unknown credential.
+func TestIntrospectionCredentialOperations(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	op := operator(t)
+	both, bothBearer, err := s.IssueIntrospectionCredential(ctx, op, "both", "hub-a")
+	if err != nil || strings.Join(both.Operations, ",") != OpCoordination+","+OpIntrospection {
+		t.Fatalf("default operations = %v, %v", both.Operations, err)
+	}
+	_, intro, err := s.IssueIntrospectionCredential(ctx, op, "intro", "hub-a", OpIntrospection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, coord, err := s.IssueIntrospectionCredential(ctx, op, "coord", "hub-b", OpCoordination, OpCoordination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		bearer            string
+		introspect, facts bool
+	}{"both": {bothBearer, true, true}, "introspection only": {intro, true, false}, "coordination only": {coord, false, true}} {
+		_, ierr := s.AuthenticateIntrospection(ctx, c.bearer)
+		_, cerr := s.AuthenticateCoordination(ctx, c.bearer)
+		if (ierr == nil) != c.introspect || (cerr == nil) != c.facts {
+			t.Errorf("%s: introspection %v, coordination %v", name, ierr, cerr)
+		}
+		for _, err := range []error{ierr, cerr} {
+			if err != nil && !errors.Is(err, ErrUnauthenticated) {
+				t.Errorf("%s: refused with %v, not as unauthenticated", name, err)
+			}
+		}
+	}
+	if _, _, err := s.IssueIntrospectionCredential(ctx, op, "bad", "hub-c", "crew.everything"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an unknown operation: %v", err)
+	}
+	list, err := s.ListIntrospectionCredentials(ctx, op)
+	if err != nil || len(list) != 3 {
+		t.Fatalf("list = %v, %v", list, err)
+	}
+	for _, c := range list {
+		if len(c.Operations) == 0 {
+			t.Fatalf("listed credential %s has no operations", c.ID)
+		}
+	}
+}
+
+// Schema v15 records each credential's operations; a credential issued
+// before it keeps introspection only, until the operator rotates it.
+func TestMigrationV15KeepsCredentialsToIntrospection(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	_, bearer, err := s.IssueIntrospectionCredential(ctx, operator(t), "before-v15", "hub-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	for _, stmt := range []string{`ALTER TABLE introspection_credentials DROP COLUMN operations`, `UPDATE schema_version SET version = 14`} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v14 store: %v", err)
+	}
+	defer s2.Close()
+	var version int
+	if err := s2.db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != schemaVersion {
+		t.Fatalf("schema version = %d, %v", version, err)
+	}
+	if hub, err := s2.AuthenticateIntrospection(ctx, bearer); err != nil || hub != "hub-test" {
+		t.Fatalf("introspection after the migration: %q, %v", hub, err)
+	}
+	if _, err := s2.AuthenticateCoordination(ctx, bearer); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("coordination with a migrated credential: %v", err)
+	}
+}

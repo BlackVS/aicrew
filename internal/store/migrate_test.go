@@ -339,7 +339,8 @@ func TestMigrationV13AddsSessionTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := rawDB(t, path)
-	for _, stmt := range []string{`DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`, `UPDATE schema_version SET version = 12`} {
+	for _, stmt := range []string{`DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`,
+		`ALTER TABLE introspection_credentials DROP COLUMN operations`, `UPDATE schema_version SET version = 12`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}

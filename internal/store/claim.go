@@ -43,7 +43,7 @@ func (r ClaimRequest) validate() error {
 		return fmt.Errorf("%w: a claim needs a task, a base commit and a branch", ErrInvalid)
 	}
 	if !r.Process.valid() || !validRefs(r.InstructionDigest) {
-		return fmt.Errorf("%w: a claim needs the process pin and the digest of the verified instructions", ErrInvalid)
+		return fmt.Errorf("%w: a claim needs the process pin in the hub selection's forms (a Git URL, the full commit, a relative manifest path) and the digest of the verified instructions", ErrInvalid)
 	}
 	return nil
 }

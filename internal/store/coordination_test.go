@@ -146,7 +146,7 @@ func TestCoordinationFactsFromRealTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(Fact{Kind: FactIndependentClaim, Task: c.Task, Member: memberOf(e.solo, RoleIndependent),
-		AttemptRef: c.attemptRef()})
+		AttemptRef: c.attemptRef(), Process: &pin})
 	if _, err := e.soloWork(t, "solo-submit", c, IntentSubmit, "https://example.invalid/pull/2"); err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +445,8 @@ func TestMigrationV14AddsCoordinationProofs(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := rawDB(t, path)
-	for _, stmt := range []string{`DROP TABLE coordination_proofs`, `UPDATE schema_version SET version = 13`} {
+	for _, stmt := range []string{`DROP TABLE coordination_proofs`, `ALTER TABLE introspection_credentials DROP COLUMN operations`,
+		`UPDATE schema_version SET version = 13`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}
@@ -456,7 +457,7 @@ func TestMigrationV14AddsCoordinationProofs(t *testing.T) {
 	}
 	defer s2.Close()
 	var version int
-	if err := s2.db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 14 {
+	if err := s2.db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != schemaVersion {
 		t.Fatalf("schema version = %d, %v", version, err)
 	}
 	if err := foreignKeyCheck(ctx, s2.db); err != nil {
@@ -470,4 +471,76 @@ func TestMigrationV14AddsCoordinationProofs(t *testing.T) {
 	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM coordination_proofs`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("proofs after an offer = %d, %v", n, err)
 	}
+}
+
+// A pin is recorded only in the hub selection's forms, which aimem compares
+// byte for byte; a malformed one is refused before any proof exists.
+func TestProcessPinForms(t *testing.T) {
+	ok := testPin.Identity
+	long := ok
+	long.Repository = "https://" + strings.Repeat("r", 512-len("https://"))
+	for name, p := range map[string]ProcessIdentity{"the test pin": ok, "a 512-byte repository": long,
+		"ssh": {Repository: "ssh://git.example/p.git", Commit: ok.Commit, Manifest: "m.json"},
+		"scp": {Repository: "git@git.example:team/p.git", Commit: ok.Commit, Manifest: "a/b/m.json"}} {
+		if !ValidProcessIdentity(p) {
+			t.Errorf("%s: refused %+v", name, p)
+		}
+	}
+	bad := map[string]func(p *ProcessIdentity){
+		"repository over 512 bytes": func(p *ProcessIdentity) { p.Repository = long.Repository + "r" },
+		"plain http":                func(p *ProcessIdentity) { p.Repository = "http://git.example/p.git" },
+		"no scheme":                 func(p *ProcessIdentity) { p.Repository = "github.com/example/process" },
+		"leading dash":              func(p *ProcessIdentity) { p.Repository = "-uhttps://git.example/p.git" },
+		"whitespace in repository":  func(p *ProcessIdentity) { p.Repository = "https://git.example/p .git" },
+		"quote in repository":       func(p *ProcessIdentity) { p.Repository = `https://git.example/p".git` },
+		"abbreviated commit":        func(p *ProcessIdentity) { p.Commit = "3f2a9c1" },
+		"uppercase commit":          func(p *ProcessIdentity) { p.Commit = strings.ToUpper(ok.Commit) },
+		"absolute manifest":         func(p *ProcessIdentity) { p.Manifest = "/process/manifest.json" },
+		"manifest leaves":           func(p *ProcessIdentity) { p.Manifest = "../manifest.json" },
+		"manifest is ..":            func(p *ProcessIdentity) { p.Manifest = ".." },
+		"manifest is .":             func(p *ProcessIdentity) { p.Manifest = "." },
+		"manifest not clean":        func(p *ProcessIdentity) { p.Manifest = "a//manifest.json" },
+		"manifest backslash":        func(p *ProcessIdentity) { p.Manifest = `a\manifest.json` },
+		"manifest over 256 bytes":   func(p *ProcessIdentity) { p.Manifest = strings.Repeat("m", 257) },
+		"empty manifest":            func(p *ProcessIdentity) { p.Manifest = "" },
+	}
+	for name, change := range bad {
+		p := ok
+		change(&p)
+		if ValidProcessIdentity(p) {
+			t.Errorf("%s: accepted %+v", name, p)
+		}
+	}
+
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	e := newClaimTeam(t, s)
+	req := e.offerReq("task-1")
+	req.Process.Identity.Commit = "3f2a9c1"
+	if _, err := s.OfferTask(ctx, e.lead.caller, e.port, "offer", req); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an offer with a malformed pin: %v", err)
+	}
+	claim := e.claimReq(e.solo, "task-2")
+	claim.Process.Identity.Manifest = "../manifest.json"
+	if _, err := s.ClaimTask(ctx, e.solo.caller, e.port, "claim", claim); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a claim with a malformed pin: %v", err)
+	}
+	if n := count(t, s, "coordination_proofs"); n != 0 {
+		t.Fatalf("%d proofs issued for refused pins", n)
+	}
+	req = e.offerReq("task-3")
+	req.Process.Identity = long
+	if _, err := s.OfferTask(ctx, e.lead.caller, e.port, "offer-long", req); err != nil {
+		t.Fatalf("an offer with a 512-byte repository: %v", err)
+	}
+}
+
+// A pin recorded in a malformed form, as by an older release or a damaged
+// row, never reaches aimem: the fact answers inactive instead.
+func TestMalformedRecordedPinAnswersInactive(t *testing.T) {
+	e, a, proof := pendingOffer(t)
+	if _, err := e.s.db.Exec(`UPDATE attempts SET process_commit = upper(process_commit) WHERE id = ?`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	inactive(t, e.s, proof, "a fact whose recorded pin is malformed")
 }

@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 14
+const schemaVersion = 15
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -208,7 +208,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	}
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
-		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14}
+		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -392,6 +392,14 @@ var schemaV5 = []string{
 		PRIMARY KEY (message_id, agent_id)
 	)`,
 	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
+}
+
+// schemaV15 records the operations each introspection credential permits:
+// session introspection, coordination facts, or both. A credential issued
+// before coordination existed keeps introspection only; the operator enables
+// coordination by rotating it (D-b0-1).
+var schemaV15 = []string{
+	`ALTER TABLE introspection_credentials ADD COLUMN operations TEXT NOT NULL DEFAULT 'crew.introspection'`,
 }
 
 // schemaV14 adds the coordination proofs aicrew issues for aimem's

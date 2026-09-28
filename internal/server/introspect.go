@@ -77,12 +77,15 @@ type refusal struct {
 	CorrelationID string `json:"correlation_id"`
 }
 
-var refusals = map[string]struct {
+// refusalText is one refusal's status and fixed texts.
+type refusalText struct {
 	status     int
 	message    string
 	retryable  bool
 	nextAction string
-}{
+}
+
+var refusals = map[string]refusalText{
 	"invalid_request": {http.StatusBadRequest, "The introspection request is malformed.", false,
 		"Correct the request or use a supported version."},
 	"unsupported_version": {http.StatusBadRequest, "The identity version is missing or unsupported.", false,
@@ -98,8 +101,13 @@ var refusals = map[string]struct {
 // refuse answers with the envelope and closes the connection, so the server
 // never reads a request body it has refused.
 func (s *Server) refuse(w http.ResponseWriter, code string) {
+	s.refuseFrom(w, refusals, code)
+}
+
+// refuseFrom answers with the envelope from the route's own texts.
+func (s *Server) refuseFrom(w http.ResponseWriter, texts map[string]refusalText, code string) {
 	w.Header().Set("Connection", "close")
-	r := refusals[code]
+	r := texts[code]
 	var id [8]byte
 	_, _ = rand.Read(id[:])
 	writeJSON(w, r.status, refusal{Code: code, Message: r.message, Retryable: r.retryable,

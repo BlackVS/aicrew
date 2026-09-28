@@ -1,0 +1,612 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AIForge coordination facts and reservation read scope (proposal)",
+    "version": "coordination.v1"
+  },
+  "x-contract-version": "coordination.v1",
+  "x-security-gate": "Nothing here is served by the hub. aicrew serves /v1/crew/coordination (task b0); C6 serves the read scope.",
+  "paths": {
+    "/v1/crew/coordination": {
+      "post": {
+        "x-owner": "aicrew",
+        "x-operation": "crew.coordination",
+        "x-caller": "aimem",
+        "security": [
+          {
+            "CoordinationCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CoordinationVersion"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoordinationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Active fact or inactive reply",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinationReply"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "unsupported_version; nothing evaluated"
+          },
+          "401": {
+            "description": "unknown or unauthorized credential"
+          }
+        }
+      }
+    },
+    "/v1/identity/peers/{service_id}/reservation-receipts/{proof_digest}": {
+      "get": {
+        "x-owner": "aimem",
+        "x-operation": "reservation.read",
+        "x-caller": "aicrew",
+        "security": [
+          {
+            "ReservationReadCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ServiceID"
+          },
+          {
+            "$ref": "#/components/parameters/ProofDigest"
+          },
+          {
+            "$ref": "#/components/parameters/ReservationVersion"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "committed or none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptRead"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "unsupported_version"
+          },
+          "401": {
+            "description": "peer_unauthenticated"
+          },
+          "403": {
+            "description": "peer_forbidden or tls_required"
+          },
+          "429": {
+            "description": "rate_limited"
+          },
+          "503": {
+            "description": "request_in_progress"
+          }
+        }
+      }
+    },
+    "/v1/identity/peers/{service_id}/reservations/{task_id}/receipts/{operation}/{request_key_digest}": {
+      "get": {
+        "x-owner": "aimem",
+        "x-operation": "reservation.read",
+        "x-caller": "aicrew",
+        "security": [
+          {
+            "ReservationReadCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ServiceID"
+          },
+          {
+            "$ref": "#/components/parameters/TaskID"
+          },
+          {
+            "$ref": "#/components/parameters/Operation"
+          },
+          {
+            "$ref": "#/components/parameters/RequestKeyDigest"
+          },
+          {
+            "$ref": "#/components/parameters/ReservationVersion"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "committed on a reservation this service's proof established, or none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptRead"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "unsupported_version"
+          },
+          "401": {
+            "description": "peer_unauthenticated"
+          },
+          "403": {
+            "description": "peer_forbidden or tls_required"
+          },
+          "429": {
+            "description": "rate_limited"
+          },
+          "503": {
+            "description": "request_in_progress"
+          }
+        }
+      }
+    },
+    "/v1/identity/peers/{service_id}/reservations/{task_id}": {
+      "get": {
+        "x-owner": "aimem",
+        "x-operation": "reservation.read",
+        "x-caller": "aicrew",
+        "security": [
+          {
+            "ReservationReadCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ServiceID"
+          },
+          {
+            "$ref": "#/components/parameters/TaskID"
+          },
+          {
+            "$ref": "#/components/parameters/ReservationVersion"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "held under own proof, closed (own most recent reservation no longer active), or none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldRead"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "unsupported_version"
+          },
+          "401": {
+            "description": "peer_unauthenticated"
+          },
+          "403": {
+            "description": "peer_forbidden or tls_required"
+          },
+          "429": {
+            "description": "rate_limited"
+          },
+          "503": {
+            "description": "request_in_progress"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "CoordinationCredential": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "aimem's outbound introspection credential, permitted crew.coordination"
+      },
+      "ReservationReadCredential": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "aimem_peer_ credential with the single operation reservation.read"
+      }
+    },
+    "parameters": {
+      "CoordinationVersion": {
+        "name": "X-Aimem-Coordination-Version",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "const": "1"
+        }
+      },
+      "ReservationVersion": {
+        "name": "X-Aimem-Reservation-Version",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "const": "1"
+        }
+      },
+      "ServiceID": {
+        "name": "service_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ProofDigest": {
+        "name": "proof_digest",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^p1_[A-Za-z0-9_-]{43}$"
+        }
+      },
+      "TaskID": {
+        "name": "task_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Operation": {
+        "name": "operation",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "enum": [
+            "claim",
+            "transfer",
+            "update",
+            "release",
+            "finalize"
+          ]
+        }
+      },
+      "RequestKeyDigest": {
+        "name": "request_key_digest",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^k1_[A-Za-z0-9_-]{43}$"
+        }
+      }
+    },
+    "schemas": {
+      "CoordinationRequest": {
+        "type": "object",
+        "required": [
+          "version",
+          "hub_id",
+          "nonce",
+          "proof"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "hub_id": {
+            "type": "string"
+          },
+          "nonce": {
+            "type": "string",
+            "pattern": "^n-[0-9a-f]{32}$"
+          },
+          "proof": {
+            "type": "string",
+            "pattern": "^acp1_[A-Za-z0-9_-]{43}$"
+          }
+        }
+      },
+      "Member": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "agent_id",
+          "team_id",
+          "role",
+          "session_id",
+          "generation"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "user_id": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "coordinator",
+              "worker",
+              "independent"
+            ]
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          }
+        }
+      },
+      "Fact": {
+        "type": "object",
+        "required": [
+          "kind",
+          "operation",
+          "task_id",
+          "request_key_digest",
+          "member",
+          "expires_at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "offer",
+              "accepted_attempt",
+              "never_accepted",
+              "stopped",
+              "accepted_for_finalization",
+              "independent_claim"
+            ]
+          },
+          "operation": {
+            "enum": [
+              "claim",
+              "transfer",
+              "release",
+              "finalize"
+            ]
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "request_key_digest": {
+            "type": "string",
+            "pattern": "^k1_[A-Za-z0-9_-]{43}$"
+          },
+          "member": {
+            "$ref": "#/components/schemas/Member"
+          },
+          "offer_ref": {
+            "type": "string"
+          },
+          "attempt_ref": {
+            "type": "string"
+          },
+          "intended_worker": {
+            "type": "object",
+            "required": [
+              "user_id",
+              "agent_id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "agent_id": {
+                "type": "string"
+              }
+            }
+          },
+          "process": {
+            "$ref": "#/components/schemas/ProcessPin"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProcessPin": {
+        "type": "object",
+        "description": "The process version aicrew recorded for an offer, an acceptance or an independent claim, in the forms of the hub's process selection. Required on offer, accepted_attempt and independent_claim, absent otherwise. aimem compares it byte for byte with the project's current selection in the committing transaction; process_mismatch on a difference or no selection.",
+        "required": [
+          "repo",
+          "commit",
+          "manifest"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "repo": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^(https://|ssh://|git@)[^\\s\"']*$"
+          },
+          "commit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "manifest": {
+            "type": "string",
+            "maxLength": 256
+          }
+        }
+      },
+      "CoordinationReply": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "nonce",
+              "active",
+              "service_id",
+              "hub_id",
+              "fact"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "nonce": {
+                "type": "string"
+              },
+              "active": {
+                "const": true
+              },
+              "service_id": {
+                "type": "string"
+              },
+              "hub_id": {
+                "type": "string"
+              },
+              "fact": {
+                "$ref": "#/components/schemas/Fact"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "nonce",
+              "active"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "nonce": {
+                "type": "string"
+              },
+              "active": {
+                "const": false
+              }
+            }
+          }
+        ]
+      },
+      "ReceiptRead": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "enum": [
+              "committed",
+              "none"
+            ]
+          },
+          "receipt": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "operation",
+              "task_id",
+              "request_key_digest",
+              "reservation_id",
+              "fence",
+              "task_revision",
+              "member_user_id",
+              "verified_mode",
+              "committed_at"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "operation": {
+                "type": "string"
+              },
+              "task_id": {
+                "type": "string"
+              },
+              "request_key_digest": {
+                "type": "string"
+              },
+              "reservation_id": {
+                "type": "string"
+              },
+              "fence": {
+                "type": "string"
+              },
+              "task_revision": {
+                "type": "integer"
+              },
+              "member_user_id": {
+                "type": "string"
+              },
+              "verified_mode": {
+                "const": "team"
+              },
+              "committed_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        }
+      },
+      "HoldRead": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "enum": [
+              "held",
+              "closed",
+              "none"
+            ]
+          },
+          "reservation_id": {
+            "type": "string"
+          },
+          "fence": {
+            "type": "string"
+          },
+          "holder_mode": {
+            "const": "external"
+          },
+          "own_work_ref": {
+            "type": "string"
+          },
+          "task_revision": {
+            "type": "integer"
+          },
+          "closing_fence": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "closed_by": {
+            "enum": [
+              "holder_release",
+              "holder_finalize",
+              "recovery_release",
+              "recovery_cancel"
+            ]
+          },
+          "closed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

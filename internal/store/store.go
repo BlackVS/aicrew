@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 15
+const schemaVersion = 16
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -82,6 +82,10 @@ type Store struct {
 	// beforeProofReplace, when set by tests, runs when a replayed begin is
 	// about to replace its step's proof, to force interleavings.
 	beforeProofReplace func()
+	// afterTokenLookup, when set by tests, runs when a token operation has
+	// found the token's session and before its first write, to force
+	// interleavings.
+	afterTokenLookup func()
 
 	// outstandingWork reports whether an agent holds work that must be
 	// reconciled before its identity changes: an open attempt or an offer
@@ -211,7 +215,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	}
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
-		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15}
+		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -395,6 +399,15 @@ var schemaV5 = []string{
 		PRIMARY KEY (message_id, agent_id)
 	)`,
 	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
+}
+
+// schemaV16 records which committed receipt verified an attempt's process
+// pin (D-b1b-1): aimem compares the pin in the claim's coordination fact with
+// the project's current selection when it commits, so the pin of an attempt
+// whose claim has not committed is still the claimer's or coordinator's
+// unverified input.
+var schemaV16 = []string{
+	`ALTER TABLE attempts ADD COLUMN process_verified_receipt TEXT NOT NULL DEFAULT ''`,
 }
 
 // schemaV15 records the operations each introspection credential permits:

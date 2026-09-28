@@ -304,6 +304,8 @@ given, and a test enforces that.
 | `POST /v1/crew/session/leave`, empty body or `{}` | `Authorization: Bearer` session token | Leave under the leave rules. |
 | `POST /v1/crew/attempts` | `Authorization: Bearer` session token | Begin an offer ("Attempt steps"). |
 | `POST /v1/crew/attempts/{id}/accept`, `/decline`, `/withdraw` | `Authorization: Bearer` session token | Begin an acceptance or a withdrawal, or record a decline. |
+| `POST /v1/crew/attempts/claim` | `Authorization: Bearer` session token | Begin an independent claim. |
+| `POST /v1/crew/attempts/{id}/stop`, `/confirm-stop`, `/release` | `Authorization: Bearer` session token | Request or confirm a stop, or begin the stopped attempt's release. |
 | `POST /v1/crew/attempts/{id}/settle` | `Authorization: Bearer` session token | Settle a step through aimem's read scope. |
 
 - **Entry and resume.** The exchange names the proof type, this service as
@@ -363,7 +365,8 @@ given, and a test enforces that.
 Under D4(a) aicrewd never mutates a reservation. The acting member's own
 aimem connection sends each mutation, and aicrewd confirms the outcome
 through aimem's read-only reservation scope. So each step of the offer
-family is two calls: begin and settle.
+family, the independent claim and the stop release is two calls: begin and
+settle.
 
 The session token alone names the agent, its session and its generation.
 The store authenticates the token again inside every command, replays
@@ -385,11 +388,23 @@ begin needs an `Idempotency-Key`; settle does not.
   - `/{id}/withdraw`: the team's current coordinator releases an offer that
     was never accepted, whether withdrawn, declined or expired. The body is
     empty or `{}`.
+  - `POST /v1/crew/attempts/claim`: an independent member claims a task in
+    one of its team's projects for itself. The body carries `task`,
+    `expected_revision`, `base_commit`, `branch`, `process` and
+    `instruction_digest`, all the claimer's ("Process pins"). The claim's
+    fact carries the pin. `Location` names the new attempt.
+  - `/{id}/release`: the holder of a stopped attempt, after its own
+    confirmation, releases the task. The body is `{target, blocker?}`, with
+    the target `READY`, or `BLOCKED` with a blocker. The step carries the
+    `stopped` fact.
   - A begin records the intent and the capacity it needs, as "Ordering
     across the two stores" requires. It answers `200` with coordination.v1's
     begin response: `{operation, request_key, expected_revision,
     reservation_id?, fence?, holder?, coordination_proof}`.
-    - For an offer, `Location` names the new attempt.
+    - For an offer or a claim, `Location` names the new attempt.
+    - A stopped attempt's release also carries `target_state`, `reason` and
+      `blocker?`: the values the member sends aimem with the step
+      (D-b1b-2). No other step carries them.
     - The member sends exactly that request to aimem.
     - The proof appears only in this answer.
   - **Retried begin.** A retry with the same key and the same input, while
@@ -401,7 +416,15 @@ begin needs an `Idempotency-Key`; settle does not.
   worker declines.
   - It is local: there is no step and no proof. The coordinator then
     withdraws the offer.
-  - The reply is the attempt: `id`, `state`, `declined` and `close_reason`.
+  - The reply is the attempt: `id`, `state`, `declined`, `stop`,
+    `close_reason`, and `process_verified_receipt` once aimem verified its
+    pin.
+- **Stop.** Local steps, with no step and no proof, each answering with the
+  attempt:
+  - `/{id}/stop`, with `{reason}`: the team's current coordinator requests
+    the stop of a running attempt. The worker never requests its own stop.
+  - `/{id}/confirm-stop`, with an empty body or `{}`: the worker confirms,
+    from its current session, with no step in flight.
 - **Settle.** `/{id}/settle`, with `{request_key, outcome, code?}`.
   - Any member of the attempt's team may settle, so another member can
     settle for one whose client went offline.
@@ -576,16 +599,15 @@ reservation follows one rule:
    the new fence and the new attempt state, together with audit and any
    lifecycle message.
 
-For the offer family (offer, accept and withdraw), step 2 is the acting
-member's ("Attempt steps"):
+For the offer family (offer, accept and withdraw), the independent claim and
+the stop release, step 2 is the acting member's ("Attempt steps"):
 - the begin route returns the request;
 - the member's own aimem connection sends it;
 - settle learns the outcome from aimem's read scope, never from the
   member's report.
 
 Until crew-execution b1b moves them to the same two phases, aicrewd still
-calls aimem itself for the independent claim, the work steps, finalize and
-the stop release.
+calls aimem itself for the work steps and finalize.
 
 After a lost reply, aicrew queries the receipt with the same key and never
 retries with a fresh key. While the receipt is unresolved, the attempt is
@@ -616,13 +638,13 @@ and "not committed" is known only once the read scope still shows nothing
 | Offer to a named worker | `OFFERING` → `OFFERED` | Claim with an external holder referencing the offer, under the coordinator's verified context. The coordinator's client sends it. |
 | Accept | `ACCEPTING` → `RUNNING` | Transfer from offer to attempt, to the worker's verified context; the fence advances. The worker's client sends it. |
 | Decline, withdraw or offer expiry | → `CLOSED` | Release under the current fence; the task returns to `READY`. The coordinator's client sends it. |
-| Independent claim | `CLAIMING` → `RUNNING` | Claim with an external holder referencing the attempt, under the worker's own verified context |
+| Independent claim | `CLAIMING` → `RUNNING` | Claim with an external holder referencing the attempt, under the worker's own verified context. The claimer's client sends it. |
 | Block | `RUNNING` → `BLOCKED` | Fenced work mutation recording the blocker; hold kept |
 | Submit result | `RUNNING` → `SUBMITTED` | Fenced work mutation to task `REVIEW`; result reference recorded |
 | Review: return for rework | `SUBMITTED` → `RUNNING` | The worker, as holder, makes the fenced work mutation back to `IN_PROGRESS` when it resumes; the hold is unchanged |
 | Review: accept result | `SUBMITTED` → `ACCEPTED` | none; acceptance is not delivery |
 | Finalize after human merge | `ACCEPTED` → `FINALIZED` | Finalize `DONE` with reviewed delivery evidence |
-| Stop | `STOP_REQUESTED` → `STOPPED` → `CLOSED` | Release to `READY`, or `BLOCKED` with a recorded blocker, after the worker confirms stop |
+| Stop | `STOP_REQUESTED` → `STOPPED` → `CLOSED` | Release to `READY`, or `BLOCKED` with a recorded blocker, after the worker confirms the stop. The holder's client sends it, under the `stopped` fact. |
 | Operator recovery | any → `CLOSED` | Recovery release or finalize by an authorized principal in aimem; aicrew closes the attempt only once aimem can report this reservation closed (see Recovery) |
 
 The reservation contract lets only the current holder mutate a held task,
@@ -713,10 +735,11 @@ outside aicrew stays open with the capacity for operator recovery.
 **Independent claim.** Only a member with the independent role claims, from
 its own active session at its current generation, and only a task in one of
 the team's projects; a worker receives work by offer and a coordinator
-offers it. A trusted reader supplies the task reference, its expected
-revision and the project's selected process pin; the claimer supplies the
-base commit and branch and the digest of the instructions it verified,
-which must match the pin. Recording the claim takes the claimer's one
+offers it. The claimer supplies the task reference, its expected revision,
+the base commit and branch, the project's selected process pin, and the
+digest of the instructions it verified, which must match the pin. aimem
+compares the expected revision and the pin with its own state when it
+commits, so neither is trusted before then ("Process pins"). Recording the claim takes the claimer's one
 execution capacity, so a member busy in any team cannot claim, and a
 member with a claim cannot be offered work anywhere. Aimem is then asked to
 claim the task with an external holder that names this exact attempt,
@@ -742,10 +765,9 @@ request is never changed.
 
 ## Process pins
 
-When an offer is created (or an independent claim is recorded), aicrew reads
-the project's selected process from aimem and records it on the attempt: the
-process repository, commit and manifest, plus a digest of the role
-instructions the worker will receive. The worker receives and verifies that
+When an offer is created, or an independent claim is recorded, aicrew
+records the process pin on the attempt: the process repository, commit and
+manifest, plus a digest of the role instructions the worker will receive. The worker receives and verifies that
 pin before accepting; if the pinned assets or required skills are
 unavailable, it declines with that reason instead of improvising. A running
 attempt keeps its pin even if the project later selects a different process.
@@ -761,10 +783,19 @@ route, the coordinator supplies the pin and the digest (D-b1(a), D-b1a-3):
 - The digest is not authoritative: a wrong one can only make acceptance
   fail.
 
-For the operations aicrewd still sends to aimem itself, the pin comes from a
-trusted reader of the project's selection, never from what a caller sends. Every audit record carries the attempt's pin. The steps that start
-work carry the pin in their coordination fact, so aimem confirms it is still
-the project's selection when the hold is taken ("Coordination facts").
+The independent claim works the same way: the claimer supplies the pin and
+the digest, and the claim's fact carries the pin for aimem to compare.
+
+A pin supplied by a member is unverified input until aimem commits a claim
+under it (D-b1b-1). The attempt then records that committed claim receipt as
+`process_verified_receipt`: the offer's claim for an offered attempt, and the
+independent claim for a claimed one. An attempt whose claim was refused or
+never committed keeps no verified receipt. So does an attempt recorded
+before schema v16.
+
+Every audit record carries the attempt's pin. The steps that start work
+carry the pin in their coordination fact, so aimem confirms it is still the
+project's selection when the hold is taken ("Coordination facts").
 
 ## Inbox, receipts and audit
 

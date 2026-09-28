@@ -580,7 +580,8 @@ func TestExposureGuard(t *testing.T) {
 		"IssueAgentChallenge": true, "EnterSession": true, "ResumeSessionWithProof": true,
 		"RefreshHandle": true, "LeaveWithToken": true, "AuthenticateSessionToken": true,
 		"BeginOfferWithToken": true, "BeginAcceptWithToken": true, "DeclineWithToken": true,
-		"BeginWithdrawWithToken": true, "SettleWithToken": true,
+		"BeginWithdrawWithToken": true, "SettleWithToken": true, "BeginClaimWithToken": true,
+		"RequestStopWithToken": true, "ConfirmStopWithToken": true, "BeginStopReleaseWithToken": true,
 	}
 	forbiddenPkg := map[string]bool{"AgentCaller": true, "OperatorCaller": true}
 	files, err := filepath.Glob("*.go")
@@ -632,8 +633,9 @@ func TestRouteInventory(t *testing.T) {
 		}
 	}
 	sort.Strings(got)
-	want := []string{"GET /healthz", "GET /v1/crew/session", "POST /v1/crew/attempts",
-		"POST /v1/crew/attempts/{id}/accept", "POST /v1/crew/attempts/{id}/decline", "POST /v1/crew/attempts/{id}/settle",
+	want := []string{"GET /healthz", "GET /v1/crew/session", "POST /v1/crew/attempts", "POST /v1/crew/attempts/claim",
+		"POST /v1/crew/attempts/{id}/accept", "POST /v1/crew/attempts/{id}/confirm-stop", "POST /v1/crew/attempts/{id}/decline",
+		"POST /v1/crew/attempts/{id}/release", "POST /v1/crew/attempts/{id}/settle", "POST /v1/crew/attempts/{id}/stop",
 		"POST /v1/crew/attempts/{id}/withdraw", "POST /v1/crew/challenges", "POST /v1/crew/coordination",
 		"POST /v1/crew/introspect", "POST /v1/crew/session/leave", "POST /v1/crew/token"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {

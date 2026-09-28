@@ -21,12 +21,13 @@ import (
 
 const (
 	AttemptsPath = "/v1/crew/attempts"
+	ClaimPath    = AttemptsPath + "/claim"
 
 	maxStepBody = 4 << 10
 )
 
 // The actions on one attempt, at AttemptsPath/{id}/{action}.
-var attemptActions = []string{"accept", "decline", "withdraw", "settle"}
+var attemptActions = []string{"accept", "decline", "withdraw", "settle", "stop", "confirm-stop", "release"}
 
 var attemptIDShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
@@ -34,8 +35,9 @@ func attemptRoute(action string) string { return AttemptsPath + "/{id}/" + actio
 
 func (s *Server) registerAttempts() {
 	s.handle(http.MethodPost, AttemptsPath, s.offer)
+	s.handle(http.MethodPost, ClaimPath, s.claim)
 	handlers := map[string]http.HandlerFunc{"accept": s.accept, "decline": s.decline, "withdraw": s.withdraw,
-		"settle": s.settle}
+		"settle": s.settle, "stop": s.requestStop, "confirm-stop": s.confirmStop, "release": s.releaseStopped}
 	for _, action := range attemptActions {
 		s.handle(http.MethodPost, attemptRoute(action), handlers[action])
 	}
@@ -205,11 +207,26 @@ type attemptView struct {
 	ID          string `json:"id"`
 	State       string `json:"state"`
 	Declined    bool   `json:"declined"`
+	Stop        string `json:"stop,omitempty"`
 	CloseReason string `json:"close_reason,omitempty"`
+	// ProcessVerifiedReceipt names the committed claim receipt under which
+	// aimem verified the attempt's process pin; absent while the pin is
+	// unverified input.
+	ProcessVerifiedReceipt string `json:"process_verified_receipt,omitempty"`
 }
 
 func viewOf(a store.Attempt) attemptView {
-	return attemptView{ID: a.ID, State: string(a.State), Declined: a.Declined, CloseReason: a.CloseReason}
+	return attemptView{ID: a.ID, State: string(a.State), Declined: a.Declined, Stop: string(a.Stop),
+		CloseReason: a.CloseReason, ProcessVerifiedReceipt: a.ProcessVerifiedReceipt}
+}
+
+// writeAttempt answers a local step with the attempt.
+func (s *Server) writeAttempt(w http.ResponseWriter, r *http.Request, a store.Attempt, err error) {
+	if err != nil {
+		s.refuseSession(w, r, attemptRefusal(err), false, 0)
+		return
+	}
+	writeJSON(w, http.StatusOK, viewOf(a))
 }
 
 // decline records the worker's decline. It is local: no step, no proof.
@@ -220,11 +237,76 @@ func (s *Server) decline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, err := s.store.DeclineWithToken(r.Context(), key, token, id)
-	if err != nil {
-		s.refuseSession(w, r, attemptRefusal(err), false, 0)
+	s.writeAttempt(w, r, a, err)
+}
+
+type claimBody struct {
+	Task              store.TaskRef `json:"task"`
+	ExpectedRevision  int64         `json:"expected_revision"`
+	BaseCommit        string        `json:"base_commit"`
+	Branch            string        `json:"branch"`
+	Process           processPin    `json:"process"`
+	InstructionDigest string        `json:"instruction_digest"`
+}
+
+// claim begins an independent member's claim of a task for itself. The
+// reply's Location names the new attempt.
+func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
+	var in claimBody
+	token, key, ok := s.stepRequest(w, r, true, &in)
+	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, viewOf(a))
+	a, step, err := s.store.BeginClaimWithToken(r.Context(), key, token, store.ClaimInput{
+		Task: in.Task, ExpectedRevision: in.ExpectedRevision, BaseCommit: in.BaseCommit, Branch: in.Branch,
+		InstructionDigest: in.InstructionDigest,
+		Process: store.TrustedProcess{InstructionDigest: in.InstructionDigest, Identity: store.ProcessIdentity{
+			Repository: in.Process.Repo, Commit: in.Process.Commit, Manifest: in.Process.Manifest}},
+	})
+	s.writeStep(w, r, a, step, err)
+}
+
+// requestStop records the team's current coordinator's request to stop a
+// running attempt. It is local: no step, no proof.
+func (s *Server) requestStop(w http.ResponseWriter, r *http.Request) {
+	id, _, _ := attemptPath(requestPath(r))
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	token, key, ok := s.stepRequest(w, r, true, &in)
+	if !ok {
+		return
+	}
+	a, err := s.store.RequestStopWithToken(r.Context(), key, token, id, in.Reason)
+	s.writeAttempt(w, r, a, err)
+}
+
+// confirmStop records the worker's confirmation that it stopped. It is
+// local: no step, no proof.
+func (s *Server) confirmStop(w http.ResponseWriter, r *http.Request) {
+	id, _, _ := attemptPath(requestPath(r))
+	token, key, ok := s.stepRequest(w, r, true, nil)
+	if !ok {
+		return
+	}
+	a, err := s.store.ConfirmStopWithToken(r.Context(), key, token, id)
+	s.writeAttempt(w, r, a, err)
+}
+
+// releaseStopped begins the holder's release of its stopped attempt, to
+// READY or to BLOCKED with a blocker, under the stopped fact.
+func (s *Server) releaseStopped(w http.ResponseWriter, r *http.Request) {
+	id, _, _ := attemptPath(requestPath(r))
+	var in struct {
+		Target  store.ReleaseTarget `json:"target"`
+		Blocker string              `json:"blocker,omitempty"`
+	}
+	token, key, ok := s.stepRequest(w, r, true, &in)
+	if !ok {
+		return
+	}
+	a, step, err := s.store.BeginStopReleaseWithToken(r.Context(), key, token, id, in.Target, in.Blocker)
+	s.writeStep(w, r, a, step, err)
 }
 
 type settleBody struct {

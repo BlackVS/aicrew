@@ -77,6 +77,14 @@ var stoppablePhases = []AttemptPhase{PhaseWorking, PhaseBlocked, PhaseSubmitted,
 // prevent the request.
 func (s *Store) RequestStop(ctx context.Context, c Caller, key, attemptID string, in StopRequest) (Attempt, error) {
 	var out Attempt
+	// The request is one local transaction and does not wait for a
+	// reservation call in flight on the attempt (the attempt's step lock),
+	// so a stop can always be recorded. The settle of that call reads the
+	// stop inside its own transaction (applyOutcome).
+	return out, s.run(ctx, c, requestStopCommand(c, key, attemptID, in), &out)
+}
+
+func requestStopCommand(c Caller, key, attemptID string, in StopRequest) command {
 	byOperator := requireOperator(c) == nil
 	cmd := command{
 		op: opRequestStop, scope: attemptID, key: key, input: struct {
@@ -156,19 +164,28 @@ func (s *Store) RequestStop(ctx context.Context, c Caller, key, attemptID string
 	if !byOperator {
 		cmd.replayCheck = sessionCurrent(c, in.SessionID, in.Generation)
 	}
-	// The request is one local transaction and does not wait for a
-	// reservation call in flight on the attempt (the attempt's step lock),
-	// so a stop can always be recorded. The settle of that call reads the
-	// stop inside its own transaction (applyOutcome).
-	return out, s.run(ctx, c, cmd, &out)
+	return cmd
 }
 
 // ConfirmStop records the worker's confirmation that it stopped work on the
 // attempt. Only the attempt's worker confirms, from its current session,
 // with no step in flight. The hold and the capacity stay.
 func (s *Store) ConfirmStop(ctx context.Context, c Caller, key, attemptID, sessionID string, generation int64) (Attempt, error) {
+	return s.confirmStop(ctx, c, confirmStopCommand(c, key, attemptID, sessionID, generation), attemptID)
+}
+
+func (s *Store) confirmStop(ctx context.Context, c Caller, cmd command, attemptID string) (Attempt, error) {
 	var out Attempt
-	cmd := command{
+	unlock, err := s.lockAttempt(ctx, attemptID)
+	if err != nil {
+		return out, err
+	}
+	defer unlock()
+	return out, s.run(ctx, c, cmd, &out)
+}
+
+func confirmStopCommand(c Caller, key, attemptID, sessionID string, generation int64) command {
+	return command{
 		op: opConfirmStop, scope: attemptID, key: key,
 		input:     attemptAt{AttemptID: attemptID, SessionID: sessionID, Generation: generation},
 		authorize: requireAgent, replayCheck: sessionCurrent(c, sessionID, generation),
@@ -197,12 +214,6 @@ func (s *Store) ConfirmStop(ctx context.Context, c Caller, key, attemptID, sessi
 			return getAttempt(ctx, tx, a.ID)
 		},
 	}
-	unlock, err := s.lockAttempt(ctx, attemptID)
-	if err != nil {
-		return out, err
-	}
-	defer unlock()
-	return out, s.run(ctx, c, cmd, &out)
 }
 
 func (r StopRelease) validate() error {
@@ -226,7 +237,13 @@ func (r StopRelease) validate() error {
 // release; any other outcome keeps both.
 func (s *Store) ReleaseStopped(ctx context.Context, c Caller, port Reservations, key, attemptID string, in StopRelease) (Attempt, error) {
 	var proof string
-	cmd := command{
+	return s.transition(ctx, c, port, releaseStoppedCommand(c, key, attemptID, in, &proof), attemptID, &proof)
+}
+
+// releaseStoppedCommand is the holder's release of its stopped attempt: the
+// intent, with the stopped proof issued into proof.
+func releaseStoppedCommand(c Caller, key, attemptID string, in StopRelease, proof *string) command {
+	return command{
 		op: opReleaseStopped, scope: attemptID, key: key, input: struct {
 			AttemptID string `json:"attempt_id"`
 			StopRelease
@@ -263,11 +280,10 @@ func (s *Store) ReleaseStopped(ctx context.Context, c Caller, port Reservations,
 			if err != nil {
 				return nil, err
 			}
-			proof, err = issueProof(ctx, tx, a, FactStopped, in.SessionID, in.Generation, now)
+			*proof, err = issueProof(ctx, tx, a, FactStopped, in.SessionID, in.Generation, now)
 			return a, err
 		},
 	}
-	return s.transition(ctx, c, port, cmd, attemptID, &proof)
 }
 
 // applyStopRelease applies a committed release of a stopped attempt: the

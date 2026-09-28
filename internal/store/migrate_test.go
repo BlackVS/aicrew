@@ -309,7 +309,8 @@ func TestMigrationV12AddsIntrospectionTables(t *testing.T) {
 	}
 	raw := rawDB(t, path)
 	for _, stmt := range []string{`DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`, `DROP TABLE session_handles`,
-		`DROP TABLE introspection_credentials`, `UPDATE schema_version SET version = 11`} {
+		`DROP TABLE introspection_credentials`, `ALTER TABLE attempts DROP COLUMN process_verified_receipt`,
+		`UPDATE schema_version SET version = 11`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}
@@ -341,7 +342,8 @@ func TestMigrationV13AddsSessionTokens(t *testing.T) {
 	}
 	raw := rawDB(t, path)
 	for _, stmt := range []string{`DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`,
-		`ALTER TABLE introspection_credentials DROP COLUMN operations`, `UPDATE schema_version SET version = 12`} {
+		`ALTER TABLE introspection_credentials DROP COLUMN operations`,
+		`ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 12`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}
@@ -362,4 +364,42 @@ func TestMigrationV13AddsSessionTokens(t *testing.T) {
 	a, _ := member(t, s2, tm.ID, "after-migration", RoleWorker)
 	_, sec := newProver(t, s2).enter("enter", a, tm.ID)
 	mustBind(t, s2, sec.Token)
+}
+
+// Schema v16 adds the verified-pin receipt to a populated v15 store and keeps
+// every attempt. An attempt from before v16 shows its pin as unverified; an
+// offer committed after it records the claim receipt that verified its pin.
+func TestMigrationV16AddsVerifiedPinReceipt(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM attempts`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	for _, stmt := range []string{`ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 15`} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v15 store: %v", err)
+	}
+	defer s2.Close()
+	var after, verified int
+	if err := s2.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(process_verified_receipt, '')) FROM attempts`).Scan(&after, &verified); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || verified != 0 {
+		t.Fatalf("after v16: %d attempts (was %d), %d verified", after, before, verified)
+	}
+	e := newExecTeamNamed(t, s2, "after-v16")
+	a := e.offer(t, "offer-after", "task-after-v16")
+	if a.State != AttemptOffered || a.ProcessVerifiedReceipt == "" || a.ProcessVerifiedReceipt != a.LastReceiptID {
+		t.Fatalf("an offer after v16: %+v", a)
+	}
 }

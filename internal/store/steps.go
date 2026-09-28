@@ -222,6 +222,10 @@ func (s *Store) SettleStep(ctx context.Context, c Caller, reader ReservationRead
 		return a, Settlement{}, fmt.Errorf("%w: step %s has no coordination proof to settle by", ErrInvalid, requestKey)
 	}
 	pending := Settlement{RetryAfter: NoneFinalAfter}
+	// A read-scope "none" is final only for lookups that start once the
+	// grace period is over: a lookup asked earlier may answer after a late
+	// commit it did not see.
+	asked := s.now()
 	if reader != nil {
 		// A proof replaced by a replay may still have been used: any of
 		// the intent's proofs can carry the committed transition.
@@ -262,22 +266,21 @@ func (s *Store) SettleStep(ctx context.Context, c Caller, reader ReservationRead
 	if reader == nil {
 		return a, pending, nil
 	}
-	now := s.now()
 	var last time.Time
 	for _, p := range proofs {
 		end := p.expires
 		if !p.ended.IsZero() && p.ended.Before(end) {
 			end = p.ended
 		}
-		if end.After(now) {
+		if end.After(asked) {
 			return a, pending, nil // a proof still lives: aimem may still commit under it
 		}
 		if end.After(last) {
 			last = end
 		}
 	}
-	if final := last.Add(NoneFinalAfter); now.Before(final) {
-		return a, Settlement{RetryAfter: final.Sub(now)}, nil
+	if final := last.Add(NoneFinalAfter); asked.Before(final) {
+		return a, Settlement{RetryAfter: max(final.Sub(s.now()), 0)}, nil
 	}
 	out, err := s.settle(ctx, c, a, callOutcome{kind: outcomeNotCommitted})
 	return out, Settlement{Settled: true}, err

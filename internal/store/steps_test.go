@@ -22,6 +22,9 @@ type fakeReader struct {
 	receipts map[string]ScopeReceiptLookup
 	err      error
 	reads    int
+	// answered, if set, runs once after a lookup has taken its answer and
+	// before it returns: the world may change while an answer is in flight.
+	answered func()
 }
 
 func newFakeReader() *fakeReader { return &fakeReader{receipts: map[string]ScopeReceiptLookup{}} }
@@ -39,6 +42,17 @@ func (f *fakeReader) commit(proof string, r ScopeReceipt) {
 }
 
 func (f *fakeReader) ReceiptByProof(_ context.Context, digest string) (ScopeReceiptLookup, error) {
+	f.mu.Lock()
+	answered := f.answered
+	f.answered = nil
+	f.mu.Unlock()
+	if answered != nil {
+		defer answered()
+	}
+	return f.lookup(digest)
+}
+
+func (f *fakeReader) lookup(digest string) (ScopeReceiptLookup, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reads++
@@ -306,6 +320,27 @@ func TestSettleVoidsAndWaits(t *testing.T) {
 
 // Until aicrew has a read scope, a step stays pending: a refusal report
 // voids it, but nothing settles it.
+// A "none" is final only when the lookup started after the grace period: a
+// lookup asked earlier may return after a late commit it did not see.
+func TestSettleNoneIsFinalOnlyWhenAskedLate(t *testing.T) {
+	e := newStepEnv(t)
+	a, st := e.begin(t, "offer", "task-1")
+	if _, set, err := e.settle(t, a, st, HintRefused); err != nil || set.Settled {
+		t.Fatalf("void: %+v %v", set, err)
+	}
+	e.advance(time.Second)
+	e.reader.answered = func() {
+		e.advance(NoneFinalAfter + time.Second)
+		e.reader.commit(st.CoordinationProof, receiptFor(a, st, "res-1", "1", 4))
+	}
+	if got, set, err := e.settle(t, a, st, HintRefused); err != nil || set.Settled || got.State != AttemptOffering {
+		t.Fatalf("a none asked inside the grace period settled the step: %+v %+v %v", got, set, err)
+	}
+	if got, set, err := e.settle(t, a, st, HintRefused); err != nil || !set.Settled || got.State != AttemptOffered {
+		t.Fatalf("the late commit: %+v %+v %v", got, set, err)
+	}
+}
+
 func TestSettleWithoutAReaderStaysPending(t *testing.T) {
 	e := newStepEnv(t)
 	a, st := e.begin(t, "offer", "task-1")

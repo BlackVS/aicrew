@@ -302,6 +302,9 @@ given, and a test enforces that.
 | `POST /v1/crew/token`, form-encoded | the proof, or the session token | RFC 8693 exchange: entry, resume or handle refresh ("Standards mapping"). |
 | `GET /v1/crew/session` | `Authorization: Bearer` session token | The token's session, hub, user and token ID and expiry. Changes nothing. |
 | `POST /v1/crew/session/leave`, empty body or `{}` | `Authorization: Bearer` session token | Leave under the leave rules. |
+| `POST /v1/crew/attempts` | `Authorization: Bearer` session token | Begin an offer ("Attempt steps"). |
+| `POST /v1/crew/attempts/{id}/accept`, `/decline`, `/withdraw` | `Authorization: Bearer` session token | Begin an acceptance or a withdrawal, or record a decline. |
+| `POST /v1/crew/attempts/{id}/settle` | `Authorization: Bearer` session token | Settle a step through aimem's read scope. |
 
 - **Entry and resume.** The exchange names the proof type, this service as
   `audience`, the `challenge_id`, and either `team_id` (enter) or
@@ -354,6 +357,86 @@ given, and a test enforces that.
   service's configuration (the hub's origin, TLS trust and the redemption
   bearer file); without it they are refused as `aimem_unconfigured`, and
   the other routes work.
+
+### Attempt steps
+
+Under D4(a) aicrewd never mutates a reservation. The acting member's own
+aimem connection sends each mutation, and aicrewd confirms the outcome
+through aimem's read-only reservation scope. So each step of the offer
+family is two calls: begin and settle.
+
+The session token alone names the agent, its session and its generation.
+The store authenticates the token again inside every command, replays
+included, so an ended or resumed session's token begins nothing. Every
+begin needs an `Idempotency-Key`; settle does not.
+
+- **Begin.**
+  - `POST /v1/crew/attempts`: the coordinator offers a task to a named
+    worker. The body carries:
+    - `worker_agent_id`;
+    - `task`, as `hub_id`, `project_id` and `task_id`;
+    - `expected_revision`, `base_commit` and `branch`;
+    - `process`, as `repo`, `commit` and `manifest`;
+    - `instruction_digest` and `expires_at`.
+
+    The pin and the digest are the coordinator's ("Process pins").
+  - `/{id}/accept`: the offer's worker accepts. The body carries the
+    `instruction_digest` the worker verified, which must equal the offer's.
+  - `/{id}/withdraw`: the team's current coordinator releases an offer that
+    was never accepted, whether withdrawn, declined or expired. The body is
+    empty or `{}`.
+  - A begin records the intent and the capacity it needs, as "Ordering
+    across the two stores" requires. It answers `200` with coordination.v1's
+    begin response: `{operation, request_key, expected_revision,
+    reservation_id?, fence?, holder?, coordination_proof}`.
+    - For an offer, `Location` names the new attempt.
+    - The member sends exactly that request to aimem.
+    - The proof appears only in this answer.
+  - **Retried begin.** A retry with the same key and the same input, while
+    the step is pending, gets a replacement proof for the same step and
+    request key. The earlier proof ends at once, so aimem refuses it if it
+    is still on its way. A retry after the step settled is refused: `409
+    step_settled` if it committed, and `409 attempt_state` if it did not.
+- **Decline.** `/{id}/decline`, with an empty body or `{}`: the offer's
+  worker declines.
+  - It is local: there is no step and no proof. The coordinator then
+    withdraws the offer.
+  - The reply is the attempt: `id`, `state`, `declined` and `close_reason`.
+- **Settle.** `/{id}/settle`, with `{request_key, outcome, code?}`.
+  - Any member of the attempt's team may settle, so another member can
+    settle for one whose client went offline.
+  - `outcome` is the member's report, and it is only a hint. It is
+    `committed`, `refused` (with aimem's refusal `code`) or `unknown`.
+  - **A committed receipt** in the read scope, under any proof issued for
+    the step (a replaced one included), applies the transition. The answer
+    is `200`, with `settled: true`, `outcome: committed` and the attempt.
+  - **A refused or unknown report** voids the step at once: its proofs end,
+    so aimem refuses any late use of them.
+  - **Not committed.** The step settles as not committed (`200`, `outcome:
+    not_committed`) only when the read scope still shows no receipt, for
+    lookups started at least 10 s after all the step's proofs ended or
+    expired.
+  - **Pending.** Until then, the answer is `202`, with `settled: false` and
+    `Retry-After`, and the client settles again. That includes a
+    `committed` report the read scope does not show yet.
+  - Settling a settled step reports its outcome again.
+  - Aicrewd has no read scope until crew-execution b3. Until then, every
+    settle answers `202`: no report is ever trusted.
+- **Refusals** use the envelope above. The step routes add these codes to
+  the session API's:
+  - `403 attempt_forbidden`: not the session's team, or not its role for
+    this step;
+  - `409 task_busy`: this service already has an open attempt on the task,
+    in any team;
+  - `409` for `agent_busy`, `attempt_state`, `offer_expired`,
+    `offer_declined`, `offer_stale`, `instruction_mismatch` and
+    `step_settled`;
+  - `404 step_unknown`: no step of the attempt has that request key;
+  - the retryable `503 outcome_unknown`, with `Retry-After`: the read scope
+    did not answer, or showed a receipt that is not the step's.
+- **Paths.** An attempt ID is 1 to 128 characters from `[A-Za-z0-9._:-]`,
+  starting with a letter or digit. Any other path is `404`. The log names
+  the route template, never the ID.
 
 ### Working in a team session: a fresh conversation
 
@@ -493,6 +576,17 @@ reservation follows one rule:
    the new fence and the new attempt state, together with audit and any
    lifecycle message.
 
+For the offer family (offer, accept and withdraw), step 2 is the acting
+member's ("Attempt steps"):
+- the begin route returns the request;
+- the member's own aimem connection sends it;
+- settle learns the outcome from aimem's read scope, never from the
+  member's report.
+
+Until crew-execution b1b moves them to the same two phases, aicrewd still
+calls aimem itself for the independent claim, the work steps, finalize and
+the stop release.
+
 After a lost reply, aicrew queries the receipt with the same key and never
 retries with a fresh key. While the receipt is unresolved, the attempt is
 `RECONCILING` and no further transition is sent. Only a committed receipt
@@ -502,7 +596,10 @@ refusal and a receipt that does not match the request are all unknown: the
 attempt keeps the worker's capacity and reconciles. A reservation's
 `coordination_proof` grants nothing by itself: aimem asks aicrew about it
 before committing ("Coordination facts").
-When the two stores disagree, aicrew conforms to aimem:
+When the two stores disagree, aicrew conforms to aimem. For a member-driven
+step, "aimem shows" means what the read scope shows for the step's proofs,
+and "not committed" is known only once the read scope still shows nothing
+10 s after those proofs ended.
 
 | Aicrew shows | Aimem shows | Resolution |
 | --- | --- | --- |
@@ -516,9 +613,9 @@ When the two stores disagree, aicrew conforms to aimem:
 
 | Step | Aicrew state | Aimem reservation operation |
 | --- | --- | --- |
-| Offer to a named worker | `OFFERING` → `OFFERED` | Claim with an external holder referencing the offer, under the coordinator's verified context |
-| Accept | `ACCEPTING` → `RUNNING` | Transfer from offer to attempt, to the worker's verified context; fence advances |
-| Decline, withdraw or offer expiry | → `CLOSED` | Release under the current fence; task returns to `READY` |
+| Offer to a named worker | `OFFERING` → `OFFERED` | Claim with an external holder referencing the offer, under the coordinator's verified context. The coordinator's client sends it. |
+| Accept | `ACCEPTING` → `RUNNING` | Transfer from offer to attempt, to the worker's verified context; the fence advances. The worker's client sends it. |
+| Decline, withdraw or offer expiry | → `CLOSED` | Release under the current fence; the task returns to `READY`. The coordinator's client sends it. |
 | Independent claim | `CLAIMING` → `RUNNING` | Claim with an external holder referencing the attempt, under the worker's own verified context |
 | Block | `RUNNING` → `BLOCKED` | Fenced work mutation recording the blocker; hold kept |
 | Submit result | `RUNNING` → `SUBMITTED` | Fenced work mutation to task `REVIEW`; result reference recorded |
@@ -655,9 +752,17 @@ attempt keeps its pin even if the project later selects a different process.
 If the selection changes between offer and accept, acceptance is refused and
 the offer is withdrawn and re-issued under the new pin; a recorded pin is
 never updated. A matching instruction digest shows the worker has the
-recorded instructions, not that it read or understood them. The pin comes
-from a trusted reader of the project's selection, never from what a caller
-sends. Every audit record carries the attempt's pin. The steps that start
+recorded instructions, not that it read or understood them. On the offer
+route, the coordinator supplies the pin and the digest (D-b1(a), D-b1a-3):
+- When aimem commits, it compares the pin in the offer's and the
+  acceptance's coordination facts with the project's current selection, and
+  refuses a different one as `process_mismatch`. So a stale pin never takes
+  or moves a hold.
+- The digest is not authoritative: a wrong one can only make acceptance
+  fail.
+
+For the operations aicrewd still sends to aimem itself, the pin comes from a
+trusted reader of the project's selection, never from what a caller sends. Every audit record carries the attempt's pin. The steps that start
 work carry the pin in their coordination fact, so aimem confirms it is still
 the project's selection when the hold is taken ("Coordination facts").
 

@@ -42,6 +42,9 @@ type Server struct {
 	// verifier redeems aimem proofs at session entry; nil when no aimem
 	// hub is configured.
 	verifier store.Verifier
+	// reader is aimem's read scope for settling member-driven steps; nil
+	// until aicrew has one (crew-execution b3), so those steps stay pending.
+	reader store.ReservationReader
 	// Per-address limits on the unauthenticated routes, and per-session on
 	// handle refresh.
 	challengeLimit, tokenLimit, refreshLimit *limiter
@@ -53,6 +56,10 @@ type Option func(*Server)
 // WithVerifier replaces the aimem verifier the configuration would build. It
 // exists for tests of the service's clients, which stand in for aimem.
 func WithVerifier(v store.Verifier) Option { return func(s *Server) { s.verifier = v } }
+
+// WithReader gives the service aimem's read scope, for tests of the step
+// routes until the real client arrives (crew-execution b3).
+func WithReader(r store.ReservationReader) Option { return func(s *Server) { s.reader = r } }
 
 // New builds the service over an open store. It loads the certificate and
 // key now, so a bad pair fails at start rather than at the first handshake.
@@ -95,6 +102,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 	s.handleOwnBody(http.MethodPost, TokenPath, s.token)
 	s.handle(http.MethodGet, SessionPath, s.sessionStatus)
 	s.handleOwnBody(http.MethodPost, LeavePath, s.leave)
+	s.registerAttempts()
 	s.http = &http.Server{
 		Handler:           s.logged(s.limitBody(http.HandlerFunc(s.dispatch))),
 		ReadHeaderTimeout: readHeaderTimeout,
@@ -166,11 +174,12 @@ func (s *Server) register(method, path string, rt route) {
 	s.routes[path][method] = rt
 }
 
-// dispatch matches the request path and method exactly. There is no
-// pattern matching, no path cleaning, no decoding and no redirect: any other
-// path is 404, and any other method on a known path, HEAD included, is 405.
+// dispatch matches the request path and method exactly. The only pattern is
+// an attempt's ID in the step routes, which must have the ID's shape. There
+// is no path cleaning, no decoding and no redirect: any other path is 404,
+// and any other method on a known path, HEAD included, is 405.
 func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
-	methods, ok := s.routes[requestPath(r)]
+	methods, ok := s.routes[s.routeKey(r)]
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "not_found"})
 		return
@@ -193,21 +202,35 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 // session routes get their envelope, with RFC 6749's members on the token
 // endpoint; every other path keeps the bare code.
 func (s *Server) refuseShared(w http.ResponseWriter, r *http.Request, status int, code string) {
-	switch path := requestPath(r); path {
-	case ChallengesPath, TokenPath, SessionPath, LeavePath:
-		s.refuseSession(w, r, code, path == TokenPath, 0)
+	switch key := s.routeKey(r); {
+	case key == ChallengesPath, key == TokenPath, key == SessionPath, key == LeavePath,
+		key == AttemptsPath, strings.HasPrefix(key, AttemptsPath+"/"):
+		s.refuseSession(w, r, code, key == TokenPath, 0)
 	default:
 		writeJSON(w, status, map[string]string{"code": code})
 	}
+}
+
+// routeKey is the registered path a request's path matches: the path itself,
+// or an attempt step's route template. It is "" when nothing matches.
+func (s *Server) routeKey(r *http.Request) string {
+	path := requestPath(r)
+	if _, ok := s.routes[path]; ok {
+		return path
+	}
+	if _, route, ok := attemptPath(path); ok {
+		return route
+	}
+	return ""
 }
 
 // routeOf names the route a request matches, for the log: the method and
 // the registered path, or "unmatched". It never returns request text that
 // no route registered.
 func (s *Server) routeOf(r *http.Request) string {
-	path := requestPath(r)
-	if _, ok := s.routes[path][r.Method]; ok {
-		return r.Method + " " + path
+	key := s.routeKey(r)
+	if _, ok := s.routes[key][r.Method]; ok {
+		return r.Method + " " + key
 	}
 	return "unmatched"
 }
@@ -236,7 +259,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // read of a body.
 func (s *Server) limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.ContentLength > MaxBodyBytes && !s.routes[requestPath(r)][r.Method].ownsBody {
+		if r.ContentLength > MaxBodyBytes && !s.routes[s.routeKey(r)][r.Method].ownsBody {
 			// Closing the connection keeps the HTTP server from reading
 			// the refused body to reuse the connection.
 			w.Header().Set("Connection", "close")

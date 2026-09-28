@@ -216,6 +216,9 @@ type member struct {
 	agent  store.Agent
 	caller store.Caller
 	sess   store.Session
+	// token is the member's session token: members enter through the
+	// proof flow, as a client does.
+	token string
 }
 
 const coordHub, coordService = "hub-example", "aicrew-example"
@@ -228,8 +231,21 @@ var coordPin = store.TrustedProcess{
 
 func setupCoordination(t *testing.T) *coordEnv {
 	t.Helper()
+	return setupCoordinationWith(t, true)
+}
+
+// setupCoordinationWith is setupCoordination, with the fake aimem's read
+// scope given to the service or not.
+func setupCoordinationWith(t *testing.T, withReader bool) *coordEnv {
+	t.Helper()
 	ctx := context.Background()
-	r := startWith(t, coordService, nil)
+	aimem := &fakeAimem{t: t, current: coordPin.Identity, holds: map[string]*fakeHold{}, revision: 3,
+		kinds: loadCoordFixture(t).FactKinds, receipts: map[string]store.ScopeReceiptLookup{}}
+	r := startWith(t, coordService, func(s *Server) {
+		if withReader {
+			s.reader = aimem
+		}
+	})
 	op, err := store.OperatorCaller("op-test")
 	if err != nil {
 		t.Fatal(err)
@@ -260,11 +276,8 @@ func setupCoordination(t *testing.T) *coordEnv {
 		if err != nil {
 			t.Fatal(err)
 		}
-		sess, err := r.store.StartSession(ctx, c, "start-"+label, team.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return member{agent: a, caller: c, sess: sess}
+		entry, secrets := enterAs(t, r, a, label, team.ID)
+		return member{agent: a, caller: c, sess: entry.Session, token: secrets.Token.Reveal()}
 	}
 	e := &coordEnv{running: r, op: op, team: team,
 		lead: join("lead", store.RoleCoordinator), worker: join("worker", store.RoleWorker),
@@ -273,10 +286,32 @@ func setupCoordination(t *testing.T) *coordEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.aimem = &fakeAimem{t: t, env: e, current: coordPin.Identity, holds: map[string]*fakeHold{}, revision: 3,
-		kinds: loadCoordFixture(t).FactKinds}
+	aimem.env, e.aimem = e, aimem
 	return e
 }
+
+// enterAs enters agent a into the team through the proof flow, with a
+// verifier that vouches for a's linked identity, and returns the entry and
+// its secrets.
+func enterAs(t *testing.T, r *running, a store.Agent, label, teamID string) (store.SessionEntry, store.EntrySecrets) {
+	t.Helper()
+	ctx := context.Background()
+	ch, err := r.store.IssueAgentChallenge(ctx, store.Caller{}, "challenge-"+label+"-"+strconv.Itoa(entries), a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries++
+	receipt := fmt.Sprintf("amr1_%s-%043d", label, entries)
+	v := &fakeVerifier{ids: map[string]store.VerifiedIdentity{
+		receipt: {HubID: coordHub, UserID: "user-" + label, TokenID: "token-" + label}}}
+	entry, secrets, err := r.store.EnterSession(ctx, v, "enter-"+label, ch.ID, store.NewSecret(receipt), teamID, coordService)
+	if err != nil {
+		t.Fatalf("enter %s: %v", label, err)
+	}
+	return entry, secrets
+}
+
+var entries int
 
 // ask sends one coordination request and returns the status and raw reply.
 func (e *coordEnv) ask(t *testing.T, bearer, hub, nonce, proof string) (int, []byte) {
@@ -333,6 +368,9 @@ type fakeAimem struct {
 	}
 	seen    []seenFact
 	refused []string
+	// receipts is the read scope: the receipt committed under each proof,
+	// by its p1_ digest.
+	receipts map[string]store.ScopeReceiptLookup
 	// before runs just before aimem asks aicrew, to change state mid-step.
 	before func()
 }

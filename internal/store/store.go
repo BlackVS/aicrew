@@ -79,6 +79,9 @@ type Store struct {
 	// afterReceiptLookup, when set by tests, runs when a command that calls
 	// out before its transaction found no receipt, to force interleavings.
 	afterReceiptLookup func(op string)
+	// beforeProofReplace, when set by tests, runs when a replayed begin is
+	// about to replace its step's proof, to force interleavings.
+	beforeProofReplace func()
 
 	// outstandingWork reports whether an agent holds work that must be
 	// reconciled before its identity changes: an open attempt or an offer

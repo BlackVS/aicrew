@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 )
 
@@ -58,21 +59,25 @@ func stepFor(a Attempt, proof string) Step {
 // worker, whose capacity the intent takes.
 func (s *Store) BeginOffer(ctx context.Context, c Caller, key string, in OfferRequest) (Attempt, Step, error) {
 	var proof string
-	cmd := offerCommand(c, key, in, &proof)
+	return s.beginOffer(ctx, c, offerCommand(c, key, in, &proof), &proof, in.SessionID, in.Generation, nil)
+}
+
+func (s *Store) beginOffer(ctx context.Context, c Caller, cmd command, proof *string, sessionID string, generation int64,
+	g guard) (Attempt, Step, error) {
 	release, err := s.flights.acquire(ctx, c, cmd, s.flightWait)
 	if err != nil {
 		return Attempt{}, Step{}, err
 	}
 	defer release()
-	return s.begin(ctx, c, cmd, "", &proof, FactOffer, in.SessionID, in.Generation)
+	return s.begin(ctx, c, cmd, "", proof, FactOffer, sessionID, generation, g)
 }
 
 // BeginAccept begins the named worker's acceptance: the transfer of the
 // offer's hold to its attempt.
 func (s *Store) BeginAccept(ctx context.Context, c Caller, key, attemptID string, in AcceptRequest) (Attempt, Step, error) {
 	var proof string
-	return s.begin(ctx, c, acceptCommand(c, key, attemptID, in, &proof), attemptID, &proof,
-		FactAcceptedAttempt, in.SessionID, in.Generation)
+	return s.begin(ctx, c, acceptCommand(c, key, attemptID, in, true, &proof), attemptID, &proof,
+		FactAcceptedAttempt, in.SessionID, in.Generation, nil)
 }
 
 // BeginRelease begins the release of an offer never accepted (declined,
@@ -80,7 +85,7 @@ func (s *Store) BeginAccept(ctx context.Context, c Caller, key, attemptID string
 func (s *Store) BeginRelease(ctx context.Context, c Caller, key, attemptID, sessionID string, generation int64) (Attempt, Step, error) {
 	var proof string
 	return s.begin(ctx, c, releaseCommand(c, key, attemptID, sessionID, generation, &proof), attemptID, &proof,
-		FactNeverAccepted, sessionID, generation)
+		FactNeverAccepted, sessionID, generation, nil)
 }
 
 // begin runs a step's intent. A replay of the same key finds the intent
@@ -88,9 +93,10 @@ func (s *Store) BeginRelease(ctx context.Context, c Caller, key, attemptID, sess
 // pending, the replay gets a replacement proof for the same intent and key,
 // and the earlier proof ends at once (D-b1a-1), so aimem refuses it if it was
 // already on its way. A replay after the step settled reports that step's
-// outcome, with no step to send.
+// outcome, with no step to send. g, if set, is checked inside the
+// replacement's transaction too.
 func (s *Store) begin(ctx context.Context, c Caller, cmd command, attemptID string, proof *string, kind FactKind,
-	sessionID string, generation int64) (Attempt, Step, error) {
+	sessionID string, generation int64, g guard) (Attempt, Step, error) {
 	if attemptID != "" {
 		unlock, err := s.lockAttempt(ctx, attemptID)
 		if err != nil {
@@ -118,7 +124,10 @@ func (s *Store) begin(ctx context.Context, c Caller, cmd command, attemptID stri
 		return out, Step{}, err
 	}
 	if *proof == "" {
-		if *proof, err = s.replaceProof(ctx, c, cur, kind, sessionID, generation); err != nil {
+		if s.beforeProofReplace != nil {
+			s.beforeProofReplace()
+		}
+		if *proof, err = s.replaceProof(ctx, c, cur, kind, sessionID, generation, g); err != nil {
 			return cur, Step{}, err
 		}
 	}
@@ -132,7 +141,8 @@ type stepRef struct {
 
 // replaceProof ends the pending step's proofs and issues a new one for the
 // same intent, acted by the same session.
-func (s *Store) replaceProof(ctx context.Context, c Caller, a Attempt, kind FactKind, sessionID string, generation int64) (string, error) {
+func (s *Store) replaceProof(ctx context.Context, c Caller, a Attempt, kind FactKind, sessionID string, generation int64,
+	g guard) (string, error) {
 	key, err := newID(s.now())
 	if err != nil {
 		return "", err
@@ -141,7 +151,7 @@ func (s *Store) replaceProof(ctx context.Context, c Caller, a Attempt, kind Fact
 	var out stepRef
 	err = s.run(ctx, c, command{
 		op: opReplaceProof, scope: a.ID, key: key, input: stepRef{a.ID, a.PendingKey}, authorize: requireAgent,
-		check: pendingStep(a),
+		check: g.then(pendingStep(a)),
 		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
 			if err := endProofs(ctx, tx, a.ID, now); err != nil {
 				return nil, err
@@ -172,29 +182,65 @@ func pendingStep(a Attempt) func(context.Context, *sql.Tx) error {
 // StepHint is the acting member's report of its mutation: a hint only.
 type StepHint string
 
+// StepReport is the acting member's report: the outcome it saw and, for a
+// refusal, aimem's refusal code. The store records it with the step's void;
+// it never decides the outcome.
+type StepReport struct {
+	Outcome StepHint `json:"outcome"`
+	Code    string   `json:"code,omitempty"`
+}
+
+var refusalCodeShape = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+func (r StepReport) validate() error {
+	switch r.Outcome {
+	case HintRefused:
+		if !refusalCodeShape.MatchString(r.Code) {
+			return fmt.Errorf("%w: a refusal needs aimem's refusal code", ErrInvalid)
+		}
+	case HintCommitted, HintUnknown:
+		if r.Code != "" {
+			return fmt.Errorf("%w: only a refusal carries a code", ErrInvalid)
+		}
+	default:
+		return fmt.Errorf("%w: the outcome must be committed, refused or unknown", ErrInvalid)
+	}
+	return nil
+}
+
 const (
 	HintCommitted StepHint = "committed"
 	HintRefused   StepHint = "refused"
 	HintUnknown   StepHint = "unknown"
 )
 
-// Settlement says whether a settle settled the step and, if not, when to ask
-// again.
+// Settlement says whether a settle settled the step and its recorded
+// outcome (committed or not_committed; refused only for a step aicrewd sent
+// to aimem itself), and, if not, when to ask again.
 type Settlement struct {
 	Settled    bool
+	Outcome    string
 	RetryAfter time.Duration
 }
+
+// ErrStepUnknown refuses a request key that names no step of the attempt.
+var ErrStepUnknown = errors.New("step_unknown")
 
 // SettleStep settles the attempt's pending coordinated step with requestKey.
 // The caller must be the operator or an active member of the attempt's team.
 // reader may be nil while aicrew has no read scope: the step then stays
 // pending, whatever the member reports (D-b1a-2).
 func (s *Store) SettleStep(ctx context.Context, c Caller, reader ReservationReader, attemptID, requestKey string,
-	hint StepHint) (Attempt, Settlement, error) {
-	switch hint {
-	case HintCommitted, HintRefused, HintUnknown:
-	default:
-		return Attempt{}, Settlement{}, fmt.Errorf("%w: the outcome must be committed, refused or unknown", ErrInvalid)
+	report StepReport) (Attempt, Settlement, error) {
+	return s.settleStep(ctx, c, reader, attemptID, requestKey, report, nil)
+}
+
+// settleStep is SettleStep with g, if set, checked inside the transaction of
+// every write it makes: the void and the settlement.
+func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationReader, attemptID, requestKey string,
+	report StepReport, g guard) (Attempt, Settlement, error) {
+	if err := report.validate(); err != nil {
+		return Attempt{}, Settlement{}, err
 	}
 	unlock, err := s.lockAttempt(ctx, attemptID)
 	if err != nil {
@@ -211,8 +257,11 @@ func (s *Store) SettleStep(ctx context.Context, c Caller, reader ReservationRead
 	if a.PendingKey != requestKey {
 		// Not the pending step: an earlier step of this attempt, whose
 		// recorded outcome answers, or no step of this attempt at all.
-		out, err := s.stepOutcome(ctx, a, requestKey)
-		return out, Settlement{Settled: !errors.Is(err, ErrOutcomeUnknown)}, err
+		outcome, _, err := s.recordedOutcome(ctx, a, requestKey)
+		if err != nil {
+			return a, Settlement{}, err
+		}
+		return a, Settlement{Settled: true, Outcome: outcome}, nil
 	}
 	proofs, err := s.stepProofs(ctx, a.ID, requestKey)
 	if err != nil {
@@ -244,8 +293,8 @@ func (s *Store) SettleStep(ctx context.Context, c Caller, reader ReservationRead
 				if err != nil {
 					return a, pending, err
 				}
-				out, err := s.settle(ctx, c, a, callOutcome{kind: outcomeCommitted, result: res})
-				return out, Settlement{Settled: true}, err
+				out, err := s.settleGuarded(ctx, c, a, callOutcome{kind: outcomeCommitted, result: res}, g)
+				return out, Settlement{Settled: true, Outcome: string(outcomeCommitted)}, err
 			case ScopeNone:
 			default:
 				return a, pending, fmt.Errorf("attempt %s: read scope answered %q: %w", a.ID, look.State, ErrOutcomeUnknown)
@@ -255,8 +304,8 @@ func (s *Store) SettleStep(ctx context.Context, c Caller, reader ReservationRead
 	// Nothing committed yet. A report of a refusal or an unknown outcome
 	// ends the step's proofs, so nothing can commit under them any more; a
 	// report of a commit that the read scope does not show yet waits.
-	if hint != HintCommitted {
-		if err := s.voidStep(ctx, c, a); err != nil {
+	if report.Outcome != HintCommitted {
+		if err := s.voidStep(ctx, c, a, report, g); err != nil {
 			return a, Settlement{}, err
 		}
 		if proofs, err = s.stepProofs(ctx, a.ID, requestKey); err != nil {
@@ -282,20 +331,25 @@ func (s *Store) SettleStep(ctx context.Context, c Caller, reader ReservationRead
 	if final := last.Add(NoneFinalAfter); asked.Before(final) {
 		return a, Settlement{RetryAfter: max(final.Sub(s.now()), 0)}, nil
 	}
-	out, err := s.settle(ctx, c, a, callOutcome{kind: outcomeNotCommitted})
-	return out, Settlement{Settled: true}, err
+	out, err := s.settleGuarded(ctx, c, a, callOutcome{kind: outcomeNotCommitted}, g)
+	return out, Settlement{Settled: true, Outcome: string(outcomeNotCommitted)}, err
 }
 
-// voidStep ends the pending step's live proofs.
-func (s *Store) voidStep(ctx context.Context, c Caller, a Attempt) error {
+// voidStep ends the pending step's live proofs. Its audit record keeps the
+// member's report.
+func (s *Store) voidStep(ctx context.Context, c Caller, a Attempt, report StepReport, g guard) error {
 	key, err := newID(s.now())
 	if err != nil {
 		return err
 	}
 	var out stepRef
 	return s.run(ctx, c, command{
-		op: opVoidStep, scope: a.ID, key: key, input: stepRef{a.ID, a.PendingKey}, authorize: anyCaller,
-		check: pendingStep(a),
+		op: opVoidStep, scope: a.ID, key: key, authorize: anyCaller,
+		input: struct {
+			stepRef
+			Report StepReport `json:"report"`
+		}{stepRef{a.ID, a.PendingKey}, report},
+		check: g.then(pendingStep(a)),
 		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE coordination_proofs SET ended_at = ? WHERE attempt_id = ? AND request_key = ? AND ended_at = ''`,

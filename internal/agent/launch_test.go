@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -278,5 +280,131 @@ func TestScopedEnv(t *testing.T) {
 	}
 	if n != 1 || len(env) == 0 || env[1] != SessionEnv+"=old" {
 		t.Fatalf("scoped env %v (input changed: %v)", got, env)
+	}
+}
+
+// unreachableEngine is an engine whose aicrewd never answers, so every
+// challenge fails in transport and is retried. waits receives at each retry
+// wait.
+func (c *crewEnv) unreachableEngine(t *testing.T) (e *Engine, waits <-chan struct{}) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := c.cfg
+	cfg.URL = "https://" + ln.Addr().String()
+	ln.Close()
+	crew, err := NewCrew(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e = NewEngine(cfg, crew, ExecAimem{Command: cfg.AimemCommand}, slog.New(slog.NewTextHandler(c.logs, nil)))
+	w := make(chan struct{}, 1)
+	e.Sleep = func(ctx context.Context, d time.Duration) error {
+		select {
+		case w <- struct{}{}:
+		default:
+		}
+		return sleepCtx(ctx, d)
+	}
+	return e, w
+}
+
+func runInBackground(e *Engine, dir string, sigs <-chan os.Signal) <-chan error {
+	done := make(chan error, 1)
+	self, _ := os.Executable()
+	go func() {
+		_, err := RunClient(context.Background(), e, Client{Path: self, Args: []string{"probe-client", dir}},
+			Stdio{Out: io.Discard, Err: io.Discard}, sigs)
+		done <- err
+	}()
+	return done
+}
+
+func noClientStarted(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(dir, "report.json")); !os.IsNotExist(err) {
+		t.Fatal("the client started after a stop")
+	}
+}
+
+// An interrupt or SIGTERM while the startup retries an unreachable aicrewd
+// ends the startup at once, and the client never starts.
+func TestRunClientStopDuringStartupRetries(t *testing.T) {
+	for _, sig := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
+		t.Run(sig.String(), func(t *testing.T) {
+			c := setupCrew(t)
+			probeEnv(t, "0")
+			dir := t.TempDir()
+			e, waits := c.unreachableEngine(t)
+			sigs := make(chan os.Signal, 1)
+			done := runInBackground(e, dir, sigs)
+			select {
+			case <-waits:
+			case <-time.After(20 * time.Second):
+				t.Fatal("the startup did not retry")
+			}
+			sigs <- sig
+			select {
+			case err := <-done:
+				if !errors.Is(err, ErrStopped) {
+					t.Fatalf("run after a stop: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the stop did not end the startup")
+			}
+			noClientStarted(t, dir)
+			if n := c.sessionsOf(t); n != 0 {
+				t.Fatalf("%d sessions after a stop before entry", n)
+			}
+		})
+	}
+}
+
+// statusGate holds the aimem status call the engine makes while binding a
+// session it has entered, until the startup ends.
+type statusGate struct {
+	Aimem
+	reached chan<- struct{}
+}
+
+func (g statusGate) Status(ctx context.Context, _ string) (string, bool, error) {
+	g.reached <- struct{}{}
+	<-ctx.Done()
+	return "", false, ctx.Err()
+}
+
+// A stop after the startup entered the team leaves the session it entered,
+// and the client never starts.
+func TestRunClientStopAfterEntry(t *testing.T) {
+	c := setupCrew(t)
+	probeEnv(t, "0")
+	dir := t.TempDir()
+	e := c.engine(t)
+	reached := make(chan struct{}, 1)
+	e.Aimem = statusGate{Aimem: e.Aimem, reached: reached}
+	sigs := make(chan os.Signal, 1)
+	done := runInBackground(e, dir, sigs)
+	select {
+	case <-reached:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the startup did not reach the binding")
+	}
+	sigs <- os.Interrupt
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrStopped) {
+			t.Fatalf("run after a stop: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the stop did not end the startup")
+	}
+	noClientStarted(t, dir)
+	if sess, err := c.store.GetSession(context.Background(), e.SessionID()); err != nil || sess.State != store.SessionLeft {
+		t.Fatalf("the entered session after a stop: %+v, %v", sess, err)
+	}
+	if _, ok, _ := LoadState(c.cfg.Home); ok {
+		t.Fatal("the session record outlived the leave")
 	}
 }

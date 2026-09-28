@@ -206,13 +206,15 @@ no secret; other sections belong to onboarding:
   that child's environment only; arguments after `--` go to the client.
   When the client exits, it leaves and closes aimem's binding, exiting with
   the client's code (128 plus the signal if a signal ended it), or 3 if
-  open work kept the session. It does not exit
-  on Ctrl-C, which the terminal delivers to the client; SIGTERM is forwarded
-  to the client, which is killed if still running 10 s later. A killed
-  launcher takes the client with it on Linux (parent-death signal) and
-  Windows (job object); on macOS the client keeps running without team
-  access once its handle expires, within 15 minutes, and the next `run`
-  resumes the session.
+  open work kept the session. Before the client starts, Ctrl-C or SIGTERM
+  stops the startup, including its retries, and leaves any session it
+  entered; the client then never starts. Once the client runs, the launcher
+  does not exit on Ctrl-C, which the terminal delivers to the client;
+  SIGTERM is forwarded to the client, which is killed if still running
+  10 s later. A killed launcher takes the client with it on Linux
+  (parent-death signal) and Windows (job object); on macOS the client keeps
+  running without team access once its handle expires, within 15 minutes,
+  and the next `run` resumes the session.
 - `session start` enters the team, or resumes the session a previous run
   recorded, binds aimem to it with `aimem team-session open` (or `refresh`
   when aimem already holds the session's file), prints

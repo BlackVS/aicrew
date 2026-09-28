@@ -55,17 +55,19 @@ func ScopedEnv(env []string, path string) []string {
 // child's exit code and the session's outcome: nil, a *WorkOutstanding when
 // the session was kept for open work, or an error.
 //
-// Ctrl-C reaches the child through the terminal or console, which delivers
-// it to the whole foreground process group or console; the launcher does not
-// exit on it but waits for the child. SIGTERM sent to the launcher is
-// forwarded to the child, which is killed if it has not exited after
-// termGrace. If the launcher itself dies, the child is stopped with it on
-// Linux (parent-death signal) and Windows (kill-on-close job object). On
-// macOS nothing can stop it, and the handle is the guarantee: no longer
-// refreshed, it gives the child no team access within 15 minutes, and the
-// next run resumes the session under a new generation.
+// Until the client starts, an interrupt or SIGTERM stops the startup and
+// the client never starts (ErrStopped). Once it runs, Ctrl-C reaches the
+// child through the terminal or console, which delivers it to the whole
+// foreground process group or console; the launcher does not exit on it but
+// waits for the child. SIGTERM sent to the launcher is forwarded to the
+// child, which is killed if it has not exited after termGrace. If the
+// launcher itself dies, the child is stopped with it on Linux (parent-death
+// signal) and Windows (kill-on-close job object). On macOS nothing can stop
+// it, and the handle is the guarantee: no longer refreshed, it gives the
+// child no team access within 15 minutes, and the next run resumes the
+// session under a new generation.
 func RunClient(ctx context.Context, e *Engine, c Client, stdio Stdio, signals <-chan os.Signal) (int, error) {
-	if err := e.Start(ctx); err != nil {
+	if err := start(ctx, e, signals); err != nil {
 		return 0, err
 	}
 	cmd := exec.Command(c.Path, c.Args...)
@@ -125,6 +127,48 @@ func RunClient(ctx context.Context, e *Engine, c Client, stdio Stdio, signals <-
 			return code, <-ran
 		}
 	}
+}
+
+// ErrStopped reports a stop requested before the client started.
+var ErrStopped = errors.New("stopped before the client started")
+
+// start starts the session unless a stop (an interrupt or SIGTERM) comes
+// first. A stop cancels the startup and its retries, and a session the
+// startup had already entered is left; the client is then never started.
+// A stop that arrives as the startup ends still counts.
+func start(ctx context.Context, e *Engine, signals <-chan os.Signal) error {
+	startCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- e.Start(startCtx) }()
+	var (
+		err     error
+		stopped bool
+	)
+	for finished := false; !finished; {
+		select {
+		case <-signals:
+			if !stopped {
+				e.Log.Info("stop requested; ending the startup")
+			}
+			stopped = true
+			cancel()
+		case err = <-done:
+			finished = true
+		}
+	}
+	select {
+	case <-signals:
+		stopped = true
+	default:
+	}
+	if !stopped {
+		return err
+	}
+	if e.SessionID() == "" {
+		return ErrStopped
+	}
+	return errors.Join(ErrStopped, e.Leave(context.WithoutCancel(ctx)))
 }
 
 // exitCode is the client's exit status as a shell reports it: a client

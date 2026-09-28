@@ -356,6 +356,39 @@ func TestCoordinationFactKindRules(t *testing.T) {
 	})
 }
 
+// A refused step ends its proof like a committed one, and the attempt's next
+// intent gets a new proof of its own; the refused one stays dead.
+func TestRefusedStepEndsItsProof(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	e := newExecTeam(t, s)
+	log := watchProofs(t, e)
+	a := e.offer(t, "offer", "task-1")
+	e.port.refuse[ReservationTransfer] = fixtureRefusal(t, "stale_worker")
+	var refusal *ReservationRefusal
+	if _, err := s.AcceptOffer(ctx, e.builder.caller, e.port, "accept-1", a.ID, e.acceptReq()); !errors.As(err, &refusal) {
+		t.Fatalf("refused transfer: %v", err)
+	}
+	refused := log.last(t)
+	if !refused.fact.Active || refused.fact.Kind != FactAcceptedAttempt {
+		t.Fatalf("the refused transfer's fact before aimem answered: %+v", refused.fact)
+	}
+	inactive(t, s, refused.proof, "a refused step's proof")
+	var ended string
+	if err := s.db.QueryRow(`SELECT ended_at FROM coordination_proofs WHERE digest = ?`, secretDigest(refused.proof)).Scan(&ended); err != nil || ended == "" {
+		t.Fatalf("the refused step's proof was not ended: %q, %v", ended, err)
+	}
+
+	a = e.accept(t, "accept-2", mustState(t, s, a.ID, AttemptOffered))
+	second := log.last(t)
+	if second.proof == refused.proof || second.key == refused.key {
+		t.Fatal("the second intent reused the refused step's proof or key")
+	}
+	checkStep(t, s, second, Fact{Kind: FactAcceptedAttempt, Task: a.Task, Member: memberOf(e.builder, RoleWorker),
+		OfferRef: a.offerRef(), AttemptRef: a.attemptRef(), Process: &testPin})
+	inactive(t, s, refused.proof, "the refused proof after a later intent")
+}
+
 // Each condition holds on its own: every case below breaks exactly one of
 // them and leaves the others true, so no other rule answers for it.
 func TestCoordinationFactEachRuleAlone(t *testing.T) {

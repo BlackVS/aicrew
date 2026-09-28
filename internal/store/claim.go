@@ -52,17 +52,25 @@ func (r ClaimRequest) validate() error {
 // session's team. The member's capacity is taken with the intent, before
 // aimem is asked to claim the task for the attempt.
 func (s *Store) ClaimTask(ctx context.Context, c Caller, port Reservations, key string, in ClaimRequest) (Attempt, error) {
-	cmd := command{
-		op: opClaimTask, scope: in.SessionID, key: key, input: in,
-		authorize: requireAgent, validate: in.validate,
-		replayCheck: sessionCurrent(c, in.SessionID, in.Generation),
-	}
+	var proof string
+	cmd := claimCommand(c, key, in, &proof)
 	release, err := s.flights.acquire(ctx, c, cmd, s.flightWait)
 	if err != nil {
 		return Attempt{}, err
 	}
 	defer release()
-	var proof string
+	return s.transition(ctx, c, port, cmd, "", &proof)
+}
+
+// claimCommand is an independent claim's intent: it records the attempt with
+// the member's capacity and issues the independent_claim proof, which carries
+// the pin, into proof.
+func claimCommand(c Caller, key string, in ClaimRequest, proof *string) command {
+	cmd := command{
+		op: opClaimTask, scope: in.SessionID, key: key, input: in,
+		authorize: requireAgent, validate: in.validate,
+		replayCheck: sessionCurrent(c, in.SessionID, in.Generation),
+	}
 	cmd.check = func(ctx context.Context, tx *sql.Tx) error {
 		sess, err := currentSession(ctx, tx, c, in.SessionID, in.Generation)
 		if err != nil {
@@ -116,18 +124,21 @@ func (s *Store) ClaimTask(ctx context.Context, c Caller, port Reservations, key 
 		if err != nil {
 			return nil, err
 		}
-		proof, err = issueProof(ctx, tx, a, FactIndependentClaim, sess.ID, sess.Generation, now)
+		*proof, err = issueProof(ctx, tx, a, FactIndependentClaim, sess.ID, sess.Generation, now)
 		return a, err
 	}
-	return s.transition(ctx, c, port, cmd, "", &proof)
+	return cmd
 }
 
 // applyClaimRun applies a committed independent claim: the claimer holds the
 // task itself and starts work.
 func applyClaimRun(ctx context.Context, tx *sql.Tx, a Attempt, r ReservationResult, now time.Time) error {
+	// The independent_claim fact carried the pin, which aimem compared with
+	// the project's selection before committing.
 	if err := updateAttempt(ctx, tx, a.ID, now,
-		`state = 'running', phase = 'working', reservation_id = ?, fence = ?, task_revision = ?, last_receipt_id = ?, `+
-			pendingColumnsCleared, r.Reservation.ID, r.Reservation.Fence, r.TaskRevision, r.Receipt.ID); err != nil {
+		`state = 'running', phase = 'working', reservation_id = ?, fence = ?, task_revision = ?, last_receipt_id = ?,
+		 process_verified_receipt = ?, `+pendingColumnsCleared,
+		r.Reservation.ID, r.Reservation.Fence, r.TaskRevision, r.Receipt.ID, r.Receipt.ID); err != nil {
 		return err
 	}
 	return announce(ctx, tx, a, a.WorkerAgentID, "%s claimed task %s and started work.",

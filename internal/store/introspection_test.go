@@ -414,7 +414,8 @@ func TestMigrationV15KeepsCredentialsToIntrospection(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := rawDB(t, path)
-	for _, stmt := range []string{`ALTER TABLE introspection_credentials DROP COLUMN operations`, `UPDATE schema_version SET version = 14`} {
+	for _, stmt := range []string{`ALTER TABLE introspection_credentials DROP COLUMN operations`,
+		`ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 14`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}

@@ -79,6 +79,9 @@ func (s *Store) tokenCaller(ctx context.Context, token string) (storedToken, Cal
 	if err != nil {
 		return storedToken{}, Caller{}, err
 	}
+	if s.afterTokenLookup != nil {
+		s.afterTokenLookup()
+	}
 	return t, Caller{kind: callerAgent, id: agentID}, nil
 }
 
@@ -93,7 +96,7 @@ func (s *Store) BeginOfferWithToken(ctx context.Context, key, token string, in O
 	cmd, g := s.withToken(offerCommand(c, key, OfferRequest{SessionID: t.sessionID, Generation: t.generation,
 		WorkerAgentID: in.WorkerAgentID, Task: in.Task, ExpectedRevision: in.ExpectedRevision, BaseCommit: in.BaseCommit,
 		Branch: in.Branch, Process: in.Process, ExpiresAt: in.ExpiresAt}, &proof), token, t)
-	return s.beginOffer(ctx, c, cmd, &proof, t.sessionID, t.generation, g)
+	return s.beginNew(ctx, c, cmd, &proof, FactOffer, t.sessionID, t.generation, g)
 }
 
 // BeginAcceptWithToken begins the acceptance of an offer by its worker, as
@@ -152,4 +155,69 @@ func (s *Store) SettleWithToken(ctx context.Context, token string, reader Reserv
 	}
 	return s.settleStep(ctx, Caller{kind: callerAgent, id: b.AgentID}, reader, attemptID, requestKey, report,
 		s.requireToken(token, b.SessionID, b.Generation, nil))
+}
+
+// ClaimInput is an independent claim as the member's client sends it. The pin
+// is the claimer's: aimem verifies it against its current selection when the
+// claim commits (C5-w2), and aicrew records it as verified only then
+// (D-b1b-1). The digest must match the pin's and is not authoritative.
+type ClaimInput struct {
+	Task              TaskRef        `json:"task"`
+	ExpectedRevision  int64          `json:"expected_revision"`
+	BaseCommit        string         `json:"base_commit"`
+	Branch            string         `json:"branch"`
+	Process           TrustedProcess `json:"process"`
+	InstructionDigest string         `json:"instruction_digest"`
+}
+
+// BeginClaimWithToken begins an independent claim as the token's session,
+// which must hold the independent role.
+func (s *Store) BeginClaimWithToken(ctx context.Context, key, token string, in ClaimInput) (Attempt, Step, error) {
+	t, c, err := s.tokenCaller(ctx, token)
+	if err != nil {
+		return Attempt{}, Step{}, err
+	}
+	var proof string
+	cmd, g := s.withToken(claimCommand(c, key, ClaimRequest{SessionID: t.sessionID, Generation: t.generation,
+		Task: in.Task, ExpectedRevision: in.ExpectedRevision, BaseCommit: in.BaseCommit, Branch: in.Branch,
+		Process: in.Process, InstructionDigest: in.InstructionDigest}, &proof), token, t)
+	return s.beginNew(ctx, c, cmd, &proof, FactIndependentClaim, t.sessionID, t.generation, g)
+}
+
+// RequestStopWithToken records a stop request as the token's session, which
+// must be its team's current coordinator. It is local.
+func (s *Store) RequestStopWithToken(ctx context.Context, key, token, attemptID, reason string) (Attempt, error) {
+	t, c, err := s.tokenCaller(ctx, token)
+	if err != nil {
+		return Attempt{}, err
+	}
+	cmd, _ := s.withToken(requestStopCommand(c, key, attemptID,
+		StopRequest{SessionID: t.sessionID, Generation: t.generation, Reason: reason}), token, t)
+	var out Attempt
+	return out, s.run(ctx, c, cmd, &out)
+}
+
+// ConfirmStopWithToken records the worker's confirmation of its stop, as the
+// token's session. It is local.
+func (s *Store) ConfirmStopWithToken(ctx context.Context, key, token, attemptID string) (Attempt, error) {
+	t, c, err := s.tokenCaller(ctx, token)
+	if err != nil {
+		return Attempt{}, err
+	}
+	cmd, _ := s.withToken(confirmStopCommand(c, key, attemptID, t.sessionID, t.generation), token, t)
+	return s.confirmStop(ctx, c, cmd, attemptID)
+}
+
+// BeginStopReleaseWithToken begins the holder's release of its stopped
+// attempt, as the token's session, under the stopped fact.
+func (s *Store) BeginStopReleaseWithToken(ctx context.Context, key, token, attemptID string, target ReleaseTarget,
+	blocker string) (Attempt, Step, error) {
+	t, c, err := s.tokenCaller(ctx, token)
+	if err != nil {
+		return Attempt{}, Step{}, err
+	}
+	var proof string
+	cmd, g := s.withToken(releaseStoppedCommand(c, key, attemptID,
+		StopRelease{SessionID: t.sessionID, Generation: t.generation, Target: target, Blocker: blocker}, &proof), token, t)
+	return s.begin(ctx, c, cmd, attemptID, &proof, FactStopped, t.sessionID, t.generation, g)
 }

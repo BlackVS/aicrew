@@ -39,6 +39,9 @@ const (
 
 // Step is one coordinated step as begin returns it: coordination.v1's begin
 // response. CoordinationProof is a secret, returned by this answer only.
+// TargetState, Reason and Blocker are the values of a stopped attempt's
+// release the member sends aimem with the step (D-b1b-2); no other step
+// carries them.
 type Step struct {
 	Operation         ReservationOp      `json:"operation"`
 	RequestKey        string             `json:"request_key"`
@@ -46,30 +49,39 @@ type Step struct {
 	ReservationID     string             `json:"reservation_id,omitempty"`
 	Fence             string             `json:"fence,omitempty"`
 	Holder            *ReservationHolder `json:"holder,omitempty"`
+	TargetState       string             `json:"target_state,omitempty"`
+	Reason            string             `json:"reason,omitempty"`
+	Blocker           string             `json:"blocker,omitempty"`
 	CoordinationProof string             `json:"coordination_proof"`
 }
 
 func stepFor(a Attempt, proof string) Step {
 	req := reservationRequest(a, proof)
-	return Step{Operation: a.PendingOp, RequestKey: a.PendingKey, ExpectedRevision: req.ExpectedRevision,
+	st := Step{Operation: a.PendingOp, RequestKey: a.PendingKey, ExpectedRevision: req.ExpectedRevision,
 		ReservationID: req.ReservationID, Fence: req.Fence, Holder: req.Holder, CoordinationProof: proof}
+	if a.PendingOp == ReservationRelease && a.Stop == StopConfirmed {
+		st.TargetState, st.Reason, st.Blocker = req.Owned.State, req.Reason, req.Owned.Blocker
+	}
+	return st
 }
 
 // BeginOffer begins an offer: the coordinator's claim of the task for a named
 // worker, whose capacity the intent takes.
 func (s *Store) BeginOffer(ctx context.Context, c Caller, key string, in OfferRequest) (Attempt, Step, error) {
 	var proof string
-	return s.beginOffer(ctx, c, offerCommand(c, key, in, &proof), &proof, in.SessionID, in.Generation, nil)
+	return s.beginNew(ctx, c, offerCommand(c, key, in, &proof), &proof, FactOffer, in.SessionID, in.Generation, nil)
 }
 
-func (s *Store) beginOffer(ctx context.Context, c Caller, cmd command, proof *string, sessionID string, generation int64,
-	g guard) (Attempt, Step, error) {
+// beginNew begins a step that creates its attempt: an offer or an
+// independent claim. Identical requests in flight wait for each other.
+func (s *Store) beginNew(ctx context.Context, c Caller, cmd command, proof *string, kind FactKind, sessionID string,
+	generation int64, g guard) (Attempt, Step, error) {
 	release, err := s.flights.acquire(ctx, c, cmd, s.flightWait)
 	if err != nil {
 		return Attempt{}, Step{}, err
 	}
 	defer release()
-	return s.begin(ctx, c, cmd, "", proof, FactOffer, sessionID, generation, g)
+	return s.begin(ctx, c, cmd, "", proof, kind, sessionID, generation, g)
 }
 
 // BeginAccept begins the named worker's acceptance: the transfer of the

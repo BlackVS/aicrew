@@ -451,3 +451,105 @@ func TestStepRouteRefusals(t *testing.T) {
 		}
 	}
 }
+
+func (e *coordEnv) claimBody(taskID string) map[string]any {
+	return map[string]any{"task": e.task(taskID), "expected_revision": 3, "base_commit": "base-1", "branch": "work/" + taskID,
+		"process": map[string]string{"repo": coordPin.Identity.Repository, "commit": coordPin.Identity.Commit,
+			"manifest": coordPin.Identity.Manifest},
+		"instruction_digest": coordPin.InstructionDigest}
+}
+
+// The independent claim and the stop family end to end, as members' clients
+// drive them. aimem verifies the claim's pin through the coordination route;
+// aicrew records it as verified only once the claim settles. The stop is
+// requested by the coordinator, confirmed by the holder, and released by the
+// holder under the stopped fact with the values the begin returned; the
+// holder then goes offline, and the coordinator's settle confirms the
+// release from the read scope alone.
+func TestClaimAndStopRoutesEndToEnd(t *testing.T) {
+	e := setupCoordination(t)
+	got := e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-1"))
+	claim, id := stepOf(t, got), attemptOf(t, got)
+	if claim.Operation != store.ReservationClaim || claim.Holder == nil || claim.Holder.WorkRef != "aicrew-attempt-"+id ||
+		claim.ReservationID != "" || claim.TargetState != "" {
+		t.Fatalf("claim begin %s", got.raw)
+	}
+	if code := e.aimem.send(t, e.task("task-1"), claim); code != "" {
+		t.Fatalf("aimem refused the claim: %s %v", code, e.aimem.refused)
+	}
+	if f := e.last(t).fact; f.Kind != "independent_claim" || f.Process == nil || f.Process.Commit != coordPin.Identity.Commit {
+		t.Fatalf("the claim's fact %+v", f)
+	}
+	running := settled(t, e.settleAs(t, e.indep, id, claim, "committed", ""), "committed", "running")
+	if r, _ := running["process_verified_receipt"].(string); r == "" {
+		t.Fatalf("the claim settled without a verified pin: %v", running)
+	}
+
+	stop := func(m member, key string) reply {
+		return e.call(t, m.token, AttemptsPath+"/"+id+"/stop", key, map[string]string{"reason": "priorities changed"})
+	}
+	refused(t, stop(e.indep, "stop-self"), http.StatusForbidden, "attempt_forbidden")
+	if got := stop(e.lead, "stop-1"); got.status != http.StatusOK || got.body["stop"] != "requested" {
+		t.Fatalf("stop: %d %s", got.status, got.raw)
+	}
+	confirm := func(m member) reply { return e.call(t, m.token, AttemptsPath+"/"+id+"/confirm-stop", "confirm-1", nil) }
+	refused(t, confirm(e.lead), http.StatusForbidden, "attempt_forbidden")
+	if got := confirm(e.indep); got.status != http.StatusOK || got.body["stop"] != "confirmed" {
+		t.Fatalf("confirm: %d %s", got.status, got.raw)
+	}
+	rel := stepOf(t, e.call(t, e.indep.token, AttemptsPath+"/"+id+"/release", "release-1",
+		map[string]string{"target": "BLOCKED", "blocker": "waiting on design"}))
+	if rel.Operation != store.ReservationRelease || rel.ReservationID != e.aimem.holds["task-1"].id || rel.Holder != nil ||
+		rel.TargetState != "BLOCKED" || rel.Reason != "stopped" || rel.Blocker != "waiting on design" {
+		t.Fatalf("release begin %+v", rel)
+	}
+	if code := e.aimem.send(t, e.task("task-1"), rel); code != "" {
+		t.Fatalf("aimem refused the release: %s %v", code, e.aimem.refused)
+	}
+	if a := settled(t, e.settleAs(t, e.lead, id, rel, "unknown", ""), "committed", "closed"); a["close_reason"] != "stopped" {
+		t.Fatalf("closed as %v", a["close_reason"])
+	}
+	if kinds := e.seenKinds(); kinds != "independent_claim,stopped" {
+		t.Fatalf("aimem accepted %s", kinds)
+	}
+}
+
+// A claim under a pin that is no longer the project's selection is refused by
+// aimem, and never verified: the refusal voids its proof.
+func TestClaimRouteStalePin(t *testing.T) {
+	e := setupCoordination(t)
+	e.aimem.current.Commit = strings.Repeat("e", 40)
+	got := e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-1"))
+	claim, id := stepOf(t, got), attemptOf(t, got)
+	if code := e.aimem.send(t, e.task("task-1"), claim); code != "process_mismatch" {
+		t.Fatalf("aimem answered %q", code)
+	}
+	pending(t, e.settleAs(t, e.indep, id, claim, "refused", "process_mismatch"))
+	if a, err := e.store.GetAttempt(context.Background(), id); err != nil || a.ProcessVerifiedReceipt != "" {
+		t.Fatalf("a refused claim: %+v %v", a, err)
+	}
+	e.aimem.current = coordPin.Identity
+	if code := e.aimem.send(t, e.task("task-1"), claim); code != "coordination_rejected" {
+		t.Fatalf("a voided claim proof: aimem answered %q", code)
+	}
+}
+
+// The claim and stop routes act only in their roles.
+func TestClaimAndStopRouteRefusals(t *testing.T) {
+	e := setupCoordination(t)
+	refused(t, e.call(t, e.worker.token, ClaimPath, "claim-w", e.claimBody("task-1")), http.StatusForbidden, "attempt_forbidden")
+	refused(t, e.call(t, e.indep.token, ClaimPath, "", e.claimBody("task-1")), http.StatusBadRequest, "invalid_request")
+	got := e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-1"))
+	id := attemptOf(t, got)
+	refused(t, e.call(t, e.indep.token, ClaimPath, "claim-2", e.claimBody("task-1")), http.StatusConflict, "task_busy")
+	refused(t, e.call(t, e.indep.token, AttemptsPath+"/"+id+"/release", "release-0", map[string]string{"target": "READY"}),
+		http.StatusConflict, "attempt_state")
+	refused(t, e.call(t, e.indep.token, AttemptsPath+"/"+id+"/release", "release-x", map[string]string{"target": "DONE"}),
+		http.StatusBadRequest, "invalid_request")
+	refused(t, e.call(t, e.lead.token, AttemptsPath+"/"+id+"/stop", "stop-x", map[string]string{"reason": ""}),
+		http.StatusBadRequest, "invalid_request")
+	for _, path := range []string{ClaimPath, AttemptsPath + "/" + id + "/stop", AttemptsPath + "/" + id + "/confirm-stop",
+		AttemptsPath + "/" + id + "/release"} {
+		refused(t, e.call(t, "", path, "k-1", map[string]any{}), http.StatusUnauthorized, "invalid_token")
+	}
+}

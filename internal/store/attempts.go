@@ -178,18 +178,22 @@ type Attempt struct {
 	BaseCommit           string         `json:"base_commit"`
 	Branch               string         `json:"branch"`
 	Process              TrustedProcess `json:"process"`
-	OfferExpiresAt       time.Time      `json:"offer_expires_at,omitzero"`
-	TaskRevision         int64          `json:"task_revision"`
-	ReservationID        string         `json:"reservation_id,omitempty"`
-	Fence                string         `json:"fence,omitempty"`
-	LastReceiptID        string         `json:"last_receipt_id,omitempty"`
-	LastRefusal          string         `json:"last_refusal,omitempty"`
-	PendingOp            ReservationOp  `json:"pending_op,omitempty"`
-	PendingKey           string         `json:"pending_key,omitempty"`
-	PendingFrom          AttemptState   `json:"pending_from,omitempty"`
-	Revision             int64          `json:"revision"`
-	CreatedAt            time.Time      `json:"created_at"`
-	UpdatedAt            time.Time      `json:"updated_at"`
+	// ProcessVerifiedReceipt is the committed claim receipt under whose
+	// coordination fact aimem verified Process against the project's
+	// selection; empty while the pin is unverified input.
+	ProcessVerifiedReceipt string        `json:"process_verified_receipt,omitempty"`
+	OfferExpiresAt         time.Time     `json:"offer_expires_at,omitzero"`
+	TaskRevision           int64         `json:"task_revision"`
+	ReservationID          string        `json:"reservation_id,omitempty"`
+	Fence                  string        `json:"fence,omitempty"`
+	LastReceiptID          string        `json:"last_receipt_id,omitempty"`
+	LastRefusal            string        `json:"last_refusal,omitempty"`
+	PendingOp              ReservationOp `json:"pending_op,omitempty"`
+	PendingKey             string        `json:"pending_key,omitempty"`
+	PendingFrom            AttemptState  `json:"pending_from,omitempty"`
+	Revision               int64         `json:"revision"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
 	// The stop of a running attempt (stop.go).
 	Stop        StopState     `json:"stop,omitempty"`
 	StopBy      string        `json:"stop_by,omitempty"`
@@ -930,9 +934,12 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 				err = applyClaimRun(ctx, tx, a, r, now)
 				break
 			}
+			// The offer's claim fact carried the pin, which aimem compared
+			// with the project's selection before committing.
 			err = updateAttempt(ctx, tx, a.ID, now,
-				`state = 'offered', reservation_id = ?, fence = ?, task_revision = ?, last_receipt_id = ?, `+clearPending,
-				r.Reservation.ID, r.Reservation.Fence, r.TaskRevision, r.Receipt.ID)
+				`state = 'offered', reservation_id = ?, fence = ?, task_revision = ?, last_receipt_id = ?,
+				 process_verified_receipt = ?, `+clearPending,
+				r.Reservation.ID, r.Reservation.Fence, r.TaskRevision, r.Receipt.ID, r.Receipt.ID)
 			if err == nil {
 				err = announce(ctx, tx, a, a.CoordinatorAgentID, "%s offered task %s to %s.",
 					now, labelOf(a.CoordinatorAgentID), taskName(a.Task), labelOf(a.WorkerAgentID))
@@ -1155,7 +1162,8 @@ const attemptColumns = `id, team_id, task_hub_id, task_project_id, task_id, work
 	reservation_id, fence, last_receipt_id, last_refusal, pending_op, pending_key, pending_from,
 	worker_session_id, worker_generation, worker_session_floor, phase, pending_intent, pending_detail,
 	pending_evidence, pending_message, accepted_result, accepted_by_session, accepted_by_generation, finalized_result,
-	terminal_evidence, stop, stop_by, stop_session, stop_reason, stop_at, origin, revision, created_at, updated_at`
+	terminal_evidence, stop, stop_by, stop_session, stop_reason, stop_at, origin, process_verified_receipt,
+	revision, created_at, updated_at`
 
 func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 	var (
@@ -1173,7 +1181,8 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		&a.LastRefusal, &op, &a.PendingKey, &from, &a.WorkerSessionID, &a.WorkerGeneration,
 		&a.WorkerSessionFloor, &phase, &a.PendingIntent, &a.PendingDetail, &a.PendingEvidence, &a.PendingMessage,
 		&a.AcceptedResult, &a.AcceptedBySession, &a.AcceptedByGeneration, &a.FinalizedResult,
-		&a.TerminalEvidence, &stop, &a.StopBy, &a.StopSession, &a.StopReason, &stopAt, &origin, &a.Revision, &created, &updated)
+		&a.TerminalEvidence, &stop, &a.StopBy, &a.StopSession, &a.StopReason, &stopAt, &origin, &a.ProcessVerifiedReceipt,
+		&a.Revision, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Attempt{}, fmt.Errorf("attempt %s: %w", id, ErrNotFound)
 	}

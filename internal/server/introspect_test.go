@@ -1,11 +1,9 @@
 package server
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -14,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"regexp"
@@ -537,7 +536,6 @@ func TestIntrospectRequestForm(t *testing.T) {
 		"unknown field":      {contentType: "application/json", body: enc(extra)},
 		"trailing data":      {contentType: "application/json", body: append(enc(valid()), []byte(" {}")...)},
 		"bad nonce":          {contentType: "application/json", body: enc(badNonce)},
-		"body over 4 KiB":    {contentType: "application/json", body: append(enc(valid()), bytes.Repeat([]byte(" "), 4<<10)...)},
 		"handle not string":  {contentType: "application/json", body: []byte(`{"version":1,"hub_id":"hub-example","nonce":"n-00000000000000000000000000000000","handle":1}`)},
 		"version not number": {contentType: "application/json", body: []byte(`{"version":"1","hub_id":"hub-example","nonce":"n-00000000000000000000000000000000","handle":"x"}`)},
 	} {
@@ -598,27 +596,24 @@ func TestIntrospectCarriesNoSecrets(t *testing.T) {
 // a body of n bytes, and returns the status and body of the response.
 func (e introspectEnv) rawDeclared(t *testing.T, bearer string, n int) (int, []byte) {
 	t.Helper()
-	conn, err := tls.Dial("tcp", e.addr, &tls.Config{RootCAs: e.pool})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	auth := ""
 	if bearer != "" {
 		auth = "Authorization: Bearer " + bearer + "\r\n"
 	}
-	if _, err := fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: x\r\n%sContent-Type: application/json\r\n%s: 1\r\nContent-Length: %d\r\n\r\n",
-		IntrospectPath, auth, VersionHeader, n); err != nil {
-		t.Fatal(err)
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodPost})
-	if err != nil {
-		t.Fatalf("declared %d bytes: %v", n, err)
-	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, b
+	return e.head(t, fmt.Sprintf("POST %s HTTP/1.1\r\nHost: x\r\n%sContent-Type: application/json\r\n%s: 1\r\nContent-Length: %d\r\n\r\n",
+		IntrospectPath, auth, VersionHeader, n))
+}
+
+// directIntrospect sends an authenticated introspection request with body
+// through the handler chain (see direct).
+func (e introspectEnv) directIntrospect(t *testing.T, body io.Reader) (int, []byte) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, IntrospectPath, body)
+	req.Header.Set("Authorization", "Bearer "+e.bearer)
+	req.Header.Set(VersionHeader, "1")
+	req.Header.Set("Content-Type", "application/json")
+	rec := e.direct(t, req)
+	return rec.Code, rec.Body.Bytes()
 }
 
 // The route owns its body limit: an oversized body, declared or not, is
@@ -636,28 +631,25 @@ func TestIntrospectOversizedBody(t *testing.T) {
 			}
 		}
 	}
-	// An undeclared (chunked) body over the route's limit: a valid request
-	// padded with whitespace, so only the limit can refuse it.
+	// A body over the route's limit, declared and undeclared: a valid
+	// request padded with whitespace, so only the limit can refuse it.
 	valid, _ := json.Marshal(map[string]any{"version": 1, "hub_id": e.hub, "nonce": newNonce(t), "handle": e.handle})
 	padded := append(valid, bytes.Repeat([]byte(" "), maxIntrospectBody)...)
-	pr, pw := io.Pipe()
-	go func() {
-		_, _ = pw.Write(padded)
-		pw.Close()
-	}()
-	req, _ := http.NewRequest(http.MethodPost, e.url(IntrospectPath), pr)
-	req.Header.Set("Authorization", "Bearer "+e.bearer)
-	req.Header.Set(VersionHeader, "1")
-	req.Header.Set("Content-Type", "application/json")
-	if resp, err := e.client.Do(req); err == nil {
-		b, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusBadRequest || refusalOf(t, b) != "invalid_request" {
-			t.Fatalf("chunked oversized body = %d %s; want 400 invalid_request", resp.StatusCode, b)
+	for name, body := range map[string]io.Reader{
+		"declared":   bytes.NewReader(padded),
+		"undeclared": unsized{bytes.NewReader(padded)},
+	} {
+		if code, reply := e.directIntrospect(t, body); code != http.StatusBadRequest || refusalOf(t, reply) != "invalid_request" {
+			t.Fatalf("%s body over the limit = %d %s; want 400 invalid_request", name, code, reply)
 		}
 	}
+	// The limit itself: a padded body at exactly the limit is served.
+	atLimit := append(valid, bytes.Repeat([]byte(" "), maxIntrospectBody-len(valid))...)
+	if code, reply := e.directIntrospect(t, bytes.NewReader(atLimit)); code != http.StatusOK {
+		t.Fatalf("a body at the limit = %d %s; want it served", code, reply)
+	}
 	// Other methods on the path are not the route: the generic limit applies.
-	if status := e.declare(t, http.MethodPut, IntrospectPath, MaxBodyBytes+1); !strings.Contains(status, "413") {
-		t.Fatalf("PUT with an oversized body = %q, want the generic 413", status)
+	if status, code := e.declare(t, http.MethodPut, IntrospectPath, MaxBodyBytes+1); status != http.StatusRequestEntityTooLarge || code != "request_too_large" {
+		t.Fatalf("PUT with an oversized body = %d %q, want the generic 413 request_too_large", status, code)
 	}
 }

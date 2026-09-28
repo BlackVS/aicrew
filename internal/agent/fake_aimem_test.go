@@ -17,6 +17,9 @@ import (
 // set and aimem's arguments, it plays aimem's client commands against files
 // under that root and records every call in calls.log.
 func TestMain(m *testing.M) {
+	if code, ok := probeMain(os.Args[1:]); ok {
+		os.Exit(code)
+	}
 	if root := os.Getenv("AICREW_FAKE_AIMEM_ROOT"); root != "" && len(os.Args) > 1 &&
 		(os.Args[1] == "identity" || os.Args[1] == "team-session") {
 		os.Exit(fakeAimem(root, os.Args[1:]))

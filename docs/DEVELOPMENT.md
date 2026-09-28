@@ -178,6 +178,7 @@ session through `aicrewd`'s client session API (`docs/CREW-CONTRACT.md`,
 
 ```sh
 CGO_ENABLED=0 go build -o bin/aicrew-agent ./cmd/aicrew-agent
+bin/aicrew-agent run -client claude -home ~/aicrew/agents/builder
 bin/aicrew-agent session start  -home ~/aicrew/agents/builder
 bin/aicrew-agent session status -home ~/aicrew/agents/builder
 bin/aicrew-agent session leave  -home ~/aicrew/agents/builder
@@ -194,10 +195,24 @@ no secret; other sections belong to onboarding:
   "agent_id": "01a0...",
   "team_id": "01a0...",
   "aimem_command": "aimem",
-  "aimem_hub": "main"
+  "aimem_hub": "main",
+  "client_command": "claude"
 }
 ```
 
+- `run -client claude|opencode` does what `session start` does, then
+  starts the client (from `PATH`, or `client_command` in the `aicrew`
+  section) as its child in the agent home, with `AIMEM_TEAM_SESSION` set in
+  that child's environment only; arguments after `--` go to the client.
+  When the client exits, it leaves and closes aimem's binding, exiting with
+  the client's code (128 plus the signal if a signal ended it), or 3 if
+  open work kept the session. It does not exit
+  on Ctrl-C, which the terminal delivers to the client; SIGTERM is forwarded
+  to the client, which is killed if still running 10 s later. A killed
+  launcher takes the client with it on Linux (parent-death signal) and
+  Windows (job object); on macOS the client keeps running without team
+  access once its handle expires, within 15 minutes, and the next `run`
+  resumes the session.
 - `session start` enters the team, or resumes the session a previous run
   recorded, binds aimem to it with `aimem team-session open` (or `refresh`
   when aimem already holds the session's file), prints

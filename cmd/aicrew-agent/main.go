@@ -2,6 +2,8 @@
 // needs no operator authority: it proves the agent's aimem identity and
 // keeps the agent's team session through aicrewd's client session API.
 //
+//	aicrew-agent run -client claude|opencode -home DIR [-- ARGS]
+//	                                        run the client in the team session, then leave
 //	aicrew-agent session start  -home DIR   enter or resume, then keep the session until interrupted
 //	aicrew-agent session status -home DIR   show the recorded session, without secrets
 //	aicrew-agent session leave  -home DIR   prove afresh, resume and leave
@@ -18,6 +20,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 
@@ -32,9 +35,58 @@ const (
 	exitWorkKept = 3 // the session was kept: the member has open work
 )
 
-const usage = `usage: aicrew-agent session start|status|leave -home DIR`
+const usage = `usage: aicrew-agent session start|status|leave -home DIR
+       aicrew-agent run -client claude|opencode -home DIR [-- CLIENT ARGS]`
+
+// clients are the agent clients run can start, by the name -client takes.
+var clients = map[string]bool{"claude": true, "opencode": true}
+
+// runClient starts the agent's team session, runs the client in it and
+// leaves when the client exits. It exits with the client's code, or with
+// exitWorkKept when open work kept the session.
+func runClient(ctx context.Context, args []string, stdio agent.Stdio, sigs <-chan os.Signal, build engineFor) int {
+	fs := flag.NewFlagSet("aicrew-agent run", flag.ContinueOnError)
+	fs.SetOutput(stdio.Err)
+	name := fs.String("client", "", "the client to run: claude or opencode")
+	home := fs.String("home", "", "the agent home directory")
+	if err := fs.Parse(args); err != nil || *home == "" || !clients[*name] {
+		fmt.Fprintln(stdio.Err, usage)
+		return exitUsage
+	}
+	log := slog.New(slog.NewTextHandler(stdio.Err, nil))
+	cfg, err := agent.LoadConfig(*home)
+	if err != nil {
+		log.Error("configuration refused", "error", err.Error())
+		return exitFailed
+	}
+	path := cfg.ClientCommand
+	if path == "" {
+		if path, err = exec.LookPath(*name); err != nil {
+			log.Error("client not found", "client", *name, "error", err.Error())
+			return exitFailed
+		}
+	}
+	e, err := build(cfg, log)
+	if err != nil {
+		log.Error("client refused", "error", err.Error())
+		return exitFailed
+	}
+	code, err := agent.RunClient(ctx, e, agent.Client{Path: path, Args: fs.Args()}, stdio, sigs)
+	if rc := finish(log, err); rc != exitOK {
+		return rc
+	}
+	return code
+}
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "run" {
+		// The client handles the terminal's interrupts; the launcher only
+		// watches signals, forwarding SIGTERM, and outlives the client.
+		sigs := make(chan os.Signal, 4)
+		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+		os.Exit(runClient(context.Background(), os.Args[2:], agent.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr},
+			sigs, defaultEngine))
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	// The first interrupt starts a clean leave; a second one stops at once.
 	go func() {

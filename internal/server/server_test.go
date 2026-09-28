@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,8 +143,28 @@ func startWith(t *testing.T, serviceID string, register func(*Server)) *running 
 func (r *running) url(path string) string { return "https://" + r.addr + path }
 
 // declare sends only a request's headers, declaring a body of n bytes, and
-// returns the response's status line.
-func (r *running) declare(t *testing.T, method, path string, n int) string {
+// returns the response's status and refusal code.
+func (r *running) declare(t *testing.T, method, path string, n int) (int, string) {
+	t.Helper()
+	code, b := r.head(t, fmt.Sprintf("%s %s HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n", method, path, n))
+	var reply struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(b, &reply)
+	return code, reply.Code
+}
+
+// An oversized body is refused without being read, and every refusal closes
+// the connection; net/http then skips its post-handler drain, so bytes a
+// client is still writing can meet a reset that discards the response. The
+// tests therefore never send a socket more than the server reads: a
+// refusal decided by the declared length is observed with the headers
+// alone (head), and one that needs body bytes runs through the server's
+// whole handler chain without a connection (direct).
+
+// head sends a request head declaring a body, and nothing more, and returns
+// the response's status and body.
+func (r *running) head(t *testing.T, head string) (int, []byte) {
 	t.Helper()
 	conn, err := tls.Dial("tcp", r.addr, &tls.Config{RootCAs: r.pool})
 	if err != nil {
@@ -150,14 +172,32 @@ func (r *running) declare(t *testing.T, method, path string, n int) string {
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	if _, err := fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n", method, path, n); err != nil {
+	if _, err := io.WriteString(conn, head); err != nil {
 		t.Fatal(err)
 	}
-	status, err := bufio.NewReader(conn).ReadString('\n')
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodPost})
 	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
+		t.Fatalf("request head %q: %v", strings.SplitN(head, "\r\n", 2)[0], err)
 	}
-	return status
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("response to %q: %v", strings.SplitN(head, "\r\n", 2)[0], err)
+	}
+	return resp.StatusCode, b
+}
+
+// unsized hides a body's length: httptest.NewRequest then leaves the
+// request's length undeclared, as for a chunked body.
+type unsized struct{ io.Reader }
+
+// direct serves req through the server's whole handler chain, middleware
+// included, without a connection.
+func (r *running) direct(t *testing.T, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	r.srv.http.Handler.ServeHTTP(rec, req)
+	return rec
 }
 
 func (r *running) do(t *testing.T, method, path string, body io.Reader) (int, string) {
@@ -275,8 +315,8 @@ func TestBounds(t *testing.T) {
 	// Only the headers are sent: the refusal must come from the declared
 	// length alone, before any body is read.
 	for _, path := range []string{"/echo", "/healthz"} {
-		if status := r.declare(t, http.MethodPost, path, MaxBodyBytes+1); !strings.Contains(status, "413") {
-			t.Fatalf("declared oversized body on %s = %q, want 413 before routing", path, status)
+		if status, code := r.declare(t, http.MethodPost, path, MaxBodyBytes+1); status != http.StatusRequestEntityTooLarge || code != "request_too_large" {
+			t.Fatalf("declared oversized body on %s = %d %q, want 413 request_too_large before routing", path, status, code)
 		}
 	}
 	if code, _ := r.do(t, http.MethodPost, "/echo", bytes.NewReader(big[:MaxBodyBytes])); code != http.StatusNoContent {
@@ -285,16 +325,12 @@ func TestBounds(t *testing.T) {
 	if got := <-reads; got.n != MaxBodyBytes || got.err != nil {
 		t.Fatalf("a body at the cap read %d bytes, err %v", got.n, got.err)
 	}
-	// An undeclared (chunked) body is cut off at the cap; the server then
-	// closes the connection, so the client may see a write error.
-	pr, pw := io.Pipe()
-	go func() {
-		_, _ = pw.Write(big)
-		pw.Close()
-	}()
-	req, _ := http.NewRequest(http.MethodPost, r.url("/echo"), pr)
-	if resp, err := r.client.Do(req); err == nil {
-		resp.Body.Close()
+	// An undeclared (chunked) body is cut off at the cap. It runs through
+	// the handler chain directly: over a socket, the server's close could
+	// reset the connection while the client is still writing.
+	req := httptest.NewRequest(http.MethodPost, "/echo", unsized{bytes.NewReader(big)})
+	if rec := r.direct(t, req); rec.Code != http.StatusNoContent {
+		t.Fatalf("chunked body over the cap = %d", rec.Code)
 	}
 	got := <-reads
 	var tooLarge *http.MaxBytesError

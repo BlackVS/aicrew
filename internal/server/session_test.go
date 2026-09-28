@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -353,13 +355,34 @@ func TestTokenEndpointRefusals(t *testing.T) {
 	// Transport-level refusals.
 	body := valid.Encode()
 	for name, r := range map[string]reply{
-		"no key":        e.send(t, http.MethodPost, TokenPath, "application/x-www-form-urlencoded", "", "", body),
-		"json body":     e.send(t, http.MethodPost, TokenPath, "application/json", "k", "", body),
-		"query string":  e.send(t, http.MethodPost, TokenPath+"?subject_token=x", "application/x-www-form-urlencoded", "k", "", body),
-		"oversize body": e.send(t, http.MethodPost, TokenPath, "application/x-www-form-urlencoded", "k", "", body+"&pad="+strings.Repeat("a", maxTokenBody)),
+		"no key":       e.send(t, http.MethodPost, TokenPath, "application/x-www-form-urlencoded", "", "", body),
+		"json body":    e.send(t, http.MethodPost, TokenPath, "application/json", "k", "", body),
+		"query string": e.send(t, http.MethodPost, TokenPath+"?subject_token=x", "application/x-www-form-urlencoded", "k", "", body),
 	} {
 		if r.status != 400 || r.body["code"] != "invalid_request" || r.body["error"] != "invalid_request" {
 			t.Errorf("%s: got %d %s", name, r.status, r.raw)
+		}
+	}
+	// A body over the limit: declared on a socket with the headers alone,
+	// and declared or undeclared through the handler chain (see direct).
+	oversize := body + "&pad=" + strings.Repeat("a", maxTokenBody)
+	code, raw := e.head(t, fmt.Sprintf("POST %s HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nIdempotency-Key: k\r\nContent-Length: %d\r\n\r\n",
+		TokenPath, len(oversize)))
+	oversized := map[string]reply{"declared, headers only": {status: code, raw: string(raw)}}
+	for name, b := range map[string]io.Reader{
+		"declared":   strings.NewReader(oversize),
+		"undeclared": unsized{strings.NewReader(oversize)},
+	} {
+		req := httptest.NewRequest(http.MethodPost, TokenPath, b)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Idempotency-Key", "k")
+		rec := e.direct(t, req)
+		oversized[name] = reply{status: rec.Code, raw: rec.Body.String()}
+	}
+	for name, r := range oversized {
+		_ = json.Unmarshal([]byte(r.raw), &r.body)
+		if r.status != 400 || r.body["code"] != "invalid_request" || r.body["error"] != "invalid_request" {
+			t.Errorf("oversize body, %s: got %d %s", name, r.status, r.raw)
 		}
 	}
 	// The valid form still enters: nothing above consumed the challenge.

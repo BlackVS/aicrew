@@ -182,10 +182,22 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Strings(allowed)
 		w.Header().Set("Allow", strings.Join(allowed, ", "))
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"code": "method_not_allowed"})
+		s.refuseShared(w, r, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
 	rt.h(w, r)
+}
+
+// refuseShared answers a refusal made before any handler runs. The client
+// session routes get their envelope, with RFC 6749's members on the token
+// endpoint; every other path keeps the bare code.
+func (s *Server) refuseShared(w http.ResponseWriter, r *http.Request, status int, code string) {
+	switch path := requestPath(r); path {
+	case ChallengesPath, TokenPath, SessionPath, LeavePath:
+		s.refuseSession(w, r, code, path == TokenPath, 0)
+	default:
+		writeJSON(w, status, map[string]string{"code": code})
+	}
 }
 
 // routeOf names the route a request matches, for the log: the method and
@@ -227,7 +239,7 @@ func (s *Server) limitBody(next http.Handler) http.Handler {
 			// Closing the connection keeps the HTTP server from reading
 			// the refused body to reuse the connection.
 			w.Header().Set("Connection", "close")
-			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"code": "request_too_large"})
+			s.refuseShared(w, r, http.StatusRequestEntityTooLarge, "request_too_large")
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)

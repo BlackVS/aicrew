@@ -115,6 +115,11 @@ var sessionRefusals = map[string]struct {
 		"aicrew or aimem could not answer now; nothing was applied.", "Retry later with the same key."},
 	"aimem_unconfigured": {http.StatusServiceUnavailable, "temporarily_unavailable", false,
 		"aicrew cannot verify aimem proofs.", "The operator configures and checks aicrew's aimem peer."},
+	// The shared refusals, made before a session handler runs.
+	"method_not_allowed": {http.StatusMethodNotAllowed, "invalid_request", false,
+		"This method is not served on this path.", "Use a method the Allow header names."},
+	"request_too_large": {http.StatusRequestEntityTooLarge, "invalid_request", false,
+		"The declared request body is too large.", "Send the request without an oversized body."},
 }
 
 // envelope is the context contract's refusal envelope; on the token endpoint

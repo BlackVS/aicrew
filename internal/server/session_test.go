@@ -676,3 +676,33 @@ func TestNewChecksRedemptionCredential(t *testing.T) {
 }
 
 func slogDiscard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// The refusals made before a session handler runs, a method the path does
+// not serve and a declared body over the service's limit, carry the
+// envelope; on the token endpoint also RFC 6749's members. Other paths keep
+// the bare code.
+func TestSessionSharedRefusals(t *testing.T) {
+	e := setupAPI(t)
+	tok := e.send(t, http.MethodGet, TokenPath, "", "", "", "")
+	refused(t, tok, http.StatusMethodNotAllowed, "method_not_allowed")
+	if tok.body["error"] != "invalid_request" || tok.body["error_description"] == "" || tok.header.Get("Allow") != http.MethodPost {
+		t.Fatalf("GET on the token endpoint: %s, Allow %q", tok.raw, tok.header.Get("Allow"))
+	}
+	leave := e.send(t, http.MethodPut, LeavePath, "", "", "", "")
+	refused(t, leave, http.StatusMethodNotAllowed, "method_not_allowed")
+	if _, ok := leave.body["error"]; ok || leave.header.Get("Allow") != http.MethodPost {
+		t.Fatalf("PUT on leave: %s, Allow %q", leave.raw, leave.header.Get("Allow"))
+	}
+	// Declared only: the refusal comes from the length, and no body is sent.
+	code, raw := e.head(t, fmt.Sprintf("GET %s HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n", SessionPath, MaxBodyBytes+1))
+	big := reply{status: code, raw: string(raw)}
+	_ = json.Unmarshal(raw, &big.body)
+	refused(t, big, http.StatusRequestEntityTooLarge, "request_too_large")
+	if _, ok := big.body["error"]; ok {
+		t.Fatalf("an oversized body on the session route carries RFC 6749 members: %s", big.raw)
+	}
+	health := e.send(t, http.MethodPost, "/healthz", "", "", "", "")
+	if health.status != http.StatusMethodNotAllowed || strings.TrimSpace(health.raw) != `{"code":"method_not_allowed"}` {
+		t.Fatalf("POST /healthz = %d %s; want the bare 405 code", health.status, health.raw)
+	}
+}

@@ -16,11 +16,14 @@ import (
 	"time"
 )
 
-// fakeReader is aimem's read scope for this service: receipts by proof, set
-// by a test when the fake "aimem" commits a step.
+// fakeReader is aimem's read scope for this service: receipts by proof and,
+// for proofless updates, by key, and the hold status, set by a test when the
+// fake "aimem" commits a step.
 type fakeReader struct {
 	mu       sync.Mutex
 	receipts map[string]ScopeReceiptLookup
+	byKey    map[string]ScopeReceiptLookup
+	hold     ScopeHold
 	err      error
 	reads    int
 	// answered, if set, runs once after a lookup has taken its answer and
@@ -28,7 +31,24 @@ type fakeReader struct {
 	answered func()
 }
 
-func newFakeReader() *fakeReader { return &fakeReader{receipts: map[string]ScopeReceiptLookup{}} }
+func newFakeReader() *fakeReader {
+	return &fakeReader{receipts: map[string]ScopeReceiptLookup{}, byKey: map[string]ScopeReceiptLookup{},
+		hold: ScopeHold{State: ScopeNone}}
+}
+
+// commitUpdate records that aimem committed an update under request key key.
+func (f *fakeReader) commitUpdate(key string, r ScopeReceipt) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.byKey[requestKeyDigest(key)] = ScopeReceiptLookup{State: ScopeCommitted, Receipt: &r}
+}
+
+// setHold sets the hold status the read scope answers.
+func (f *fakeReader) setHold(h ScopeHold) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hold = h
+}
 
 func p1Of(proof string) string {
 	sum := sha256.Sum256([]byte(proof))
@@ -66,12 +86,33 @@ func (f *fakeReader) lookup(digest string) (ScopeReceiptLookup, error) {
 	return ScopeReceiptLookup{State: ScopeNone}, nil
 }
 
-func (f *fakeReader) ReceiptByKey(context.Context, TaskRef, ReservationOp, string) (ScopeReceiptLookup, error) {
+func (f *fakeReader) ReceiptByKey(_ context.Context, _ TaskRef, _ ReservationOp, digest string) (ScopeReceiptLookup, error) {
+	f.mu.Lock()
+	answered := f.answered
+	f.answered = nil
+	f.mu.Unlock()
+	if answered != nil {
+		defer answered()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads++
+	if f.err != nil {
+		return ScopeReceiptLookup{}, f.err
+	}
+	if r, ok := f.byKey[digest]; ok {
+		return r, nil
+	}
 	return ScopeReceiptLookup{State: ScopeNone}, nil
 }
 
 func (f *fakeReader) HoldStatus(context.Context, TaskRef) (ScopeHold, error) {
-	return ScopeHold{State: ScopeNone}, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return ScopeHold{}, f.err
+	}
+	return f.hold, nil
 }
 
 // receiptFor is the read scope's receipt for a committed step.

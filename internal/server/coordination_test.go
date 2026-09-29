@@ -240,7 +240,8 @@ func setupCoordinationWith(t *testing.T, withReader bool) *coordEnv {
 	t.Helper()
 	ctx := context.Background()
 	aimem := &fakeAimem{t: t, current: coordPin.Identity, holds: map[string]*fakeHold{}, revision: 3,
-		kinds: loadCoordFixture(t).FactKinds, receipts: map[string]store.ScopeReceiptLookup{}}
+		kinds: loadCoordFixture(t).FactKinds, receipts: map[string]store.ScopeReceiptLookup{},
+		byKey: map[string]store.ScopeReceiptLookup{}}
 	r := startWith(t, coordService, func(s *Server) {
 		if withReader {
 			s.reader = aimem
@@ -369,8 +370,9 @@ type fakeAimem struct {
 	seen    []seenFact
 	refused []string
 	// receipts is the read scope: the receipt committed under each proof,
-	// by its p1_ digest.
+	// by its p1_ digest, and byKey each update's, by its k1_ digest.
 	receipts map[string]store.ScopeReceiptLookup
+	byKey    map[string]store.ScopeReceiptLookup
 	// before runs just before aimem asks aicrew, to change state mid-step.
 	before func()
 }

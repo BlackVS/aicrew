@@ -39,10 +39,12 @@ const (
 
 // Step is one coordinated step as begin returns it: coordination.v1's begin
 // response. CoordinationProof is a secret, returned by this answer only.
-// TargetState, Reason, Blocker and TerminalEvidence are the values the member
-// sends aimem with the step (D-b1b-2): a stopped attempt's release carries the
-// first three, a finalize its target, reason and the confirmed delivery's
-// references. No other step carries them.
+// TargetState, Reason, Blocker, TerminalEvidence, Intent and ResultRef are the
+// values the member sends aimem with the step (D-b1b-2): a stopped attempt's
+// release carries the target, reason and blocker; a finalize its target,
+// reason and the confirmed delivery's references; a work update its intent,
+// target and blocker or result reference. No other step carries them. An
+// update has no coordination fact, so it has no proof.
 type Step struct {
 	Operation         ReservationOp      `json:"operation"`
 	RequestKey        string             `json:"request_key"`
@@ -54,7 +56,9 @@ type Step struct {
 	Reason            string             `json:"reason,omitempty"`
 	Blocker           string             `json:"blocker,omitempty"`
 	TerminalEvidence  []string           `json:"terminal_evidence,omitempty"`
-	CoordinationProof string             `json:"coordination_proof"`
+	Intent            string             `json:"intent,omitempty"`
+	ResultRef         string             `json:"result_ref,omitempty"`
+	CoordinationProof string             `json:"coordination_proof,omitempty"`
 }
 
 func stepFor(a Attempt, proof string) Step {
@@ -66,6 +70,8 @@ func stepFor(a Attempt, proof string) Step {
 		st.TargetState, st.Reason, st.Blocker = req.Owned.State, req.Reason, req.Owned.Blocker
 	case a.PendingOp == ReservationFinalize:
 		st.TargetState, st.Reason, st.TerminalEvidence = req.Owned.State, req.Reason, req.TerminalEvidence
+	case a.PendingOp == ReservationUpdate:
+		st.Intent, st.TargetState, st.Blocker, st.ResultRef = req.Intent, req.Owned.State, req.Owned.Blocker, req.Owned.ResultRef
 	}
 	return st
 }
@@ -111,7 +117,8 @@ func (s *Store) BeginRelease(ctx context.Context, c Caller, key, attemptID, sess
 // and the earlier proof ends at once (D-b1a-1), so aimem refuses it if it was
 // already on its way. A replay after the step settled reports that step's
 // outcome, with no step to send. g, if set, is checked inside the
-// replacement's transaction too.
+// replacement's transaction too. A step with no fact (kind "", an update)
+// has no proof to replace: its replay answers the same step.
 func (s *Store) begin(ctx context.Context, c Caller, cmd command, attemptID string, proof *string, kind FactKind,
 	sessionID string, generation int64, g guard) (Attempt, Step, error) {
 	if attemptID != "" {
@@ -140,7 +147,7 @@ func (s *Store) begin(ctx context.Context, c Caller, cmd command, attemptID stri
 		out, err := s.stepOutcome(ctx, cur, recorded.PendingKey)
 		return out, Step{}, err
 	}
-	if *proof == "" {
+	if *proof == "" && kind != "" {
 		if s.beforeProofReplace != nil {
 			s.beforeProofReplace()
 		}
@@ -271,6 +278,17 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 	if err := s.mayReconcile(ctx, c, a); err != nil {
 		return Attempt{}, Settlement{}, err
 	}
+	if a.PendingKey != requestKey && a.PendingOp == ReservationUpdate {
+		// A superseded key settles its update step.
+		if alias, err := s.supersededKey(ctx, a.ID, requestKey); err != nil {
+			return a, Settlement{}, err
+		} else if alias {
+			requestKey = a.PendingKey
+		}
+	}
+	if a.PendingKey == requestKey && a.PendingOp == ReservationUpdate {
+		return s.settleUpdate(ctx, c, reader, a, g)
+	}
 	if a.PendingKey != requestKey {
 		// Not the pending step: an earlier step of this attempt, whose
 		// recorded outcome answers, or no step of this attempt at all.
@@ -306,7 +324,7 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 			}
 			switch look.State {
 			case ScopeCommitted:
-				res, err := resultFromReceipt(a, look.Receipt)
+				res, err := resultFromReceipt(a, look.Receipt, a.PendingKey)
 				if err != nil {
 					return a, pending, err
 				}
@@ -417,9 +435,10 @@ func (s *Store) stepProofs(ctx context.Context, attemptID, requestKey string) ([
 
 // resultFromReceipt turns the read scope's receipt for the pending step into
 // the committed result the store applies, after checking that it is this
-// step's: its operation, its request key's digest and its task.
-func resultFromReceipt(a Attempt, r *ScopeReceipt) (ReservationResult, error) {
-	if r == nil || r.Operation != string(a.PendingOp) || r.RequestKeyDigest != requestKeyDigest(a.PendingKey) ||
+// step's: its operation, the digest of key (the step's key, or a superseded
+// alias of it) and its task.
+func resultFromReceipt(a Attempt, r *ScopeReceipt, key string) (ReservationResult, error) {
+	if r == nil || r.Operation != string(a.PendingOp) || r.RequestKeyDigest != requestKeyDigest(key) ||
 		r.TaskID != a.Task.TaskID || r.VerifiedMode != "team" {
 		return ReservationResult{}, fmt.Errorf("attempt %s: the read scope's receipt is not the pending step's: %w", a.ID, ErrOutcomeUnknown)
 	}
@@ -427,7 +446,7 @@ func resultFromReceipt(a Attempt, r *ScopeReceipt) (ReservationResult, error) {
 	switch a.PendingOp {
 	case ReservationClaim:
 		st.ID, st.Active, st.HolderMode, st.OwnWorkRef = r.ReservationID, true, "external", a.claimRef()
-	case ReservationTransfer:
+	case ReservationTransfer, ReservationUpdate:
 		st.ID, st.Active, st.HolderMode, st.OwnWorkRef = r.ReservationID, true, "external", a.attemptRef()
 	}
 	res := ReservationResult{

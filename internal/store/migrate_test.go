@@ -107,8 +107,8 @@ func downgradeToV10(t *testing.T, path string) {
 		}
 	}
 	stmts = append(stmts,
-		// A table added after v10 that references attempts goes first.
-		`DROP TABLE coordination_proofs`,
+		// Tables added after v10 that reference attempts go first.
+		`DROP TABLE coordination_proofs`, `DROP TABLE superseded_updates`,
 		`INSERT INTO attempts_v10 (`+attemptsV10Columns+`) SELECT `+attemptsV10Columns+` FROM attempts`,
 		`DROP TABLE attempts`,
 		`ALTER TABLE attempts_v10 RENAME TO attempts`,
@@ -407,10 +407,11 @@ func TestMigrationV16AddsVerifiedPinReceipt(t *testing.T) {
 	}
 }
 
-// dropDeliveryColumns takes a store back to before schema v17, so a test that
-// downgrades further can migrate it forward again.
+// dropDeliveryColumns takes a store back to before schema v17 (and so v18),
+// so a test that downgrades further can migrate it forward again.
 func dropDeliveryColumns(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropSupersededUpdates(t, raw)
 	for _, c := range []string{"delivery_result", "delivery_evidence", "delivery_by_agent", "delivery_by_session",
 		"delivery_by_generation", "delivery_at"} {
 		if _, err := raw.Exec(`ALTER TABLE attempts DROP COLUMN ` + c); err != nil {
@@ -447,5 +448,44 @@ func TestMigrationV17AddsDeliveryConfirmation(t *testing.T) {
 	}
 	if after != before || confirmed != 0 {
 		t.Fatalf("after v17: %d attempts (was %d), %d confirmed", after, before, confirmed)
+	}
+}
+
+// dropSupersededUpdates takes a store back to before schema v18.
+func dropSupersededUpdates(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	if _, err := raw.Exec(`DROP TABLE superseded_updates`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Schema v18 adds the superseded update keys to a populated v17 store and
+// keeps every attempt.
+func TestMigrationV18AddsSupersededUpdates(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM attempts`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropSupersededUpdates(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 17`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v17 store: %v", err)
+	}
+	defer s2.Close()
+	var after, keys int
+	if err := s2.db.QueryRow(`SELECT (SELECT COUNT(*) FROM attempts), (SELECT COUNT(*) FROM superseded_updates)`).Scan(&after, &keys); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || keys != 0 {
+		t.Fatalf("after v18: %d attempts (was %d), %d superseded keys", after, before, keys)
 	}
 }

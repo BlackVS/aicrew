@@ -307,6 +307,7 @@ given, and a test enforces that.
 | `POST /v1/crew/attempts/claim` | `Authorization: Bearer` session token | Begin an independent claim. |
 | `POST /v1/crew/attempts/{id}/stop`, `/confirm-stop`, `/release` | `Authorization: Bearer` session token | Request or confirm a stop, or begin the stopped attempt's release. |
 | `POST /v1/crew/attempts/{id}/review`, `/confirm-delivery`, `/finalize` | `Authorization: Bearer` session token | Review the latest result, confirm its delivery, or begin finalizing it as `DONE`. |
+| `POST /v1/crew/attempts/{id}/work` | `Authorization: Bearer` session token | Begin, or supersede, the holder's work update: block, submit or resume. |
 | `POST /v1/crew/attempts/{id}/settle` | `Authorization: Bearer` session token | Settle a step through aimem's read scope. |
 
 - **Entry and resume.** The exchange names the proof type, this service as
@@ -365,9 +366,9 @@ given, and a test enforces that.
 
 Under D4(a) aicrewd never mutates a reservation. The acting member's own
 aimem connection sends each mutation, and aicrewd confirms the outcome
-through aimem's read-only reservation scope. So each step of the offer
-family, the independent claim, the stop release and finalize is two calls:
-begin and settle.
+through aimem's read-only reservation scope. So every reservation step is
+two calls, begin and settle: the offer family, the independent claim, the
+work updates, the stop release and finalize.
 
 The session token alone names the agent, its session and its generation.
 The store authenticates the token again inside every command, replays
@@ -404,23 +405,44 @@ begin needs an `Idempotency-Key`; settle does not.
     finalize needs the confirmed delivery of that result ("Confirmed
     delivery"), and its terminal evidence is that record's, never the
     finalizer's. The step carries the `accepted_for_finalization` fact.
+  - `/{id}/work`, with `{intent, detail?}`: the holder's work update.
+    - `intent` is `block` (with the blocker as `detail`), `submit` (with
+      the result reference) or `resume`.
+    - It is a fenced update of the holder's own hold, with no coordination
+      fact, so it has no proof.
   - A begin records the intent and the capacity it needs, as "Ordering
     across the two stores" requires. It answers `200` with coordination.v1's
     begin response: `{operation, request_key, expected_revision,
     reservation_id?, fence?, holder?, coordination_proof}`.
     - For an offer or a claim, `Location` names the new attempt.
-    - A stopped attempt's release also carries `target_state`, `reason` and
-      `blocker?`, and a finalize carries `target_state: DONE`, `reason` and
-      `terminal_evidence` (the confirmed delivery's references). These are the
-      values the member sends aimem with the step (D-b1b-2). No other step
-      carries them.
+    - Some steps also carry the values the member sends aimem with them
+      (D-b1b-2). No other step carries them:
+      - a stopped attempt's release carries `target_state`, `reason` and
+        `blocker?`;
+      - a finalize carries `target_state: DONE`, `reason` and
+        `terminal_evidence` (the confirmed delivery's references);
+      - a work update carries `intent`, `target_state`, and `blocker` or
+        `result_ref`.
+    - A work update's answer has no `coordination_proof`.
     - The member sends exactly that request to aimem.
     - The proof appears only in this answer.
   - **Retried begin.** A retry with the same key and the same input, while
     the step is pending, gets a replacement proof for the same step and
     request key. The earlier proof ends at once, so aimem refuses it if it
-    is still on its way. A retry after the step settled is refused: `409
+    is still on its way. A work update has no proof, so its retry answers
+    the same step. A retry after the step settled is refused: `409
     step_settled` if it committed, and `409 attempt_state` if it did not.
+  - **Superseding a stuck update** (D-b1b-4 (a)). aimem may refuse an update
+    without moving anything, for example for authorization or validation.
+    Then no evidence ever settles it (see Settle below). The holder may give
+    the pending update a new request key: `/{id}/work` with `{intent,
+    detail?, supersedes}`.
+    - `supersedes` names the pending update's key, and the intent and
+      detail repeat the update's own.
+    - The update is unchanged: the same expected revision and fence. So
+      aimem's revision check lets at most one of its keys commit.
+    - Every key is an alias of the one step: settling under any of them
+      settles it, and each keeps the step's outcome.
 - **Decline.** `/{id}/decline`, with an empty body or `{}`: the offer's
   worker declines.
   - It is local: there is no step and no proof. The coordinator then
@@ -472,6 +494,15 @@ begin needs an `Idempotency-Key`; settle does not.
     `Retry-After`, and the client settles again. That includes a
     `committed` report the read scope does not show yet.
   - Settling a settled step reports its outcome again.
+  - **A work update** has no proof, so it follows coordination.v1's
+    proofless rule instead:
+    - A committed receipt by key, under any of the step's keys, applies it.
+    - Nothing is voided, and no report changes anything.
+    - A `none` becomes final (`not_committed`) only when the read scope's
+      hold status shows the hold's fence or task revision past the
+      request's, and the receipts are read after that observation.
+    - Until then the step stays pending, however long. Superseding it is
+      the way out.
   - Aicrewd has no read scope until crew-execution b3. Until then, every
     settle answers `202`: no report is ever trusted.
 - **Refusals** use the envelope above. The step routes add these codes to
@@ -628,16 +659,15 @@ reservation follows one rule:
    the new fence and the new attempt state, together with audit and any
    lifecycle message.
 
-For the offer family (offer, accept and withdraw), the independent claim,
-the stop release and finalize, step 2 is the acting member's ("Attempt
-steps"):
+For every step, step 2 is the acting member's ("Attempt steps"):
 - the begin route returns the request;
 - the member's own aimem connection sends it;
 - settle learns the outcome from aimem's read scope, never from the
   member's report.
 
-Until crew-execution b1b-3 moves them to the same two phases, aicrewd still
-calls aimem itself for the work steps.
+The store keeps its one-shot operations, which call aimem through a
+mutating port, as internal test paths. No route reaches them, and they are
+deleted in crew-execution b3 (D-b1b-6).
 
 After a lost reply, aicrew queries the receipt with the same key and never
 retries with a fresh key. While the receipt is unresolved, the attempt is
@@ -651,7 +681,9 @@ before committing ("Coordination facts").
 When the two stores disagree, aicrew conforms to aimem. For a member-driven
 step, "aimem shows" means what the read scope shows for the step's proofs,
 and "not committed" is known only once the read scope still shows nothing
-10 s after those proofs ended.
+10 s after those proofs ended. For a work update, "not committed" is known
+only once the hold's fence or revision is seen past the request's, and its
+keys still show nothing when read after that.
 
 | Aicrew shows | Aimem shows | Resolution |
 | --- | --- | --- |
@@ -669,8 +701,8 @@ and "not committed" is known only once the read scope still shows nothing
 | Accept | `ACCEPTING` → `RUNNING` | Transfer from offer to attempt, to the worker's verified context; the fence advances. The worker's client sends it. |
 | Decline, withdraw or offer expiry | → `CLOSED` | Release under the current fence; the task returns to `READY`. The coordinator's client sends it. |
 | Independent claim | `CLAIMING` → `RUNNING` | Claim with an external holder referencing the attempt, under the worker's own verified context. The claimer's client sends it. |
-| Block | `RUNNING` → `BLOCKED` | Fenced work mutation recording the blocker; hold kept |
-| Submit result | `RUNNING` → `SUBMITTED` | Fenced work mutation to task `REVIEW`; result reference recorded |
+| Block | `RUNNING` → `BLOCKED` | Fenced work mutation recording the blocker; hold kept. The holder's client sends it. |
+| Submit result | `RUNNING` → `SUBMITTED` | Fenced work mutation to task `REVIEW`; result reference recorded. The holder's client sends it. |
 | Review: return for rework | `SUBMITTED` → `RUNNING` | The worker, as holder, makes the fenced work mutation back to `IN_PROGRESS` when it resumes; the hold is unchanged |
 | Review: accept result | `SUBMITTED` → `ACCEPTED` | none; acceptance is not delivery |
 | Finalize after human merge | `ACCEPTED` → `FINALIZED` | Finalize `DONE` with the confirmed delivery evidence as terminal evidence. The finalizer's client sends it. |

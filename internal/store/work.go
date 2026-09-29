@@ -105,7 +105,13 @@ const (
 // UpdateWork blocks, resumes or submits the caller's running attempt as its
 // holder.
 func (s *Store) UpdateWork(ctx context.Context, c Caller, port Reservations, key, attemptID string, in WorkUpdate) (Attempt, error) {
-	cmd := command{
+	return s.transition(ctx, c, port, updateCommand(c, key, attemptID, in), attemptID, nil)
+}
+
+// updateCommand is a work update's intent: a fenced update of the holder's
+// own hold, with no coordination fact.
+func updateCommand(c Caller, key, attemptID string, in WorkUpdate) command {
+	return command{
 		op: opUpdateWork, scope: attemptID, key: key, input: struct {
 			AttemptID string `json:"attempt_id"`
 			WorkUpdate
@@ -157,7 +163,6 @@ func (s *Store) UpdateWork(ctx context.Context, c Caller, port Reservations, key
 			return startWorkIntent(ctx, tx, a, ReservationUpdate, AttemptRunning, string(in.Intent), detail, "", text, now)
 		},
 	}
-	return s.transition(ctx, c, port, cmd, attemptID, nil)
 }
 
 // ReviewResult records the current coordinator's decision on the latest

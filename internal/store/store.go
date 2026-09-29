@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 17
+const schemaVersion = 18
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -215,7 +215,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	}
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
-		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17}
+		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -399,6 +399,19 @@ var schemaV5 = []string{
 		PRIMARY KEY (message_id, agent_id)
 	)`,
 	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
+}
+
+// schemaV18 records the request keys of work updates a holder superseded
+// with a new key (D-b1b-4 (a)): each is an alias of its attempt's pending
+// update step until that step settles, when each is recorded with the step's
+// outcome and dropped here.
+var schemaV18 = []string{
+	`CREATE TABLE superseded_updates (
+		request_key   TEXT PRIMARY KEY,
+		attempt_id    TEXT NOT NULL REFERENCES attempts (id),
+		superseded_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX superseded_updates_attempt ON superseded_updates (attempt_id)`,
 }
 
 // schemaV17 records a team member's confirmation of an accepted result's

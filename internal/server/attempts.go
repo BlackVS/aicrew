@@ -28,7 +28,7 @@ const (
 
 // The actions on one attempt, at AttemptsPath/{id}/{action}.
 var attemptActions = []string{"accept", "decline", "withdraw", "settle", "stop", "confirm-stop", "release", "review",
-	"confirm-delivery", "finalize"}
+	"confirm-delivery", "finalize", "work"}
 
 var attemptIDShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
@@ -39,7 +39,7 @@ func (s *Server) registerAttempts() {
 	s.handle(http.MethodPost, ClaimPath, s.claim)
 	handlers := map[string]http.HandlerFunc{"accept": s.accept, "decline": s.decline, "withdraw": s.withdraw,
 		"settle": s.settle, "stop": s.requestStop, "confirm-stop": s.confirmStop, "release": s.releaseStopped,
-		"review": s.review, "confirm-delivery": s.confirmDelivery, "finalize": s.finalize}
+		"review": s.review, "confirm-delivery": s.confirmDelivery, "finalize": s.finalize, "work": s.work}
 	for _, action := range attemptActions {
 		s.handle(http.MethodPost, attemptRoute(action), handlers[action])
 	}
@@ -139,12 +139,14 @@ func (s *Server) stepRequest(w http.ResponseWriter, r *http.Request, wantKey boo
 }
 
 // writeStep answers a begin with coordination.v1's begin response. A replay
-// of a step that has already settled has no step to send.
+// of a step that has already settled has no step to send: no request key.
+// (A work update's step has no proof at all, so a missing proof says
+// nothing.)
 func (s *Server) writeStep(w http.ResponseWriter, r *http.Request, a store.Attempt, step store.Step, err error) {
 	switch {
 	case err != nil:
 		s.refuseSession(w, r, attemptRefusal(err), false, 0)
-	case step.CoordinationProof == "":
+	case step.RequestKey == "":
 		s.refuseSession(w, r, "step_settled", false, 0)
 	default:
 		w.Header().Set("Location", AttemptsPath+"/"+a.ID)
@@ -407,5 +409,33 @@ func (s *Server) finalize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, step, err := s.store.BeginFinalizeWithToken(r.Context(), key, token, id, in.ResultSeq)
+	s.writeStep(w, r, a, step, err)
+}
+
+// work begins the holder's work update: block with a blocker, submit with a
+// result reference, or resume. The step has no proof. With supersedes, the
+// same update (repeating its intent and detail) gets a new request key, and
+// the superseded key becomes an alias of the step.
+func (s *Server) work(w http.ResponseWriter, r *http.Request) {
+	id, _, _ := attemptPath(requestPath(r))
+	var in struct {
+		Intent     store.WorkIntent `json:"intent"`
+		Detail     string           `json:"detail,omitempty"`
+		Supersedes string           `json:"supersedes,omitempty"`
+	}
+	token, key, ok := s.stepRequest(w, r, true, &in)
+	if !ok {
+		return
+	}
+	var (
+		a    store.Attempt
+		step store.Step
+		err  error
+	)
+	if in.Supersedes != "" {
+		a, step, err = s.store.SupersedeWorkWithToken(r.Context(), key, token, id, in.Supersedes, in.Intent, in.Detail)
+	} else {
+		a, step, err = s.store.BeginWorkWithToken(r.Context(), key, token, id, in.Intent, in.Detail)
+	}
 	s.writeStep(w, r, a, step, err)
 }

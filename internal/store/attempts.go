@@ -1017,6 +1017,17 @@ func recordStep(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now t
 		a.PendingKey, a.ID, string(a.PendingOp), string(o.kind), refusal, o.result.Receipt.ID, formatTime(now)); err != nil {
 		return fmt.Errorf("record step outcome: %w", err)
 	}
+	// A superseded update key is an alias of the step: it keeps the step's
+	// outcome.
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO attempt_steps (request_key, attempt_id, operation, outcome, refusal, receipt_id, settled_at)
+		 SELECT request_key, attempt_id, ?, ?, ?, ?, ? FROM superseded_updates WHERE attempt_id = ?`,
+		string(a.PendingOp), string(o.kind), refusal, o.result.Receipt.ID, formatTime(now), a.ID); err != nil {
+		return fmt.Errorf("record superseded step keys: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM superseded_updates WHERE attempt_id = ?`, a.ID); err != nil {
+		return fmt.Errorf("clear superseded step keys: %w", err)
+	}
 	return nil
 }
 

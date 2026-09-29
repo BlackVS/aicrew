@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,8 @@ import (
 	"github.com/BlackVS/aicrew/internal/store"
 )
 
-// The fake aimem's read scope: what it committed under each proof.
+// The fake aimem's read scope: what it committed under each proof or, for an
+// update, under each key, and the hold it keeps for each task.
 
 func (f *fakeAimem) ReceiptByProof(_ context.Context, digest string) (store.ScopeReceiptLookup, error) {
 	f.mu.Lock()
@@ -29,12 +31,24 @@ func (f *fakeAimem) ReceiptByProof(_ context.Context, digest string) (store.Scop
 	return store.ScopeReceiptLookup{State: store.ScopeNone}, nil
 }
 
-func (f *fakeAimem) ReceiptByKey(context.Context, store.TaskRef, store.ReservationOp, string) (store.ScopeReceiptLookup, error) {
+func (f *fakeAimem) ReceiptByKey(_ context.Context, _ store.TaskRef, _ store.ReservationOp, digest string) (store.ScopeReceiptLookup, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r, ok := f.byKey[digest]; ok {
+		return r, nil
+	}
 	return store.ScopeReceiptLookup{State: store.ScopeNone}, nil
 }
 
-func (f *fakeAimem) HoldStatus(context.Context, store.TaskRef) (store.ScopeHold, error) {
-	return store.ScopeHold{State: store.ScopeNone}, nil
+func (f *fakeAimem) HoldStatus(_ context.Context, task store.TaskRef) (store.ScopeHold, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.holds[task.TaskID]
+	if h == nil || !h.active {
+		return store.ScopeHold{State: store.ScopeNone}, nil
+	}
+	return store.ScopeHold{State: store.ScopeHeld, ReservationID: h.id, Fence: strconv.Itoa(h.fence), HolderMode: "external",
+		OwnWorkRef: h.workRef, TaskRevision: f.revision}, nil
 }
 
 // send is the acting member's own aimem connection sending the step it
@@ -54,10 +68,15 @@ func (f *fakeAimem) send(t *testing.T, task store.TaskRef, st store.Step) string
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.receipts[p1(st.CoordinationProof)] = store.ScopeReceiptLookup{State: store.ScopeCommitted, Receipt: &store.ScopeReceipt{
+	lookup := store.ScopeReceiptLookup{State: store.ScopeCommitted, Receipt: &store.ScopeReceipt{
 		ID: res.Receipt.ID, Operation: string(st.Operation), TaskID: task.TaskID, RequestKeyDigest: k1(st.RequestKey),
 		ReservationID: f.holds[task.TaskID].id, Fence: res.Reservation.Fence, TaskRevision: res.TaskRevision,
 		MemberUserID: "user-member", VerifiedMode: "team", CommittedAt: time.Now().UTC().Format(time.RFC3339)}}
+	if st.Operation == store.ReservationUpdate {
+		f.byKey[k1(st.RequestKey)] = lookup
+	} else {
+		f.receipts[p1(st.CoordinationProof)] = lookup
+	}
 	return ""
 }
 
@@ -664,4 +683,100 @@ func TestFinalizeWithoutEvidenceIsRefusedByAimem(t *testing.T) {
 	if code := e.aimem.send(t, e.task("task-1"), st); code != "invalid_request" {
 		t.Fatalf("a finalize without its evidence: aimem answered %q", code)
 	}
+}
+
+// updateStepOf decodes a work update's begin reply strictly: the begin
+// response with the update's values and no proof.
+func updateStepOf(t *testing.T, got reply) store.Step {
+	t.Helper()
+	if got.status != http.StatusOK {
+		t.Fatalf("begin: %d %s", got.status, got.raw)
+	}
+	var st store.Step
+	if err := strictDecode([]byte(got.raw), &st); err != nil || st.RequestKey == "" || st.Operation != store.ReservationUpdate ||
+		st.CoordinationProof != "" || strings.Contains(got.raw, "coordination_proof") {
+		t.Fatalf("update begin reply %s: %v", got.raw, err)
+	}
+	return st
+}
+
+// The whole loop, entirely through the routes, as members' clients drive it:
+// an independent member claims a task and submits a result; the coordinator
+// reviews it and confirms its delivery; the holder finalizes. Every step's
+// begin goes through aicrew, the member's own aimem connection sends it, and
+// settle confirms it from the read scope; aicrewd sends aimem nothing.
+func TestCompleteLoopThroughTheRoutes(t *testing.T) {
+	e := setupCoordination(t)
+	got := e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-1"))
+	claim, id := stepOf(t, got), attemptOf(t, got)
+	path := func(action string) string { return AttemptsPath + "/" + id + "/" + action }
+	if code := e.aimem.send(t, e.task("task-1"), claim); code != "" {
+		t.Fatalf("claim: %s %v", code, e.aimem.refused)
+	}
+	settled(t, e.settleAs(t, e.indep, id, claim, "committed", ""), "committed", "running")
+
+	sub := updateStepOf(t, e.call(t, e.indep.token, path("work"), "submit-1",
+		map[string]string{"intent": "submit", "detail": "https://forge.example/pull/7"}))
+	if sub.Intent != "submit" || sub.TargetState != "REVIEW" || sub.ResultRef != "https://forge.example/pull/7" ||
+		sub.ReservationID != e.aimem.holds["task-1"].id || sub.Fence != "1" {
+		t.Fatalf("submit begin %+v", sub)
+	}
+	pending(t, e.settleAs(t, e.indep, id, sub, "committed", ""))
+	if code := e.aimem.send(t, e.task("task-1"), sub); code != "" {
+		t.Fatalf("submit: %s %v", code, e.aimem.refused)
+	}
+	if a := settled(t, e.settleAs(t, e.indep, id, sub, "unknown", ""), "committed", "running"); a["phase"] != "submitted" {
+		t.Fatalf("submitted: %v", a)
+	}
+	seq := float64(1)
+	if got := e.call(t, e.lead.token, path("review"), "review-1", map[string]any{"result_seq": seq, "decision": "accept"}); got.status != http.StatusOK {
+		t.Fatalf("review: %d %s", got.status, got.raw)
+	}
+	if got := e.call(t, e.lead.token, path("confirm-delivery"), "confirm-1",
+		map[string]any{"result_seq": seq, "evidence": confirmedEvidence}); got.status != http.StatusOK {
+		t.Fatalf("confirm-delivery: %d %s", got.status, got.raw)
+	}
+	fin := stepOf(t, e.call(t, e.indep.token, path("finalize"), "fin-1", map[string]any{"result_seq": seq}))
+	if code := e.aimem.send(t, e.task("task-1"), fin); code != "" {
+		t.Fatalf("finalize: %s %v", code, e.aimem.refused)
+	}
+	if a := settled(t, e.settleAs(t, e.lead, id, fin, "unknown", ""), "committed", "closed"); a["close_reason"] != "finalized" {
+		t.Fatalf("closed as %v", a["close_reason"])
+	}
+	if kinds := e.seenKinds(); kinds != "independent_claim,accepted_for_finalization" {
+		t.Fatalf("aimem verified %s", kinds)
+	}
+}
+
+// A block aimem never committed stays unresolved: nothing moved the hold.
+// The holder supersedes it with a new key for the same update, sends that,
+// and a settle under either key settles the one step.
+func TestSupersedeThroughTheRoutes(t *testing.T) {
+	e := setupCoordination(t)
+	got := e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-1"))
+	claim, id := stepOf(t, got), attemptOf(t, got)
+	path := func(action string) string { return AttemptsPath + "/" + id + "/" + action }
+	if code := e.aimem.send(t, e.task("task-1"), claim); code != "" {
+		t.Fatalf("claim: %s", code)
+	}
+	settled(t, e.settleAs(t, e.indep, id, claim, "committed", ""), "committed", "running")
+	block := map[string]string{"intent": "block", "detail": "waiting on design"}
+	first := updateStepOf(t, e.call(t, e.indep.token, path("work"), "block-1", block))
+	pending(t, e.settleAs(t, e.indep, id, first, "refused", "invalid_request"))
+	refused(t, e.call(t, e.indep.token, path("work"), "block-2", block), http.StatusConflict, "attempt_state")
+	refused(t, e.call(t, e.indep.token, path("work"), "s-0",
+		map[string]string{"intent": "block", "detail": "something else", "supersedes": first.RequestKey}),
+		http.StatusBadRequest, "invalid_request")
+	second := updateStepOf(t, e.call(t, e.indep.token, path("work"), "s-1",
+		map[string]string{"intent": "block", "detail": "waiting on design", "supersedes": first.RequestKey}))
+	if second.RequestKey == first.RequestKey || second.Blocker != "waiting on design" || second.TargetState != "BLOCKED" {
+		t.Fatalf("supersede %+v", second)
+	}
+	if code := e.aimem.send(t, e.task("task-1"), second); code != "" {
+		t.Fatalf("block: %s", code)
+	}
+	if a := settled(t, e.settleAs(t, e.indep, id, first, "unknown", ""), "committed", "running"); a["phase"] != "blocked" {
+		t.Fatalf("blocked: %v", a)
+	}
+	settled(t, e.settleAs(t, e.lead, id, second, "unknown", ""), "committed", "running")
 }

@@ -274,8 +274,22 @@ func TestDriverStopRelease(t *testing.T) {
 
 // The worker accepts an offer: the driver sends the transfer.
 func TestDriverAcceptTransfer(t *testing.T) {
-	ctx := context.Background()
 	s := setupSteps(t, store.RoleWorker)
+	id := s.offered(t)
+	r, err := s.run(t, attemptsPath+"/"+id+"/accept", map[string]string{"instruction_digest": testDigest})
+	if err != nil || !r.Settled || r.Outcome != "committed" {
+		t.Fatalf("accept: %+v %v", r, err)
+	}
+	if got := s.attempt(t, id); got.State != store.AttemptRunning {
+		t.Fatalf("attempt after accept: %+v", got)
+	}
+}
+
+// offered has the coordinator offer task-1 to the agent, its own client
+// sending the claim, and settles it.
+func (s *stepEnv) offered(t *testing.T) string {
+	t.Helper()
+	ctx := context.Background()
 	a, st, err := s.store.BeginOffer(ctx, s.coord, "offer-1", store.OfferRequest{SessionID: s.coordSess.ID,
 		Generation: s.coordSess.Generation, WorkerAgentID: s.agentID,
 		Task:             store.TaskRef{HubID: "hub-test", ProjectID: "project-t", TaskID: "task-1"},
@@ -296,13 +310,7 @@ func TestDriverAcceptTransfer(t *testing.T) {
 		store.StepReport{Outcome: store.HintCommitted}); err != nil || !set.Settled {
 		t.Fatalf("settle the offer: %+v %v", set, err)
 	}
-	r, err := s.run(t, attemptsPath+"/"+a.ID+"/accept", map[string]string{"instruction_digest": testDigest})
-	if err != nil || !r.Settled || r.Outcome != "committed" {
-		t.Fatalf("accept: %+v %v", r, err)
-	}
-	if got := s.attempt(t, a.ID); got.State != store.AttemptRunning {
-		t.Fatalf("attempt after accept: %+v", got)
-	}
+	return a.ID
 }
 
 // aimem's exit codes, one by one, on work updates: 3 is a refusal with its
@@ -598,8 +606,8 @@ func TestDriverDropsARefusedBegin(t *testing.T) {
 	if !errors.As(err, &ref) || ref.Code != "task_busy" || len(results) != 1 {
 		t.Fatalf("recover past a failing step: %+v %v", results, err)
 	}
-	if p, _ := s.d.Pending(); len(p) != 1 {
-		t.Fatalf("records after recovery: %v", p)
+	if p, _ := s.d.Pending(); len(p) != 2 {
+		t.Fatalf("records after recovery: %d, want the refused begin's and the pending update's", len(p))
 	}
 }
 
@@ -615,4 +623,60 @@ func (s *stepEnv) attemptOfTask(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return id
+}
+
+// A begin that aicrewd committed, whose reply was lost, keeps its record
+// through a recovery aicrewd refuses (here, the session token has lapsed): the
+// refusal says nothing about the lost begin. The next recovery finishes the
+// step under the same begin key.
+func TestDriverKeepsALostBeginThroughARefusal(t *testing.T) {
+	ctx := context.Background()
+	s := setupSteps(t, store.RoleIndependent)
+	p := &pendingStep{BeginKey: "step-00000000000000000000000000000002",
+		Request: s.request(t, attemptsPath+"/claim", s.claimBody()), Phase: PhaseBegin}
+	if err := s.d.save(p); err != nil {
+		t.Fatal(err)
+	}
+	// The begin commits; its reply is lost.
+	if _, _, err := s.d.Crew.BeginStep(ctx, p.BeginKey, s.e.token, p.Request.Path, p.Request.Body); err != nil {
+		t.Fatal(err)
+	}
+	token := s.e.token
+	s.e.token = "acs1_" + strings.Repeat("0", 43) // a token aicrewd refuses
+	_, err := s.d.Recover(ctx)
+	var ref *Refusal
+	if !errors.As(err, &ref) || ref.Code != "invalid_token" {
+		t.Fatalf("recover with a lapsed token: %v", err)
+	}
+	if pending, _ := s.d.Pending(); len(pending) != 1 || pending[0].BeginKey != p.BeginKey {
+		t.Fatalf("the lost begin's record was dropped: %v", pending)
+	}
+	s.e.token = token
+	results, err := s.d.Recover(ctx)
+	if err != nil || len(results) != 1 || !results[0].Settled || results[0].Outcome != "committed" {
+		t.Fatalf("recover the lost begin: %+v %v", results, err)
+	}
+}
+
+// The fake refuses a transfer that does not name the current hold at its
+// fence: seeded faults drop the reservation or alter the fence.
+func TestDriverSeededTransferFaults(t *testing.T) {
+	for name, fault := range map[string]func(b map[string]any){
+		"reservation dropped": func(b map[string]any) { delete(b, "reservation_id") },
+		"fence altered":       func(b map[string]any) { b["fence"] = "9" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := setupSteps(t, store.RoleWorker)
+			id := s.offered(t)
+			s.d.composed = func(op string, b map[string]any) {
+				if op == "transfer" {
+					fault(b)
+				}
+			}
+			r, err := s.run(t, attemptsPath+"/"+id+"/accept", map[string]string{"instruction_digest": testDigest})
+			if err != nil || r.Report != (StepReport{Outcome: "refused", Code: "payload_mismatch"}) || len(s.mismatches(t)) != 1 {
+				t.Fatalf("the seeded transfer fault went unnoticed: %+v %v %v", r, err, s.mismatches(t))
+			}
+		})
+	}
 }

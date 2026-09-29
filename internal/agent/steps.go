@@ -262,7 +262,7 @@ func (d *Driver) Run(ctx context.Context, req StepRequest) (StepResult, error) {
 	if err := d.save(p); err != nil {
 		return StepResult{}, fmt.Errorf("record the step: %w", err)
 	}
-	return d.drive(ctx, p)
+	return d.drive(ctx, p, true)
 }
 
 // Recover finishes every recorded step with its recorded keys. A step that
@@ -275,7 +275,7 @@ func (d *Driver) Recover(ctx context.Context) ([]StepResult, error) {
 	var out []StepResult
 	var first error
 	for _, p := range pending {
-		r, err := d.drive(ctx, p)
+		r, err := d.drive(ctx, p, false)
 		if err != nil {
 			if first == nil {
 				first = err
@@ -287,8 +287,10 @@ func (d *Driver) Recover(ctx context.Context) ([]StepResult, error) {
 	return out, first
 }
 
-// drive takes a recorded step from its phase to its settle.
-func (d *Driver) drive(ctx context.Context, p *pendingStep) (StepResult, error) {
+// drive takes a recorded step from its phase to its settle. fresh is true
+// for a step's first begin, whose answer is known to be the answer to the
+// only begin sent under its key.
+func (d *Driver) drive(ctx context.Context, p *pendingStep, fresh bool) (StepResult, error) {
 	var proof string
 	if p.Phase == PhaseBegin || p.Phase == PhaseBegun {
 		// The proof is never recorded: a step not yet answered by aimem
@@ -300,9 +302,11 @@ func (d *Driver) drive(ctx context.Context, p *pendingStep) (StepResult, error) 
 		case errors.As(err, &ref) && (ref.Code == "step_settled" || ref.Code == "attempt_state") && p.Step != nil:
 			// The step settled meanwhile: settle reports its outcome.
 			p.Phase, p.Report = PhaseSent, &StepReport{Outcome: "unknown"}
-		case errors.As(err, &ref) && !ref.Retryable && p.Step == nil:
-			// aicrewd refused a step that never began: there is nothing to
-			// finish, and its record would only be refused again.
+		case errors.As(err, &ref) && !ref.Retryable && fresh:
+			// aicrewd refused the step's first begin: nothing began, so
+			// there is nothing to finish. A recovery's refusal proves nothing
+			// about an earlier begin whose reply was lost (it may have
+			// committed), so it never drops the record.
 			if derr := d.drop(p); derr != nil {
 				return StepResult{}, errors.Join(err, derr)
 			}

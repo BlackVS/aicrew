@@ -268,11 +268,20 @@ func checkPayload(root string, f *fakeReservations, op, task, key string, body m
 		if holder.Mode != "external" || holder.WorkRef != want {
 			return "holder " + holder.Mode + " " + holder.WorkRef + ", want " + want
 		}
-		return ""
+		if op == "claim" {
+			if _, has := body["reservation_id"]; has {
+				return "a claim names no reservation"
+			}
+			return ""
+		}
 	}
+	// Every operation but claim acts on the current hold, at its fence.
 	h := f.Holds[task]
 	if h == nil || !h.Active || str("reservation_id") != h.ID || str("fence") != fmt.Sprint(h.Fence) {
 		return "reservation or fence"
+	}
+	if op == "transfer" {
+		return ""
 	}
 	content := contentOf(body)
 	cstr := func(field string) string {

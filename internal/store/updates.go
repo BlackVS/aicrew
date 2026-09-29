@@ -185,8 +185,8 @@ func (s *Store) BeginWorkWithToken(ctx context.Context, key, token, attemptID st
 		return Attempt{}, Step{}, err
 	}
 	var proof string
-	cmd, g := s.withToken(updateCommand(c, key, attemptID,
-		WorkUpdate{SessionID: t.sessionID, Generation: t.generation, Intent: intent, Detail: detail}), token, t)
+	cmd, g := s.withToken(intentOnly(updateCommand(c, key, attemptID,
+		WorkUpdate{SessionID: t.sessionID, Generation: t.generation, Intent: intent, Detail: detail})), token, t)
 	return s.begin(ctx, c, cmd, attemptID, &proof, "", t.sessionID, t.generation, g)
 }
 
@@ -200,7 +200,7 @@ func (s *Store) SupersedeWorkWithToken(ctx context.Context, key, token, attemptI
 		return Attempt{}, Step{}, err
 	}
 	var proof string
-	cmd, g := s.withToken(supersedeUpdateCommand(c, key, attemptID,
-		WorkUpdate{SessionID: t.sessionID, Generation: t.generation, Intent: intent, Detail: detail}, supersedes), token, t)
+	cmd, g := s.withToken(intentOnly(supersedeUpdateCommand(c, key, attemptID,
+		WorkUpdate{SessionID: t.sessionID, Generation: t.generation, Intent: intent, Detail: detail}, supersedes)), token, t)
 	return s.begin(ctx, c, cmd, attemptID, &proof, "", t.sessionID, t.generation, g)
 }

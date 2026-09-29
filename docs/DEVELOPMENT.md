@@ -289,8 +289,10 @@ aicrew-agent step recover
   launcher makes private before listening and then verifies:
   - on Unix, mode 0700, with the socket at 0600;
   - on Windows, a protected DACL for the current user, SYSTEM and
-    Administrators, which the socket inherits. No other account can list
-    or traverse the directory.
+    Administrators, which the socket inherits. The socket's own inherited
+    DACL is what refuses other accounts, since an account allowed to
+    bypass traverse checking reaches a file by its path whatever its
+    directory allows.
 
   An existing `state/` is restricted the same way. If the launcher cannot
   make it private, or cannot listen (a Unix socket's path is limited to

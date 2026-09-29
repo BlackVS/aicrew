@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -231,12 +230,7 @@ func TestStepChannelIsPrivate(t *testing.T) {
 	if err := privatefile.CheckDir(state); err != nil {
 		t.Fatalf("served from a directory that is not private: %v", err)
 	}
-	if runtime.GOOS != "windows" {
-		info, err := os.Lstat(StepSocket(home))
-		if err != nil || info.Mode().Perm()&0o077 != 0 {
-			t.Fatalf("socket: %v %v", info.Mode(), err)
-		}
-	}
+	assertSocketPrivate(t, StepSocket(home))
 	if ans, err := CallStep(context.Background(), home, StepCall{Op: "pending"}); err != nil || ans.Status != StepDone {
 		t.Fatalf("pending: %+v %v", ans, err)
 	}

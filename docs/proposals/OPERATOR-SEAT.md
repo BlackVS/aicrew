@@ -111,8 +111,12 @@ are `deploy` or `security` in every working directory. Decision-table cases:
 | Edit `AGENTS.md`, `CLAUDE.md`, a skill file or a fixture | `implementation`, `architecture` | `architecture` | ask, authority |
 | Re-run a flaky check on the head | `retry` | `retry` | per mode; never a retry loop |
 | Skip a failing check to merge today | `retry`, `risk` | `risk` | ask, authority |
-| Shell command `go test ./...` in the worktree | `environment` | `environment` | allow |
-| Shell command that writes outside the worktree | `environment` | `environment` | deny (rule may raise to ask) |
+| Shell command `go test ./...` in the worktree, mode `default` or `auto`, no rule | `environment` | `environment` | allow, self-answer recorded |
+| The same command, mode `manual` | `environment` | `environment` | ask (manual makes every category ask) |
+| The same command, mode `default` with rule `environment: ask` | `environment` | `environment` | ask (the rule tightens the mode) |
+| The same command, mode `auto` with rule `environment: deny` | `environment` | `environment` | deny, recorded; the worker is told why |
+| Shell command that writes outside the worktree, mode `default` or `auto`, no rule | `environment` | `environment` | deny (the modes table's "deny outside") |
+| The same command, any mode, rule `environment: ask` | `environment` | `environment` | ask; a rule can raise deny to ask, never to allow outside the worktree |
 | `git push`, a release tag, `boot.sh` or an installer run, anywhere | `environment`, `deploy` | `deploy` | ask, authority |
 | Add an allow rule, edit settings or hooks, accept a trust dialog, a `--dangerously-*` flag | `environment`, `security` | `security` | ask, authority |
 | A prompt the adapter cannot parse | none | unclassified | ask |
@@ -189,14 +193,14 @@ Options for how the human produces the receipt:
 
 | Option | How | Strength against an agent holding the human's credential | Cost |
 | --- | --- | --- | --- |
-| A. WebAuthn in the aimem console | The seat registers a passkey or hardware key with aimem; the console shows the open request; the human confirms; the assertion's challenge is the request digest; aimem verifies and issues the receipt | Strong: needs user presence on the authenticator; the bearer in an agent home cannot sign | New: WebAuthn registration and verification in the hub (a Go library exists), one console page, approvals ledger, read scope. Needs hub TLS, which team mode already requires |
+| A. WebAuthn in the aimem console | The seat registers a passkey or hardware key with aimem; the console shows the open request with its question, the fixed decision and the policy revision; the human confirms that displayed decision; the assertion's challenge is derived from the request digest, the decision and the policy revision ("What the receipt binds"), never the request digest alone; aimem verifies and issues the receipt | Strong: needs user presence on the authenticator; the bearer in an agent home cannot sign | New: WebAuthn registration and verification in the hub (a Go library exists), one console page, approvals ledger, read scope. Needs hub TLS, which team mode already requires |
 | B. Hardware-key CLI | `aimem approve <request>` on the seat's machine performs a FIDO2 assertion with a key touch, no browser | Strong, same reason | CTAP client code per OS; harder on Windows without admin rights; the machine that runs agents is often the same machine |
 | C. Human-only approval token | The hub admin issues the seat a distinct credential type (`aimem_approve_`, user-scoped, operation `approve` only). The human types it only into a separate non-AI command, `aimem approve <request>`, which reads it from the TTY (never argv, env, a file or stdin from a pipe) and sends it to the hub. It never enters an AI session, an agent home, `hub.json` or a session file | Medium: strong against an agent that only has the installation credential and against a model transcript; weak if the token is ever stored on the agent host | Small: one credential type in the access store, one route, the approvals ledger and read scope |
 | D. Forge approval | A GitHub approving review or the merge click counts as the authority answer | Covers only `merge`; the forge account is usually logged in on the agent host | None, but it cannot cover the other five floor categories |
 
 **Recommendation.** Target A. Bridge with C for the first increment after the pilot,
 under three rules: the token is issued for the seat's user only, it authorizes nothing
-but `approve`, and the seat client refuses to store it (hidden prompt, memory only). The
+but `approve`, and only `aimem approve` ever reads it, from the TTY, in memory only. The
 approvals ledger, the receipt format and the read scope are the same for A and C, so the
 bridge is not thrown away. D stays a consumer's evidence (verify-delivery's `human_merge`),
 never a substitute for the receipt.
@@ -216,12 +220,20 @@ edited request record with the original confirmation is refused; (3) **the decis
 changed while the original confirmation is kept and presented for the new decision:
 refused, nothing recorded**; (4) the policy revision moves between selection and
 confirmation: refused; (5) a receipt read through the peer scope names the confirmed
-decision and never the credential or assertion.
+decision and never the credential or assertion; (6) **the skill selects an option that
+differs from the human's intent: `aimem approve` displays the fixed decision before any
+confirmation, the human sees the mismatch and declines, and nothing is recorded**; a
+variant where the human confirms without reading is out of scope for the software.
 
-**Where the skill stops.** A seat skill in an AI session may render the inbox, draft the
-answer, select the option and print the exact `aimem approve <request>` command. It never
-asks for, reads or receives the token or the authenticator; that step happens only in the
-human's own terminal, outside any model session.
+**Where the skill stops: what you see is what you approve.** A seat skill in an AI
+session may render the inbox, draft the answer, select the option and print the exact
+`aimem approve <request>` command. It never asks for, reads or receives the token or the
+authenticator. `aimem approve <request>` then runs in the human's own terminal, outside
+any model session: it fetches the pending confirmation from the hub and displays the
+request's question, the fixed decision and the policy revision as the hub holds them. The
+human confirms **that displayed decision** explicitly, by typing the decision back or
+answering `y/N` to it, and only then enters the token. The skill's own description of what
+it selected is never what the human approves; the hub's display is.
 
 ## 5. Reuse and what is new
 

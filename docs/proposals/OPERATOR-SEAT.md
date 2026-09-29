@@ -385,6 +385,11 @@ wins; the first implementation increment brings the earlier sections in line.
     session, in the seat client or the console;
   - the receipt still binds `{request_digest, decision, policy_revision}` (§4) and records
     the unlocked seat session that produced it; forge approval stays evidence only.
+  - **the unlock is bound to the seat session's generation**, not only to its id: any
+    resume (a new generation, which the crew contract lets any holder of the ordinary
+    credential perform) ends the unlock, and no authority receipt issues until a new
+    second-factor unlock. A protocol vector covers it: unlock, resume with only the
+    ordinary credential, attempt an authority answer, and no receipt issues.
 - **D4 Answer delivery: (b), made general.** An answer always reaches the coordinator, plus
   whoever the request's `blocked` field names. A worker's question relayed by the
   coordinator therefore reaches both; the coordinator's own question reaches the
@@ -406,6 +411,11 @@ wins; the first implementation increment brings the earlier sections in line.
   (the later work stays on the old branch; nothing is deleted or force-pushed) or fix
   forward, and to record which and why. A blocked request takes its checkpoint when the
   attempt blocks.
+  Pushing **the attempt's own work branch** is `environment` (allowed per mode), not
+  `deploy`, so a checkpoint never needs an authority answer. The `git push` row of the §2
+  decision table is narrowed accordingly: `deploy` is a push to the default or a protected
+  branch, a tag or release, or an installer run; a push of the attempt's own branch is
+  `environment`.
 - **D8 Policy changes: (a).** Tightening needs only the seat session; loosening needs the
   seat session, and switching to `auto` additionally needs a fresh second-factor
   confirmation.

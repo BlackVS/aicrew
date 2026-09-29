@@ -164,7 +164,12 @@ type stepRef struct {
 }
 
 // replaceProof ends the pending step's proofs and issues a new one for the
-// same intent, acted by the same session.
+// same intent, acted by sessionID at generation: the session that began the
+// step, perhaps resumed since. Inside the same transaction, the session must
+// still act the step by the rule of its fact kind (stillActs), so authority
+// is rechecked where the replacement commits. A pending independent claim
+// is the claiming session's own: its recorded generation moves with the
+// session's resume.
 func (s *Store) replaceProof(ctx context.Context, c Caller, a Attempt, kind FactKind, sessionID string, generation int64,
 	g guard) (string, error) {
 	key, err := newID(s.now())
@@ -177,6 +182,16 @@ func (s *Store) replaceProof(ctx context.Context, c Caller, a Attempt, kind Fact
 		op: opReplaceProof, scope: a.ID, key: key, input: stepRef{a.ID, a.PendingKey}, authorize: requireAgent,
 		check: g.then(pendingStep(a)),
 		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
+			if kind == FactIndependentClaim {
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE attempts SET worker_generation = ? WHERE id = ? AND worker_session_id = ?`,
+					generation, a.ID, sessionID); err != nil {
+					return nil, fmt.Errorf("carry the claim forward: %w", err)
+				}
+			}
+			if err := stillActs(ctx, tx, a.ID, kind, sessionID, generation); err != nil {
+				return nil, err
+			}
 			if err := endProofs(ctx, tx, a.ID, now); err != nil {
 				return nil, err
 			}
@@ -186,6 +201,30 @@ func (s *Store) replaceProof(ctx context.Context, c Caller, a Attempt, kind Fact
 		},
 	}, &out)
 	return proof, err
+}
+
+// stillActs checks that sessionID at generation may act the attempt's
+// pending step: the rule of its fact kind, as aimem would be answered for a
+// proof of that session (CoordinationFact).
+func stillActs(ctx context.Context, q querier, attemptID string, kind FactKind, sessionID string, generation int64) error {
+	a, err := getAttempt(ctx, q, attemptID)
+	if err != nil {
+		return err
+	}
+	member, ok, err := actingMember(ctx, q, a, proofRecord{sessionID: sessionID, generation: generation}, a.Task.HubID)
+	if err != nil {
+		return err
+	}
+	if ok {
+		f := Fact{Kind: kind, Member: member}
+		if ok, err = f.fill(ctx, q, a, a.Task.HubID); err != nil {
+			return err
+		}
+	}
+	if !ok {
+		return fmt.Errorf("attempt %s: the session no longer acts its %s step: %w", attemptID, kind, ErrForbidden)
+	}
+	return nil
 }
 
 // pendingStep checks, in the command's transaction, that a's step is still

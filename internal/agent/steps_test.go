@@ -685,3 +685,106 @@ func TestDriverSeededTransferFaults(t *testing.T) {
 		})
 	}
 }
+
+// restart starts a new engine on the agent home, as a restarted client
+// does: it resumes the recorded session under a new generation, and the
+// driver acts through it.
+func (s *stepEnv) restart(t *testing.T) {
+	t.Helper()
+	before := s.generation(t)
+	e := s.engine(t)
+	if err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.e, s.d.Session = e, e
+	if after := s.generation(t); after <= before {
+		t.Fatalf("the restart did not resume under a new generation: %d, then %d", before, after)
+	}
+}
+
+func (s *stepEnv) generation(t *testing.T) int64 {
+	t.Helper()
+	b, err := s.store.AuthenticateSessionToken(context.Background(), s.e.token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b.Generation
+}
+
+// A step begun before the client restarted is recovered by the restarted
+// client with its original begin key and aimem key (01a0ebb9): the session
+// resumed under a new generation, and the begin's replay gets a
+// replacement proof for it.
+func TestDriverRecoversAcrossResume(t *testing.T) {
+	for _, step := range []string{"claim", "update", "stop release", "finalize"} {
+		t.Run(step, func(t *testing.T) {
+			ctx := context.Background()
+			s := setupSteps(t, store.RoleIndependent)
+			var id string
+			if step != "claim" {
+				id = s.claimed(t)
+			}
+			if step == "stop release" {
+				if _, err := s.store.RequestStop(ctx, s.coord, "stop-1", id, store.StopRequest{SessionID: s.coordSess.ID,
+					Generation: s.coordSess.Generation, Reason: "priorities changed"}); err != nil {
+					t.Fatal(err)
+				}
+				b, err := s.store.AuthenticateSessionToken(ctx, s.e.token)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.store.ConfirmStop(ctx, s.agent, "confirm-1", id, b.SessionID, b.Generation); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.d.crash = func(p string) bool { return p == "begun" }
+			var seq int64
+			if step == "finalize" {
+				s.d.crash = nil
+				if r, err := s.work(t, id, "submit", "https://forge.example/pull/7"); err != nil || !r.Settled {
+					t.Fatalf("submit: %+v %v", r, err)
+				}
+				seq = s.reviewAndConfirm(t, id)
+				s.d.crash = func(p string) bool { return p == "begun" }
+			}
+			var err error
+			switch step {
+			case "finalize":
+				_, err = s.run(t, attemptsPath+"/"+id+"/finalize", map[string]any{"result_seq": seq})
+			case "claim":
+				_, err = s.run(t, attemptsPath+"/claim", s.claimBody())
+			case "update":
+				_, err = s.work(t, id, "submit", "https://forge.example/pull/7")
+			default:
+				_, err = s.run(t, attemptsPath+"/"+id+"/release", map[string]string{"target": "BLOCKED", "blocker": "waiting"})
+			}
+			if !errors.Is(err, errCrashed) {
+				t.Fatalf("the crash: %v", err)
+			}
+			pending, err := s.d.Pending()
+			if err != nil || len(pending) != 1 || pending[0].Step == nil {
+				t.Fatalf("records after the crash: %v %v", pending, err)
+			}
+			beginKey, stepKey := pending[0].BeginKey, pending[0].Step.RequestKey
+			sends := len(s.mutations(t))
+
+			s.d.crash = nil
+			s.restart(t)
+			results, err := s.d.Recover(ctx)
+			if err != nil || len(results) != 1 || !results[0].Settled || results[0].Outcome != "committed" ||
+				results[0].RequestKey != stepKey {
+				t.Fatalf("recover after the restart: %+v %v", results, err)
+			}
+			calls := s.mutations(t)
+			if len(calls) != sends+1 || flagValue(calls[len(calls)-1].Args, "--key") != stepKey {
+				t.Fatalf("aimem's sends after the restart: %v", calls[sends:])
+			}
+			if p, _ := s.d.Pending(); len(p) != 0 {
+				t.Fatalf("records after recovery: %v", p)
+			}
+			if strings.Count(s.logs.String(), beginKey) != 0 {
+				t.Fatal("the begin key reached the log")
+			}
+		})
+	}
+}

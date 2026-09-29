@@ -308,6 +308,7 @@ func TestMigrationV12AddsIntrospectionTables(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := rawDB(t, path)
+	dropDeliveryColumns(t, raw)
 	for _, stmt := range []string{`DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`, `DROP TABLE session_handles`,
 		`DROP TABLE introspection_credentials`, `ALTER TABLE attempts DROP COLUMN process_verified_receipt`,
 		`UPDATE schema_version SET version = 11`} {
@@ -341,6 +342,7 @@ func TestMigrationV13AddsSessionTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := rawDB(t, path)
+	dropDeliveryColumns(t, raw)
 	for _, stmt := range []string{`DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`,
 		`ALTER TABLE introspection_credentials DROP COLUMN operations`,
 		`ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 12`} {
@@ -380,6 +382,7 @@ func TestMigrationV16AddsVerifiedPinReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := rawDB(t, path)
+	dropDeliveryColumns(t, raw)
 	for _, stmt := range []string{`ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 15`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -401,5 +404,48 @@ func TestMigrationV16AddsVerifiedPinReceipt(t *testing.T) {
 	a := e.offer(t, "offer-after", "task-after-v16")
 	if a.State != AttemptOffered || a.ProcessVerifiedReceipt == "" || a.ProcessVerifiedReceipt != a.LastReceiptID {
 		t.Fatalf("an offer after v16: %+v", a)
+	}
+}
+
+// dropDeliveryColumns takes a store back to before schema v17, so a test that
+// downgrades further can migrate it forward again.
+func dropDeliveryColumns(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	for _, c := range []string{"delivery_result", "delivery_evidence", "delivery_by_agent", "delivery_by_session",
+		"delivery_by_generation", "delivery_at"} {
+		if _, err := raw.Exec(`ALTER TABLE attempts DROP COLUMN ` + c); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Schema v17 adds the confirmed-delivery record to a populated v16 store and
+// keeps every attempt, none of them confirmed.
+func TestMigrationV17AddsDeliveryConfirmation(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM attempts`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropDeliveryColumns(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 16`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v16 store: %v", err)
+	}
+	defer s2.Close()
+	var after, confirmed int
+	if err := s2.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(delivery_result, 0)) FROM attempts`).Scan(&after, &confirmed); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || confirmed != 0 {
+		t.Fatalf("after v17: %d attempts (was %d), %d confirmed", after, before, confirmed)
 	}
 }

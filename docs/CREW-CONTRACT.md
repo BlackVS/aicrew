@@ -306,6 +306,7 @@ given, and a test enforces that.
 | `POST /v1/crew/attempts/{id}/accept`, `/decline`, `/withdraw` | `Authorization: Bearer` session token | Begin an acceptance or a withdrawal, or record a decline. |
 | `POST /v1/crew/attempts/claim` | `Authorization: Bearer` session token | Begin an independent claim. |
 | `POST /v1/crew/attempts/{id}/stop`, `/confirm-stop`, `/release` | `Authorization: Bearer` session token | Request or confirm a stop, or begin the stopped attempt's release. |
+| `POST /v1/crew/attempts/{id}/review`, `/confirm-delivery`, `/finalize` | `Authorization: Bearer` session token | Review the latest result, confirm its delivery, or begin finalizing it as `DONE`. |
 | `POST /v1/crew/attempts/{id}/settle` | `Authorization: Bearer` session token | Settle a step through aimem's read scope. |
 
 - **Entry and resume.** The exchange names the proof type, this service as
@@ -365,8 +366,8 @@ given, and a test enforces that.
 Under D4(a) aicrewd never mutates a reservation. The acting member's own
 aimem connection sends each mutation, and aicrewd confirms the outcome
 through aimem's read-only reservation scope. So each step of the offer
-family, the independent claim and the stop release is two calls: begin and
-settle.
+family, the independent claim, the stop release and finalize is two calls:
+begin and settle.
 
 The session token alone names the agent, its session and its generation.
 The store authenticates the token again inside every command, replays
@@ -397,14 +398,22 @@ begin needs an `Idempotency-Key`; settle does not.
     confirmation, releases the task. The body is `{target, blocker?}`, with
     the target `READY`, or `BLOCKED` with a blocker. The step carries the
     `stopped` fact.
+  - `/{id}/finalize`, with `{result_seq}`: the holder, or the coordinator
+    from the session and generation that recorded the acceptance, finalizes
+    the accepted result as `DONE`. The body names the result only. The
+    finalize needs the confirmed delivery of that result ("Confirmed
+    delivery"), and its terminal evidence is that record's, never the
+    finalizer's. The step carries the `accepted_for_finalization` fact.
   - A begin records the intent and the capacity it needs, as "Ordering
     across the two stores" requires. It answers `200` with coordination.v1's
     begin response: `{operation, request_key, expected_revision,
     reservation_id?, fence?, holder?, coordination_proof}`.
     - For an offer or a claim, `Location` names the new attempt.
     - A stopped attempt's release also carries `target_state`, `reason` and
-      `blocker?`: the values the member sends aimem with the step
-      (D-b1b-2). No other step carries them.
+      `blocker?`, and a finalize carries `target_state: DONE`, `reason` and
+      `terminal_evidence` (the confirmed delivery's references). These are the
+      values the member sends aimem with the step (D-b1b-2). No other step
+      carries them.
     - The member sends exactly that request to aimem.
     - The proof appears only in this answer.
   - **Retried begin.** A retry with the same key and the same input, while
@@ -425,6 +434,26 @@ begin needs an `Idempotency-Key`; settle does not.
     the stop of a running attempt. The worker never requests its own stop.
   - `/{id}/confirm-stop`, with an empty body or `{}`: the worker confirms,
     from its current session, with no step in flight.
+- **Review.** `/{id}/review`, with `{result_seq, decision}`: the team's
+  current coordinator accepts the latest submitted result, or returns it for
+  rework. It is local, and no member reviews its own result.
+- **Confirmed delivery.** `/{id}/confirm-delivery`, with `{result_seq,
+  evidence}`: a team member confirms that the accepted result was delivered.
+  It is local, and it is audited.
+  - `evidence` is a list of `{kind, ref}`: the `reviewed_head`,
+    `human_merge` and `post_merge_ci` of the current development process,
+    with at most 16 references.
+  - Aicrew queries no forge. The confirming member gathers the evidence
+    (for example with the verify-delivery skill), and aicrew records it,
+    bound to the accepted result and to the confirming agent, session,
+    generation and time.
+  - Today the confirming member is the team's current coordinator, who is
+    not the attempt's worker. That rule is one predicate, so a dedicated
+    verifier role would change only it.
+  - A confirmation of the same result replaces an earlier one while no
+    finalize is in flight. Rework or a stop voids it with the acceptance.
+  - Evidence that no member confirmed unlocks nothing: a finalize refused
+    for it is `409 delivery_unconfirmed`.
 - **Settle.** `/{id}/settle`, with `{request_key, outcome, code?}`.
   - Any member of the attempt's team may settle, so another member can
     settle for one whose client went offline.
@@ -452,8 +481,8 @@ begin needs an `Idempotency-Key`; settle does not.
   - `409 task_busy`: this service already has an open attempt on the task,
     in any team;
   - `409` for `agent_busy`, `attempt_state`, `offer_expired`,
-    `offer_declined`, `offer_stale`, `instruction_mismatch` and
-    `step_settled`;
+    `offer_declined`, `offer_stale`, `instruction_mismatch`,
+    `delivery_unconfirmed` and `step_settled`;
   - `404 step_unknown`: no step of the attempt has that request key;
   - the retryable `503 outcome_unknown`, with `Retry-After`: the read scope
     did not answer, or showed a receipt that is not the step's.
@@ -599,15 +628,16 @@ reservation follows one rule:
    the new fence and the new attempt state, together with audit and any
    lifecycle message.
 
-For the offer family (offer, accept and withdraw), the independent claim and
-the stop release, step 2 is the acting member's ("Attempt steps"):
+For the offer family (offer, accept and withdraw), the independent claim,
+the stop release and finalize, step 2 is the acting member's ("Attempt
+steps"):
 - the begin route returns the request;
 - the member's own aimem connection sends it;
 - settle learns the outcome from aimem's read scope, never from the
   member's report.
 
-Until crew-execution b1b moves them to the same two phases, aicrewd still
-calls aimem itself for the work steps and finalize.
+Until crew-execution b1b-3 moves them to the same two phases, aicrewd still
+calls aimem itself for the work steps.
 
 After a lost reply, aicrew queries the receipt with the same key and never
 retries with a fresh key. While the receipt is unresolved, the attempt is
@@ -643,7 +673,7 @@ and "not committed" is known only once the read scope still shows nothing
 | Submit result | `RUNNING` → `SUBMITTED` | Fenced work mutation to task `REVIEW`; result reference recorded |
 | Review: return for rework | `SUBMITTED` → `RUNNING` | The worker, as holder, makes the fenced work mutation back to `IN_PROGRESS` when it resumes; the hold is unchanged |
 | Review: accept result | `SUBMITTED` → `ACCEPTED` | none; acceptance is not delivery |
-| Finalize after human merge | `ACCEPTED` → `FINALIZED` | Finalize `DONE` with reviewed delivery evidence |
+| Finalize after human merge | `ACCEPTED` → `FINALIZED` | Finalize `DONE` with the confirmed delivery evidence as terminal evidence. The finalizer's client sends it. |
 | Stop | `STOP_REQUESTED` → `STOPPED` → `CLOSED` | Release to `READY`, or `BLOCKED` with a recorded blocker, after the worker confirms the stop. The holder's client sends it, under the `stopped` fact. |
 | Operator recovery | any → `CLOSED` | Recovery release or finalize by an authorized principal in aimem; aicrew closes the attempt only once aimem can report this reservation closed (see Recovery) |
 
@@ -698,9 +728,12 @@ reviews the result itself first; succession alone is not review. The
 holder may finalize its own accepted result. Finalizing as `DONE` needs the
 delivery evidence the project's process requires; for the current
 development workflow, the reviewed head, the human merge and post-merge CI.
-A trusted internal caller supplies both the requirement and the references;
-arbitrary callers never do, and neither a reference nor aimem storing it
-proves that the referenced check passed. There is no cancellation shortcut:
+A team member confirms that evidence for the accepted result ("Confirmed
+delivery" under "Attempt steps"), and the finalize's terminal evidence is
+that confirmed record, never what the finalizer sends. Aicrew queries no
+forge. Neither a reference, nor aicrew recording it, nor aimem storing it
+proves that the referenced check passed: the confirming member vouches for
+it. There is no cancellation shortcut:
 cancelling belongs to the stop and recovery flow.
 
 **Stop.** The team's current coordinator, including a successor, or the

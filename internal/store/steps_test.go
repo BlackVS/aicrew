@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -221,7 +222,7 @@ func TestBeginReplayReplacesTheProof(t *testing.T) {
 	}
 	// A replay after the step settled reports it, with nothing to send.
 	after, step, err := e.s.BeginOffer(ctx, e.lead.caller, "offer", req)
-	if err != nil || after.ID != a.ID || after.State != AttemptOffered || step != (Step{}) {
+	if err != nil || after.ID != a.ID || after.State != AttemptOffered || !reflect.DeepEqual(step, Step{}) {
 		t.Fatalf("replay after settle gave %+v %+v %v", after, step, err)
 	}
 }

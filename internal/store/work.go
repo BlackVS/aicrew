@@ -164,8 +164,22 @@ func (s *Store) UpdateWork(ctx context.Context, c Caller, port Reservations, key
 // submitted result. It is local: accepting a result is not delivery. The
 // acceptance names the result and the reviewing session and generation.
 func (s *Store) ReviewResult(ctx context.Context, c Caller, key, attemptID string, in ResultReview) (Attempt, error) {
+	return s.localStep(ctx, c, reviewCommand(c, key, attemptID, in), attemptID)
+}
+
+// localStep runs a local step on an attempt under the attempt's step lock.
+func (s *Store) localStep(ctx context.Context, c Caller, cmd command, attemptID string) (Attempt, error) {
 	var out Attempt
-	cmd := command{
+	unlock, err := s.lockAttempt(ctx, attemptID)
+	if err != nil {
+		return out, err
+	}
+	defer unlock()
+	return out, s.run(ctx, c, cmd, &out)
+}
+
+func reviewCommand(c Caller, key, attemptID string, in ResultReview) command {
+	return command{
 		op: opReviewResult, scope: attemptID, key: key, input: struct {
 			AttemptID string `json:"attempt_id"`
 			ResultReview
@@ -226,12 +240,6 @@ func (s *Store) ReviewResult(ctx context.Context, c Caller, key, attemptID strin
 			return getAttempt(ctx, tx, a.ID)
 		},
 	}
-	unlock, err := s.lockAttempt(ctx, attemptID)
-	if err != nil {
-		return out, err
-	}
-	defer unlock()
-	return out, s.run(ctx, c, cmd, &out)
 }
 
 // FinalizeWork finalizes the accepted result as DONE. The holder may
@@ -240,7 +248,15 @@ func (s *Store) ReviewResult(ctx context.Context, c Caller, key, attemptID strin
 // same coordinator after a resume, reviews the result itself first.
 func (s *Store) FinalizeWork(ctx context.Context, c Caller, port Reservations, key, attemptID string, in FinalizeRequest) (Attempt, error) {
 	var proof string
-	cmd := command{
+	return s.transition(ctx, c, port, finalizeCommand(c, key, attemptID, in, false, &proof), attemptID, &proof)
+}
+
+// finalizeCommand is a finalize's intent. With confirmed, the terminal
+// evidence is the confirmed delivery of the accepted result, whatever
+// in.Delivery holds. Otherwise it is in.Delivery, from a trusted internal
+// caller (the one-shot path).
+func finalizeCommand(c Caller, key, attemptID string, in FinalizeRequest, confirmed bool, proof *string) command {
+	return command{
 		op: opFinalizeWork, scope: attemptID, key: key, input: struct {
 			AttemptID string `json:"attempt_id"`
 			FinalizeRequest
@@ -287,22 +303,30 @@ func (s *Store) FinalizeWork(ctx context.Context, c Caller, port Reservations, k
 				return nil, fmt.Errorf("%w: only the holder or the reviewing coordinator may finalize attempt %s",
 					ErrForbidden, a.ID)
 			}
-			if err := in.Delivery.check(); err != nil {
+			var evidence string
+			if confirmed {
+				if a.DeliveryResult == 0 || a.DeliveryResult != a.AcceptedResult {
+					return nil, fmt.Errorf("attempt %s: result %d: %w", a.ID, a.AcceptedResult, ErrDeliveryUnconfirmed)
+				}
+				evidence = a.DeliveryEvidence
+			} else {
+				if err := in.Delivery.check(); err != nil {
+					return nil, err
+				}
+				b, err := json.Marshal(in.Delivery.Evidence)
+				if err != nil {
+					return nil, fmt.Errorf("encode delivery evidence: %w", err)
+				}
+				evidence = string(b)
+			}
+			a, err = startWorkIntent(ctx, tx, a, ReservationFinalize, AttemptRunning, "", "", evidence, "", now)
+			if err != nil {
 				return nil, err
 			}
-			evidence, err := json.Marshal(in.Delivery.Evidence)
-			if err != nil {
-				return nil, fmt.Errorf("encode delivery evidence: %w", err)
-			}
-			a, err = startWorkIntent(ctx, tx, a, ReservationFinalize, AttemptRunning, "", "", string(evidence), "", now)
-			if err != nil {
-				return nil, err
-			}
-			proof, err = issueProof(ctx, tx, a, FactAcceptedForFinalization, sess.ID, sess.Generation, now)
+			*proof, err = issueProof(ctx, tx, a, FactAcceptedForFinalization, sess.ID, sess.Generation, now)
 			return a, err
 		},
 	}
-	return s.transition(ctx, c, port, cmd, attemptID, &proof)
 }
 
 // AttemptResults lists an attempt's submitted results in order.
@@ -355,10 +379,11 @@ func workable(a Attempt) error {
 	return nil
 }
 
-// acceptanceCleared forgets a recorded acceptance; acceptanceVoided also
-// returns an accepted result to submitted.
+// acceptanceCleared forgets a recorded acceptance and the confirmed delivery
+// of the accepted result; acceptanceVoided also returns an accepted result to
+// submitted.
 const (
-	acceptanceCleared = `accepted_result = 0, accepted_by_session = '', accepted_by_generation = 0`
+	acceptanceCleared = `accepted_result = 0, accepted_by_session = '', accepted_by_generation = 0, ` + deliveryCleared
 	acceptanceVoided  = `phase = CASE phase WHEN 'accepted' THEN 'submitted' ELSE phase END, ` + acceptanceCleared
 )
 

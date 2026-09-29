@@ -162,15 +162,23 @@ type Attempt struct {
 	// was recorded). Only the next session may accept an offline offer.
 	WorkerSessionFloor int64 `json:"worker_session_floor"`
 	// The work lifecycle of a running attempt (work.go).
-	Phase                AttemptPhase   `json:"phase,omitempty"`
-	PendingIntent        string         `json:"pending_intent,omitempty"`
-	PendingDetail        string         `json:"pending_detail,omitempty"`
-	PendingEvidence      string         `json:"pending_evidence,omitempty"`
-	PendingMessage       string         `json:"pending_message,omitempty"`
-	AcceptedResult       int64          `json:"accepted_result,omitempty"`
-	AcceptedBySession    string         `json:"accepted_by_session,omitempty"`
-	AcceptedByGeneration int64          `json:"accepted_by_generation,omitempty"`
-	FinalizedResult      int64          `json:"finalized_result,omitempty"`
+	Phase                AttemptPhase `json:"phase,omitempty"`
+	PendingIntent        string       `json:"pending_intent,omitempty"`
+	PendingDetail        string       `json:"pending_detail,omitempty"`
+	PendingEvidence      string       `json:"pending_evidence,omitempty"`
+	PendingMessage       string       `json:"pending_message,omitempty"`
+	AcceptedResult       int64        `json:"accepted_result,omitempty"`
+	AcceptedBySession    string       `json:"accepted_by_session,omitempty"`
+	AcceptedByGeneration int64        `json:"accepted_by_generation,omitempty"`
+	FinalizedResult      int64        `json:"finalized_result,omitempty"`
+	// The confirmed delivery of the accepted result (confirm.go): the
+	// result, its evidence (JSON), and who confirmed it when.
+	DeliveryResult       int64          `json:"delivery_result,omitempty"`
+	DeliveryEvidence     string         `json:"delivery_evidence,omitempty"`
+	DeliveryByAgent      string         `json:"delivery_by_agent,omitempty"`
+	DeliveryBySession    string         `json:"delivery_by_session,omitempty"`
+	DeliveryByGeneration int64          `json:"delivery_by_generation,omitempty"`
+	DeliveryAt           time.Time      `json:"delivery_at,omitzero"`
 	TerminalEvidence     string         `json:"terminal_evidence,omitempty"`
 	State                AttemptState   `json:"state"`
 	CloseReason          string         `json:"close_reason,omitempty"`
@@ -1163,6 +1171,7 @@ const attemptColumns = `id, team_id, task_hub_id, task_project_id, task_id, work
 	worker_session_id, worker_generation, worker_session_floor, phase, pending_intent, pending_detail,
 	pending_evidence, pending_message, accepted_result, accepted_by_session, accepted_by_generation, finalized_result,
 	terminal_evidence, stop, stop_by, stop_session, stop_reason, stop_at, origin, process_verified_receipt,
+	delivery_result, delivery_evidence, delivery_by_agent, delivery_by_session, delivery_by_generation, delivery_at,
 	revision, created_at, updated_at`
 
 func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
@@ -1170,6 +1179,7 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		a                         Attempt
 		state, op, from, phase    string
 		stop, stopAt, origin      string
+		deliveryAt                string
 		declined                  int
 		expires, created, updated string
 	)
@@ -1182,6 +1192,7 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		&a.WorkerSessionFloor, &phase, &a.PendingIntent, &a.PendingDetail, &a.PendingEvidence, &a.PendingMessage,
 		&a.AcceptedResult, &a.AcceptedBySession, &a.AcceptedByGeneration, &a.FinalizedResult,
 		&a.TerminalEvidence, &stop, &a.StopBy, &a.StopSession, &a.StopReason, &stopAt, &origin, &a.ProcessVerifiedReceipt,
+		&a.DeliveryResult, &a.DeliveryEvidence, &a.DeliveryByAgent, &a.DeliveryBySession, &a.DeliveryByGeneration, &deliveryAt,
 		&a.Revision, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Attempt{}, fmt.Errorf("attempt %s: %w", id, ErrNotFound)
@@ -1198,6 +1209,11 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 	}
 	if stopAt != "" {
 		if a.StopAt, err = parseTime(stopAt); err != nil {
+			return Attempt{}, err
+		}
+	}
+	if deliveryAt != "" {
+		if a.DeliveryAt, err = parseTime(deliveryAt); err != nil {
 			return Attempt{}, err
 		}
 	}

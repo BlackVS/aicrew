@@ -10,11 +10,13 @@ import (
 // from the attempt state machine (work.go), which only checks that every
 // required kind is present for the accepted result.
 //
-// Trust boundary: the requirement and the references are supplied by a
-// trusted internal caller that read them from the project's process and the
-// delivery systems. Arbitrary external callers must never supply them. A
-// reference names where a check can be found; neither the reference, nor
-// aicrew recording it, nor aimem storing it proves that the check passed.
+// Trust boundary: on the member-driven path, a team member confirms the
+// references for the accepted result (confirm.go), and a finalize uses only
+// that confirmed record. On the one-shot path, the requirement and the
+// references come from a trusted internal caller. A finalizer never supplies
+// its own. A reference names where a check can be found; neither the
+// reference, nor aicrew recording it, nor aimem storing it proves that the
+// check passed.
 
 // Evidence is one delivery reference, such as the reviewed head of a PR.
 type Evidence struct {

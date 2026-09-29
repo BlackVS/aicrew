@@ -221,3 +221,45 @@ func (s *Store) BeginStopReleaseWithToken(ctx context.Context, key, token, attem
 		StopRelease{SessionID: t.sessionID, Generation: t.generation, Target: target, Blocker: blocker}, &proof), token, t)
 	return s.begin(ctx, c, cmd, attemptID, &proof, FactStopped, t.sessionID, t.generation, g)
 }
+
+// ReviewWithToken records the current coordinator's decision on the latest
+// submitted result, as the token's session. It is local.
+func (s *Store) ReviewWithToken(ctx context.Context, key, token, attemptID string, resultSeq int64,
+	decision ReviewDecision) (Attempt, error) {
+	t, c, err := s.tokenCaller(ctx, token)
+	if err != nil {
+		return Attempt{}, err
+	}
+	cmd, _ := s.withToken(reviewCommand(c, key, attemptID, ResultReview{SessionID: t.sessionID, Generation: t.generation,
+		ResultSeq: resultSeq, Decision: decision}), token, t)
+	return s.localStep(ctx, c, cmd, attemptID)
+}
+
+// ConfirmDeliveryWithToken records the token's session's confirmation that
+// the accepted result was delivered, with the evidence it gathered. It is
+// local.
+func (s *Store) ConfirmDeliveryWithToken(ctx context.Context, key, token, attemptID string, resultSeq int64,
+	evidence []Evidence) (Attempt, error) {
+	t, c, err := s.tokenCaller(ctx, token)
+	if err != nil {
+		return Attempt{}, err
+	}
+	cmd, _ := s.withToken(confirmDeliveryCommand(c, key, attemptID, DeliveryConfirmation{SessionID: t.sessionID,
+		Generation: t.generation, ResultSeq: resultSeq, Evidence: evidence}), token, t)
+	return s.localStep(ctx, c, cmd, attemptID)
+}
+
+// BeginFinalizeWithToken begins finalizing the accepted result as DONE, as the
+// token's session: the holder, or the coordinator from the session and
+// generation that recorded the acceptance. Its terminal evidence is the
+// confirmed delivery of that result; without a confirmation it is refused.
+func (s *Store) BeginFinalizeWithToken(ctx context.Context, key, token, attemptID string, resultSeq int64) (Attempt, Step, error) {
+	t, c, err := s.tokenCaller(ctx, token)
+	if err != nil {
+		return Attempt{}, Step{}, err
+	}
+	var proof string
+	cmd, g := s.withToken(finalizeCommand(c, key, attemptID, FinalizeRequest{SessionID: t.sessionID,
+		Generation: t.generation, ResultSeq: resultSeq}, true, &proof), token, t)
+	return s.begin(ctx, c, cmd, attemptID, &proof, FactAcceptedForFinalization, t.sessionID, t.generation, g)
+}

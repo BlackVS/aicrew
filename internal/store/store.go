@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 16
+const schemaVersion = 17
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -215,7 +215,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	}
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
-		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16}
+		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -399,6 +399,19 @@ var schemaV5 = []string{
 		PRIMARY KEY (message_id, agent_id)
 	)`,
 	`CREATE INDEX message_recipients_pending ON message_recipients (agent_id, acknowledged_at)`,
+}
+
+// schemaV17 records a team member's confirmation of an accepted result's
+// delivery (seq179): the evidence, the result it confirms, and the confirming
+// agent, session, generation and time. Finalizing as DONE needs it, and its
+// evidence is the terminal evidence the finalize sends.
+var schemaV17 = []string{
+	`ALTER TABLE attempts ADD COLUMN delivery_result INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE attempts ADD COLUMN delivery_evidence TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN delivery_by_agent TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN delivery_by_session TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN delivery_by_generation INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE attempts ADD COLUMN delivery_at TEXT NOT NULL DEFAULT ''`,
 }
 
 // schemaV16 records which committed receipt verified an attempt's process

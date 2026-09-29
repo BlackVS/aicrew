@@ -334,3 +334,35 @@ func TestStepChannelOutcomes(t *testing.T) {
 		t.Fatalf("recovering a pending update: %+v", ans)
 	}
 }
+
+// A newer launcher of the same home replaces the socket; the older one's
+// exit leaves the newer socket in place, and it keeps answering (3cfc). The
+// newer one still removes its own socket when it closes.
+func TestStepChannelSurvivesAnOlderLaunchersExit(t *testing.T) {
+	home, err := os.MkdirTemp("", "ah")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(home)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	older, err := ServeSteps(home, &Driver{Home: home}, nil, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := ServeSteps(home, &Driver{Home: home}, nil, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := older.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if ans, err := CallStep(context.Background(), home, StepCall{Op: "pending"}); err != nil || ans.Status != StepDone {
+		t.Fatalf("the newer launcher after the older one's exit: %+v %v", ans, err)
+	}
+	if err := newer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(StepSocket(home)); !os.IsNotExist(err) {
+		t.Fatalf("the newer launcher left its socket: %v", err)
+	}
+}

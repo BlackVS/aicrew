@@ -300,10 +300,22 @@ func TestStepChannelOutcomes(t *testing.T) {
 	s.serve(t)
 	id := s.claimedThrough(t, &answers)
 	// The task moves before the update is read: nothing is sent, and aicrewd
-	// settles it as not committed at once.
+	// settles it as not committed at once. A run that stopped before settling
+	// leaves it recorded, and recovering it is answered as refused.
 	s.setFault(t, "mcp", "bump")
+	s.d.crash = func(p string) bool { return p == "sent" }
+	if _, err := s.work(t, id, "submit", "https://forge.example/pull/7"); !errors.Is(err, errCrashed) {
+		t.Fatalf("the crash: %v", err)
+	}
+	s.d.crash = nil
+	ans := s.call(t, &answers, StepCall{Op: "recover"})
+	var rs []StepResult
+	if err := json.Unmarshal(ans.Result, &rs); err != nil || ans.OK || ans.Status != StepRefused || len(rs) != 1 ||
+		!rs[0].Settled || rs[0].Outcome != "not_committed" || ans.NextAction == "" {
+		t.Fatalf("recovering a stale update: %+v", ans)
+	}
 	body, _ := json.Marshal(map[string]string{"intent": "submit", "detail": "https://forge.example/pull/7"})
-	ans := s.call(t, &answers, StepCall{Op: "work", AttemptID: id, TaskID: "task-1", Body: body})
+	ans = s.call(t, &answers, StepCall{Op: "work", AttemptID: id, TaskID: "task-1", Body: body})
 	if r := stepResult(t, ans); ans.OK || ans.Status != StepRefused || !r.Settled || r.Outcome != "not_committed" ||
 		ans.NextAction == "" {
 		t.Fatalf("a stale update: %+v", ans)

@@ -238,16 +238,7 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 	switch {
 	case call.Op == "recover":
 		results, err := s.driver.Recover(ctx)
-		ans := done(results)
-		if err != nil {
-			ans.OK, ans.Status, ans.Error = false, StepFailed, answerErr(err).Error
-		}
-		for _, r := range results {
-			if !r.Settled && ans.OK {
-				ans.Status = StepPending
-			}
-		}
-		return ans
+		return recovered(results, err)
 	case call.Op == "pending":
 		pending, err := s.driver.Pending()
 		if err != nil {
@@ -338,4 +329,26 @@ func CallStep(ctx context.Context, home string, call StepCall) (StepAnswer, erro
 		return StepAnswer{}, fmt.Errorf("the step channel's answer: %w", err)
 	}
 	return ans, nil
+}
+
+// recovered answers a recovery by its worst step: failed if one failed,
+// refused if one settled as not committed, pending if one is still pending,
+// and done only when every step committed.
+func recovered(results []StepResult, err error) StepAnswer {
+	ans := done(results)
+	if err != nil {
+		ans.OK, ans.Status, ans.Error = false, StepFailed, answerErr(err).Error
+		return ans
+	}
+	for _, r := range results {
+		switch {
+		case r.Settled && r.Outcome != "committed":
+			ans.OK, ans.Status = false, StepRefused
+			ans.NextAction = "A recovered step did not commit. Begin it again, or reconcile the attempt."
+		case !r.Settled && ans.Status == StepDone:
+			ans.Status = StepPending
+			ans.NextAction = "A recovered step is still pending: run `aicrew-agent step recover` later."
+		}
+	}
+	return ans
 }

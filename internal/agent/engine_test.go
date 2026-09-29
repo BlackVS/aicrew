@@ -55,6 +55,18 @@ type crewEnv struct {
 // linked member of a team and writes the agent's configuration.
 func setupCrew(t *testing.T) *crewEnv {
 	t.Helper()
+	return setupCrewWith(t, crewOptions{role: store.RoleWorker})
+}
+
+// crewOptions shape setupCrewWith: the member's role, and for step tests a
+// team project and aimem's read scope over the fake aimem's state.
+type crewOptions struct {
+	role  store.Role
+	steps bool
+}
+
+func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
+	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 	certFile, keyFile, pin := writeCert(t, dir)
@@ -69,11 +81,15 @@ func setupCrew(t *testing.T) *crewEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tm, err := st.CreateTeam(ctx, op, "team", store.NewTeam{Name: "crew"})
+	nt := store.NewTeam{Name: "crew"}
+	if o.steps {
+		nt.Projects = []store.ProjectRef{{HubID: "hub-test", ProjectID: "project-t"}}
+	}
+	tm, err := st.CreateTeam(ctx, op, "team", nt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.AddMember(ctx, op, "member", tm.ID, a.ID, store.RoleWorker); err != nil {
+	if _, err := st.AddMember(ctx, op, "member", tm.ID, a.ID, o.role); err != nil {
 		t.Fatal(err)
 	}
 	db, err := sql.Open("sqlite", storePath)
@@ -85,9 +101,14 @@ func setupCrew(t *testing.T) *crewEnv {
 	}
 	db.Close()
 
+	root := filepath.Join(dir, "aimem")
+	opts := []server.Option{server.WithVerifier(testVerifier{})}
+	if o.steps {
+		opts = append(opts, server.WithReader(fileReader{root: root}))
+	}
 	srv, err := server.New(server.Config{StorePath: storePath, ListenAddr: "127.0.0.1:0", TLSCertFile: certFile,
 		TLSKeyFile: keyFile, ServiceID: "aicrew-test", ShutdownTimeout: server.Duration(5 * time.Second)},
-		st, slog.New(slog.NewTextHandler(new(bytes.Buffer), nil)), server.WithVerifier(testVerifier{}))
+		st, slog.New(slog.NewTextHandler(new(bytes.Buffer), nil)), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +122,6 @@ func setupCrew(t *testing.T) *crewEnv {
 	t.Cleanup(func() { cancel(); <-done })
 
 	home := filepath.Join(dir, "home")
-	root := filepath.Join(dir, "aimem")
 	os.MkdirAll(home, 0o700)
 	os.MkdirAll(root, 0o700)
 	t.Setenv("AICREW_FAKE_AIMEM_ROOT", root)

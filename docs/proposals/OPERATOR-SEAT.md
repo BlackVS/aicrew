@@ -4,7 +4,8 @@ Status: **proposal** (aicrew PR #47, `docs/proposals/OPERATOR-SEAT.md`), amended
 review on 2026-09-29: token outside AI sessions (§4, §7), merge path allowlist (§6),
 decision-bound confirmation (§4), floor-first classification (§1, §2), verifier identity
 (§6, D12), `resume` with `answer_ref` (§3). Board task 01a0eba9-d5fe, refinement seq189.
-Decisions D1 to D12 (§8) are open. Nothing here is implemented or authorized by this document.
+**Accepted by the operator on 2026-09-29 with the amendments in §9**, which take precedence
+over any earlier section they contradict. Nothing here is implemented yet.
 Sources: aimem `DESIGN-AIFORGE*.md` on master plus `DESIGN-AIFORGE-KNOWLEDGE.md` (aimem PR #151, since merged),
 aicrew `CREW-CONTRACT.md` and `ONBOARDING-CONTRACT.md` at `main`, `internal/store/confirm.go`,
 ai-skills `verify-delivery` at v1.25.0, and the launcher observation probe (task 01a0eb7c).
@@ -359,3 +360,64 @@ Each has options and a recommendation; the design above assumes the recommendati
   membership may carry a role set, and evaluate `deliveryConfirmer` and the seat rules per
   role. Recommendation: (a); it needs no contract change and keeps "one user, one agent".
   Choose (b) only if running a second identity per person proves impractical in the pilot.
+
+## 9. Operator decisions (2026-09-29)
+
+The operator decided D1 to D12. Where a decision below differs from §1 to §8, this section
+wins; the first implementation increment brings the earlier sections in line.
+
+- **D1 Manual mode: (a) hold.** Every question escalates and the coordinator waits.
+- **D2 System of record: (a).** The aicrew message log is the operational record now; the
+  task comment is written by the seat's own client in personal mode until the team-mode
+  comment write exists, then by the coordinator with the same schema.
+- **D3 Authority proof: amended.** The seat's client is **not an AI session** (see D5), so
+  the prompt-injection risk that motivated per-decision confirmation does not arise inside
+  it. Instead:
+  - the seat session is **unlocked once** at start with a second factor no agent holds, and
+    lives for a bounded time (for example 8 hours); its credential is held only in the
+    client's memory, never in an agent home, a config file or `hub.json`;
+  - within an unlocked session **every answer counts as the operator's**, authority answers
+    included, with no further confirmation, except switching a team's policy to `auto`,
+    which needs a fresh second-factor confirmation (D8);
+  - the second factor is **not tied to hardware keys**: any WebAuthn/passkey authenticator
+    (Windows Hello, Touch ID or Face ID, a phone passkey, a security key) and TOTP from an
+    authenticator app as a fallback. The confirmation always happens outside any AI
+    session, in the seat client or the console;
+  - the receipt still binds `{request_digest, decision, policy_revision}` (§4) and records
+    the unlocked seat session that produced it; forge approval stays evidence only.
+- **D4 Answer delivery: (b), made general.** An answer always reaches the coordinator, plus
+  whoever the request's `blocked` field names. A worker's question relayed by the
+  coordinator therefore reaches both; the coordinator's own question reaches the
+  coordinator, and the holder too when it concerns an attempt in progress.
+- **D5 What the seat is: (a), with a non-AI client.** An aicrew member with role `operator`,
+  its own session, joined by invitation. The first client is a **terminal UI without a
+  model**: it lists open requests, shows question, options and recommendation, and sends
+  the operator's choice or text. It offers a **chat with the coordinator** per request, so
+  the operator can ask about context or options; the chat is attached to the decision
+  record, and the decision is still entered by the operator in the client. The "seat skill"
+  of §4 and §7 is dropped. A web or mobile client is a later direction that needs its own
+  security design (passkeys make it feasible).
+- **D6 No answer in time: (a).** The task stays `BLOCKED`; a timeout never decides, and the
+  coordinator may offer other work meanwhile.
+- **D7 Overturn effect: (a), with checkpoints.** Before a member acts on any answer or
+  self-answer, it commits its work in progress and pushes its branch, and the record
+  carries `checkpoint {repo, branch, commit}`. An overturn obliges the coordinator, before
+  any other step on the attempt, to either restart from the checkpoint on a new branch
+  (the later work stays on the old branch; nothing is deleted or force-pushed) or fix
+  forward, and to record which and why. A blocked request takes its checkpoint when the
+  attempt blocks.
+- **D8 Policy changes: (a).** Tightening needs only the seat session; loosening needs the
+  seat session, and switching to `auto` additionally needs a fresh second-factor
+  confirmation.
+- **D9 Auto-merge: (a).** Advisory first; a delegated bot merge only by an explicit
+  per-repository decision with a fresh second-factor confirmation, after records show the
+  advisory verdicts matching the operator's; the explicit path allowlist of §6 applies.
+- **D10 Categories: accepted, with one amendment.** Splitting a task while every acceptance
+  criterion of the parent maps to a child is `process` and belongs to the coordinator
+  (recorded as a self-answer). `scope` covers only changing the objective, acceptance
+  criteria or non-goals, adding new scope, or deferring part of it; a split that drops or
+  defers a criterion is a scope change.
+- **D11 Name: accepted.** Role id `operator`, displayed as "operator seat".
+- **D12 Verifier identity: (a).** The verifier is a separate aimem user and aicrew agent
+  running the `verify-delivery` skill, relieving the coordinator of delivery checks; it is
+  never the attempt's worker nor its reviewing coordinator.

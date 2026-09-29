@@ -7,6 +7,8 @@
 //	aicrew-agent session start  -home DIR   enter or resume, then keep the session until interrupted
 //	aicrew-agent session status -home DIR   show the recorded session, without secrets
 //	aicrew-agent session leave  -home DIR   prove afresh, resume and leave
+//	aicrew-agent step OP [-home DIR] [-attempt ID] [-task ID] [-body JSON|-]
+//	                                        ask the running launcher for a step
 //
 // The configuration is the "aicrew" section of <DIR>/agent.json.
 package main
@@ -36,7 +38,8 @@ const (
 )
 
 const usage = `usage: aicrew-agent session start|status|leave -home DIR
-       aicrew-agent run -client claude|opencode -home DIR [-- CLIENT ARGS]`
+       aicrew-agent run -client claude|opencode -home DIR [-- CLIENT ARGS]
+       aicrew-agent step OP [-home DIR] [-attempt ID] [-task ID] [-body JSON|-]`
 
 // clients are the agent clients run can start, by the name -client takes.
 var clients = map[string]bool{"claude": true, "opencode": true}
@@ -86,6 +89,9 @@ func main() {
 		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 		os.Exit(runClient(context.Background(), os.Args[2:], agent.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr},
 			sigs, defaultEngine))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "step" {
+		os.Exit(step(context.Background(), os.Args[2:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	// The first interrupt starts a clean leave; a second one stops at once.

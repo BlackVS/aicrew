@@ -10,6 +10,46 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// ownerOnly is the protected DACL for the current user, SYSTEM and
+// Administrators; inherit makes it apply to what a directory will contain.
+func ownerOnly(inherit bool) (*windows.SECURITY_DESCRIPTOR, error) {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return nil, fmt.Errorf("current user: %w", err)
+	}
+	sid, flags := user.User.Sid.String(), ""
+	if inherit {
+		flags = "OICI"
+	}
+	sd, err := windows.SecurityDescriptorFromString(
+		"O:" + sid + "D:P(A;" + flags + ";FA;;;" + sid + ")(A;" + flags + ";FA;;;SY)(A;" + flags + ";FA;;;BA)")
+	if err != nil {
+		return nil, fmt.Errorf("security descriptor: %w", err)
+	}
+	return sd, nil
+}
+
+// makeDir creates the directory, or restricts an existing one, with the
+// protected owner-only DACL, which what it contains inherits.
+func makeDir(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	sd, err := ownerOnly(true)
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		return fmt.Errorf("restrict %s: %w", path, err)
+	}
+	return nil
+}
+
 // create makes the file with its protected, owner-only DACL in the same call
 // that creates it, so it is never readable by anyone else, even briefly.
 func create(path string) (*os.File, error) {

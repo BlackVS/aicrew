@@ -6,12 +6,19 @@ import "golang.org/x/sys/windows"
 
 // Expose replaces path's DACL with a protected one that also grants Everyone
 // read access.
-func Expose(path string) error {
+func Expose(path string) error { return grantEveryone(path, "FR") }
+
+// ExposeTraverse replaces the directory path's DACL with a protected one
+// that also lets Everyone traverse it, reaching what it contains by name,
+// but not list it.
+func ExposeTraverse(path string) error { return grantEveryone(path, "0x20") }
+
+func grantEveryone(path, rights string) error {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return err
 	}
-	sd, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;" + user.User.Sid.String() + ")(A;;FR;;;WD)")
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;" + user.User.Sid.String() + ")(A;;" + rights + ";;;WD)")
 	if err != nil {
 		return err
 	}

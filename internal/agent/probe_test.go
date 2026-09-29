@@ -20,7 +20,8 @@ import (
 //   - probe-client DIR: an agent client. It records its environment and
 //     arguments, starts a grandchild the way a client starts its MCP server,
 //     then exits with AICREW_PROBE_EXIT or runs until SIGTERM or DIR/stop,
-//     writing a heartbeat;
+//     writing a heartbeat; with AICREW_PROBE_STEP it first asks the
+//     launcher's step channel for its pending steps (DIR/step.json);
 //   - probe-grandchild DIR: records whether it sees AIMEM_TEAM_SESSION;
 //   - probe-launcher HOME DIR: runs RunClient with the probe client, from the
 //     agent home's configuration, so a test can kill the launcher outright.
@@ -63,6 +64,15 @@ func probeClient(dir string) int {
 	self, _ := os.Executable()
 	if err := exec.Command(self, "probe-grandchild", dir).Run(); err != nil {
 		return 9
+	}
+	if os.Getenv("AICREW_PROBE_STEP") != "" {
+		// Ask the launcher for a step, as the model's client would.
+		ans, err := CallStep(context.Background(), os.Getenv(HomeEnv), StepCall{Op: "pending"})
+		if err != nil {
+			ans = StepAnswer{Status: "error: " + err.Error()}
+		}
+		b, _ := json.Marshal(ans)
+		os.WriteFile(filepath.Join(dir, "step.json"), b, 0o600)
 	}
 	gc, _ := os.ReadFile(filepath.Join(dir, "grandchild.txt"))
 	v, ok := os.LookupEnv(SessionEnv)

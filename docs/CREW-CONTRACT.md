@@ -552,6 +552,14 @@ handle is no longer refreshed, so aimem refuses its team tools within the
 handle's lifetime of at most 15 minutes, and the next run resumes the
 session under a new generation, which ends the old handle at once.
 
+The client drives attempt steps through its launcher, not with the session
+token: `aicrew-agent step OP` asks the launcher of `AICREW_AGENT_HOME`
+over a Unix socket in the agent home's private `state/` directory. The
+launcher begins, sends through aimem's member CLI, and settles each
+reservation step, keeping a nonsecret record of each step in flight until
+it settles (`docs/DEVELOPMENT.md`, "Driving steps"). Neither the token nor
+a proof crosses the socket.
+
 Start a new conversation for team work rather than switching an existing
 personal one. When the context fails, the conversation stops dependent work
 and follows the refusal's next action: resume with a new proof, or ask the

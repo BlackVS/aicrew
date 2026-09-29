@@ -38,7 +38,7 @@ is also independent of the model and client, both of which may change.
   agent.json         nonsecret configuration
   creds/             credential material only
   docs/              agent guidance and handoff
-  state/             nonsecret recovery data
+  state/             nonsecret recovery data; owner-only, holds the step socket
   logs/              redacted logs
   work/              temporary artifacts
   repos/             clean clones, one per repository key

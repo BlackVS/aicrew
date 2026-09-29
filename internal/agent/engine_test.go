@@ -63,6 +63,10 @@ func setupCrew(t *testing.T) *crewEnv {
 type crewOptions struct {
 	role  store.Role
 	steps bool
+	// shortHome puts the agent home in a short temporary directory, for a
+	// test that serves the step socket: a Unix socket's path is limited to
+	// about 104 bytes.
+	shortHome bool
 }
 
 func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
@@ -122,6 +126,12 @@ func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
 	t.Cleanup(func() { cancel(); <-done })
 
 	home := filepath.Join(dir, "home")
+	if o.shortHome {
+		if home, err = os.MkdirTemp("", "ah"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(home) })
+	}
 	os.MkdirAll(home, 0o700)
 	os.MkdirAll(root, 0o700)
 	t.Setenv("AICREW_FAKE_AIMEM_ROOT", root)

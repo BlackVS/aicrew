@@ -34,8 +34,13 @@ const testDigest = "sha256:worker-instructions-v1"
 
 func setupSteps(t *testing.T, role store.Role) *stepEnv {
 	t.Helper()
+	return setupStepsWith(t, crewOptions{role: role, steps: true})
+}
+
+func setupStepsWith(t *testing.T, o crewOptions) *stepEnv {
+	t.Helper()
 	ctx := context.Background()
-	c := setupCrewWith(t, crewOptions{role: role, steps: true})
+	c := setupCrewWith(t, o)
 	t.Setenv("AICREW_FAKE_AICREW_DB", c.storePath)
 	f := loadFakeReservations(c.root)
 	content := map[string]any{"title": "Example task", "objective": "Deliver the example", "acceptance_criteria": "Reviewed",

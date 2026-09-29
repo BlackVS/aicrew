@@ -325,3 +325,13 @@ func (c *Crew) Leave(ctx context.Context, key, token string) (Session, error) {
 	err := c.do(ctx, http.MethodPost, "/v1/crew/session/leave", "application/json", key, token, []byte("{}"), &out)
 	return out, err
 }
+
+// LocalStep sends a local step (decline, review, stop, confirm-stop,
+// confirm-delivery) and returns aicrewd's answer, the attempt.
+func (c *Crew) LocalStep(ctx context.Context, key, token, path string, body []byte) (json.RawMessage, error) {
+	var out json.RawMessage
+	if err := c.do(ctx, http.MethodPost, path, "application/json", key, token, body, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

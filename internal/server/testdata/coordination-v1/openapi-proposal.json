@@ -417,6 +417,11 @@
           "process": {
             "$ref": "#/components/schemas/ProcessPin"
           },
+          "evidence_digest": {
+            "type": "string",
+            "pattern": "^e1_[A-Za-z0-9_-]{43}$",
+            "description": "The e1_ digest of the delivery evidence the coordinator confirmed through aicrew (C5-w3): required on accepted_for_finalization and on no other kind. aimem recomputes it over the finalize's terminal_evidence in the committing transaction and refuses a mismatch with evidence_mismatch."
+          },
           "expires_at": {
             "type": "string",
             "format": "date-time"

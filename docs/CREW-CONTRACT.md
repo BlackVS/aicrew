@@ -170,8 +170,8 @@ registered endpoint is the full https URL of this route.
 
 Before it commits a coordinated reservation step, aimem asks aicrew, online,
 whether the step's coordination proof names a fact that is still true
-(coordination.v1 in aimem's `DESIGN-AIFORGE-COORDINATION-WIRE.md`, frozen at
-aimem `8ac4ef1`). Aicrew serves that question at
+(coordination.v1 in aimem's `DESIGN-AIFORGE-COORDINATION-WIRE.md`, as amended
+by C5-w3 at aimem `0dd404a`; its fixtures are unchanged at `a9b9b6f`). Aicrew serves that question at
 `POST /v1/crew/coordination`, on the same origin as introspection.
 
 - **Proofs.**
@@ -210,7 +210,8 @@ aimem `8ac4ef1`). Aicrew serves that question at
     the step's request key, and the acting member (user, agent, team, role,
     session and generation). It also carries the references the kind
     requires: the offer and attempt references, the intended worker of an
-    offer, and the process pin. `expires_at` is truncated to the second.
+    offer, the process pin, and the evidence digest. `expires_at` is
+    truncated to the second.
   - Every value comes from one snapshot of aicrew's current state, never
     from the proof alone.
   - Every other state gets `200` with `{nonce, active: false}`, with no
@@ -234,6 +235,17 @@ aimem `8ac4ef1`). Aicrew serves that question at
     - a clean relative manifest path of at most 256 bytes that stays inside
       the repository, and is not `..`.
   - A pin recorded in any other form answers inactive, never malformed.
+- **Evidence digest (C5-w3).**
+  - `accepted_for_finalization` carries `evidence_digest`, and no other
+    kind does. It is `e1_` and the unpadded base64url SHA-256 of the
+    finalize's `terminal_evidence`: for each reference in order, the 4-byte
+    big-endian length of its UTF-8 bytes, then the bytes. Nothing is
+    normalised.
+  - It covers exactly the references the finalize sends aimem: the
+    confirmed delivery's, in their confirmed order, or the one-shot path's.
+    aimem recomputes it in the committing transaction and refuses a
+    mismatch with `evidence_mismatch`.
+  - A finalize whose recorded evidence cannot be read answers inactive.
 
 
 An identity proof completes only when aimem vouches for the receipt the
@@ -492,6 +504,14 @@ begin needs an `Idempotency-Key`; settle does not.
   - `evidence` is a list of `{kind, ref}`: the `reviewed_head`,
     `human_merge` and `post_merge_ci` of the current development process,
     with at most 16 references.
+  - Each reference is of a shape aimem accepts as terminal evidence, so a
+    confirmed set is never refused for it at finalize: valid UTF-8, not
+    blank, at most 256 bytes, with no control character but tab, newline
+    and carriage return, and no bidirectional override. The one-shot path's
+    evidence follows the same rules.
+  - aimem also refuses secret-shaped text, which aicrew does not mirror: a
+    confirmation whose reference looks like a secret is refused by aimem at
+    finalize, and is then confirmed again.
   - Aicrew queries no forge. The confirming member gathers the evidence
     (for example with the verify-delivery skill), and aicrew records it,
     bound to the accepted result and to the confirming agent, session,

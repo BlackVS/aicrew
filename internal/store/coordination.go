@@ -68,8 +68,11 @@ type Fact struct {
 	// Process is the pin aicrew recorded for a step that starts work (an
 	// offer, an acceptance or an independent claim), for aimem to check
 	// against the project's current selection (coordination.v1 C5-w2).
-	Process   *TrustedProcess
-	ExpiresAt time.Time
+	Process *TrustedProcess
+	// EvidenceDigest is the e1_ digest of the terminal evidence a finalize
+	// sends (C5-w3): set on accepted_for_finalization only.
+	EvidenceDigest string
+	ExpiresAt      time.Time
 }
 
 // requestKeyDigest is identity.v1's k1_ digest of a request key.
@@ -250,7 +253,13 @@ func (f *Fact) fill(ctx context.Context, q querier, a Attempt, hubID string) (bo
 			!(holder || reviewer) {
 			return false, nil
 		}
-		f.AttemptRef = a.attemptRef()
+		// The digest covers exactly the references the finalize sends; a
+		// record they cannot be read from answers inactive.
+		refs, err := pendingRefs(a)
+		if err != nil {
+			return false, nil
+		}
+		f.AttemptRef, f.EvidenceDigest = a.attemptRef(), evidenceDigest(refs)
 	case FactIndependentClaim:
 		if a.Origin != OriginClaim || m.Role != RoleIndependent || !holder ||
 			m.SessionID != a.WorkerSessionID || m.Generation != a.WorkerGeneration {

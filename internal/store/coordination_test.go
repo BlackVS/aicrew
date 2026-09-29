@@ -138,7 +138,8 @@ func TestCoordinationFactsFromRealTransitions(t *testing.T) {
 	if _, err := e.finalize(t, "finalize", a, e.builder, 1, devDelivery("1")); err != nil {
 		t.Fatal(err)
 	}
-	check(Fact{Kind: FactAcceptedForFinalization, Task: a.Task, Member: builder, AttemptRef: a.attemptRef()})
+	check(Fact{Kind: FactAcceptedForFinalization, Task: a.Task, Member: builder, AttemptRef: a.attemptRef(),
+		EvidenceDigest: evidenceDigest(refsOf(devDelivery("1").Evidence))})
 
 	// An independent claim, finalized by the reviewing coordinator.
 	c, err := e.claim(t, "claim", e.solo, "task-2")
@@ -156,7 +157,8 @@ func TestCoordinationFactsFromRealTransitions(t *testing.T) {
 	if _, err := e.finalize(t, "lead-finalize", c, e.lead, 1, devDelivery("2")); err != nil {
 		t.Fatal(err)
 	}
-	check(Fact{Kind: FactAcceptedForFinalization, Task: c.Task, Member: lead, AttemptRef: c.attemptRef()})
+	check(Fact{Kind: FactAcceptedForFinalization, Task: c.Task, Member: lead, AttemptRef: c.attemptRef(),
+		EvidenceDigest: evidenceDigest(refsOf(devDelivery("2").Evidence))})
 
 	// An offer the coordinator withdraws was never accepted.
 	w := e.offer(t, "offer-3", "task-3")

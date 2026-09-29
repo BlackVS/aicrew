@@ -77,9 +77,6 @@ func confirmDeliveryCommand(c Caller, key, attemptID string, in DeliveryConfirma
 		}{attemptID, in},
 		authorize: requireAgent, replayCheck: sessionCurrent(c, in.SessionID, in.Generation),
 		validate: func() error {
-			if len(in.Evidence) > maxDeliveryEvidence {
-				return fmt.Errorf("%w: at most %d delivery references", ErrInvalid, maxDeliveryEvidence)
-			}
 			return TrustedDelivery{Required: DevelopmentDelivery, Evidence: in.Evidence}.check()
 		},
 		check: func(ctx context.Context, tx *sql.Tx) error {

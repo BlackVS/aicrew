@@ -198,7 +198,8 @@
         "coordinator"
       ],
       "requires": [
-        "attempt_ref"
+        "attempt_ref",
+        "evidence_digest"
       ]
     },
     "independent_claim": {
@@ -590,6 +591,7 @@
               "generation": "3"
             },
             "attempt_ref": "attempt-example-8",
+            "evidence_digest": "e1_yi2u4ti6y2N0PMARZY7MCg3Vxu7c0gEnSLWucoPA07A",
             "expires_at": "2026-09-27T18:15:00Z"
           }
         }
@@ -617,8 +619,14 @@
         "checks": {
           "operation": "finalize",
           "current_work_ref": "attempt-example-8",
-          "terminal_evidence": true
-        }
+          "terminal_evidence": true,
+          "evidence_digest": true
+        },
+        "terminal_evidence": [
+          "review-head-example",
+          "human-merge-example",
+          "post-merge-ci-example"
+        ]
       }
     },
     {
@@ -1510,7 +1518,8 @@
       "fence",
       "expected_revision",
       "reason",
-      "terminal_evidence"
+      "terminal_evidence",
+      "intent"
     ],
     "stdin_example": {
       "expected_revision": 3,
@@ -1946,5 +1955,231 @@
         }
       }
     ]
+  },
+  "evidence_digest": {
+    "decision": "C5-w3 (operator decisions D1-D4 on its scope): a coordination-backed finalize carries exactly the delivery evidence the coordinator confirmed through aicrew; the accepted_for_finalization fact binds its digest, and aimem refuses a mismatch in the committing transaction.",
+    "kinds": [
+      "accepted_for_finalization"
+    ],
+    "field": "evidence_digest",
+    "scheme": "e1_ + unpadded base64url(SHA-256(for each reference of terminal_evidence, in order: 4-byte big-endian length of its UTF-8 bytes, then the bytes)))",
+    "covers": "the terminal_evidence references only, in their exact order; no evidence kind",
+    "normalisation": "none: no trimming, case or Unicode folding, sorting or deduplication",
+    "vectors": [
+      {
+        "case": "empty",
+        "terminal_evidence": [],
+        "digest": "e1_47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
+      },
+      {
+        "case": "one_reference",
+        "terminal_evidence": [
+          "review-head-example"
+        ],
+        "digest": "e1__oPk5vDM05CZLzuWcGEDltFC0rVbIMqK2Wlrzvw8-Js"
+      },
+      {
+        "case": "confirmed",
+        "terminal_evidence": [
+          "review-head-example",
+          "human-merge-example",
+          "post-merge-ci-example"
+        ],
+        "digest": "e1_yi2u4ti6y2N0PMARZY7MCg3Vxu7c0gEnSLWucoPA07A"
+      },
+      {
+        "case": "reordered",
+        "terminal_evidence": [
+          "human-merge-example",
+          "review-head-example",
+          "post-merge-ci-example"
+        ],
+        "digest": "e1_8AjDQkqQewihB7cf5en5n-8c9vLS0HZ1hWlzGGD_yBE"
+      },
+      {
+        "case": "altered_trailing_space",
+        "terminal_evidence": [
+          "review-head-example ",
+          "human-merge-example",
+          "post-merge-ci-example"
+        ],
+        "digest": "e1_W6A66SK_ntgb-auOqt4n0UZlteyX7SelA8xWv05lB90"
+      },
+      {
+        "case": "altered_case",
+        "terminal_evidence": [
+          "Review-Head-Example",
+          "human-merge-example",
+          "post-merge-ci-example"
+        ],
+        "digest": "e1_yccxjJ4u7tTS3T5Plg4_8G4tebKTpCxeJSV5ZzZVyDM"
+      },
+      {
+        "case": "dropped",
+        "terminal_evidence": [
+          "review-head-example",
+          "human-merge-example"
+        ],
+        "digest": "e1_Na6XL-95692kB0LHc9CL9HTgKmCb7z3R7EgIX_klTgE"
+      },
+      {
+        "case": "extra",
+        "terminal_evidence": [
+          "review-head-example",
+          "human-merge-example",
+          "post-merge-ci-example",
+          "extra-example"
+        ],
+        "digest": "e1_EMkmysBDppOT9wvpdFxnTEteI-B7ByKq5euxXVub6ek"
+      },
+      {
+        "case": "duplicated",
+        "terminal_evidence": [
+          "review-head-example",
+          "human-merge-example",
+          "post-merge-ci-example",
+          "post-merge-ci-example"
+        ],
+        "digest": "e1_VeBzirFdqGTavH5jLN_XZ-lS_FMK1Q2yR6g_YxMzSnc"
+      },
+      {
+        "case": "split_ab_c",
+        "terminal_evidence": [
+          "ab",
+          "c"
+        ],
+        "digest": "e1_8pOfkDAW5bspseSmHNvTdiIMoDokGAs5mV8tUPLgpkc"
+      },
+      {
+        "case": "split_a_bc",
+        "terminal_evidence": [
+          "a",
+          "bc"
+        ],
+        "digest": "e1_tTTOFqycizaCPzmjlc6ODjx62WBbgrVETxjK2s0hel0"
+      },
+      {
+        "case": "joined_abc",
+        "terminal_evidence": [
+          "abc"
+        ],
+        "digest": "e1_0EtyplDOD4zkljMwpT7igycz0rrv__PB2OJWzKCW0SA"
+      },
+      {
+        "case": "newline_inside",
+        "terminal_evidence": [
+          "line one\nline two"
+        ],
+        "digest": "e1_blwXC64zWQX1qo0g0_NkJis7YjkXoCKGKydfDIJ9CLQ"
+      },
+      {
+        "case": "newline_split",
+        "terminal_evidence": [
+          "line one",
+          "line two"
+        ],
+        "digest": "e1_wrh4koOC6l6hMD5pMWFY__fTxpeTu6AOVhBMKJil2c0"
+      },
+      {
+        "case": "non_ascii",
+        "terminal_evidence": [
+          "Überprüfung ✓ 検証"
+        ],
+        "digest": "e1_xXYnMcVfe-eJ8chLbIJPOVky6crf6hzSZXGpFAHnpCI"
+      }
+    ],
+    "confirmed_digest": "e1_yi2u4ti6y2N0PMARZY7MCg3Vxu7c0gEnSLWucoPA07A",
+    "cases": [
+      {
+        "case": "matches_the_confirmed_evidence",
+        "terminal_evidence": [
+          "review-head-example",
+          "human-merge-example",
+          "post-merge-ci-example"
+        ],
+        "outcome": "committed"
+      },
+      {
+        "case": "reordered",
+        "terminal_evidence": [
+          "human-merge-example",
+          "review-head-example",
+          "post-merge-ci-example"
+        ],
+        "outcome": "evidence_mismatch"
+      },
+      {
+        "case": "altered",
+        "terminal_evidence": [
+          "review-head-example",
+          "human-merge-substitute",
+          "post-merge-ci-example"
+        ],
+        "outcome": "evidence_mismatch"
+      },
+      {
+        "case": "dropped",
+        "terminal_evidence": [
+          "review-head-example",
+          "human-merge-example"
+        ],
+        "outcome": "evidence_mismatch"
+      },
+      {
+        "case": "extra",
+        "terminal_evidence": [
+          "review-head-example",
+          "human-merge-example",
+          "post-merge-ci-example",
+          "extra-example"
+        ],
+        "outcome": "evidence_mismatch"
+      },
+      {
+        "case": "replay_of_the_committed_finalize",
+        "terminal_evidence": [
+          "review-head-example",
+          "human-merge-example",
+          "post-merge-ci-example"
+        ],
+        "replay": true,
+        "coordination_calls": 0,
+        "outcome": "recorded_outcome"
+      }
+    ],
+    "malformed": [
+      {
+        "case": "missing_on_the_finalize_fact",
+        "kind": "accepted_for_finalization"
+      },
+      {
+        "case": "on_another_kind",
+        "kind": "stopped",
+        "evidence_digest": "e1_yi2u4ti6y2N0PMARZY7MCg3Vxu7c0gEnSLWucoPA07A"
+      },
+      {
+        "case": "wrong_prefix",
+        "kind": "accepted_for_finalization",
+        "evidence_digest": "k1_yi2u4ti6y2N0PMARZY7MCg3Vxu7c0gEnSLWucoPA07A"
+      },
+      {
+        "case": "short",
+        "kind": "accepted_for_finalization",
+        "evidence_digest": "e1_yi2u4ti6y2N0PMARZ"
+      },
+      {
+        "case": "padded",
+        "kind": "accepted_for_finalization",
+        "evidence_digest": "e1_yi2u4ti6y2N0PMARZY7MCg3Vxu7c0gEnSLWucoPA07A="
+      }
+    ],
+    "malformed_outcome": "context_unavailable",
+    "refusal": {
+      "code": "evidence_mismatch",
+      "http_status": 409,
+      "retryable": false,
+      "next_action": "Finalize with exactly the evidence aicrew confirmed, in its order; if the confirmation changed, begin the finalize again through aicrew; never reuse the proof or the key."
+    },
+    "personal_done": "a personal finalize or DONE edit carries no proof and no fact, so no digest: it is unchanged"
   }
 }

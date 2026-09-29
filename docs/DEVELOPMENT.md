@@ -58,6 +58,15 @@ CGO_ENABLED=0 go build ./...
 CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,
 `go-test (windows-latest)`, `go-test (macos-latest)`, `go-build`.
 
+`go-test (ubuntu-latest)` also runs the agent package under the race
+detector, which takes about five minutes:
+
+```sh
+CGO_ENABLED=1 go test -race -count=1 ./internal/agent/
+```
+
+It needs cgo (a C compiler). On a Windows host without one, run it in WSL.
+
 ## Layout
 
 - `cmd/aicrewd`: the aicrew HTTPS service (below).

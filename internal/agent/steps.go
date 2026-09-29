@@ -149,8 +149,23 @@ type stepSession interface {
 	stepAimemFile() string
 }
 
-func (e *Engine) stepToken() string     { return e.token }
-func (e *Engine) stepAimemFile() string { return e.aimemFile }
+func (e *Engine) stepToken() string {
+	e.live.RLock()
+	defer e.live.RUnlock()
+	return e.token
+}
+
+func (e *Engine) stepAimemFile() string {
+	e.live.RLock()
+	defer e.live.RUnlock()
+	return e.aimemFile
+}
+
+func (e *Engine) setAimemFile(path string) {
+	e.live.Lock()
+	e.aimemFile = path
+	e.live.Unlock()
+}
 
 // Driver drives steps for one agent home.
 type Driver struct {

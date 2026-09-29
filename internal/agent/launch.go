@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -37,16 +38,39 @@ type Stdio struct {
 // already had. Only the client's process tree receives it: nothing else in
 // the environment, the user's shell or the host changes. No secret is ever
 // added.
-func ScopedEnv(env []string, path string) []string {
+func ScopedEnv(env []string, path string) []string { return withEnv(env, SessionEnv, path) }
+
+// withEnv returns env with name set to value, replacing any value it had.
+func withEnv(env []string, name, value string) []string {
 	out := make([]string, 0, len(env)+1)
 	for _, kv := range env {
-		name, _, _ := strings.Cut(kv, "=")
-		if name == SessionEnv || (runtime.GOOS == "windows" && strings.EqualFold(name, SessionEnv)) {
+		n, _, _ := strings.Cut(kv, "=")
+		if n == name || (runtime.GOOS == "windows" && strings.EqualFold(n, name)) {
 			continue
 		}
 		out = append(out, kv)
 	}
-	return append(out, SessionEnv+"="+path)
+	return append(out, name+"="+value)
+}
+
+// serveSteps serves the step channel for the client and finishes the steps
+// a previous run left recorded. A launcher that cannot serve it still runs
+// the client, whose `aicrew-agent step` then finds no launcher.
+func serveSteps(e *Engine) *StepServer {
+	crew, ok := e.Crew.(interface {
+		StepAPI
+		LocalAPI
+	})
+	if !ok || e.Reservations == nil {
+		return nil
+	}
+	s, err := ServeSteps(e.Cfg.Home, NewDriver(e.Cfg.Home, crew, e.Reservations, e, e.Log), crew, e.Log)
+	if err != nil {
+		e.Log.Warn("the step channel is not served", "error", err.Error())
+		return nil
+	}
+	s.RecoverPending()
+	return s
 }
 
 // RunClient starts the agent's team session, runs the client as a child in
@@ -71,9 +95,16 @@ func RunClient(ctx context.Context, e *Engine, c Client, stdio Stdio, signals <-
 	if err := start(ctx, e, signals); err != nil {
 		return 0, err
 	}
+	if steps := serveSteps(e); steps != nil {
+		defer steps.Close()
+	}
+	home, err := filepath.Abs(e.Cfg.Home)
+	if err != nil {
+		home = e.Cfg.Home
+	}
 	cmd := exec.Command(c.Path, c.Args...)
 	cmd.Dir = e.Cfg.Home
-	cmd.Env = ScopedEnv(os.Environ(), e.AimemFile())
+	cmd.Env = withEnv(ScopedEnv(os.Environ(), e.AimemFile()), HomeEnv, home)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio.In, stdio.Out, stdio.Err
 	bindToLauncher(cmd)
 	// A stop that arrived after the startup ended keeps the client from

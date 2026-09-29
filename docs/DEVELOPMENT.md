@@ -190,6 +190,7 @@ bin/aicrew-agent run -client claude -home ~/aicrew/agents/builder
 bin/aicrew-agent session start  -home ~/aicrew/agents/builder
 bin/aicrew-agent session status -home ~/aicrew/agents/builder
 bin/aicrew-agent session leave  -home ~/aicrew/agents/builder
+bin/aicrew-agent step pending   # from the client run started ("Driving steps")
 ```
 
 It reads the `aicrew` section of the agent home's `agent.json`, which holds
@@ -255,3 +256,80 @@ no secret; other sections belong to onboarding:
   while a refresh runs, here or in another process, waits for it.
 - The session is recorded before aimem is asked to bind it, so a binding
   that fails still leaves a session the next `start` resumes.
+
+### Driving steps: `aicrew-agent step`
+
+The launcher drives every attempt step for its client, which never holds the
+session token or a coordination proof. The client (the model, or a script in
+its conversation) asks the launcher for one step at a time:
+
+```sh
+aicrew-agent step claim   -body - < claim.json
+aicrew-agent step work    -attempt A1 -task T1 -body '{"intent":"submit","detail":"https://forge.example/pr/12"}'
+aicrew-agent step release -attempt A1 -task T1 -body '{"target":"BLOCKED","blocker":"waiting on design"}'
+aicrew-agent step confirm-stop -attempt A1
+aicrew-agent step pending
+aicrew-agent step recover
+```
+
+- **Operations.** The reservation steps `offer`, `claim`, `accept`,
+  `withdraw`, `work`, `release` and `finalize` take the begin route's body
+  (`docs/CREW-CONTRACT.md`, "Attempt steps"). `offer` and `claim` create
+  their attempt and name the task in the body. The others need `-attempt`
+  and the aimem task's `-task`. The local steps `decline`, `review`, `stop`,
+  `confirm-stop` and `confirm-delivery` need only `-attempt` and their body.
+  `pending` lists the recorded steps, and `recover` finishes them.
+- **Finding the launcher.** `-home` defaults to `AICREW_AGENT_HOME`, which
+  `run` sets in its client's environment only, to the agent home's absolute
+  path. The launcher listens on the Unix socket `state/step.sock` of that
+  home. The socket exists only while `run` runs. Without it, `step` exits 1
+  and says that no launcher serves the home. A client of another agent home
+  reaches only that home's launcher.
+- **Privacy.** The socket is reachable only through `state/`, which the
+  launcher makes private before listening and then verifies:
+  - on Unix, mode 0700, with the socket at 0600;
+  - on Windows, a protected DACL for the current user, SYSTEM and
+    Administrators, which the socket inherits. The socket's own inherited
+    DACL is what refuses other accounts, since an account allowed to
+    bypass traverse checking reaches a file by its path whatever its
+    directory allows.
+
+  An existing `state/` is restricted the same way. If the launcher cannot
+  make it private, or cannot listen (a Unix socket's path is limited to
+  about 104 bytes), it logs a warning and runs the client without the
+  channel. Nothing secret crosses the socket: an answer carries the step's
+  outcome, never the token or a proof.
+- **What the launcher does.** For a reservation step, the launcher:
+  1. begins the step under an `Idempotency-Key`, which it records first;
+  2. records the step;
+  3. composes aimem's body from the begin's values, with the task's
+     complete content read through `aimem mcp` `get_task`;
+  4. sends it with `aimem reservation OP --task T --key K`, with the body,
+     and any proof, on stdin only;
+  5. settles the step.
+
+  If the task's revision moved since the begin, nothing is sent, and the
+  step is refused as `stale_revision`. Steps run one at a time.
+- **Pending records.** Each step in flight is recorded in
+  `state/steps/<begin key>.json` (0600, replaced atomically). The record
+  holds the phase, the request, the attempt, the step's nonsecret values
+  and the proof's SHA-256, never the proof or the token. A settled step's
+  record is removed. A pending settlement keeps it.
+- **Recovery.** `run` finishes the recorded steps in the background as soon
+  as it serves the channel, and `step recover` does so on request. Each
+  step is finished with its recorded begin key and aimem key:
+  - a step aimem has not answered begins again under the same key, for a
+    replacement proof, then is sent;
+  - a step aimem answered is settled;
+  - a first begin that aicrewd refuses (not retryably) keeps no record, but
+    a refusal during recovery keeps it, because a lost begin may have
+    committed.
+- **Answers.** `step` prints one JSON answer, whose fields are `ok`,
+  `status`, `result`, and `error` with `code`, `message`, `retryable` and
+  `next_action`. Its exit codes:
+  - 0: `done`, committed or answered;
+  - 3: `refused`, by aicrewd or aimem, or settled as not committed;
+  - 4: `pending`, recorded but not settled; run `step recover` later;
+  - 1: `failed`, meaning no launcher, or aicrewd, aimem or the channel
+    failed;
+  - 2: usage.

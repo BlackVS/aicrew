@@ -11,21 +11,30 @@ import (
 )
 
 // readRights are the rights that let an account read the file, or grant
-// itself access to read it.
+// itself access to read it. For a directory, listing (the same bit as
+// reading data) and traversing it (which reaches what it contains) count too.
 const readRights = windows.FILE_READ_DATA | windows.GENERIC_READ | windows.GENERIC_ALL |
 	windows.WRITE_DAC | windows.WRITE_OWNER
+
+const dirRights = readRights | windows.FILE_TRAVERSE | windows.GENERIC_EXECUTE
 
 // check measures the file's effective access, not mode bits. The owner must
 // be the current user, SYSTEM or Administrators, and every allow entry that
 // grants read (or the right to change the DACL or owner) must name one of
 // them. A null DACL, which grants everyone, is refused, and so is any entry
 // type this check does not understand.
-func check(path string) error {
+func check(path string, dir bool) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() {
+	rights := uint32(readRights)
+	switch {
+	case dir && !info.IsDir():
+		return fmt.Errorf("%s is not a directory", path)
+	case dir:
+		rights = dirRights
+	case !info.Mode().IsRegular():
 		return fmt.Errorf("%s is not a regular file", path)
 	}
 	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
@@ -84,7 +93,7 @@ func check(path string) error {
 		default:
 			return fmt.Errorf("%s has an access entry of a type this check does not understand (%d); %s", path, ace.Header.AceType, fix)
 		}
-		if uint32(ace.Mask)&readRights == 0 {
+		if uint32(ace.Mask)&rights == 0 {
 			continue
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))

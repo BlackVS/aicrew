@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -53,7 +54,10 @@ type Engine struct {
 	Cfg   Config
 	Crew  CrewAPI
 	Aimem Aimem
-	Log   *slog.Logger
+	// Reservations runs the member's reservation commands for the step
+	// channel; nil when aimem cannot (a test's fake).
+	Reservations ReservationCLI
+	Log          *slog.Logger
 	// Now and Sleep are the clock; tests replace them.
 	Now   func() time.Time
 	Sleep func(ctx context.Context, d time.Duration) error
@@ -68,12 +72,18 @@ type Engine struct {
 	aimemFile string
 	// pendingHandle is an entry's handle until bind gives it to aimem.
 	pendingHandle string
+	// live guards token and aimemFile, which the step server reads while
+	// the engine's goroutine may resume or rebind the session. The engine's
+	// own goroutine reads them without it.
+	live sync.RWMutex
 }
 
 // NewEngine assembles an engine for cfg. Aimem's lifecycle commands are
 // always serialized per session.
 func NewEngine(cfg Config, crew CrewAPI, aimem Aimem, log *slog.Logger) *Engine {
-	return &Engine{Cfg: cfg, Crew: crew, Aimem: Serialize(aimem, LockDir(cfg.Home)), Log: log, Now: time.Now, Sleep: sleepCtx}
+	e := &Engine{Cfg: cfg, Crew: crew, Aimem: Serialize(aimem, LockDir(cfg.Home)), Log: log, Now: time.Now, Sleep: sleepCtx}
+	e.Reservations, _ = aimem.(ReservationCLI)
+	return e
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -132,7 +142,7 @@ func (e *Engine) Start(ctx context.Context) error {
 		err := e.enter(ctx, st.SessionID)
 		switch code := codeOf(err); {
 		case err == nil:
-			e.aimemFile = st.AimemFile
+			e.setAimemFile(st.AimemFile)
 			return e.bind(ctx)
 		case code == "context_stale" || code == "role_forbidden":
 			e.Log.Info("the recorded session has ended; entering the team anew", "session", st.SessionID)
@@ -222,7 +232,9 @@ func (e *Engine) challenge(ctx context.Context) (Challenge, error) {
 // adopt takes an entry's secrets and times; they replace any earlier ones.
 func (e *Engine) adopt(entry Entry, ch Challenge) {
 	e.session, e.serviceID, e.hubID = entry.Session, ch.ServiceID, ch.HubID
+	e.live.Lock()
 	e.token, e.tokenEnds = entry.Token, entry.TokenExpires
+	e.live.Unlock()
 	e.handleAt, e.handleEnd = e.Now(), entry.HandleExpires
 	e.pendingHandle = entry.Handle
 }
@@ -249,7 +261,7 @@ func (e *Engine) bind(ctx context.Context) error {
 	} else if path, err = e.Aimem.Open(ctx, e.serviceID, e.session.TeamID, e.session.ID, handle); err != nil {
 		return err
 	}
-	e.aimemFile = path
+	e.setAimemFile(path)
 	e.Log.Info("in session", "session", e.session.ID, "team", e.session.TeamID, "generation", e.session.Generation)
 	return e.record(path)
 }
@@ -361,7 +373,7 @@ func (e *Engine) LeaveRecorded(ctx context.Context) error {
 		// The resume moved the session to a new generation. aimem is given
 		// its handle before the leave, so that a leave refused for open work
 		// keeps the session with a binding that still works.
-		e.aimemFile = st.AimemFile
+		e.setAimemFile(st.AimemFile)
 		if err := e.bind(ctx); err != nil {
 			return err
 		}
@@ -425,7 +437,9 @@ leaving:
 	if err := e.Aimem.Close(ctx, e.session.ID); err != nil {
 		return fmt.Errorf("left the session, but aimem kept its binding: %w", err)
 	}
+	e.live.Lock()
 	e.token = ""
+	e.live.Unlock()
 	e.Log.Info("left the session", "session", e.session.ID)
 	return ClearState(e.Cfg.Home)
 }

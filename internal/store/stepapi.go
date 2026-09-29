@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -72,6 +73,37 @@ func (s *Store) withToken(cmd command, token string, t storedToken) (command, gu
 	return cmd, valid
 }
 
+// stepIntent is what a token-driven begin's receipt is keyed on: the
+// operation, its scope and the request without the acting session and
+// generation. A resumed session of the same agent then replays its own
+// begin, and the replay is answered for that session as it is now: a
+// pending step gets a replacement proof for the current generation, once
+// the session is shown, inside the replacement's transaction, to still act
+// the step (replaceProof). The same key with another request is still an
+// idempotency conflict.
+type stepIntent struct {
+	Op      string          `json:"op"`
+	Scope   string          `json:"scope"`
+	Request json.RawMessage `json:"request"`
+}
+
+// intentOnly keys cmd's receipt on its intent (stepIntent).
+func intentOnly(cmd command) command {
+	b, err := json.Marshal(cmd.input)
+	if err != nil {
+		return cmd // run refuses the input itself
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return cmd
+	}
+	delete(fields, "session_id")
+	delete(fields, "generation")
+	req, _ := json.Marshal(fields) // map keys encode sorted
+	cmd.digest = stepIntent{Op: cmd.op, Scope: cmd.scope, Request: req}
+	return cmd
+}
+
 // tokenCaller finds the token's session and agent; the command then checks
 // that the token is valid.
 func (s *Store) tokenCaller(ctx context.Context, token string) (storedToken, Caller, error) {
@@ -93,9 +125,9 @@ func (s *Store) BeginOfferWithToken(ctx context.Context, key, token string, in O
 		return Attempt{}, Step{}, err
 	}
 	var proof string
-	cmd, g := s.withToken(offerCommand(c, key, OfferRequest{SessionID: t.sessionID, Generation: t.generation,
+	cmd, g := s.withToken(intentOnly(offerCommand(c, key, OfferRequest{SessionID: t.sessionID, Generation: t.generation,
 		WorkerAgentID: in.WorkerAgentID, Task: in.Task, ExpectedRevision: in.ExpectedRevision, BaseCommit: in.BaseCommit,
-		Branch: in.Branch, Process: in.Process, ExpiresAt: in.ExpiresAt}, &proof), token, t)
+		Branch: in.Branch, Process: in.Process, ExpiresAt: in.ExpiresAt}, &proof)), token, t)
 	return s.beginNew(ctx, c, cmd, &proof, FactOffer, t.sessionID, t.generation, g)
 }
 
@@ -109,7 +141,7 @@ func (s *Store) BeginAcceptWithToken(ctx context.Context, key, token, attemptID,
 	}
 	var proof string
 	in := AcceptRequest{SessionID: t.sessionID, Generation: t.generation, InstructionDigest: instructionDigest}
-	cmd, g := s.withToken(acceptCommand(c, key, attemptID, in, false, &proof), token, t)
+	cmd, g := s.withToken(intentOnly(acceptCommand(c, key, attemptID, in, false, &proof)), token, t)
 	return s.begin(ctx, c, cmd, attemptID, &proof, FactAcceptedAttempt, t.sessionID, t.generation, g)
 }
 
@@ -132,7 +164,7 @@ func (s *Store) BeginWithdrawWithToken(ctx context.Context, key, token, attemptI
 		return Attempt{}, Step{}, err
 	}
 	var proof string
-	cmd, g := s.withToken(releaseCommand(c, key, attemptID, t.sessionID, t.generation, &proof), token, t)
+	cmd, g := s.withToken(intentOnly(releaseCommand(c, key, attemptID, t.sessionID, t.generation, &proof)), token, t)
 	return s.begin(ctx, c, cmd, attemptID, &proof, FactNeverAccepted, t.sessionID, t.generation, g)
 }
 
@@ -178,9 +210,9 @@ func (s *Store) BeginClaimWithToken(ctx context.Context, key, token string, in C
 		return Attempt{}, Step{}, err
 	}
 	var proof string
-	cmd, g := s.withToken(claimCommand(c, key, ClaimRequest{SessionID: t.sessionID, Generation: t.generation,
+	cmd, g := s.withToken(intentOnly(claimCommand(c, key, ClaimRequest{SessionID: t.sessionID, Generation: t.generation,
 		Task: in.Task, ExpectedRevision: in.ExpectedRevision, BaseCommit: in.BaseCommit, Branch: in.Branch,
-		Process: in.Process, InstructionDigest: in.InstructionDigest}, &proof), token, t)
+		Process: in.Process, InstructionDigest: in.InstructionDigest}, &proof)), token, t)
 	return s.beginNew(ctx, c, cmd, &proof, FactIndependentClaim, t.sessionID, t.generation, g)
 }
 
@@ -217,8 +249,8 @@ func (s *Store) BeginStopReleaseWithToken(ctx context.Context, key, token, attem
 		return Attempt{}, Step{}, err
 	}
 	var proof string
-	cmd, g := s.withToken(releaseStoppedCommand(c, key, attemptID,
-		StopRelease{SessionID: t.sessionID, Generation: t.generation, Target: target, Blocker: blocker}, &proof), token, t)
+	cmd, g := s.withToken(intentOnly(releaseStoppedCommand(c, key, attemptID,
+		StopRelease{SessionID: t.sessionID, Generation: t.generation, Target: target, Blocker: blocker}, &proof)), token, t)
 	return s.begin(ctx, c, cmd, attemptID, &proof, FactStopped, t.sessionID, t.generation, g)
 }
 
@@ -259,7 +291,7 @@ func (s *Store) BeginFinalizeWithToken(ctx context.Context, key, token, attemptI
 		return Attempt{}, Step{}, err
 	}
 	var proof string
-	cmd, g := s.withToken(finalizeCommand(c, key, attemptID, FinalizeRequest{SessionID: t.sessionID,
-		Generation: t.generation, ResultSeq: resultSeq}, true, &proof), token, t)
+	cmd, g := s.withToken(intentOnly(finalizeCommand(c, key, attemptID, FinalizeRequest{SessionID: t.sessionID,
+		Generation: t.generation, ResultSeq: resultSeq}, true, &proof)), token, t)
 	return s.begin(ctx, c, cmd, attemptID, &proof, FactAcceptedForFinalization, t.sessionID, t.generation, g)
 }

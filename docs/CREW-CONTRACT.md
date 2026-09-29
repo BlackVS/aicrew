@@ -101,6 +101,25 @@ and changes nothing.
 - **Receipt replay** rechecks current authorization and the current
   generation before returning an earlier result, so an old session cannot
   learn more than a current one.
+- **A step begun before a resume** is the same agent's own step, and its
+  resumed session recovers it under the same key. A token-driven begin's
+  idempotency covers only its intent: the operation, the attempt or scope,
+  and the request. It does not cover the acting session or generation. So
+  the same agent's current session replays it, while the fenced
+  generation's token replays nothing.
+
+  A pending step gets a replacement proof for the current generation, and
+  only if the resumed session still acts the step by the rule of the step's
+  fact kind (Coordination facts). That is rechecked in the replacement's
+  own transaction, where the write commits.
+  - A pending independent claim is the claiming session's own, so its
+    recorded generation moves with the resume.
+  - A coordinator's resume moves the team's coordinator generation. So its
+    pending offer, the worker's pending acceptance of that offer, and its
+    own finalize as the accepting coordinator are refused. The coordinator
+    withdraws and re-offers instead (D-ebb9-3).
+  - The same key with another request is still `409
+    idempotency_conflict`.
 
 ## Session introspection (aimem → aicrew)
 
@@ -432,6 +451,14 @@ begin needs an `Idempotency-Key`; settle does not.
     is still on its way. A work update has no proof, so its retry answers
     the same step. A retry after the step settled is refused: `409
     step_settled` if it committed, and `409 attempt_state` if it did not.
+    - **After a resume.** The same holds for a retry from the same agent's
+      resumed session. The input is the step's intent, without the acting
+      session and generation.
+    - **The replacement proof** names the current generation. It is issued
+      only while that session still acts the step by its fact kind's rule,
+      checked in the replacement's transaction: otherwise `403
+      attempt_forbidden`, and nothing is issued ("Sessions and generation
+      fencing").
   - **Superseding a stuck update** (D-b1b-4 (a)). aimem may refuse an update
     without moving anything, for example for authorization or validation.
     Then no evidence ever settles it (see Settle below). The holder may give

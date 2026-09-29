@@ -31,10 +31,13 @@ const maxKeyLen = 128
 // commands get a receipt: a refusal (forbidden, invalid, conflict) records
 // nothing, so a retry with the same key is evaluated again.
 type command struct {
-	op        string
-	scope     string
-	key       string
-	input     any
+	op    string
+	scope string
+	key   string
+	input any
+	// digest, if set, is what the receipt's input digest covers instead of
+	// input; the audit still records input in full.
+	digest    any
 	authorize func(Caller) error
 	validate  func() error
 	// check runs inside the transaction before a new command applies, for
@@ -63,6 +66,11 @@ func (s *Store) run(ctx context.Context, c Caller, cmd command, out any) error {
 	input, digest, err := inputDigest(cmd.input)
 	if err != nil {
 		return err
+	}
+	if cmd.digest != nil {
+		if _, digest, err = inputDigest(cmd.digest); err != nil {
+			return err
+		}
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)

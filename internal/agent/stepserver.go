@@ -111,9 +111,13 @@ type StepServer struct {
 	driver *Driver
 	local  LocalAPI
 	log    *slog.Logger
-	ln     net.Listener
-	mu     sync.Mutex // one step at a time
-	wg     sync.WaitGroup
+	ln     *net.UnixListener
+	// sock is the socket file this server created. Close removes the path
+	// only while it is still that file: a newer launcher of the same home
+	// may have replaced it, and its socket must survive this one's exit.
+	sock os.FileInfo
+	mu   sync.Mutex // one step at a time
+	wg   sync.WaitGroup
 	// ctx ends at Close: a step it interrupts stays recorded.
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -133,17 +137,23 @@ func ServeSteps(home string, d *Driver, local LocalAPI, log *slog.Logger) (*Step
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("remove a stale step socket: %w", err)
 	}
-	ln, err := net.Listen("unix", path)
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
 		return nil, fmt.Errorf("serve the step channel: %w", err)
 	}
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(path, 0o600); err != nil {
-			ln.Close()
-			return nil, err
-		}
+	// The listener would unlink the path by name when it closes, whoever
+	// owns it by then; Close removes it only while it is still ours.
+	ln.SetUnlinkOnClose(false)
+	sock, err := os.Lstat(path)
+	if err == nil && runtime.GOOS != "windows" {
+		err = os.Chmod(path, 0o600)
 	}
-	s := &StepServer{home: home, driver: d, local: local, log: log, ln: ln}
+	if err != nil {
+		ln.Close()
+		os.Remove(path)
+		return nil, err
+	}
+	s := &StepServer{home: home, driver: d, local: local, log: log, ln: ln, sock: sock}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.wg.Add(1)
 	go s.accept()
@@ -166,12 +176,16 @@ func (s *StepServer) RecoverPending() {
 	}()
 }
 
-// Close stops serving; the listener removes its socket. A step in progress
-// is interrupted and stays recorded.
+// Close stops serving and removes its socket, unless a newer launcher of
+// the same home has replaced it since. A step in progress is interrupted
+// and stays recorded.
 func (s *StepServer) Close() error {
 	err := s.ln.Close()
 	s.cancel()
 	s.wg.Wait()
+	if cur, lerr := os.Lstat(StepSocket(s.home)); lerr == nil && os.SameFile(cur, s.sock) {
+		os.Remove(StepSocket(s.home))
+	}
 	return err
 }
 

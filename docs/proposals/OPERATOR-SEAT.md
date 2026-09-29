@@ -1,8 +1,10 @@
 # Operator seat: a human member role that receives escalations
 
-Board task 01a0eba9-d5fe (aicrew), with the operator's refinement in comment seq189.
-**Status: proposal for review, 2026-09-29.** Decisions D1 to D11 (§8) are open; nothing
-here is implemented or authorized by this document.
+Status: **proposal** (aicrew PR #47, `docs/proposals/OPERATOR-SEAT.md`), amended after
+review on 2026-09-29: token outside AI sessions (§4, §7), merge path allowlist (§6),
+decision-bound confirmation (§4), floor-first classification (§1, §2), verifier identity
+(§6, D12), `resume` with `answer_ref` (§3). Board task 01a0eba9-d5fe, refinement seq189.
+Decisions D1 to D12 (§8) are open. Nothing here is implemented or authorized by this document.
 Sources: aimem `DESIGN-AIFORGE*.md` on master plus `DESIGN-AIFORGE-KNOWLEDGE.md` (aimem PR #151, since merged),
 aicrew `CREW-CONTRACT.md` and `ONBOARDING-CONTRACT.md` at `main`, `internal/store/confirm.go`,
 ai-skills `verify-delivery` at v1.25.0, and the launcher observation probe (task 01a0eb7c).
@@ -20,25 +22,22 @@ worker ◀──answer (relayed)── coordinator ◀──answer (durable)─�
 ```
 
 1. **Worker to coordinator.** A worker that cannot proceed sends a directed team message
-   (existing inbox) and, when the attempt cannot continue, records a work update `block`
-   with a blocker (existing `RUNNING → BLOCKED`, hold kept). Workers address only the
-   coordinator; aicrew refuses a worker's message to a seat member (`role_forbidden`).
-2. **Coordinator decides class and category.** For every question it applies the team's
-   escalation policy (§2): answer it, or escalate it. Answering within the frozen scope
-   (objective, acceptance criteria, non-goals, recorded decisions on the task and its
-   design docs) is the default. The coordinator never guesses at intent: an answer it
+   and, when the attempt cannot continue, a work update `block` with a blocker (existing
+   `RUNNING → BLOCKED`, hold kept). Workers address only the coordinator; aicrew refuses a
+   worker's message to a seat member (`role_forbidden`).
+2. **Coordinator decides.** It files the question under one category (§2, floor first)
+   and applies the policy: answer within the frozen scope (objective, acceptance criteria,
+   non-goals, recorded decisions) or escalate. It never guesses at intent: an answer it
    cannot ground in a recorded decision is an escalation, however small.
-3. **Coordinator to seat.** An escalation is one *request record* (§3) sent as a directed
-   message to the seat and mirrored on the task. While it is open the task is `BLOCKED`
-   with the blocker `awaiting operator: <request id>`; the worker's attempt stays blocked
-   with its hold and capacity, as today.
-4. **Seat answers.** The human produces one *answer record* (§3). A clarification informs;
-   an authority answer grants (§4). Aicrew delivers the answer to the coordinator **and**
-   to the blocked member, both with delivery and explicit ack, and mirrors it on the task.
-5. **Back to work.** The coordinator applies the answer (rework, new offer, stop, or
-   simply "continue") and the holder sends the ordinary work update that leaves
-   `BLOCKED`. Leaving `BLOCKED` is always a member step with the answer's id as its
-   reason; the seat never mutates the task or the reservation.
+3. **Coordinator to seat.** One *request record* (§3), a directed message to the seat
+   mirrored on the task. While open, the task is `BLOCKED` with blocker
+   `awaiting operator: <request id>`; the attempt keeps its hold and capacity.
+4. **Seat answers.** One *answer record* (§3): a clarification informs, an authority answer
+   grants (§4). Aicrew delivers it to the coordinator **and** the blocked member, each with
+   delivery and explicit ack, and mirrors it on the task.
+5. **Back to work.** The coordinator applies the answer (continue, rework, new offer or
+   stop); the holder sends the `resume` update that leaves `BLOCKED` (§3). The seat never
+   mutates the task or the reservation.
 
 Simple questions never reach the seat: everything the coordinator can answer from the
 record is answered by the coordinator and recorded as a *self-answer* (§3) for later
@@ -50,6 +49,10 @@ Those prompts are one *input* to this flow, not a separate one: the launcher's a
 classifies a prompt into a category of §2 (most are `environment` and are decided by
 policy without any model), and only a prompt the policy marks `ask` becomes an
 escalation request from the coordinator. A launcher never asks the seat directly.
+Classification follows the floor-first rule of §2: a prompt that would deploy, publish,
+or widen a permission (a new allow rule, a broader token, a trust dialog, `--dangerously-*`
+flags, settings or hook edits) is `deploy` or `security` and always `ask`, whatever the
+working directory; a prompt the adapter cannot classify is `ask`.
 
 ## 2. Escalation policy: modes, rules and the floor
 
@@ -95,6 +98,25 @@ of the mode, so the operator can set `retry: ask` in `default` without moving to
 them. Their answers are authority answers (§4). The floor is a constant of the design,
 not a row of the policy record, so no policy edit can remove it.
 
+**Classification: the floor wins.** A question or prompt that fits several categories is
+filed under the most restrictive one, in this order: floor categories first, then `scope`
+and `cross_repo`, then the rest. A classification the coordinator (or the launcher
+adapter) cannot make with confidence is `ask`. Deployment and permission-widening prompts
+are `deploy` or `security` in every working directory. Decision-table cases:
+
+| Case | Fits | Filed as | Disposition |
+| --- | --- | --- | --- |
+| Rename a helper inside the worktree | `implementation` | `implementation` | per mode |
+| Rename a field of a frozen wire message | `implementation`, `wire` | `wire` | ask, authority |
+| Edit `AGENTS.md`, `CLAUDE.md`, a skill file or a fixture | `implementation`, `architecture` | `architecture` | ask, authority |
+| Re-run a flaky check on the head | `retry` | `retry` | per mode; never a retry loop |
+| Skip a failing check to merge today | `retry`, `risk` | `risk` | ask, authority |
+| Shell command `go test ./...` in the worktree | `environment` | `environment` | allow |
+| Shell command that writes outside the worktree | `environment` | `environment` | deny (rule may raise to ask) |
+| `git push`, a release tag, `boot.sh` or an installer run, anywhere | `environment`, `deploy` | `deploy` | ask, authority |
+| Add an allow rule, edit settings or hooks, accept a trust dialog, a `--dangerously-*` flag | `environment`, `security` | `security` | ask, authority |
+| A prompt the adapter cannot parse | none | unclassified | ask |
+
 **Changing the policy is a floor action.** A mode change, or a rule that loosens a
 disposition (`ask → allow`, `deny → allow`, `deny → ask`), is an authority answer to a
 request of category `security` that the seat itself raises. A rule that tightens
@@ -132,20 +154,22 @@ copy; the task comment is the record of decision. Both carry the same `id`.
 | `supersedes` | set when this answer overturns a self-answer or an earlier answer |
 
 **Self-answer** (`escalation.self`), written by the coordinator when it answers without
-escalating: `question`, `category`, `answer`, `grounds` (the recorded decision it relied
-on), `policy_revision` and the mode or rule that allowed it. Self-answers are delivered
-to the seat as a low-priority digest (one message per attempt milestone in `default` and
-`auto`, one per question in `manual`) so the human can review them in the seat's inbox
-and on the task.
+escalating: `question`, `category`, `answer`, `grounds` (the recorded decision relied on),
+`policy_revision` and the mode or rule that allowed it. Self-answers reach the seat as a
+low-priority digest (per attempt milestone in `default` and `auto`, per question in
+`manual`) for review in the inbox and on the task.
 
 **Overturn.** The seat answers a self-answer with `supersedes` set. The coordinator must
-act on it before any further step on the affected attempt: request rework or a stop. An
-overturned self-answer stays in the record; nothing is edited.
+request rework or a stop on the affected attempt before any other step. Nothing is edited.
 
-**Leaving BLOCKED.** The answer does not change task state. The holder's next work
-update (`resume`, or `submit`) names the answer id in its reason, and aicrew refuses a
-resume on a `BLOCKED` attempt whose open request has no answer. That keeps the reservation
-rules unchanged: only the holder mutates, only over its own connection.
+**Leaving BLOCKED.** The answer does not change task state. The holder leaves `BLOCKED`
+with a work update of intent `resume` (allowed from `Blocked` and `Rework`; `submit` is
+allowed only from `Working`, so a result comes in a later `submit`). Today `WorkUpdate`
+has `session_id`, `generation`, `intent` and `detail`, and `resume` ignores `detail`. The
+increment adds one optional field, `answer_ref`, the answer record's id: required on a
+`resume` from `Blocked` when the attempt has an open escalation request, refused
+(`answer_missing`) when absent or when the request has no answer, and ignored otherwise.
+The reservation rules are unchanged: only the holder mutates, over its own connection.
 
 ## 4. Two answer classes and the human-only credential
 
@@ -167,7 +191,7 @@ Options for how the human produces the receipt:
 | --- | --- | --- | --- |
 | A. WebAuthn in the aimem console | The seat registers a passkey or hardware key with aimem; the console shows the open request; the human confirms; the assertion's challenge is the request digest; aimem verifies and issues the receipt | Strong: needs user presence on the authenticator; the bearer in an agent home cannot sign | New: WebAuthn registration and verification in the hub (a Go library exists), one console page, approvals ledger, read scope. Needs hub TLS, which team mode already requires |
 | B. Hardware-key CLI | `aimem approve <request>` on the seat's machine performs a FIDO2 assertion with a key touch, no browser | Strong, same reason | CTAP client code per OS; harder on Windows without admin rights; the machine that runs agents is often the same machine |
-| C. Human-only approval token | The hub admin issues the seat a distinct credential type (`aimem_approve_`, user-scoped, operation `approve` only). The human enters it at a hidden prompt per approval, or keeps it on another device; it is never written into an agent home, `hub.json` or a session file | Medium: strong against an agent that only has the installation credential; weak if the token is ever stored on the agent host | Small: one credential type in the access store, one route, the approvals ledger and read scope |
+| C. Human-only approval token | The hub admin issues the seat a distinct credential type (`aimem_approve_`, user-scoped, operation `approve` only). The human types it only into a separate non-AI command, `aimem approve <request>`, which reads it from the TTY (never argv, env, a file or stdin from a pipe) and sends it to the hub. It never enters an AI session, an agent home, `hub.json` or a session file | Medium: strong against an agent that only has the installation credential and against a model transcript; weak if the token is ever stored on the agent host | Small: one credential type in the access store, one route, the approvals ledger and read scope |
 | D. Forge approval | A GitHub approving review or the merge click counts as the authority answer | Covers only `merge`; the forge account is usually logged in on the agent host | None, but it cannot cover the other five floor categories |
 
 **Recommendation.** Target A. Bridge with C for the first increment after the pilot,
@@ -177,10 +201,27 @@ approvals ledger, the receipt format and the read scope are the same for A and C
 bridge is not thrown away. D stays a consumer's evidence (verify-delivery's `human_merge`),
 never a substitute for the receipt.
 
-**What the receipt binds.** The request digest covers the request record as filed, so an
-edited question cannot reuse an approval. A receipt is single-use per request, and a
-request whose policy revision has since changed is answered again. Denials are receipts
-too, so a "no" is as durable as a "yes".
+**What the receipt binds.** The ceremony fixes the decision before the human confirms:
+the seat selects an option, the hub records the pending confirmation `{request_digest,
+decision, policy_revision}` server-side and derives the challenge from exactly those three
+values. The confirmation (a WebAuthn assertion under A, the token-bearing `aimem approve`
+call under C) is accepted only if it answers that challenge, and the receipt repeats the
+three values. So an approval cannot be replayed for another request, another decision on
+the same request, or the same request under a later policy revision. A receipt is
+single-use per request, and a request whose policy revision has changed is answered
+again. Denials are receipts too, so a "no" is as durable as a "yes".
+
+Test vectors for the ledger: (1) the same request confirmed twice is one receipt; (2) an
+edited request record with the original confirmation is refused; (3) **the decision is
+changed while the original confirmation is kept and presented for the new decision:
+refused, nothing recorded**; (4) the policy revision moves between selection and
+confirmation: refused; (5) a receipt read through the peer scope names the confirmed
+decision and never the credential or assertion.
+
+**Where the skill stops.** A seat skill in an AI session may render the inbox, draft the
+answer, select the option and print the exact `aimem approve <request>` command. It never
+asks for, reads or receives the token or the authenticator; that step happens only in the
+human's own terminal, outside any model session.
 
 ## 5. Reuse and what is new
 
@@ -195,9 +236,8 @@ too, so a "no" is as durable as a "yes".
 | Policy | aicrew audit and receipts; the coordinator's process (ai-skills) | The per-team policy record, the category list, and a coordinator skill `escalate-or-answer` that files requests and self-answers |
 | Delivery evidence | `confirm-delivery` and its one predicate (`deliveryConfirmer`); verify-delivery v1.25.0 | Nothing for the pilot; the verifier role changes only the predicate (§6) |
 
-Nothing is added to the coordination wire: escalations never carry a proof reference, and
-the reservation is untouched. The team-mode comment write and the approvals ledger are
-aimem feature PRs; the role, policy and message kinds are aicrew increments.
+Nothing is added to the coordination wire; the reservation is untouched. The comment write
+and the approvals ledger are aimem PRs; role, policy and message kinds are aicrew increments.
 
 ## 6. Consumers
 
@@ -205,8 +245,14 @@ aimem feature PRs; the role, policy and message kinds are aicrew increments.
 delegated merger may perform it, or outside it, and then it is a `merge` escalation to the
 seat. A first policy that can stand without a human:
 
-- the diff touches only `docs/**`, `*.md`, `CHANGELOG.md` and nothing else (no code,
-  workflows, installers, fixtures or `openapi.json`), and no path a frozen wire names;
+- every changed path matches an **explicit allowlist** kept in the repository's policy
+  file, for example `README.md`, `CHANGELOG.md`, `docs/*.md` except the patterns below,
+  and `docs/img/**`; anything not listed is outside the policy. The allowlist never
+  contains design, contract or wire documents (`docs/DESIGN*.md`, `docs/*CONTRACT*.md`,
+  `docs/*-WIRE*.md`, `docs/proposals/**`), fixtures (`docs/fixtures/**`, `testdata/**`),
+  agent instructions (`AGENTS.md`, `CLAUDE.md`, `.claude/**`, `.agents/**`), skill files
+  (`skills/**`, `SKILL.md`), workflows, installers or `openapi.json`: a change to any of
+  those is `architecture` (or `wire`) and escalates, however small the diff;
 - the PR title has no `WIP:` and the branch is up to date with the base;
 - verify-delivery's `reviewed_head` check passes at the current head for both required
   reviews, with a trusted author list, and the review comments contain no `BLOCKER`;
@@ -223,16 +269,21 @@ request, and the human still clicks (D9).
 **The verifier role.** `deliveryConfirmer` is one predicate: today the current coordinator
 who is not the worker. A verifier role changes it to "a member with role `verifier`, who
 is neither the worker nor the reviewing coordinator". The seat is not the verifier: the
-seat decides, the verifier checks, and one human may hold both roles only through two
-memberships. Until the role exists the coordinator confirms, as now.
+seat decides, the verifier checks. One person cannot hold both through two memberships:
+the onboarding contract refuses a second role for an agent already active in the team
+(`role_conflict`) and links one aimem user to exactly one aicrew agent. So either the
+verifier is a **separate identity** (its own aimem user and agent, for example a
+dedicated verifier installation the same person operates), or the crew contract takes a
+new decision: a membership may carry a role set, with the predicates above evaluated per
+role. This design assumes the separate identity (D12). Until the role exists the
+coordinator confirms, as now.
 
 ## 7. Phasing
 
 **Pilot (now).** The human stays the approver through a relay session and pasted
-prompts. Two things change in text only: the coordinator files every escalation in the
-§3 request shape and every self-answer in the self shape, as task comments written by the
-human's relay session in personal mode; and the blocker text names the request id. This
-gives the pilot the record and the category statistics the first increment needs.
+prompts. In text only: escalations and self-answers use the §3 shapes, as task comments
+written by the human's relay session in personal mode, and the blocker names the request
+id. That gives the first increment its record and its category statistics.
 
 **Increment 1 (smallest after the pilot).**
 - aicrew: role `operator`; the policy record with mode `default` and the floor; message
@@ -241,7 +292,10 @@ gives the pilot the record and the category statistics the first increment needs
 - aimem: the approvals ledger, the `approve` operation and the C-bridge credential; one
   route to issue a receipt for a request digest; the peer read scope for receipts.
 - ai-skills: `escalate-or-answer` for the coordinator, and a seat skill that renders the
-  inbox, drafts the answer, and asks for the approval token at a hidden prompt.
+  inbox, drafts the answer and prints the `aimem approve <request>` command. The skill
+  never receives the approval token: the human runs that command in a plain terminal,
+  where the token is read from the TTY and sent to the hub.
+- aicrew: the `answer_ref` field on `WorkUpdate` and the `answer_missing` refusal (§3).
 - Acceptance: one worker question answered by the coordinator and visible to the seat as
   a self-answer; one `wire` question escalated, answered with a receipt, delivered to
   both members, the task leaving `BLOCKED` on the holder's resume; a forged answer text
@@ -257,37 +311,39 @@ mirroring in real time.
 Each has options and a recommendation; the design above assumes the recommendation.
 
 - **D1 Manual mode.** (a) *Hold*: every question escalates and the coordinator waits.
-  (b) *Mirror*: the coordinator answers non-floor questions, and each self-answer is
-  delivered to the seat at once. Recommendation: (a). It is the Claude Code meaning of
-  manual, and (b) is `default` plus a real-time digest, which a rule can express later.
-- **D2 System of record first.** (a) aicrew message log as the operational record and
-  the task comment written by the seat in personal mode; (b) wait for the team-mode
-  comment write before the first increment. Recommendation: (a); the task comment
-  becomes coordinator-written when the write lands, with the same schema.
+  (b) *Mirror*: the coordinator answers non-floor questions and each self-answer reaches
+  the seat at once. Recommendation: (a), the Claude Code meaning; (b) is `default` plus a
+  real-time digest, expressible by a rule later.
+- **D2 System of record first.** (a) aicrew message log plus a task comment the seat
+  writes in personal mode; (b) wait for the team-mode comment write. Recommendation: (a);
+  the comment becomes coordinator-written, same schema, when the write lands.
 - **D3 Authority proof.** Options A to D in §4. Recommendation: A as the target, C as the
   bridge, D as evidence only. Reject B for the pilot hosts.
 - **D4 Answer delivery.** (a) to the coordinator only, who relays; (b) to the coordinator
   and the blocked member. Recommendation: (b); the worker sees the decision unfiltered,
   and the coordinator still owns the next step.
-- **D5 What the seat is.** (a) an aicrew member role with a session, joined by
-  invitation, answering through its inbox; (b) an out-of-band operator principal on
-  `aicrewd` with no session. Recommendation: (a); it reuses identity, sessions and the
-  inbox, and the authority proof does not depend on the session either way.
-- **D6 No answer in time.** (a) the task stays `BLOCKED` indefinitely and urgency only
-  changes notification; (b) a timeout falls back to the coordinator's recommendation for
-  clarifications. Recommendation: (a); a timeout never decides, and the coordinator may
-  offer other work meanwhile.
+- **D5 What the seat is.** (a) an aicrew member role with a session, joined by invitation,
+  answering through its inbox; (b) an out-of-band operator principal on `aicrewd`.
+  Recommendation: (a); the authority proof does not depend on the session either way.
+- **D6 No answer in time.** (a) the task stays `BLOCKED` and urgency only changes
+  notification; (b) a timeout falls back to the coordinator's recommendation for
+  clarifications. Recommendation: (a); a timeout never decides.
 - **D7 Overturn effect.** (a) the coordinator must request rework or a stop on the
   affected attempt before any other step; (b) the overturn is advisory. Recommendation: (a).
 - **D8 Policy changes.** (a) mode change and any loosening rule need a receipt;
   tightening needs the seat's session; (b) every change needs a receipt. Recommendation:
   (a); tightening is safe and should be cheap.
 - **D9 Auto-merge start.** (a) advisory evaluator, human clicks; (b) delegated bot merge
-  for docs-only from the start. Recommendation: (a) for the first two months of records,
-  then (b) by an explicit delegation receipt per repository.
+  for the allowlist from the start. Recommendation: (a) for two months of records, then
+  (b) by an explicit delegation receipt per repository.
 - **D10 Category list.** Accept the thirteen categories of §2, or name changes. The floor
   is fixed; `scope` and `cross_repo` are `ask` in every mode but their answers may be
   clarifications when no authority is granted.
 - **D11 Name.** `operator seat` or `approver` as the role's name in aicrew. Recommendation:
   role id `operator`, displayed as "operator seat"; `approver` describes only the
   authority-answer function.
+- **D12 Verifier identity.** (a) the verifier is a separate aimem user and aicrew agent,
+  even when the same person operates it; (b) amend the crew and onboarding contracts so a
+  membership may carry a role set, and evaluate `deliveryConfirmer` and the seat rules per
+  role. Recommendation: (a); it needs no contract change and keeps "one user, one agent".
+  Choose (b) only if running a second identity per person proves impractical in the pilot.

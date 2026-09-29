@@ -136,11 +136,21 @@ func NewCrew(cfg Config, roots *x509.CertPool) (*Crew, error) {
 }
 
 func (c *Crew) do(ctx context.Context, method, path, contentType, key, bearer string, body []byte, out any) error {
+	_, _, err := c.exchange(ctx, method, path, contentType, key, bearer, body, out, http.StatusOK)
+	return err
+}
+
+// exchange sends one request and decodes a reply with one of the accepted
+// statuses into out, returning the status and the reply's headers. Any other
+// status is aicrewd's refusal, or a transport error when it carries no
+// envelope.
+func (c *Crew) exchange(ctx context.Context, method, path, contentType, key, bearer string, body []byte, out any,
+	accepted ...int) (int, http.Header, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return 0, nil, err
 	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
@@ -154,14 +164,18 @@ func (c *Crew) do(ctx context.Context, method, path, contentType, key, bearer st
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return &TransportError{Err: errors.New(scrub(err))}
+		return 0, nil, &TransportError{Err: errors.New(scrub(err))}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxReply+1))
 	if err != nil || len(raw) > maxReply {
-		return &TransportError{Err: errors.New("the reply could not be read")}
+		return 0, nil, &TransportError{Err: errors.New("the reply could not be read")}
 	}
-	if resp.StatusCode != http.StatusOK {
+	ok := false
+	for _, s := range accepted {
+		ok = ok || resp.StatusCode == s
+	}
+	if !ok {
 		r := &Refusal{Status: resp.StatusCode}
 		var env struct {
 			Code       string `json:"code"`
@@ -171,18 +185,60 @@ func (c *Crew) do(ctx context.Context, method, path, contentType, key, bearer st
 		}
 		if json.Unmarshal(raw, &env) != nil || env.Code == "" {
 			// No envelope: a proxy or a server error; the outcome is unknown.
-			return &TransportError{Err: fmt.Errorf("aicrewd answered %d without a refusal", resp.StatusCode)}
+			return 0, nil, &TransportError{Err: fmt.Errorf("aicrewd answered %d without a refusal", resp.StatusCode)}
 		}
 		r.Code, r.Message, r.NextAction, r.Retryable = env.Code, env.Message, env.NextAction, env.Retryable
 		if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && s > 0 {
 			r.RetryAfter = time.Duration(s) * time.Second
 		}
-		return r
+		return 0, nil, r
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return &TransportError{Err: errors.New("the reply is not the expected JSON")}
+		return 0, nil, &TransportError{Err: errors.New("the reply is not the expected JSON")}
 	}
-	return nil
+	return resp.StatusCode, resp.Header, nil
+}
+
+// attemptsPath is the step routes' root (docs/CREW-CONTRACT.md, "Attempt
+// steps").
+const attemptsPath = "/v1/crew/attempts"
+
+// BeginStep sends one begin route. The attempt is the one the reply's
+// Location names.
+func (c *Crew) BeginStep(ctx context.Context, key, token, path string, body []byte) (Step, string, error) {
+	var st Step
+	_, h, err := c.exchange(ctx, http.MethodPost, path, "application/json", key, token, body, &st, http.StatusOK)
+	if err != nil {
+		return Step{}, "", err
+	}
+	id, ok := strings.CutPrefix(h.Get("Location"), attemptsPath+"/")
+	if !ok || id == "" || strings.Contains(id, "/") || st.RequestKey == "" {
+		return Step{}, "", &TransportError{Err: errors.New("the begin reply named no attempt or step")}
+	}
+	return st, id, nil
+}
+
+// SettleStep reports a step. A pending step (202) is a Settlement with
+// RetryAfter, not an error.
+func (c *Crew) SettleStep(ctx context.Context, token, attemptID, requestKey string, report StepReport) (Settlement, error) {
+	body, _ := json.Marshal(struct {
+		RequestKey string `json:"request_key"`
+		StepReport
+	}{requestKey, report})
+	var reply struct {
+		Settled bool   `json:"settled"`
+		Outcome string `json:"outcome"`
+	}
+	status, h, err := c.exchange(ctx, http.MethodPost, attemptsPath+"/"+url.PathEscape(attemptID)+"/settle",
+		"application/json", "", token, body, &reply, http.StatusOK, http.StatusAccepted)
+	if err != nil {
+		return Settlement{}, err
+	}
+	set := Settlement{Settled: status == http.StatusOK && reply.Settled, Outcome: reply.Outcome}
+	if s, err := strconv.Atoi(h.Get("Retry-After")); err == nil && s > 0 {
+		set.RetryAfter = time.Duration(s) * time.Second
+	}
+	return set, nil
 }
 
 // scrub keeps a transport error's kind without the request line; Go's URL

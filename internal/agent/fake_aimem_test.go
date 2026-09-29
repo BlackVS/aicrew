@@ -20,9 +20,17 @@ func TestMain(m *testing.M) {
 	if code, ok := probeMain(os.Args[1:]); ok {
 		os.Exit(code)
 	}
-	if root := os.Getenv("AICREW_FAKE_AIMEM_ROOT"); root != "" && len(os.Args) > 1 &&
-		(os.Args[1] == "identity" || os.Args[1] == "team-session") {
-		os.Exit(fakeAimem(root, os.Args[1:]))
+	if root := os.Getenv("AICREW_FAKE_AIMEM_ROOT"); root != "" && len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "identity", "team-session":
+			os.Exit(fakeAimem(root, os.Args[1:]))
+		case "reservation":
+			if len(os.Args) > 2 {
+				os.Exit(fakeReservation(root, os.Args[2:]))
+			}
+		case "mcp":
+			os.Exit(fakeMCP(root))
+		}
 	}
 	os.Exit(m.Run())
 }

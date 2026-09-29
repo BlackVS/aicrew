@@ -193,3 +193,79 @@ func (s *serialAimem) Status(ctx context.Context, sessionID string) (string, boo
 	defer unlock()
 	return s.Aimem.Status(ctx, sessionID)
 }
+
+// Reservation runs `aimem reservation ARGS…` under the team session file,
+// with stdin (a body, which may carry a proof) on a pipe. It returns aimem's
+// exit code and its one JSON document; only a failure to run aimem at all is
+// an error.
+func (a ExecAimem) Reservation(ctx context.Context, sessionFile string, stdin []byte, args ...string) (int, []byte, error) {
+	cmd := exec.CommandContext(ctx, a.Command, append([]string{"reservation"}, args...)...)
+	cmd.Env = ScopedEnv(os.Environ(), sessionFile)
+	cmd.Stdin = bytes.NewReader(stdin)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	var exit *exec.ExitError
+	switch {
+	case errors.As(err, &exit):
+		return exit.ExitCode(), out, nil
+	case err != nil:
+		return 0, nil, fmt.Errorf("aimem could not be run: %w", err)
+	}
+	return 0, out, nil
+}
+
+// GetTask reads a task through `aimem mcp` under the team session file: the
+// same binding, context header and online verification as the reservation
+// CLI, which reads the task the same way.
+func (a ExecAimem) GetTask(ctx context.Context, sessionFile, taskID string) (TaskDoc, error) {
+	cmd := exec.CommandContext(ctx, a.Command, "mcp")
+	cmd.Env = ScopedEnv(os.Environ(), sessionFile)
+	var in bytes.Buffer
+	for _, m := range []map[string]any{
+		{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2024-11-05",
+			"capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "aicrew-agent", "version": "1"}}},
+		{"jsonrpc": "2.0", "method": "notifications/initialized"},
+		{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "get_task",
+			"arguments": map[string]any{"id": taskID}}},
+	} {
+		b, _ := json.Marshal(m)
+		in.Write(append(b, '\n'))
+	}
+	cmd.Stdin = &in
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil && len(out) == 0 {
+		return TaskDoc{}, fmt.Errorf("aimem mcp could not be run: %w", err)
+	}
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		var msg struct {
+			ID     json.RawMessage `json:"id"`
+			Result struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				IsError bool `json:"isError"`
+			} `json:"result"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(line, &msg) != nil || string(msg.ID) != "2" {
+			continue
+		}
+		if msg.Error != nil || msg.Result.IsError || len(msg.Result.Content) == 0 {
+			return TaskDoc{}, errors.New("aimem could not read the task")
+		}
+		var doc TaskDoc
+		if err := json.Unmarshal([]byte(msg.Result.Content[0].Text), &doc.Fields); err != nil {
+			return TaskDoc{}, errors.New("aimem's task is not the expected JSON")
+		}
+		if err := json.Unmarshal(doc.Fields["revision"], &doc.Revision); err != nil || doc.Revision < 1 {
+			return TaskDoc{}, errors.New("aimem's task has no revision")
+		}
+		return doc, nil
+	}
+	return TaskDoc{}, errors.New("aimem mcp gave no answer to get_task")
+}

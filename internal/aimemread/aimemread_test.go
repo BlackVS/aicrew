@@ -250,27 +250,46 @@ func TestInvalidReplies(t *testing.T) {
 		status     int
 		code       string
 	}{
-		"an unknown field":            {byProof, `{"state":"none","extra":1}`, 200, CodeInvalidReply},
-		"trailing data":               {byProof, `{"state":"none"} {}`, 200, CodeInvalidReply},
-		"an unknown state":            {byProof, `{"state":"maybe"}`, 200, CodeInvalidReply},
-		"committed without a receipt": {byProof, `{"state":"committed"}`, 200, CodeInvalidReply},
-		"none with a receipt":         {byProof, `{"state":"none","receipt":` + receipt + `}`, 200, CodeInvalidReply},
+		"an unknown field":              {byProof, `{"state":"none","extra":1}`, 200, CodeUnavailable},
+		"a duplicate state, none last":  {byProof, `{"state":"committed","state":"none"}`, 200, CodeUnavailable},
+		"a duplicate state, none first": {byProof, `{"state":"none","receipt":` + receipt + `,"state":"committed"}`, 200, CodeUnavailable},
+		"a duplicate receipt":           {byProof, `{"state":"committed","receipt":` + receipt + `,"receipt":` + receipt + `}`, 200, CodeUnavailable},
+		"a duplicate key in the receipt": {byKey, `{"state":"committed","receipt":` +
+			strings.Replace(receipt, `"fence":"2"`, `"fence":"2","fence":"3"`, 1) + `}`, 200, CodeUnavailable},
+		"none with a null receipt":      {byProof, `{"state":"none","receipt":null}`, 200, CodeUnavailable},
+		"committed with a null receipt": {byProof, `{"state":"committed","receipt":null}`, 200, CodeUnavailable},
+		"a receipt with a null field": {byKey, `{"state":"committed","receipt":` +
+			strings.Replace(receipt, `"member_user_id":"u"`, `"member_user_id":null`, 1) + `}`, 200, CodeUnavailable},
+		"a receipt of another verified mode": {byKey, `{"state":"committed","receipt":` +
+			strings.Replace(receipt, `"verified_mode":"team"`, `"verified_mode":"personal"`, 1) + `}`, 200, CodeUnavailable},
+		"a duplicate key in a hold":   {hold, `{"state":"held","reservation_id":"r-1","reservation_id":"r-2","fence":"2","holder_mode":"external","task_revision":3}`, 200, CodeUnavailable},
+		"held of another holder mode": {hold, `{"state":"held","reservation_id":"r-1","fence":"2","holder_mode":"personal","task_revision":3}`, 200, CodeUnavailable},
+		"held without a holder mode":  {hold, `{"state":"held","reservation_id":"r-1","fence":"2","task_revision":3}`, 200, CodeUnavailable},
+		"held with a closed_by":       {hold, `{"state":"held","reservation_id":"r-1","fence":"2","holder_mode":"external","task_revision":3,"closed_by":"holder_release"}`, 200, CodeUnavailable},
+		"closed with a null time":     {hold, `{"state":"closed","reservation_id":"r-1","closing_fence":"3","closed_by":"holder_release","closed_at":null,"task_revision":5}`, 200, CodeUnavailable},
+		"a JSON array":                {hold, `[{"state":"none"}]`, 200, CodeUnavailable},
+		"a proof's receipt with a malformed fence": {byProof, `{"state":"committed","receipt":` +
+			strings.Replace(receipt, `"fence":"2"`, `"fence":"x"`, 1) + `}`, 200, CodeUnavailable},
+		"trailing data":               {byProof, `{"state":"none"} {}`, 200, CodeUnavailable},
+		"an unknown state":            {byProof, `{"state":"maybe"}`, 200, CodeUnavailable},
+		"committed without a receipt": {byProof, `{"state":"committed"}`, 200, CodeUnavailable},
+		"none with a receipt":         {byProof, `{"state":"none","receipt":` + receipt + `}`, 200, CodeUnavailable},
 		"a receipt for another key": {byKey, `{"state":"committed","receipt":` +
-			strings.Replace(receipt, "k1_9svAO90Pfq8X2wdd", "k1_0svAO90Pfq8X2wdd", 1) + `}`, 200, CodeInvalidReply},
+			strings.Replace(receipt, "k1_9svAO90Pfq8X2wdd", "k1_0svAO90Pfq8X2wdd", 1) + `}`, 200, CodeUnavailable},
 		"a receipt for another task": {byKey, `{"state":"committed","receipt":` +
-			strings.Replace(receipt, "c501", "c502", 1) + `}`, 200, CodeInvalidReply},
+			strings.Replace(receipt, "c501", "c502", 1) + `}`, 200, CodeUnavailable},
 		"a receipt of another operation": {byKey, `{"state":"committed","receipt":` +
-			strings.Replace(receipt, `"update"`, `"claim"`, 1) + `}`, 200, CodeInvalidReply},
+			strings.Replace(receipt, `"update"`, `"claim"`, 1) + `}`, 200, CodeUnavailable},
 		"a receipt without a fence": {byKey, `{"state":"committed","receipt":` +
-			strings.Replace(receipt, `"fence":"2"`, `"fence":""`, 1) + `}`, 200, CodeInvalidReply},
-		"held without a fence":         {hold, `{"state":"held","reservation_id":"r-1","task_revision":3}`, 200, CodeInvalidReply},
-		"held with a closing fence":    {hold, `{"state":"held","reservation_id":"r-1","fence":"2","closing_fence":"3","task_revision":3}`, 200, CodeInvalidReply},
-		"closed without closed_by":     {hold, `{"state":"closed","reservation_id":"r-1","closing_fence":"3","closed_at":"2026-09-28T04:10:00Z","task_revision":5}`, 200, CodeInvalidReply},
-		"closed by an unknown kind":    {hold, `{"state":"closed","reservation_id":"r-1","closing_fence":"3","closed_by":"magic","closed_at":"2026-09-28T04:10:00Z","task_revision":5}`, 200, CodeInvalidReply},
-		"closed with a live fence":     {hold, `{"state":"closed","reservation_id":"r-1","fence":"2","closing_fence":"3","closed_by":"holder_release","closed_at":"2026-09-28T04:10:00Z","task_revision":5}`, 200, CodeInvalidReply},
-		"closed without a time":        {hold, `{"state":"closed","reservation_id":"r-1","closing_fence":"3","closed_by":"holder_release","task_revision":5}`, 200, CodeInvalidReply},
-		"none with fields":             {hold, `{"state":"none","reservation_id":"r-1"}`, 200, CodeInvalidReply},
-		"not JSON":                     {hold, `<html>`, 200, CodeInvalidReply},
+			strings.Replace(receipt, `"fence":"2"`, `"fence":""`, 1) + `}`, 200, CodeUnavailable},
+		"held without a fence":         {hold, `{"state":"held","reservation_id":"r-1","task_revision":3}`, 200, CodeUnavailable},
+		"held with a closing fence":    {hold, `{"state":"held","reservation_id":"r-1","fence":"2","closing_fence":"3","task_revision":3}`, 200, CodeUnavailable},
+		"closed without closed_by":     {hold, `{"state":"closed","reservation_id":"r-1","closing_fence":"3","closed_at":"2026-09-28T04:10:00Z","task_revision":5}`, 200, CodeUnavailable},
+		"closed by an unknown kind":    {hold, `{"state":"closed","reservation_id":"r-1","closing_fence":"3","closed_by":"magic","closed_at":"2026-09-28T04:10:00Z","task_revision":5}`, 200, CodeUnavailable},
+		"closed with a live fence":     {hold, `{"state":"closed","reservation_id":"r-1","fence":"2","closing_fence":"3","closed_by":"holder_release","closed_at":"2026-09-28T04:10:00Z","task_revision":5}`, 200, CodeUnavailable},
+		"closed without a time":        {hold, `{"state":"closed","reservation_id":"r-1","closing_fence":"3","closed_by":"holder_release","task_revision":5}`, 200, CodeUnavailable},
+		"none with fields":             {hold, `{"state":"none","reservation_id":"r-1"}`, 200, CodeUnavailable},
+		"not JSON":                     {hold, `<html>`, 200, CodeUnavailable},
 		"an oversized body":            {hold, `{"state":"none","pad":"` + strings.Repeat("x", MaxReply) + `"}`, 200, CodeUnavailable},
 		"a redirect":                   {hold, ``, 302, CodeUnavailable},
 		"a status without an envelope": {hold, `oops`, 500, CodeUnavailable},
@@ -286,10 +305,63 @@ func TestInvalidReplies(t *testing.T) {
 			})
 			got, err := call(s.client(t, fx), c.path)
 			var e *Error
-			if !errors.As(err, &e) || e.Code != c.code {
-				t.Fatalf("answer %+v, error %v; want %s", got, err, c.code)
+			if !errors.As(err, &e) || e.Code != c.code || !e.Retryable {
+				t.Fatalf("answer %+v, error %v; want a retryable %s", got, err, c.code)
+			}
+			// A refused answer is never also returned.
+			if b, _ := json.Marshal(got); string(b) != `{"state":""}` {
+				t.Fatalf("an answer came back with the error: %s", b)
 			}
 		})
+	}
+}
+
+// A receipt missing any required field, or a closed hold missing any of
+// its fields, is unavailable and retryable, never none.
+func TestRequiredFields(t *testing.T) {
+	fx := loadFixture(t)
+	for _, ex := range fx.ReadScope.Exchanges {
+		var body map[string]json.RawMessage
+		if json.Unmarshal(ex.Response.Body, &body) != nil {
+			t.Fatal(ex.Case)
+		}
+		var drop []string
+		inner := ""
+		if raw, ok := body["receipt"]; ok {
+			var r map[string]json.RawMessage
+			json.Unmarshal(raw, &r)
+			for k := range r {
+				drop = append(drop, k)
+			}
+			inner = "receipt"
+		} else {
+			for k := range body {
+				if k != "state" && k != "own_work_ref" {
+					drop = append(drop, k)
+				}
+			}
+		}
+		for _, field := range drop {
+			t.Run(ex.Case+" without "+field, func(t *testing.T) {
+				var m map[string]json.RawMessage
+				json.Unmarshal(ex.Response.Body, &m)
+				if inner != "" {
+					var r map[string]json.RawMessage
+					json.Unmarshal(m[inner], &r)
+					delete(r, field)
+					m[inner], _ = json.Marshal(r)
+				} else {
+					delete(m, field)
+				}
+				b, _ := json.Marshal(m)
+				s := newStub(t, func(w http.ResponseWriter, r *http.Request) { w.Write(b) })
+				got, err := call(s.client(t, fx), ex.HTTP.Path)
+				var e *Error
+				if !errors.As(err, &e) || e.Code != CodeUnavailable || !e.Retryable {
+					t.Fatalf("answer %+v, error %v", got, err)
+				}
+			})
+		}
 	}
 }
 

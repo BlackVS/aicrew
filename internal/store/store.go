@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 18
+const schemaVersion = 19
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -86,6 +86,9 @@ type Store struct {
 	// found the token's session and before its first write, to force
 	// interleavings.
 	afterTokenLookup func()
+	// beforeRecoveredClose, if set, runs after a recovered closure's first
+	// check and before its transaction: the attempt may change in between.
+	beforeRecoveredClose func()
 
 	// outstandingWork reports whether an agent holds work that must be
 	// reconciled before its identity changes: an open attempt or an offer
@@ -215,7 +218,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	}
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
-		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18}
+		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -405,6 +408,15 @@ var schemaV5 = []string{
 // with a new key (D-b1b-4 (a)): each is an alias of its attempt's pending
 // update step until that step settles, when each is recorded with the step's
 // outcome and dropped here.
+// schemaV19 records an attempt closed as recovered by the reconciler
+// (crew-execution b3b): the read scope's closure evidence for its exact
+// reservation.
+var schemaV19 = []string{
+	`ALTER TABLE attempts ADD COLUMN recovered_by TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN recovered_fence TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN recovered_at TEXT NOT NULL DEFAULT ''`,
+}
+
 var schemaV18 = []string{
 	`CREATE TABLE superseded_updates (
 		request_key   TEXT PRIMARY KEY,

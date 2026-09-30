@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"github.com/BlackVS/aicrew/internal/aimemread"
 	"github.com/BlackVS/aicrew/internal/privatefile"
 	"github.com/BlackVS/aicrew/internal/privatefile/privatefiletest"
+	"github.com/BlackVS/aicrew/internal/reconcile"
 	"github.com/BlackVS/aicrew/internal/store"
 )
 
@@ -161,12 +164,85 @@ func TestNewChecksReadCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s.reader.(*aimemread.Client); !ok {
-		t.Fatalf("the service's read scope is %T", s.reader)
+	if _, ok := s.reader.(*aimemread.Client); !ok || s.loop == nil {
+		t.Fatalf("the service's read scope is %T, loop %v", s.reader, s.loop != nil)
+	}
+	// Serving starts the reconciliation loop, and stopping stops it.
+	var logs syncBuffer
+	s.log = slog.New(slog.NewTextHandler(&logs, nil))
+	s.loop.Log = s.log
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sctx, stop := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- s.Serve(sctx, ln) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(logs.String(), "reconcile: started") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the loop did not start: %s", logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stop()
+	if err := <-served; err != nil {
+		t.Fatalf("serve: %v", err)
 	}
 	// Without a read credential, the service has no read scope.
 	cfg.Aimem.ReadTokenFile = ""
-	if s, err = New(cfg, st, log); err != nil || s.reader != nil {
+	if s, err = New(cfg, st, log); err != nil || s.reader != nil || s.loop != nil {
 		t.Fatalf("no read credential: reader %T, %v", s.reader, err)
+	}
+}
+
+// With no member online, aicrewd's reconciler settles a member's claim and
+// update that aimem committed but the member never settled, and closes as
+// recovered an attempt whose reservation aimem closed outside aicrew: through
+// the production read scope client over HTTPS.
+func TestReconcilerSettlesCrashedSteps(t *testing.T) {
+	readOverHTTPS = true
+	t.Cleanup(func() { readOverHTTPS = false })
+	ctx := context.Background()
+	e := setupCoordination(t)
+	loop := reconcile.New(e.store, e.srv.reader, slogDiscard())
+
+	got := e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-1"))
+	claim, id := stepOf(t, got), attemptOf(t, got)
+	if code := e.aimem.send(t, e.task("task-1"), claim); code != "" {
+		t.Fatalf("aimem refused the claim: %s", code)
+	}
+	// The member crashes: it never settles.
+	if settled, _ := loop.Round(ctx); settled != 1 {
+		t.Fatalf("the claim's round settled %d", settled)
+	}
+	if a, _ := e.store.GetAttempt(ctx, id); a.State != store.AttemptRunning {
+		t.Fatalf("after the round: %+v", a)
+	}
+
+	upd := updateStepOf(t, e.call(t, e.indep.token, AttemptsPath+"/"+id+"/work", "block-1",
+		map[string]string{"intent": "block", "detail": "waiting on design"}))
+	if code := e.aimem.send(t, e.task("task-1"), upd); code != "" {
+		t.Fatalf("aimem refused the update: %s", code)
+	}
+	if settled, _ := loop.Round(ctx); settled != 1 {
+		t.Fatalf("the update's round settled %d", settled)
+	}
+	if a, _ := e.store.GetAttempt(ctx, id); a.Phase != store.PhaseBlocked || a.PendingKey != "" {
+		t.Fatalf("after the update's round: %+v", a)
+	}
+
+	// An admin recovery at aimem closes the hold outside aicrew.
+	a, _ := e.store.GetAttempt(ctx, id)
+	e.aimem.mu.Lock()
+	h := e.aimem.holds["task-1"]
+	h.active, h.closedBy, h.fence = false, "recovery_release", h.fence+1
+	e.aimem.mu.Unlock()
+	if _, closed := loop.Round(ctx); closed != 1 {
+		t.Fatalf("the recovery's round closed %d", closed)
+	}
+	if r, _ := e.store.GetAttempt(ctx, id); r.State != store.AttemptClosed || r.CloseReason != "recovered" ||
+		r.RecoveredBy != "recovery_release" || r.ReservationID != "" || a.ReservationID == "" {
+		t.Fatalf("the recovered attempt: %+v", r)
 	}
 }

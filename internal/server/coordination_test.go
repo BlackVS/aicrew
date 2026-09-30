@@ -356,6 +356,9 @@ type fakeHold struct {
 	workRef string
 	worker  *factWorker
 	active  bool
+	// closedBy, when set on an inactive hold, is how aimem closed it
+	// outside aicrew (C5c-w closure evidence), at fence.
+	closedBy string
 }
 
 // seenFact is a fact the fake aimem accepted, with the raw reply it came in.

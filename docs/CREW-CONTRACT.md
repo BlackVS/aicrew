@@ -576,8 +576,8 @@ begin needs an `Idempotency-Key`; settle does not.
       request's, and the receipts are read after that observation.
     - Until then the step stays pending, however long. Superseding it is
       the way out.
-  - Aicrewd has no read scope until crew-execution b3. Until then, every
-    settle answers `202`: no report is ever trusted.
+  - Without a configured read scope (`read_token_file`), every settle
+    answers `202`: no report is ever trusted.
 - **Refusals** use the envelope above. The step routes add these codes to
   the session API's:
   - `403 attempt_forbidden`: not the session's team, or not its role for
@@ -593,6 +593,45 @@ begin needs an `Idempotency-Key`; settle does not.
 - **Paths.** An attempt ID is 1 to 128 characters from `[A-Za-z0-9._:-]`,
   starting with a letter or digit. Any other path is `404`. The log names
   the route template, never the ID.
+
+### Reconciliation by aicrewd
+
+With a read scope configured, aicrewd settles the steps members left
+pending, and closes attempts whose reservation aimem closed outside aicrew,
+with no member online (crew-execution b3b). It acts only on the read scope's
+answers, as its own reconciler caller.
+
+- **The reconciler's authority.** No route ever acts as the reconciler, and
+  its audit records name it. It may settle a pending step and close an
+  attempt as recovered, and nothing else: it never begins a step, reviews,
+  confirms a delivery or writes to aimem. Every other command refuses it.
+- **Settling.** The reconciler settles by the rules of Settle above, but
+  with no member's report, so it voids nothing, and a member still sending
+  the step is never cut off.
+  - It settles committed only on a committed receipt for that exact step:
+    by one of its proofs, or an update's request key. So a finalize is
+    recorded as finalized only on its own receipt, never because the task
+    is `DONE` in aimem, which other routes such as an admin recovery also
+    reach.
+  - It settles not committed only when the scope's rules make a `none`
+    final: every proof of the step ended or expired at least 10 s earlier,
+    or, for an update, the hold's fence or revision was observed past the
+    request's.
+- **The recovered closure.** An open attempt holding a reservation, with
+  no step pending, closes as `recovered` only when the hold status answers
+  `closed` for exactly its reservation, with a `closing_fence` greater than
+  the fence aicrew confirmed. It records aimem's `closed_by`, the closing
+  fence and the time; the attempt's capacity is free again. `none`, `held`,
+  another reservation's closure or an unchanged fence leave it open. The
+  rule is checked again inside the closing transaction.
+- **Nothing on time alone.** A read that fails, is refused or is malformed
+  settles and closes nothing, however long it lasts.
+- **Pacing.** A round runs every 15 s: pending steps oldest first, then the
+  holds least recently checked first. Its reads stay within 30 in any
+  rolling minute, half of the read credential's 60, the rest being left to
+  members' settles. When aimem answers `rate_limited` or
+  `request_in_progress`, the loop pauses for aimem's `Retry-After`, and at
+  least one round.
 
 ### Working in a team session: a fresh conversation
 

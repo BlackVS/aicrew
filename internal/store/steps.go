@@ -251,11 +251,18 @@ type StepHint string
 type StepReport struct {
 	Outcome StepHint `json:"outcome"`
 	Code    string   `json:"code,omitempty"`
+	// reconciled marks the reconciler's settle, which carries no member's
+	// report: it voids nothing and settles only on what the read scope
+	// shows (ReconcileStep).
+	reconciled bool
 }
 
 var refusalCodeShape = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 func (r StepReport) validate() error {
+	if r.reconciled {
+		return nil
+	}
 	switch r.Outcome {
 	case HintRefused:
 		if !refusalCodeShape.MatchString(r.Code) {
@@ -378,7 +385,7 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 	// Nothing committed yet. A report of a refusal or an unknown outcome
 	// ends the step's proofs, so nothing can commit under them any more; a
 	// report of a commit that the read scope does not show yet waits.
-	if report.Outcome != HintCommitted {
+	if report.Outcome != HintCommitted && !report.reconciled {
 		if err := s.voidStep(ctx, c, a, report, g); err != nil {
 			return a, Settlement{}, err
 		}
@@ -418,7 +425,7 @@ func (s *Store) voidStep(ctx context.Context, c Caller, a Attempt, report StepRe
 	}
 	var out stepRef
 	return s.run(ctx, c, command{
-		op: opVoidStep, scope: a.ID, key: key, authorize: anyCaller,
+		op: opVoidStep, scope: a.ID, key: key, authorize: settleCallers,
 		input: struct {
 			stepRef
 			Report StepReport `json:"report"`

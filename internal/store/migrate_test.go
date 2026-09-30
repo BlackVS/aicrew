@@ -454,8 +454,50 @@ func TestMigrationV17AddsDeliveryConfirmation(t *testing.T) {
 // dropSupersededUpdates takes a store back to before schema v18.
 func dropSupersededUpdates(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropRecoveredColumns(t, raw)
 	if _, err := raw.Exec(`DROP TABLE superseded_updates`); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// dropRecoveredColumns takes a store back to v18.
+func dropRecoveredColumns(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	for _, c := range []string{"recovered_by", "recovered_fence", "recovered_at"} {
+		if _, err := raw.Exec(`ALTER TABLE attempts DROP COLUMN ` + c); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Schema v19 adds the recovered closure's evidence to a populated v18 store
+// and keeps every attempt, none of them recovered.
+func TestMigrationV19AddsRecoveredClosure(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM attempts`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropRecoveredColumns(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 18`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v18 store: %v", err)
+	}
+	defer s2.Close()
+	var after, recovered int
+	if err := s2.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(recovered_by, '')) FROM attempts`).Scan(&after, &recovered); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || recovered != 0 {
+		t.Fatalf("after v19: %d attempts (was %d), %d recovered", after, before, recovered)
 	}
 }
 

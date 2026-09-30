@@ -44,6 +44,10 @@ func (f *fakeAimem) HoldStatus(_ context.Context, task store.TaskRef) (store.Sco
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	h := f.holds[task.TaskID]
+	if h != nil && !h.active && h.closedBy != "" {
+		return store.ScopeHold{State: store.ScopeClosed, ReservationID: h.id, ClosingFence: strconv.Itoa(h.fence),
+			ClosedBy: h.closedBy, ClosedAt: "2026-09-28T04:12:00Z", TaskRevision: f.revision}, nil
+	}
 	if h == nil || !h.active {
 		return store.ScopeHold{State: store.ScopeNone}, nil
 	}

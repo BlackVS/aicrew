@@ -275,13 +275,20 @@ func TestReconcilerReachesTheNewestOfManyProofs(t *testing.T) {
 }
 
 // windowLoop is a reconciliation loop over e's read scope with a clock the
-// test moves and a read window of perMinute.
-func windowLoop(e *coordEnv, perMinute int) (*reconcile.Loop, func()) {
+// test moves and a read window of perMinute. window runs the rounds of one
+// minute at the production cadence, one every Tick, the ones after the
+// budget is spent included.
+func windowLoop(e *coordEnv, perMinute int) (*reconcile.Loop, func(context.Context)) {
 	now := time.Now()
 	loop := reconcile.New(e.store, e.srv.reader, slogDiscard())
 	loop.Now = func() time.Time { return now }
 	loop.PerMinute = perMinute
-	return loop, func() { now = now.Add(time.Minute + time.Second) }
+	return loop, func(ctx context.Context) {
+		for range time.Minute / reconcile.Tick {
+			loop.Round(ctx)
+			now = now.Add(reconcile.Tick)
+		}
+	}
 }
 
 // indepUpdateWithMostKeys has the independent member claim task-1 and leave
@@ -342,15 +349,14 @@ func TestReconcilerFinishesAnUpdateWithManyKeys(t *testing.T) {
 	t.Cleanup(func() { readOverHTTPS = false })
 	ctx := context.Background()
 	e := setupCoordination(t)
-	loop, nextWindow := windowLoop(e, 5)
+	_, window := windowLoop(e, 5)
 	id := indepUpdateWithMostKeys(t, e)
 	e.recoverHold("task-1")
-	for window := 0; window < 5; window++ {
-		loop.Round(ctx)
-		nextWindow()
+	for w := 0; w < 5; w++ {
+		window(ctx)
 		if a, _ := e.store.GetAttempt(ctx, id); a.State == store.AttemptClosed {
-			if a.CloseReason != "recovered" || a.RecoveredBy != "recovery_release" || window < 2 {
-				t.Fatalf("closed as %+v in window %d", a, window)
+			if a.CloseReason != "recovered" || a.RecoveredBy != "recovery_release" || w < 2 {
+				t.Fatalf("closed as %+v in window %d", a, w)
 			}
 			return
 		}
@@ -377,13 +383,12 @@ func TestAnInterruptedStepDoesNotStarveARecoverableHold(t *testing.T) {
 			t.Cleanup(func() { readOverHTTPS = false })
 			ctx := context.Background()
 			e := setupCoordination(t)
-			loop, nextWindow := windowLoop(e, 5)
+			_, window := windowLoop(e, 5)
 			stuck := pending(t, e)
 			recoverable := workerRunning(t, e)
 			e.recoverHold("task-2")
-			for window := 0; window < 2; window++ {
-				loop.Round(ctx)
-				nextWindow()
+			for w := 0; w < 2; w++ {
+				window(ctx)
 			}
 			if a, _ := e.store.GetAttempt(ctx, recoverable); a.State != store.AttemptClosed || a.CloseReason != "recovered" {
 				t.Fatalf("the recoverable hold after two windows: %+v", a)

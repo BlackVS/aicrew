@@ -56,6 +56,7 @@ type Loop struct {
 	reads   []time.Time // the loop's reads in the last minute
 	paused  time.Time   // no read before this
 	checked map[string]time.Time
+	taken   int // reads the budget has granted, ever
 }
 
 // New returns a loop with the default tick and budget.
@@ -109,10 +110,15 @@ func (l *Loop) Round(ctx context.Context) (settled, closed int) {
 	reader := budgeted{l}
 	for _, c := range cands {
 		if c.Pending {
+			before := l.spent()
 			_, set, err := l.Store.ReconcileStep(ctx, reader, c.AttemptID)
 			// A step cut short by the budget kept its progress in the
-			// store; it goes to the back of the line, not the front.
-			l.mark(c.AttemptID)
+			// store; it goes to the back of the line, not the front. A
+			// step refused before its first read was not checked at all
+			// and keeps its place, like a hold whose read was refused.
+			if !errors.Is(err, errBudget) || l.spent() != before {
+				l.mark(c.AttemptID)
+			}
 			if errors.Is(err, errBudget) {
 				return settled, closed
 			}
@@ -166,7 +172,15 @@ func (l *Loop) take() error {
 		return errBudget
 	}
 	l.reads = append(l.reads, now)
+	l.taken++
 	return nil
+}
+
+// spent is how many reads the budget has granted so far.
+func (l *Loop) spent() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.taken
 }
 
 // backOff pauses the loop when aimem asked it to wait.

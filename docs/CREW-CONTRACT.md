@@ -645,7 +645,10 @@ answers, as its own reconciler caller.
   step or a hold, least recently checked first (pending steps first among
   equals). A candidate whose scan the budget interrupts counts as checked:
   it goes to the back of the line and resumes from its recorded progress,
-  so no candidate holds the head of the queue across windows. Its reads
+  so no candidate holds the head of the queue across windows. A candidate
+  the budget refuses before its first read was not checked, and keeps its
+  place: rounds that run with the budget spent move nothing behind the
+  scans that spent it. Its reads
   stay within 30 in any rolling minute, half of the read credential's 60,
   the rest being left to members' settles. When aimem answers
   `rate_limited` or `request_in_progress`, the loop pauses for aimem's

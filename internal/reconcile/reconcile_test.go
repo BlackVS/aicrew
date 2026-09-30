@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -322,5 +323,47 @@ func TestAStepCutShortDoesNotStayFirst(t *testing.T) {
 	c.t = c.t.Add(time.Minute + time.Second)
 	if _, closed := l.Round(context.Background()); closed != 1 {
 		t.Fatalf("the hold waited behind the step cut short: %v", r.order[len(r.order)-3:])
+	}
+}
+
+// mixedStore's "stuck-" steps each cost ten reads and never resolve, like
+// abandoned updates with eight superseded keys whose hold does not move; its
+// other steps settle on one committed receipt.
+type mixedStore struct{ *fakeStore }
+
+func (s mixedStore) ReconcileStep(ctx context.Context, r store.ReservationReader, id string) (store.Attempt, store.Settlement, error) {
+	if !strings.HasPrefix(id, "stuck-") {
+		return s.fakeStore.ReconcileStep(ctx, r, id)
+	}
+	for i := 0; i < 10; i++ {
+		if _, err := r.HoldStatus(ctx, store.TaskRef{TaskID: id}); err != nil {
+			return store.Attempt{}, store.Settlement{}, fmt.Errorf("attempt %s: read scope: %w: %w", id, store.ErrOutcomeUnknown, err)
+		}
+	}
+	return store.Attempt{}, store.Settlement{RetryAfter: time.Second}, nil
+}
+
+// Rounds whose budget is already spent check nothing, so they move nothing
+// behind the scans that spent it: at the production cadence, a round every
+// Tick, committed steps behind three unresolved ten-read scans are settled
+// in the next window, not starved window after window.
+func TestRefusedStepsKeepTheirPlace(t *testing.T) {
+	c := &clock{t: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+	var cands []store.ReconcileCandidate
+	for _, id := range []string{"stuck-a", "stuck-b", "stuck-c", "d", "e", "f", "g"} {
+		cands = append(cands, store.ReconcileCandidate{AttemptID: id, Pending: true})
+	}
+	st := mixedStore{newFakeStore(cands)}
+	r := &fakeReader{commit: true, hold: store.ScopeHold{State: store.ScopeHeld, ReservationID: "r", Fence: "2"}}
+	l := New(st, r, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	l.Now = c.now
+	for round := 0; round <= 4; round++ { // +0 s to +60 s, a round every Tick
+		l.Round(context.Background())
+		c.t = c.t.Add(Tick)
+	}
+	for _, id := range []string{"d", "e", "f", "g"} {
+		if !st.settled[id] {
+			t.Fatalf("step %s not settled after the second window: %v", id, r.order)
+		}
 	}
 }

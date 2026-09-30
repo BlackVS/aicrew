@@ -358,12 +358,18 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 	asked := s.now()
 	if reader != nil {
 		// A proof replaced by a replay may still have been used: any of
-		// the intent's proofs can carry the committed transition.
+		// the intent's proofs can carry the committed transition. The
+		// newest, the only one that may still live, is read first; a proof
+		// whose "none" is already final is not read again.
 		for _, p := range proofs {
+			if p.noneFinal {
+				continue
+			}
 			digest, err := proofDigestP1(p.digest)
 			if err != nil {
 				return a, Settlement{}, err
 			}
+			readAt := s.now()
 			look, err := reader.ReceiptByProof(ctx, digest)
 			if err != nil {
 				return a, pending, fmt.Errorf("attempt %s: read scope: %w: %w", a.ID, ErrOutcomeUnknown, err)
@@ -377,6 +383,14 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 				out, err := s.settleGuarded(ctx, c, a, callOutcome{kind: outcomeCommitted, result: res}, g)
 				return out, Settlement{Settled: true, Outcome: string(outcomeCommitted)}, err
 			case ScopeNone:
+				// A proof that ended or expired commits nothing more once
+				// the grace period after its end has passed: a "none" read
+				// from then on is final for it (none_finality).
+				if !readAt.Before(p.end().Add(NoneFinalAfter)) {
+					if err := s.markNoneFinal(ctx, p.digest, readAt); err != nil {
+						return a, pending, err
+					}
+				}
 			default:
 				return a, pending, fmt.Errorf("attempt %s: read scope answered %q: %w", a.ID, look.State, ErrOutcomeUnknown)
 			}
@@ -398,10 +412,7 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 	}
 	var last time.Time
 	for _, p := range proofs {
-		end := p.expires
-		if !p.ended.IsZero() && p.ended.Before(end) {
-			end = p.ended
-		}
+		end := p.end()
 		if end.After(asked) {
 			return a, pending, nil // a proof still lives: aimem may still commit under it
 		}
@@ -445,6 +456,28 @@ func (s *Store) voidStep(ctx context.Context, c Caller, a Attempt, report StepRe
 type stepProof struct {
 	digest         string
 	expires, ended time.Time
+	// noneFinal: a read scope "none" for this proof was read after its end
+	// and the grace period, so it can never show a commit.
+	noneFinal bool
+}
+
+// end is when the proof stopped being usable: its expiry, or its end if
+// earlier.
+func (p stepProof) end() time.Time {
+	if !p.ended.IsZero() && p.ended.Before(p.expires) {
+		return p.ended
+	}
+	return p.expires
+}
+
+// markNoneFinal records that a proof's "none", read at readAt, is final.
+func (s *Store) markNoneFinal(ctx context.Context, digest string, readAt time.Time) error {
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE coordination_proofs SET none_final_at = ? WHERE digest = ? AND none_final_at = ''`,
+		formatTime(readAt), digest); err != nil {
+		return fmt.Errorf("record a final none: %w", err)
+	}
+	return nil
 }
 
 // stepProofs lists every proof issued for one step, replaced ones included.
@@ -452,8 +485,9 @@ func (s *Store) stepProofs(ctx context.Context, attemptID, requestKey string) ([
 	var out []stepProof
 	err := s.snapshot(ctx, func(q querier) error {
 		rows, err := q.QueryContext(ctx,
-			`SELECT digest, expires_at, ended_at FROM coordination_proofs WHERE attempt_id = ? AND request_key = ?
-			 ORDER BY issued_at, digest`, attemptID, requestKey)
+			`SELECT digest, expires_at, ended_at, none_final_at != '' FROM coordination_proofs
+			 WHERE attempt_id = ? AND request_key = ?
+			 ORDER BY issued_at DESC, rowid DESC`, attemptID, requestKey)
 		if err != nil {
 			return fmt.Errorf("read step proofs: %w", err)
 		}
@@ -461,7 +495,7 @@ func (s *Store) stepProofs(ctx context.Context, attemptID, requestKey string) ([
 		for rows.Next() {
 			var p stepProof
 			var expires, ended string
-			if err := rows.Scan(&p.digest, &expires, &ended); err != nil {
+			if err := rows.Scan(&p.digest, &expires, &ended, &p.noneFinal); err != nil {
 				return err
 			}
 			if p.expires, err = parseTime(expires); err != nil {

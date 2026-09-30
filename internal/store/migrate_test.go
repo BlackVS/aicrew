@@ -468,6 +468,9 @@ func dropRecoveredColumns(t *testing.T, raw *sql.DB) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := raw.Exec(`ALTER TABLE coordination_proofs DROP COLUMN none_final_at`); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // Schema v19 adds the recovered closure's evidence to a populated v18 store

@@ -246,3 +246,29 @@ func TestReconcilerSettlesCrashedSteps(t *testing.T) {
 		t.Fatalf("the recovered attempt: %+v", r)
 	}
 }
+
+// A claim replayed until it has more proofs than the loop reads in a
+// minute, and committed under the newest, is settled by one round: the
+// newest proof is read first.
+func TestReconcilerReachesTheNewestOfManyProofs(t *testing.T) {
+	readOverHTTPS = true
+	t.Cleanup(func() { readOverHTTPS = false })
+	ctx := context.Background()
+	e := setupCoordination(t)
+	loop := reconcile.New(e.store, e.srv.reader, slogDiscard())
+	var claim store.Step
+	var id string
+	for i := 0; i < 31; i++ {
+		got := e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-1"))
+		claim, id = stepOf(t, got), attemptOf(t, got)
+	}
+	if code := e.aimem.send(t, e.task("task-1"), claim); code != "" {
+		t.Fatalf("aimem refused the newest proof: %s", code)
+	}
+	if settled, _ := loop.Round(ctx); settled != 1 {
+		t.Fatalf("the round settled %d", settled)
+	}
+	if a, _ := e.store.GetAttempt(ctx, id); a.State != store.AttemptRunning {
+		t.Fatalf("after the round: %+v", a)
+	}
+}

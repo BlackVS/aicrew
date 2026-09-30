@@ -90,38 +90,43 @@ func (l *Loop) Round(ctx context.Context) (settled, closed int) {
 		l.Log.Warn("reconcile: list the candidates", "error", err.Error())
 		return 0, 0
 	}
-	var holds []store.ReconcileCandidate
-	reader := budgeted{l}
-	for _, c := range cands {
-		if !c.Pending {
-			holds = append(holds, c)
-			continue
-		}
-		_, set, err := l.Store.ReconcileStep(ctx, reader, c.AttemptID)
-		if errors.Is(err, errBudget) {
-			return settled, closed
-		}
-		if err != nil && !errors.Is(err, store.ErrOutcomeUnknown) {
-			l.Log.Warn("reconcile: settle a step", "attempt_id", c.AttemptID, "error", err.Error())
-		}
-		if set.Settled {
-			settled++
-		}
-	}
+	// Every candidate, a pending step or a hold, is taken least recently
+	// checked first, so candidates that stay unresolved cannot use up
+	// every minute's budget ahead of the others; pending steps come first
+	// among equals.
 	l.mu.Lock()
 	if l.checked == nil {
 		l.checked = map[string]time.Time{}
 	}
-	sort.SliceStable(holds, func(i, j int) bool { return l.checked[holds[i].AttemptID].Before(l.checked[holds[j].AttemptID]) })
+	sort.SliceStable(cands, func(i, j int) bool {
+		ci, cj := l.checked[cands[i].AttemptID], l.checked[cands[j].AttemptID]
+		if !ci.Equal(cj) {
+			return ci.Before(cj)
+		}
+		return cands[i].Pending && !cands[j].Pending
+	})
 	l.mu.Unlock()
-	for _, c := range holds {
+	reader := budgeted{l}
+	for _, c := range cands {
+		if c.Pending {
+			_, set, err := l.Store.ReconcileStep(ctx, reader, c.AttemptID)
+			if errors.Is(err, errBudget) {
+				return settled, closed
+			}
+			l.mark(c.AttemptID)
+			if err != nil && !errors.Is(err, store.ErrOutcomeUnknown) {
+				l.Log.Warn("reconcile: settle a step", "attempt_id", c.AttemptID, "error", err.Error())
+			}
+			if set.Settled {
+				settled++
+			}
+			continue
+		}
 		hold, err := reader.HoldStatus(ctx, c.Task)
 		if errors.Is(err, errBudget) {
 			return settled, closed
 		}
-		l.mu.Lock()
-		l.checked[c.AttemptID] = l.Now()
-		l.mu.Unlock()
+		l.mark(c.AttemptID)
 		if err != nil || hold.State != store.ScopeClosed {
 			continue
 		}
@@ -133,6 +138,13 @@ func (l *Loop) Round(ctx context.Context) (settled, closed int) {
 		}
 	}
 	return settled, closed
+}
+
+// mark records that a candidate was just checked.
+func (l *Loop) mark(id string) {
+	l.mu.Lock()
+	l.checked[id] = l.Now()
+	l.mu.Unlock()
 }
 
 // take spends one read of the budget, or reports errBudget.

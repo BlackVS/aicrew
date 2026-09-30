@@ -302,3 +302,118 @@ func TestReconcileCandidates(t *testing.T) {
 		t.Fatalf("after the closure: %+v", got)
 	}
 }
+
+// windowReader lets n reads through, then fails every read, as the loop's
+// budget does until the next window.
+type windowReader struct {
+	*fakeReader
+	left, reads int
+}
+
+func (w *windowReader) spend() error {
+	if w.left == 0 {
+		return errors.New("the read budget is spent")
+	}
+	w.left--
+	w.reads++
+	return nil
+}
+
+func (w *windowReader) ReceiptByProof(ctx context.Context, d string) (ScopeReceiptLookup, error) {
+	if err := w.spend(); err != nil {
+		return ScopeReceiptLookup{}, err
+	}
+	return w.fakeReader.ReceiptByProof(ctx, d)
+}
+
+func (w *windowReader) ReceiptByKey(ctx context.Context, t TaskRef, op ReservationOp, d string) (ScopeReceiptLookup, error) {
+	if err := w.spend(); err != nil {
+		return ScopeReceiptLookup{}, err
+	}
+	return w.fakeReader.ReceiptByKey(ctx, t, op, d)
+}
+
+func (w *windowReader) HoldStatus(ctx context.Context, t TaskRef) (ScopeHold, error) {
+	if err := w.spend(); err != nil {
+		return ScopeHold{}, err
+	}
+	return w.fakeReader.HoldStatus(ctx, t)
+}
+
+func proofCounts(t *testing.T, s *Store, attemptID string) (all, final int) {
+	t.Helper()
+	if err := s.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(none_final_at, '')) FROM coordination_proofs WHERE attempt_id = ?`,
+		attemptID).Scan(&all, &final); err != nil {
+		t.Fatal(err)
+	}
+	return all, final
+}
+
+// A step whose proofs outnumber a budget window still settles: its newest
+// proof, the one that may carry the commit, is read first, and a proof's
+// final "none" is recorded so later windows go on from there.
+func TestReconcileStepProgressesAcrossBudgetWindows(t *testing.T) {
+	ctx := context.Background()
+	replayed := func(t *testing.T) (claimStopEnv, Attempt, Step) {
+		e := newClaimStopEnv(t)
+		a, st, err := e.s.BeginClaimWithToken(ctx, "claim-1", e.indepTk, e.claimInput("task-1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 30; i++ {
+			if _, st, err = e.s.BeginClaimWithToken(ctx, "claim-1", e.indepTk, e.claimInput("task-1")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if all, _ := proofCounts(t, e.s, a.ID); all != 31 {
+			t.Fatalf("%d proofs", all)
+		}
+		return e, a, st
+	}
+
+	t.Run("committed under the newest", func(t *testing.T) {
+		e, a, st := replayed(t)
+		e.reader.commit(st.CoordinationProof, receiptFor(a, st, "res-1", "1", 4))
+		w := &windowReader{fakeReader: e.reader, left: 30}
+		if cur, set, err := e.s.ReconcileStep(ctx, w, a.ID); err != nil || !set.Settled || cur.State != AttemptRunning || w.reads != 1 {
+			t.Fatalf("settled %+v after %d reads: %v", set, w.reads, err)
+		}
+	})
+
+	t.Run("none under every proof", func(t *testing.T) {
+		e, a, _ := replayed(t)
+		// A "none" read while a proof may still commit, or within the grace
+		// after it ended, is not final.
+		w := &windowReader{fakeReader: e.reader, left: 30}
+		e.s.ReconcileStep(ctx, w, a.ID)
+		if _, final := proofCounts(t, e.s, a.ID); final != 0 {
+			t.Fatalf("%d proofs final before the grace", final)
+		}
+		*e.now = e.now.Add(ProofLifetime + NoneFinalAfter + time.Second)
+		w = &windowReader{fakeReader: e.reader, left: 30}
+		if _, set, err := e.s.ReconcileStep(ctx, w, a.ID); set.Settled || !errors.Is(err, ErrOutcomeUnknown) || w.reads != 30 {
+			t.Fatalf("the first window: %+v after %d reads, %v", set, w.reads, err)
+		}
+		if _, final := proofCounts(t, e.s, a.ID); final != 30 {
+			t.Fatalf("%d proofs recorded final after the first window", final)
+		}
+		w = &windowReader{fakeReader: e.reader, left: 30}
+		cur, set, err := e.s.ReconcileStep(ctx, w, a.ID)
+		if err != nil || !set.Settled || set.Outcome != "not_committed" || cur.State != AttemptClosed || w.reads != 1 {
+			t.Fatalf("the second window: %+v %+v after %d reads, %v", cur, set, w.reads, err)
+		}
+	})
+
+	t.Run("no final none before the grace", func(t *testing.T) {
+		e := newClaimStopEnv(t)
+		a, _, err := e.s.BeginClaimWithToken(ctx, "claim-1", e.indepTk, e.claimInput("task-1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		*e.now = e.now.Add(ProofLifetime + NoneFinalAfter - time.Second)
+		e.s.ReconcileStep(ctx, e.reader, a.ID)
+		if _, final := proofCounts(t, e.s, a.ID); final != 0 {
+			t.Fatalf("a none read within the grace was recorded final")
+		}
+	})
+}

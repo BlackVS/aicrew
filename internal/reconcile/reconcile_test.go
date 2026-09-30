@@ -264,3 +264,33 @@ func TestRunStops(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 }
+
+// slowStore's pending steps each cost two reads and never resolve, like an
+// abandoned update whose hold does not move; its holds close when read.
+type slowStore struct{ *fakeStore }
+
+func (s slowStore) ReconcileStep(ctx context.Context, r store.ReservationReader, id string) (store.Attempt, store.Settlement, error) {
+	for i := 0; i < 2; i++ {
+		if _, err := r.HoldStatus(ctx, store.TaskRef{TaskID: id}); err != nil {
+			return store.Attempt{}, store.Settlement{}, fmt.Errorf("attempt %s: read scope: %w: %w", id, store.ErrOutcomeUnknown, err)
+		}
+	}
+	return store.Attempt{}, store.Settlement{RetryAfter: time.Second}, nil
+}
+
+// Steps that stay unresolved and cost more than a window cannot starve the
+// work behind them: every candidate is taken least recently checked first.
+func TestUnresolvedStepsDoNotStarve(t *testing.T) {
+	c := &clock{t: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+	st := slowStore{newFakeStore(candidates(20, 1))}
+	r := &fakeReader{hold: store.ScopeHold{State: store.ScopeClosed, ReservationID: "r", ClosingFence: "3", ClosedBy: "recovery_release"}}
+	l := New(st, r, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	l.Now = c.now
+	if _, closed := l.Round(context.Background()); closed != 0 {
+		t.Fatal("the first window reached the hold behind 40 reads of steps")
+	}
+	c.t = c.t.Add(time.Minute + time.Second)
+	if _, closed := l.Round(context.Background()); closed != 1 {
+		t.Fatalf("the second window did not reach the hold: %d reads, %v", r.reads, r.order)
+	}
+}

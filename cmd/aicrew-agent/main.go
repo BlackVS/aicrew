@@ -9,6 +9,8 @@
 //	aicrew-agent session leave  -home DIR   prove afresh, resume and leave
 //	aicrew-agent step OP [-home DIR] [-attempt ID] [-task ID] [-body JSON|-]
 //	                                        ask the running launcher for a step
+//	aicrew-agent join -label LABEL [-home DIR] -url URL -tls-trust-mode M -tls-trust-value V -aimem-hub NAME
+//	                                        redeem an invitation and prepare the agent home
 //
 // The configuration is the "aicrew" section of <DIR>/agent.json.
 package main
@@ -39,7 +41,8 @@ const (
 
 const usage = `usage: aicrew-agent session start|status|leave -home DIR
        aicrew-agent run -client claude|opencode -home DIR [-- CLIENT ARGS]
-       aicrew-agent step OP [-home DIR] [-attempt ID] [-task ID] [-body JSON|-]`
+       aicrew-agent step OP [-home DIR] [-attempt ID] [-task ID] [-body JSON|-]
+       aicrew-agent join -label LABEL [-home DIR] -url URL -tls-trust-mode M -tls-trust-value V -aimem-hub NAME`
 
 // clients are the agent clients run can start, by the name -client takes.
 var clients = map[string]bool{"claude": true, "opencode": true}
@@ -92,6 +95,10 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "step" {
 		os.Exit(step(context.Background(), os.Args[2:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "join" {
+		os.Exit(join(context.Background(), os.Args[2:], agent.IsTerminal(os.Stdin), os.Stdout, os.Stderr,
+			joinDeps(os.Stderr)))
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	// The first interrupt starts a clean leave; a second one stops at once.

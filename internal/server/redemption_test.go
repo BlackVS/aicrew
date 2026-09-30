@@ -301,7 +301,7 @@ func TestInvitationCompletionRaceOneWinner(t *testing.T) {
 }
 
 // The per-address limits, and the refusal counter in the log: a running
-// total per code, never a code, key or digest; the totals again at shutdown.
+// total per code, never a code, key or digest.
 func TestInvitationRedemptionLimitsAndCounter(t *testing.T) {
 	if BeginsPerMinute != 10 || CompletionsPerMinute != 20 {
 		t.Fatal("the redemption limits differ from 10 and 20 a minute")
@@ -344,12 +344,5 @@ func TestInvitationRedemptionLimitsAndCounter(t *testing.T) {
 	if counted != BeginsPerMinute+CompletionsPerMinute || last["code"] != "rate_limited" {
 		t.Fatalf("counted %d invitation_invalid refusals; last %v", counted, last)
 	}
-	e.cancel()
-	err := <-e.done
-	e.done <- err
-	final := e.logs.String()
-	if !strings.Contains(final, `"invitation redemption refusals since start","invitation_invalid":30,"rate_limited":2`) {
-		t.Fatalf("no totals at shutdown:\n%s", final[max(0, len(final)-600):])
-	}
-	noSecrets(t, "the log", final, code, bad)
+	noSecrets(t, "the log", logs, code, bad)
 }

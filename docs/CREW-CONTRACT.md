@@ -415,10 +415,9 @@ trusts a caller it is given, and a test enforces that.
 
   **Limits:** 10 begins and 20 completions a minute per client address,
   with the limiter above. **Refusal counter:** each refusal on these two
-  routes adds to an in-memory total per code. The log line of every
-  refusal carries its code's running total, and the totals since start are
-  logged at shutdown. A line holds only the route and the code: never a code,
-  key, digest or address.
+  routes adds to an in-memory total per code, and the log line of every
+  refusal carries its code's running total. A line holds only the route, the
+  code and the count: never an invitation code, key, digest or address.
 
 ### Attempt steps
 

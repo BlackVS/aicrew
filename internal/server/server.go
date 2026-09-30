@@ -49,9 +49,7 @@ type Server struct {
 	// Per-address limits on the unauthenticated routes, and per-session on
 	// handle refresh.
 	challengeLimit, tokenLimit, refreshLimit *limiter
-	// Per-address limits on invitation redemption, and its refusal counts.
-	beginLimit, completeLimit *limiter
-	redemptionRefusals        refusalCounter
+	redemption                               redemptionState // redemption.go
 }
 
 // Option adjusts a Server before it serves.
@@ -109,8 +107,6 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 	s.challengeLimit = newLimiter(ChallengesPerMinute, time.Minute)
 	s.tokenLimit = newLimiter(ExchangesPerMinute, time.Minute)
 	s.refreshLimit = newLimiter(RefreshesPerMinute, time.Minute)
-	s.beginLimit = newLimiter(BeginsPerMinute, time.Minute)
-	s.completeLimit = newLimiter(CompletionsPerMinute, time.Minute)
 	s.handle(http.MethodGet, "/healthz", s.health)
 	s.handleOwnBody(http.MethodPost, IntrospectPath, s.introspect)
 	s.handleOwnBody(http.MethodPost, CoordinationPath, s.coordination)
@@ -118,9 +114,8 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 	s.handleOwnBody(http.MethodPost, TokenPath, s.token)
 	s.handle(http.MethodGet, SessionPath, s.sessionStatus)
 	s.handleOwnBody(http.MethodPost, LeavePath, s.leave)
-	s.handleOwnBody(http.MethodPost, InvitationBeginPath, s.beginInvitation)
-	s.handleOwnBody(http.MethodPost, InvitationCompletePath, s.completeInvitation)
 	s.registerAttempts()
+	s.registerRedemption()
 	s.http = &http.Server{
 		Handler:           s.logged(s.limitBody(http.HandlerFunc(s.dispatch))),
 		ReadHeaderTimeout: readHeaderTimeout,
@@ -158,9 +153,6 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	case <-ctx.Done():
 	}
 	s.log.Info("shutting down")
-	if counts := s.redemptionRefusals.snapshot(); len(counts) > 0 {
-		s.log.Info("invitation redemption refusals since start", counts...)
-	}
 	sctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.cfg.ShutdownTimeout))
 	defer cancel()
 	err := s.http.Shutdown(sctx)

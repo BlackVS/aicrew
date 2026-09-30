@@ -3,7 +3,6 @@ package server
 import (
 	"errors"
 	"net/http"
-	"sort"
 	"sync"
 	"time"
 
@@ -33,6 +32,21 @@ const (
 	maxCompleteBody = 4 << 10
 )
 
+// redemptionState is the Server's redemption state: per-address limits and
+// the refusal counts.
+type redemptionState struct {
+	begin, complete *limiter
+	refusals        refusalCounter
+}
+
+// registerRedemption registers the two routes and their limits.
+func (s *Server) registerRedemption() {
+	s.redemption.begin = newLimiter(BeginsPerMinute, time.Minute)
+	s.redemption.complete = newLimiter(CompletionsPerMinute, time.Minute)
+	s.handleOwnBody(http.MethodPost, InvitationBeginPath, s.beginInvitation)
+	s.handleOwnBody(http.MethodPost, InvitationCompletePath, s.completeInvitation)
+}
+
 // refusalCounter counts the redemption routes' refusals by code, in memory,
 // for the operator's log. It holds nothing from a request: no code, key,
 // digest or address.
@@ -51,27 +65,10 @@ func (c *refusalCounter) add(code string) int64 {
 	return c.counts[code]
 }
 
-// snapshot returns the counts as alternating code and total, in code order,
-// for a log record.
-func (c *refusalCounter) snapshot() []any {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	codes := make([]string, 0, len(c.counts))
-	for code := range c.counts {
-		codes = append(codes, code)
-	}
-	sort.Strings(codes)
-	out := make([]any, 0, 2*len(codes))
-	for _, code := range codes {
-		out = append(out, code, c.counts[code])
-	}
-	return out
-}
-
 // refuseRedemption counts the refusal, logs the running total for its code
 // and answers with the envelope.
 func (s *Server) refuseRedemption(w http.ResponseWriter, r *http.Request, code string, retryAfter time.Duration) {
-	n := s.redemptionRefusals.add(code)
+	n := s.redemption.refusals.add(code)
 	s.log.Info("invitation redemption refused", "route", s.routeOf(r), "code", code, "count", n)
 	s.refuseSession(w, r, code, false, retryAfter)
 }
@@ -92,7 +89,7 @@ func redemptionCode(err error) string {
 // beginInvitation starts redeeming an invitation: {"code": ...} with an
 // Idempotency-Key, answered with a challenge for the holder's aimem proof.
 func (s *Server) beginInvitation(w http.ResponseWriter, r *http.Request) {
-	if ok, wait := s.beginLimit.allow(clientAddr(r)); !ok {
+	if ok, wait := s.redemption.begin.allow(clientAddr(r)); !ok {
 		s.refuseRedemption(w, r, "rate_limited", wait)
 		return
 	}
@@ -134,7 +131,7 @@ type completionReply struct {
 // completeInvitation finishes redeeming an invitation:
 // {"code": ..., "challenge_id": ..., "receipt": ...} with an Idempotency-Key.
 func (s *Server) completeInvitation(w http.ResponseWriter, r *http.Request) {
-	if ok, wait := s.completeLimit.allow(clientAddr(r)); !ok {
+	if ok, wait := s.redemption.complete.allow(clientAddr(r)); !ok {
 		s.refuseRedemption(w, r, "rate_limited", wait)
 		return
 	}

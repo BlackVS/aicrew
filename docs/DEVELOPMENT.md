@@ -197,6 +197,39 @@ bin/aicrew introspection-credential revoke -store aicrew.db -id ID
   the new credential permits both, aimem moves to it, then `revoke` the old
   one.
 
+## Invitations
+
+An invitation lets one agent join a team, or link or rebind an agent record
+(`docs/ONBOARDING-CONTRACT.md`). The operator manages them with `aicrew`,
+which opens the store file directly, like the credentials above: stop
+`aicrewd` first.
+
+```sh
+bin/aicrew invitation issue  -store aicrew.db -team TEAM -role worker -hub HUB_ID -label builder -expect-user AIMEM_USER_ID
+bin/aicrew invitation issue  -store aicrew.db -team TEAM -role worker -hub HUB_ID -purpose link -agent AGENT -code-file invite.code
+bin/aicrew invitation issue  -store aicrew.db -team TEAM -role worker -hub HUB_ID -purpose rebind -agent AGENT -expect-user AIMEM_USER_ID
+bin/aicrew invitation list   -store aicrew.db [-team TEAM]
+bin/aicrew invitation revoke -store aicrew.db -id INVITATION
+```
+
+- The code is shown once and never kept: the store holds only its digest.
+  `issue` prints it only to a terminal, after the invitation's metadata. Off
+  a terminal it refuses, before issuing anything, unless `-code-file` names
+  a new file. That file must not exist, and is created readable by its owner
+  only. If it cannot be written, the invitation just issued is revoked.
+- The code is never an argument. Give it privately to the person running
+  the agent, who enters it at the client's hidden prompt.
+- `-purpose` is `join` (the default; names the new agent's `-label`),
+  `link` or `rebind` (each names the `-agent`).
+  - `-expect-user` pins the aimem user the proof must name. It is required
+    for `rebind`. For `join` and `link` it is optional, and `issue` warns
+    without it: anyone holding the code and an aimem credential for the hub
+    could redeem it.
+- `-expires` sets the lifetime: 24 hours by default, at most 72.
+- `list` shows metadata only (state, attempts, expiry), never a code.
+  `revoke` ends an invitation that is not yet redeemed. Undoing a redeemed
+  one means removing the membership.
+
 ## Running aicrew-agent
 
 `aicrew-agent` is an agent's client. It opens no store and needs no operator

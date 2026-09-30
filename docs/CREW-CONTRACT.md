@@ -323,14 +323,16 @@ session.
 ## Client session API
 
 `aicrewd` serves an agent's client these routes over its TLS listener. They
-call only the store operations that authenticate by an aimem proof or a
-session token; no route reaches an operation that trusts a caller it is
-given, and a test enforces that.
+call only the store operations that authenticate by an aimem proof, a
+session token or an invitation code; no route reaches an operation that
+trusts a caller it is given, and a test enforces that.
 
 | Route | Authentication | Purpose |
 | --- | --- | --- |
 | `POST /v1/crew/challenges`, JSON `{"agent_id"}` | none; rate-limited | Issue a challenge. Reply: `challenge_id`, `hub_id`, `service_id`, `expires_at`. |
 | `POST /v1/crew/token`, form-encoded | the proof, or the session token | RFC 8693 exchange: entry, resume or handle refresh ("Standards mapping"). |
+| `POST /v1/crew/invitations/begin`, JSON `{"code"}` | the invitation code; rate-limited | Begin redeeming an invitation. Reply: `challenge_id`, `hub_id`, `service_id`, `expires_at`. |
+| `POST /v1/crew/invitations/complete`, JSON `{"code", "challenge_id", "receipt"}` | the invitation code and an aimem receipt; rate-limited | Complete it. Reply: `agent_id`, `team_id`, `role`, `hub_id`, `user_id`, `created`, `rebound`, `rotated`; no secret. |
 | `GET /v1/crew/session` | `Authorization: Bearer` session token | The token's session, hub, user and token ID and expiry. Changes nothing. |
 | `POST /v1/crew/session/leave`, empty body or `{}` | `Authorization: Bearer` session token | Leave under the leave rules. |
 | `POST /v1/crew/attempts` | `Authorization: Bearer` session token | Begin an offer ("Attempt steps"). |
@@ -388,10 +390,34 @@ given, and a test enforces that.
   agent ID alike, but a challenge it issues confirms that the ID is a
   linked agent. That is accepted: agent IDs are random, and the route is
   rate-limited.
-- **Configuration.** Entry and resume need the `aimem` section of the
-  service's configuration (the hub's origin, TLS trust and the redemption
-  bearer file); without it they are refused as `aimem_unconfigured`, and
-  the other routes work.
+- **Configuration.** Entry, resume and invitation completion need the
+  `aimem` section of the service's configuration (the hub's origin, TLS
+  trust and the redemption bearer file); without it they are refused as
+  `aimem_unconfigured`, and the other routes work.
+- **Invitation redemption** ([onboarding contract](ONBOARDING-CONTRACT.md),
+  "Redemption"). The code and the aimem receipt travel only in the JSON body:
+  never in the path, the query, a header, a log line, an audit record or a
+  refusal. Each route takes its key in the `Idempotency-Key` header, as the
+  other routes do: the begin's key is the redemption key, the completion's
+  the completion key, with the contract's retry rules. The refusals are the
+  envelope's:
+  - `invitation_invalid` (`403`) is the one non-disclosing answer for an
+    unknown, malformed, expired, revoked, redeemed or locked invitation;
+    next action: ask the operator for a new invitation;
+  - `challenge_invalid` (`400`): begin again with a new key;
+  - `proof_invalid`, `credential_inactive` and `identity_mismatch` as at
+    entry;
+  - `identity_already_linked` (`409`, one aimem user links to one agent) and
+    `role_conflict` (`409`, role changes are operator operations): ask the
+    operator;
+  - `work_outstanding` (`409`) for a rebind while the agent has open work;
+  - `request_in_progress` and `identity_unavailable`, the retryable `503`.
+
+  **Limits:** 10 begins and 20 completions a minute per client address,
+  with the limiter above. **Refusal counter:** each refusal on these two
+  routes adds to an in-memory total per code, and the log line of every
+  refusal carries its code's running total. A line holds only the route, the
+  code and the count: never an invitation code, key, digest or address.
 
 ### Attempt steps
 

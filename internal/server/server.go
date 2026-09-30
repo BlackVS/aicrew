@@ -49,6 +49,7 @@ type Server struct {
 	// Per-address limits on the unauthenticated routes, and per-session on
 	// handle refresh.
 	challengeLimit, tokenLimit, refreshLimit *limiter
+	redemption                               redemptionState // redemption.go
 }
 
 // Option adjusts a Server before it serves.
@@ -114,6 +115,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 	s.handle(http.MethodGet, SessionPath, s.sessionStatus)
 	s.handleOwnBody(http.MethodPost, LeavePath, s.leave)
 	s.registerAttempts()
+	s.registerRedemption()
 	s.http = &http.Server{
 		Handler:           s.logged(s.limitBody(http.HandlerFunc(s.dispatch))),
 		ReadHeaderTimeout: readHeaderTimeout,
@@ -217,6 +219,8 @@ func (s *Server) refuseShared(w http.ResponseWriter, r *http.Request, status int
 	case key == ChallengesPath, key == TokenPath, key == SessionPath, key == LeavePath,
 		key == AttemptsPath, strings.HasPrefix(key, AttemptsPath+"/"):
 		s.refuseSession(w, r, code, key == TokenPath, 0)
+	case key == InvitationBeginPath, key == InvitationCompletePath:
+		s.refuseRedemption(w, r, code, 0) // redemption.go: counted, with the envelope
 	default:
 		writeJSON(w, status, map[string]string{"code": code})
 	}

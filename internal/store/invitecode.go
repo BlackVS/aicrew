@@ -1,81 +1,49 @@
 package store
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"strings"
+
+	"github.com/BlackVS/aicrew/internal/invitecode"
 )
 
 // Invitation codes are bearer capabilities (docs/ONBOARDING-CONTRACT.md).
-//
-// A code is 26 random Crockford base32 characters (130 bits) followed by two
-// checksum characters, shown in groups of four: XXXX-XXXX-...-XXXX. The
-// trusted caller generates it with GenerateInvitationCode and shows it once;
-// the store keeps only its digest. Crockford base32 has no I, L, O or U, and
-// parsing accepts common confusions (O as 0, I and L as 1), any case, and
-// optional separators.
+// Their text form lives in internal/invitecode, shared with the agent's
+// client; the trusted caller generates a code with GenerateInvitationCode
+// and shows it once, and the store keeps only its digest.
 
 const (
-	codeAlphabet  = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-	codeBodyLen   = 26 // 26 characters × 5 bits = 130 random bits
-	codeCheckLen  = 2
+	codeAlphabet  = invitecode.Alphabet
+	codeBodyLen   = invitecode.BodyLen
+	codeCheckLen  = invitecode.CheckLen
 	codeDigestTag = "aicrew-invitation-v1:"
 )
 
 // GenerateInvitationCode returns a new invitation code. The caller shows it
 // once and passes it to IssueInvitation; the code is never stored.
 func GenerateInvitationCode() (Secret, error) {
-	var raw [codeBodyLen]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return Secret{}, fmt.Errorf("generate invitation code: %w", err)
+	code, err := invitecode.Generate()
+	if err != nil {
+		return Secret{}, err
 	}
-	body := make([]byte, codeBodyLen)
-	for i, b := range raw {
-		body[i] = codeAlphabet[b&31] // 256 is a multiple of 32: uniform
-	}
-	full := string(body) + codeChecksum(string(body))
-	var groups []string
-	for i := 0; i < len(full); i += 4 {
-		groups = append(groups, full[i:min(i+4, len(full))])
-	}
-	return NewSecret(strings.Join(groups, "-")), nil
+	return NewSecret(code), nil
 }
 
 // invitationCodeDigest normalizes a code, verifies its checksum and returns
 // the digest the store keeps. The code itself is never returned or kept.
 func invitationCodeDigest(code Secret) (string, error) {
-	var b strings.Builder
-	for _, r := range strings.ToUpper(code.Reveal()) {
-		switch r {
-		case '-', ' ':
-			continue
-		case 'O':
-			r = '0'
-		case 'I', 'L':
-			r = '1'
-		}
-		if r > 127 || !strings.ContainsRune(codeAlphabet, r) {
-			return "", fmt.Errorf("%w: invitation code has an invalid character", ErrInvalid)
-		}
-		b.WriteRune(r)
+	norm, err := invitecode.Normalize(code.Reveal())
+	if errors.Is(err, invitecode.ErrMalformed) {
+		return "", fmt.Errorf("%w: %s", ErrInvalid, err.Error())
 	}
-	norm := b.String()
-	if len(norm) != codeBodyLen+codeCheckLen {
-		return "", fmt.Errorf("%w: invitation code has the wrong length", ErrInvalid)
-	}
-	body, check := norm[:codeBodyLen], norm[codeBodyLen:]
-	if codeChecksum(body) != check {
-		return "", fmt.Errorf("%w: invitation code checksum does not match", ErrInvalid)
+	if err != nil {
+		return "", err
 	}
 	sum := sha256.Sum256([]byte(codeDigestTag + norm))
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// codeChecksum is two base32 characters from the first ten bits of the
-// body's SHA-256: it catches typing errors, not tampering.
-func codeChecksum(body string) string {
-	h := sha256.Sum256([]byte(body))
-	return string([]byte{codeAlphabet[h[0]>>3], codeAlphabet[(h[0]&7)<<2|h[1]>>6]})
-}
+// codeChecksum is invitecode.Checksum, kept for the store's tests.
+func codeChecksum(body string) string { return invitecode.Checksum(body) }

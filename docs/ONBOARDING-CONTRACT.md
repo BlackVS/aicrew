@@ -1,10 +1,13 @@
 # Onboarding and identity-link authorization contract
 
-Status: proposed design for review (task crew-onboarding design). Nothing
-here is implemented. It fixes who may start and complete identity linking,
-how invitations are scoped and redeemed, and how retries, expiry, revocation
-and recovery behave. Wire encoding, code formats, the hub CLI and the client
-bootstrap remain implementation reviews. Updated 2026-09-25.
+Status: reviewed design (task crew-onboarding design). It fixes who may
+start and complete identity linking, how invitations are scoped and
+redeemed, and how retries, expiry, revocation and recovery behave.
+Implemented: the invitation store and redemption (crew-onboarding 1 and 2),
+and the invitation surface (1a81-3): the operator's `aicrew invitation`
+command and the `aicrewd` begin and complete routes (CREW-CONTRACT, "Client
+session API"). The client bootstrap remains an implementation review.
+Updated 2026-09-30.
 
 Parent contracts, pinned:
 

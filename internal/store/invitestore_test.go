@@ -424,3 +424,44 @@ func TestRedemptionComposesAtomically(t *testing.T) {
 		t.Fatal("a redeemed invitation completed twice")
 	}
 }
+
+// The operator's listing (1a81-3): operator only, newest first, and never a
+// code or its digest.
+func TestListInvitations(t *testing.T) {
+	s, _ := openTemp(t)
+	ctx := context.Background()
+	tm := mustTeam(t, s, "t1", "crew")
+	a := mustAgent(t, s, "a1", "builder")
+	var zero Caller
+	if _, err := s.ListInvitations(ctx, zero); !errors.Is(err, ErrForbidden) {
+		t.Errorf("zero caller list: %v", err)
+	}
+	if _, err := s.ListInvitations(ctx, agentCaller(t, a.ID)); !errors.Is(err, ErrForbidden) {
+		t.Errorf("agent caller list: %v", err)
+	}
+	if got, err := s.ListInvitations(ctx, operator(t)); err != nil || len(got) != 0 {
+		t.Fatalf("empty list: %v %v", got, err)
+	}
+	first, second := newCode(t), newCode(t)
+	older := issueJoin(t, s, "k1", tm.ID, first)
+	newer := issueJoin(t, s, "k2", tm.ID, second)
+	revoked, err := s.RevokeInvitation(ctx, operator(t), "r1", older.ID, older.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListInvitations(ctx, operator(t))
+	if err != nil || len(got) != 2 {
+		t.Fatalf("list: %v %v", got, err)
+	}
+	if got[0].ID != newer.ID || got[1].ID != older.ID || got[1].State != InvitationRevoked || got[1].Revision != revoked.Revision {
+		t.Fatalf("list order or state: %+v", got)
+	}
+	shown, _ := json.Marshal(got)
+	for _, code := range []Secret{first, second} {
+		digest, _ := invitationCodeDigest(code)
+		if strings.Contains(string(shown), strings.ReplaceAll(code.Reveal(), "-", "")) || strings.Contains(string(shown), code.Reveal()) ||
+			strings.Contains(string(shown), digest) || strings.Contains(string(shown), "digest") {
+			t.Fatalf("the listing exposes code material: %s", shown)
+		}
+	}
+}

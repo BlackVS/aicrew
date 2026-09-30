@@ -115,6 +115,14 @@ var sessionRefusals = map[string]struct {
 		"aicrew or aimem could not answer now; nothing was applied.", "Retry later with the same key."},
 	"aimem_unconfigured": {http.StatusServiceUnavailable, "temporarily_unavailable", false,
 		"aicrew cannot verify aimem proofs.", "The operator configures and checks aicrew's aimem peer."},
+	// Invitation redemption (docs/ONBOARDING-CONTRACT.md).
+	"invitation_invalid": {http.StatusForbidden, "", false,
+		"The invitation is not valid.", "Ask the operator for a new invitation."},
+	"identity_already_linked": {http.StatusConflict, "", false,
+		"This aimem identity is already linked to another agent.",
+		"Ask the operator: one aimem user links to one agent, and moving it takes a rebind invitation."},
+	"role_conflict": {http.StatusConflict, "", false,
+		"The agent is already a member of this team in another role.", "Ask the operator: role changes are operator operations."},
 	// The attempt step routes.
 	"attempt_forbidden": {http.StatusForbidden, "", false,
 		"The session may not act on this attempt.", "Act only on your team's attempts, in your role."},

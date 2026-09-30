@@ -213,6 +213,42 @@ func (s *Store) GetInvitation(ctx context.Context, id string) (Invitation, error
 	return inv, err
 }
 
+// ListInvitations lists every invitation, newest first, for the operator.
+// Operator only. It never includes a code or its digest.
+func (s *Store) ListInvitations(ctx context.Context, c Caller) ([]Invitation, error) {
+	if err := requireOperator(c); err != nil {
+		return nil, err
+	}
+	out := []Invitation{}
+	err := s.snapshot(ctx, func(q querier) error {
+		rows, err := q.QueryContext(ctx, `SELECT id FROM invitations ORDER BY created_at DESC, id DESC`)
+		if err != nil {
+			return fmt.Errorf("list invitations: %w", err)
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return err
+		}
+		for _, id := range ids {
+			inv, err := getInvitation(ctx, q, id)
+			if err != nil {
+				return err
+			}
+			out = append(out, inv)
+		}
+		return nil
+	})
+	return out, err
+}
+
 // --- package-internal operations for redemption ---
 
 // resolveForBegin finds the invitation for a presented code when a holder

@@ -4,6 +4,7 @@
 //	aicrew introspection-credential rotate -store PATH -hub HUB -secret-file PATH [-operations LIST]
 //	aicrew introspection-credential list   -store PATH [-hub HUB]
 //	aicrew introspection-credential revoke -store PATH -id ID
+//	aicrew invitation issue|list|revoke ... (see invitation.go)
 //
 // -operations names what the new credential permits, comma-separated:
 // introspection (identity.v1 session introspection), coordination
@@ -43,6 +44,7 @@ const usage = `usage:
   aicrew introspection-credential rotate -store PATH -hub HUB -secret-file PATH [-operations LIST]
   aicrew introspection-credential list   -store PATH [-hub HUB]
   aicrew introspection-credential revoke -store PATH -id ID
+  aicrew invitation issue|list|revoke ...   (run "aicrew invitation" for its usage)
 `
 
 // writeSecret writes the bearer to its file; tests replace it to fail.
@@ -55,6 +57,9 @@ var writeSecret = func(f *os.File, bearer string) error {
 
 // run is the command: 0 on success, 1 on a failure, 2 on a usage error.
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if len(args) >= 1 && args[0] == "invitation" {
+		return runInvitation(ctx, args[1:], stdout, stderr)
+	}
 	if len(args) < 2 || args[0] != "introspection-credential" {
 		fmt.Fprint(stderr, usage)
 		return 2

@@ -12,7 +12,10 @@
 // is read from its own private file on every call. An answer is accepted only
 // in the scope's exact shapes; anything else, a refusal or a transport
 // failure is an *Error, never "none", so a step stays pending rather than
-// settle on a misread. No error carries the bearer.
+// settle on a misread. An answer that breaks the scope's shape in any way
+// (a duplicate key at any depth, a null, a missing or foreign field) is
+// "unavailable" and retryable, never a final answer. No error carries the
+// bearer.
 package aimemread
 
 import (
@@ -52,12 +55,10 @@ const (
 
 // Codes this client reports besides aimem's own refusal codes.
 const (
-	// CodeUnavailable: aimem could not be reached, or its answer could not
-	// be read. Nothing is known; a later read may succeed.
+	// CodeUnavailable: aimem could not be reached, or its answer is not the
+	// scope's exact answer to this request. Nothing is known; a later read
+	// may succeed.
 	CodeUnavailable = "read_unavailable"
-	// CodeInvalidReply: aimem answered 200 with something that is not the
-	// scope's answer to this request. It is not retried.
-	CodeInvalidReply = "invalid_reply"
 )
 
 var (
@@ -85,8 +86,8 @@ var (
 		"recovery_release": true, "recovery_cancel": true}
 )
 
-// Error is a failed read. Code is a read-scope refusal code, CodeUnavailable
-// or CodeInvalidReply; Reason is one fixed word naming what failed.
+// Error is a failed read. Code is a read-scope refusal code or
+// CodeUnavailable; Reason is one fixed word naming what failed.
 // RetryAfter is aimem's Retry-After on a refusal that may succeed later, or
 // zero. Unwrap gives the caller's cancellation, for errors.Is, or why a
 // credential file was refused.
@@ -105,7 +106,9 @@ func unavailable(reason string) *Error {
 	return &Error{Code: CodeUnavailable, Retryable: true, Reason: reason}
 }
 
-func invalidReply(reason string) *Error { return &Error{Code: CodeInvalidReply, Reason: reason} }
+// invalidReply is an answer that breaks the scope's shape: unavailable, as
+// if nothing had been read.
+func invalidReply(reason string) *Error { return unavailable(reason) }
 
 // Config names aimem and how to trust and authenticate to it.
 type Config struct {
@@ -242,10 +245,13 @@ func (c *Client) ReceiptByProof(ctx context.Context, proofDigest string) (store.
 		return store.ScopeReceiptLookup{}, &Error{Code: "invalid_request", Reason: "proof_digest"}
 	}
 	var out store.ScopeReceiptLookup
-	if err := c.get(ctx, "reservation-receipts/"+proofDigest, &out); err != nil {
+	if err := c.get(ctx, "reservation-receipts/"+proofDigest, &out, lookupKeys); err != nil {
 		return store.ScopeReceiptLookup{}, err
 	}
-	return out, checkLookup(out, "", "")
+	if err := checkLookup(out, "", ""); err != nil {
+		return store.ScopeReceiptLookup{}, err
+	}
+	return out, nil
 }
 
 // ReceiptByKey returns the transition committed under a request key's k1_
@@ -259,7 +265,7 @@ func (c *Client) ReceiptByKey(ctx context.Context, task store.TaskRef, op store.
 	}
 	var out store.ScopeReceiptLookup
 	path := "reservations/" + url.PathEscape(task.TaskID) + "/receipts/" + url.PathEscape(string(op)) + "/" + keyDigest
-	if err := c.get(ctx, path, &out); err != nil {
+	if err := c.get(ctx, path, &out, lookupKeys); err != nil {
 		return store.ScopeReceiptLookup{}, err
 	}
 	if err := checkLookup(out, task.TaskID, keyDigest); err != nil {
@@ -279,10 +285,13 @@ func (c *Client) HoldStatus(ctx context.Context, task store.TaskRef) (store.Scop
 		return store.ScopeHold{}, &Error{Code: "invalid_request", Reason: "task"}
 	}
 	var out store.ScopeHold
-	if err := c.get(ctx, "reservations/"+url.PathEscape(task.TaskID), &out); err != nil {
+	if err := c.get(ctx, "reservations/"+url.PathEscape(task.TaskID), &out, holdKeys); err != nil {
 		return store.ScopeHold{}, err
 	}
-	return out, checkHold(out)
+	if err := checkHold(out); err != nil {
+		return store.ScopeHold{}, err
+	}
+	return out, nil
 }
 
 // checkLookup accepts a receipt answer only in the scope's shape: "none"
@@ -304,6 +313,7 @@ func checkLookup(l store.ScopeReceiptLookup, taskID, keyDigest string) error {
 	case r == nil:
 		return invalidReply("receipt_missing")
 	case r.ID == "" || r.Operation == "" || !idShape.MatchString(r.TaskID) || r.ReservationID == "" ||
+		r.MemberUserID == "" || r.VerifiedMode != "team" ||
 		!fenceShape.MatchString(r.Fence) || r.TaskRevision <= 0 || r.CommittedAt == "" ||
 		!digestShape.MatchString(r.RequestKeyDigest) || !strings.HasPrefix(r.RequestKeyDigest, "k1_"):
 		return invalidReply("receipt_fields")
@@ -326,7 +336,7 @@ func checkHold(h store.ScopeHold) error {
 			return invalidReply("none_with_fields")
 		}
 	case store.ScopeHeld:
-		if h.ReservationID == "" || !fenceShape.MatchString(h.Fence) || h.TaskRevision <= 0 ||
+		if h.ReservationID == "" || !fenceShape.MatchString(h.Fence) || h.TaskRevision <= 0 || h.HolderMode != "external" ||
 			h.ClosingFence != "" || h.ClosedBy != "" || h.ClosedAt != "" {
 			return invalidReply("held_fields")
 		}
@@ -345,8 +355,9 @@ func checkHold(h store.ScopeHold) error {
 }
 
 // get reads one scope path under this service and decodes its answer into
-// out, strictly.
-func (c *Client) get(ctx context.Context, path string, out any) error {
+// out, strictly: the raw answer must first pass keys (no duplicate key at
+// any depth, no null, exactly the fields its state allows).
+func (c *Client) get(ctx context.Context, path string, out any, keys func([]byte) error) error {
 	bearer, err := readCredential(c.cfg.TokenFile)
 	if err != nil {
 		e := unavailable("credential_file")
@@ -377,6 +388,9 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 	}
 	if resp.StatusCode != http.StatusOK {
 		return refusal(resp, data)
+	}
+	if err := keys(data); err != nil {
+		return err
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -442,4 +456,155 @@ func refusal(resp *http.Response, data []byte) *Error {
 		}
 	}
 	return e
+}
+
+// Exact key sets of the scope's answers (aimem's read-scope types at the
+// pinned commit and the OpenAPI proposal's ReceiptRead and HoldRead).
+var (
+	receiptKeys = keySet("id", "operation", "task_id", "request_key_digest", "reservation_id", "fence",
+		"task_revision", "member_user_id", "verified_mode", "committed_at")
+	lookupStates = map[string]fieldRule{
+		store.ScopeNone:      {required: keySet("state")},
+		store.ScopeCommitted: {required: keySet("state", "receipt")},
+	}
+	holdStates = map[string]fieldRule{
+		store.ScopeNone: {required: keySet("state")},
+		store.ScopeHeld: {required: keySet("state", "reservation_id", "fence", "holder_mode", "task_revision"),
+			optional: keySet("own_work_ref")},
+		store.ScopeClosed: {required: keySet("state", "reservation_id", "closing_fence", "closed_by", "closed_at",
+			"task_revision")},
+	}
+)
+
+type fieldRule struct{ required, optional map[string]bool }
+
+func keySet(keys ...string) map[string]bool {
+	m := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		m[k] = true
+	}
+	return m
+}
+
+// lookupKeys checks a receipt answer's raw shape: unique keys throughout,
+// exactly its state's fields, and a receipt with exactly its fields.
+func lookupKeys(data []byte) error {
+	top, err := object(data, lookupStates)
+	if err != nil {
+		return err
+	}
+	if raw, ok := top["receipt"]; ok {
+		if _, err := fields(raw, fieldRule{required: receiptKeys}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// holdKeys checks a hold answer's raw shape: unique keys throughout and
+// exactly its state's fields.
+func holdKeys(data []byte) error {
+	_, err := object(data, holdStates)
+	return err
+}
+
+// object checks that data is one JSON object with unique keys at every
+// depth, whose "state" selects the rule its fields must follow.
+func object(data []byte, states map[string]fieldRule) (map[string]json.RawMessage, error) {
+	if err := uniqueKeys(data); err != nil {
+		return nil, err
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(data, &top) != nil || top == nil {
+		return nil, invalidReply("not_an_object")
+	}
+	var state string
+	if json.Unmarshal(top["state"], &state) != nil {
+		return nil, invalidReply("state")
+	}
+	rule, ok := states[state]
+	if !ok {
+		return nil, invalidReply("state")
+	}
+	return fields(data, rule)
+}
+
+// fields checks that raw is an object with every required field, no field
+// outside required and optional, and no null value.
+func fields(raw json.RawMessage, rule fieldRule) (map[string]json.RawMessage, error) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil || m == nil {
+		return nil, invalidReply("not_an_object")
+	}
+	for k, v := range m {
+		if !rule.required[k] && !rule.optional[k] {
+			return nil, invalidReply("foreign_field")
+		}
+		if string(bytes.TrimSpace(v)) == "null" {
+			return nil, invalidReply("null_field")
+		}
+	}
+	for k := range rule.required {
+		if _, ok := m[k]; !ok {
+			return nil, invalidReply("missing_field")
+		}
+	}
+	return m, nil
+}
+
+// uniqueKeys walks data's JSON tokens and refuses a duplicate key in any
+// object, at any depth, and anything after the one value: encoding/json
+// keeps the last of duplicate keys, which would let an answer say two
+// things.
+func uniqueKeys(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := walkValue(dec); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return invalidReply("trailing_data")
+	}
+	return nil
+}
+
+func walkValue(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return invalidReply("syntax")
+	}
+	switch tok {
+	case json.Delim('{'):
+		seen := map[string]bool{}
+		for dec.More() {
+			key, err := dec.Token()
+			if err != nil {
+				return invalidReply("syntax")
+			}
+			k, ok := key.(string)
+			if !ok {
+				return invalidReply("syntax")
+			}
+			if seen[k] {
+				return invalidReply("duplicate_key")
+			}
+			seen[k] = true
+			if err := walkValue(dec); err != nil {
+				return err
+			}
+		}
+		if _, err := dec.Token(); err != nil {
+			return invalidReply("syntax")
+		}
+	case json.Delim('['):
+		for dec.More() {
+			if err := walkValue(dec); err != nil {
+				return err
+			}
+		}
+		if _, err := dec.Token(); err != nil {
+			return invalidReply("syntax")
+		}
+	}
+	return nil
 }

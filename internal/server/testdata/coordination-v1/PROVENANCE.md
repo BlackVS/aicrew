@@ -2,19 +2,22 @@
 
 Both files are verbatim copies of aimem's coordination.v1 fixtures. They are
 used only by tests, to keep aicrew's coordination route (`POST
-/v1/crew/coordination`), the facts it serves and the process pin it carries
-consistent with the reviewed contract.
+/v1/crew/coordination`), the facts it serves, and the process pin and
+evidence digest they carry consistent with the reviewed contract.
 
 - Source repository: <https://github.com/BlackVS/aimem>
 - Source paths: `docs/fixtures/coordination-v1/examples.json` and
   `docs/fixtures/coordination-v1/openapi-proposal.json`
-- Source commit: `8ac4ef1` (aimem master after C5-w2, #141, which froze the
-  process pin on `offer`, `accepted_attempt` and `independent_claim`)
+- Source commit: `a9b9b6fcf1963808c4480f7b96838bfd1ea10d56` (aimem master
+  after C5-w3, #149, which binds a coordinated finalize to the confirmed
+  delivery evidence; `docs/fixtures/coordination-v1/` is unchanged from
+  #149's `0dd404a` to this commit). The previous copy was from `8ac4ef1`
+  (C5-w2, #141).
 - Git blobs, checked when copied:
-  - `examples.json`: `829f5293b3407c45acb3b39b356da915e2b1eca1`
-  - `openapi-proposal.json`: `77022a8f6d1590c0263a52cfeee2b7d1ab4067c3`
+  - `examples.json`: `26d408a0e04e1bb27a44ff7fe8a754c5214194de`
+  - `openapi-proposal.json`: `7a0727856f5c5c209fb82d11b19ebbad4d3ec7f8`
 - Contract: `docs/DESIGN-AIFORGE-COORDINATION-WIRE.md` at the same commit
-  (C5w, amended by C5c-w and C5-w2)
+  (C5w, amended by C5c-w, C5-w2 and C5-w3)
 - License: PolyForm Noncommercial 1.0.0, same licensor as aicrew; aimem's
   `Required Notice:` line is kept in this repository's `LICENSE`.
 

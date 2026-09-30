@@ -802,9 +802,7 @@ func reservationRequest(a Attempt, proof string) ReservationRequest {
 		req.ReservationID, req.Fence, req.Reason = a.ReservationID, a.Fence, "reviewed delivery"
 		var evidence []Evidence
 		if err := json.Unmarshal([]byte(a.PendingEvidence), &evidence); err == nil {
-			for _, e := range evidence {
-				req.TerminalEvidence = append(req.TerminalEvidence, e.Ref)
-			}
+			req.TerminalEvidence, _ = pendingRefs(a)
 		}
 		req.Owned = &OwnedTaskFields{State: taskStateFor(a.PendingOp, ""), Evidence: evidence}
 	}

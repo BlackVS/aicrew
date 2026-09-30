@@ -105,6 +105,19 @@ func k1(key string) string {
 	return "k1_" + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
+// e1 is coordination.v1's evidence digest (C5-w3), written here from the
+// fixture's scheme so the test does not check aicrew's digest against itself.
+func e1(refs []string) string {
+	h := sha256.New()
+	for _, r := range refs {
+		h.Write([]byte{byte(len(r) >> 24), byte(len(r) >> 16), byte(len(r) >> 8), byte(len(r))})
+		h.Write([]byte(r))
+	}
+	return "e1_" + base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+}
+
+var mirrorEvidenceDigest = regexp.MustCompile(`^e1_[A-Za-z0-9_-]{43}$`)
+
 func p1(proof string) string {
 	sum := sha256.Sum256([]byte(proof))
 	return "p1_" + base64.RawURLEncoding.EncodeToString(sum[:])
@@ -192,7 +205,7 @@ func TestCoordinationReplySize(t *testing.T) {
 			OfferRef: "aicrew-offer-" + id, AttemptRef: "aicrew-attempt-" + id,
 			IntendedWorker: &factWorker{UserID: id, AgentID: id},
 			Process:        &processPin{Repo: "https://" + long("r", 504), Commit: long("a", 40), Manifest: long("m", 256)},
-			ExpiresAt:      "2026-09-28T12:00:00Z"}}
+			EvidenceDigest: e1([]string{"a"}), ExpiresAt: "2026-09-28T12:00:00Z"}}
 	b, _ := json.Marshal(reply)
 	if len(b) > fx.Bounds.MaxResponseBytes {
 		t.Fatalf("largest reply is %d bytes; aimem reads at most %d", len(b), fx.Bounds.MaxResponseBytes)
@@ -489,7 +502,8 @@ func (f *fakeAimem) verify(op store.ReservationOp, req store.ReservationRequest,
 		return fact, raw, "context_unavailable", "unknown kind"
 	}
 	present := map[string]bool{"offer_ref": fact.OfferRef != "", "attempt_ref": fact.AttemptRef != "",
-		"intended_worker": fact.IntendedWorker != nil, "process": fact.Process != nil}
+		"intended_worker": fact.IntendedWorker != nil, "process": fact.Process != nil,
+		"evidence_digest": fact.EvidenceDigest != ""}
 	for field := range present {
 		required := false
 		for _, r := range kind.Requires {
@@ -501,6 +515,9 @@ func (f *fakeAimem) verify(op store.ReservationOp, req store.ReservationRequest,
 	}
 	if fact.Process != nil && !mirrorRef(*fact.Process) {
 		return fact, raw, "context_unavailable", "malformed process"
+	}
+	if fact.EvidenceDigest != "" && !mirrorEvidenceDigest.MatchString(fact.EvidenceDigest) {
+		return fact, raw, "context_unavailable", "malformed evidence digest"
 	}
 	expires, err := time.Parse(time.RFC3339, fact.ExpiresAt)
 	roleOK := false
@@ -541,6 +558,9 @@ func (f *fakeAimem) verify(op store.ReservationOp, req store.ReservationRequest,
 	if p := fact.Process; p != nil && (p.Repo != f.current.Repository || p.Commit != f.current.Commit ||
 		p.Manifest != f.current.Manifest) {
 		return fact, raw, "process_mismatch", "the pin is not the current selection"
+	}
+	if fact.Kind == "accepted_for_finalization" && fact.EvidenceDigest != e1(req.TerminalEvidence) {
+		return fact, raw, "evidence_mismatch", "the terminal evidence is not the confirmed evidence"
 	}
 	return fact, raw, "", ""
 }

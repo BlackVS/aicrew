@@ -82,6 +82,7 @@ type coordinationFact struct {
 	AttemptRef       string      `json:"attempt_ref,omitempty"`
 	IntendedWorker   *factWorker `json:"intended_worker,omitempty"`
 	Process          *processPin `json:"process,omitempty"`
+	EvidenceDigest   string      `json:"evidence_digest,omitempty"`
 	ExpiresAt        string      `json:"expires_at"`
 }
 
@@ -157,7 +158,7 @@ func (s *Server) coordination(w http.ResponseWriter, r *http.Request) {
 		Member: factMember{UserID: f.Member.UserID, AgentID: f.Member.AgentID, TeamID: f.Member.TeamID,
 			Role: string(f.Member.Role), SessionID: f.Member.SessionID,
 			Generation: strconv.FormatInt(f.Member.Generation, 10)},
-		OfferRef: f.OfferRef, AttemptRef: f.AttemptRef,
+		OfferRef: f.OfferRef, AttemptRef: f.AttemptRef, EvidenceDigest: f.EvidenceDigest,
 		// Truncated to the second, so it is never later than the true end.
 		ExpiresAt: f.ExpiresAt.UTC().Truncate(time.Second).Format(time.RFC3339),
 	}

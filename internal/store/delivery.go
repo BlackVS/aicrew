@@ -36,16 +36,23 @@ type TrustedDelivery struct {
 // post-merge CI.
 var DevelopmentDelivery = []string{"reviewed_head", "human_merge", "post_merge_ci"}
 
-// check requires a stated requirement and a non-empty reference for every
-// required kind.
+// check requires a stated requirement and a reference for every required
+// kind, at most maxDeliveryEvidence of them, each of a shape aimem accepts
+// as terminal evidence (checkEvidenceRef).
 func (d TrustedDelivery) check() error {
 	if len(d.Required) == 0 {
 		return fmt.Errorf("%w: the project's delivery requirement is missing", ErrInvalid)
 	}
+	if len(d.Evidence) > maxDeliveryEvidence {
+		return fmt.Errorf("%w: at most %d delivery references", ErrInvalid, maxDeliveryEvidence)
+	}
 	have := map[string]bool{}
 	for _, e := range d.Evidence {
-		if !validRefs(e.Kind, e.Ref) {
-			return fmt.Errorf("%w: delivery evidence needs a kind and a reference", ErrInvalid)
+		if !validRefs(e.Kind) {
+			return fmt.Errorf("%w: delivery evidence needs a kind", ErrInvalid)
+		}
+		if err := checkEvidenceRef(e.Ref); err != nil {
+			return err
 		}
 		have[e.Kind] = true
 	}

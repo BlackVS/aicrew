@@ -1,8 +1,10 @@
 # Agent workspace convention
 
-Status: convention for review (task crew-workspace). Docs only: nothing here
-is implemented, and no installer, protocol or runtime schema is defined.
-Updated 2026-09-25.
+Status: convention (task crew-workspace). `aicrew-agent join` (1a81-4)
+implements the home layout, `agent.json`, the managed files and the rerun
+rules (DEVELOPMENT, "Joining a team"). Repositories, worktrees and
+credential files are not implemented yet, and no installer is defined.
+Updated 2026-09-30.
 
 This document fixes where an aicrew agent keeps its configuration,
 credentials, guidance, recovery data, logs, repositories and worktrees, and
@@ -52,8 +54,32 @@ repository instructions.
 `agent.json` records nonsecret facts: the layout version, the agent label,
 hub aliases with the stable hub IDs they locate, the configured clients,
 credential reference names (never values), and the managed-file record used
-for reruns (see below). Its exact fields and format belong to the onboarding
-implementation (crew-onboarding) and are not fixed here.
+for reruns (see below). The bootstrap writes these keys and keeps every
+other key as it finds it:
+
+```json
+{
+  "layout": 1,
+  "label": "builder",
+  "aicrew": {
+    "url": "https://aicrew.example:8443",
+    "tls_trust_mode": "ca_dns",
+    "tls_trust_value": "aicrew.example",
+    "aimem_hub": "main",
+    "agent_id": "01a0...",
+    "team_id": "01a0..."
+  },
+  "managed": {"AGENTS.md": "sha256:...", "CLAUDE.md": "sha256:...", "docs/START.md": "sha256:..."}
+}
+```
+
+- `layout` is this layout's version. A home with another version is
+  reported, never migrated.
+- `aicrew` is the client's section (DEVELOPMENT, "Running aicrew-agent"). Its
+  `agent_id` and `team_id` are written once the invitation is redeemed; a
+  home that has them is linked, to one team. `aimem_hub` is the reference to
+  the individual aimem credential, which stays in aimem's own storage.
+- `managed` holds each managed file's digest at its last managed write.
 
 ## Credentials
 
@@ -203,5 +229,5 @@ Reruns are non-destructive and repeatable:
 | Credential file format, OS store backend, encryption | onboarding and context implementation reviews |
 | Roles, grants and knowledge permissions | context contract and aimem knowledge access matrix |
 | Session persistence and `state/` formats | context contract local-session slice; aicrew execution and onboarding tasks |
-| `agent.json` fields, installer behavior, version sets | crew-onboarding |
+| Installer behavior, version sets, client wiring | crew-onboarding (1a81-5) |
 | Attempt identifiers and reservation fencing | crew-contract and the aimem reservation contract |

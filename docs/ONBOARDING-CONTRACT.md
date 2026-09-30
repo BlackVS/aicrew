@@ -6,7 +6,9 @@ redeemed, and how retries, expiry, revocation and recovery behave.
 Implemented: the invitation store and redemption (crew-onboarding 1 and 2),
 and the invitation surface (1a81-3): the operator's `aicrew invitation`
 command and the `aicrewd` begin and complete routes (CREW-CONTRACT, "Client
-session API"). The client bootstrap remains an implementation review.
+session API"), and the client bootstrap (1a81-4): `aicrew-agent join`
+(DEVELOPMENT, "Joining a team"). Client dependency and wiring checks remain
+an implementation review (1a81-5).
 Updated 2026-09-30.
 
 Parent contracts, pinned:

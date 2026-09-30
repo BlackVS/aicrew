@@ -319,6 +319,54 @@ no secret; other sections belong to onboarding:
 - The session is recorded before aimem is asked to bind it, so a binding
   that fails still leaves a session the next `start` resumes.
 
+### Joining a team: `aicrew-agent join`
+
+The client bootstrap (`docs/ONBOARDING-CONTRACT.md`, "The client's view")
+redeems an invitation and prepares the agent home (`docs/WORKSPACE.md`):
+
+```sh
+bin/aicrew-agent join -label builder -url https://aicrew.example:8443 \
+  -tls-trust-mode ca_dns -tls-trust-value aicrew.example -aimem-hub main
+bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh only
+```
+
+- `-home` defaults to `~/aicrew/agents/<label>` (`%USERPROFILE%\aicrew\agents\<label>`
+  on Windows). `-aimem-hub` is aimem's name for the hub whose identity the
+  invitation names; `-aimem-command` overrides the `aimem` executable.
+  `-json` prints the report as JSON.
+- The invitation code is read only at a hidden prompt on a terminal, never
+  from an argument, a pipe, a file or the environment; off a terminal the
+  command refuses. A code with a typing error (its checksum) is caught
+  before it costs an invitation attempt, and asked for again: at most three
+  prompts in all.
+- Before the prompt it checks the installation's individual aimem
+  credential with `aimem hub credential <hub> --json`. A missing, refused or
+  unconfirmed credential stops the run with the instruction to install it
+  through aimem (`aimem hub task-token`), as does an answer that is not a
+  credential status. Only an aimem without that command (it answers with
+  its usage) is left to the identity proof, and a proof that names the
+  missing credential gives the same instruction.
+- It then begins the redemption, proves the identity with
+  `aimem identity proof`, and completes it, recovering on its own: a lost
+  reply or a retryable refusal is retried with the same key, a refused
+  receipt gets a new one for the same challenge, and an expired challenge a
+  new begin. It stops on `invitation_invalid`, `identity_already_linked`,
+  `role_conflict`, `identity_mismatch`, `work_outstanding`,
+  `credential_inactive` and `aimem_unconfigured`, each with what to do.
+- `state/aicrew-join.json` keeps the begin and completion keys and the
+  challenge, never the code or a receipt, so a rerun with the same code
+  after a crash or a lost reply resumes with the same keys. It is removed
+  once the home is linked.
+- A linked home (its `agent.json` names the agent and team) is only
+  refreshed: no prompt, aimem or `aicrewd` call. One home serves one team,
+  so options naming another server, trust or aimem hub are refused.
+- The report is `ready`, `restart_required` (a managed guidance file
+  changed, so restart any client open in the home) or `blocked` with its
+  instruction; exit 0 for the first two, 1 when blocked or failed, 2 on
+  usage. It opens no session: it prints the `session start` command.
+- It writes no secret. `creds/` is created empty and owner-only; the
+  individual aimem credential stays in aimem's own storage.
+
 ### Driving steps: `aicrew-agent step`
 
 The launcher drives every attempt step for its client, which never holds the

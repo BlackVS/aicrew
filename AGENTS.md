@@ -78,8 +78,21 @@ Use the installed oh-code-review skill and read a repository-specific
 custom-codereview-guide if present. Pre-push: medium inline, no subagents,
 against the final pending changes. Pre-merge: high, including docs-only PRs,
 with verified findings, risk and verdict posted on the actual final head.
-After source changes, high delta review and renewed external review are
-required. Max/ultra only on explicit operator request.
+After a change of your own, high delta review and renewed external review
+are required; a base-only update follows the patch-identity rule below.
+Max/ultra only on explicit operator request.
+
+A base-only update keeps the verdicts (ai-skills 1.26.0,
+[review-gates](https://github.com/BlackVS/aiskills/blob/main/agents/review-gates.md)).
+Before and after updating a PR branch from main, compute the patch identity
+of your change against its merge base:
+`git diff $(git merge-base origin/main <head>) <head> | git patch-id --stable`.
+The same identity: post a short delta note naming the old head, the new
+head, both identities and the command; do not re-add review-this, restore
+WIP or draft, or clear hands-reviewed. The PR stays ready on the existing
+verdicts, and CI must still pass on the new head. A different identity (a
+conflict resolved with edits, or any change of yours): the full flow, with a
+delta review, WIP restored, hands-reviewed cleared and review-this re-added.
 
 Only concrete in-scope BLOCKER findings return a PR to implementation.
 FOLLOW_UP findings become separate tasks, not scope expansion. Runtime
@@ -89,7 +102,8 @@ claim CI, review or delivery without evidence for that head.
 Use plain review-this; never select a reviewer model unless the operator
 requests it. Watch the result and read the hands-bot comment at the named
 head. hands-reviewed is not a verdict. Never push while hands-reviewing;
-after a new source head, clear stale hands-reviewed and re-request review.
+after a new source head (not a base-only update with the same patch
+identity), clear stale hands-reviewed and re-request review.
 Do not hand-edit hands-reviewing or claim the reviewer runs merely because
 a label exists. No automatic human merge, release or deployment.
 

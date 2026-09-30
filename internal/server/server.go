@@ -217,9 +217,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 func (s *Server) refuseShared(w http.ResponseWriter, r *http.Request, status int, code string) {
 	switch key := s.routeKey(r); {
 	case key == ChallengesPath, key == TokenPath, key == SessionPath, key == LeavePath,
-		key == InvitationBeginPath, key == InvitationCompletePath,
 		key == AttemptsPath, strings.HasPrefix(key, AttemptsPath+"/"):
 		s.refuseSession(w, r, code, key == TokenPath, 0)
+	case key == InvitationBeginPath, key == InvitationCompletePath:
+		s.refuseRedemption(w, r, code, 0) // redemption.go: counted, with the envelope
 	default:
 		writeJSON(w, status, map[string]string{"code": code})
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -188,12 +189,24 @@ func TestInvitationRedemptionRefusals(t *testing.T) {
 	refused(t, api.send(t, http.MethodPost, InvitationBeginPath, "application/json", "k", "", `{"code":"x","extra":1}`), http.StatusBadRequest, "invalid_request")
 	refused(t, api.send(t, http.MethodPost, InvitationBeginPath+"?code="+code, "application/json", "k", "", `{"code":"x"}`), http.StatusBadRequest, "invalid_request")
 	refused(t, api.send(t, http.MethodPost, InvitationCompletePath, "application/json", "k", "", `{"code":"x"}`), http.StatusBadRequest, "invalid_request")
-	// Refusals made before the handler runs carry the envelope too.
-	for _, path := range []string{InvitationBeginPath, InvitationCompletePath} {
+	// Refusals made before the handler runs carry the envelope too, and are
+	// counted like every other refusal on these routes: a method the path
+	// does not serve, and a declared body over the service's limit.
+	for i, path := range []string{InvitationBeginPath, InvitationCompletePath} {
 		got := api.send(t, http.MethodGet, path, "", "", "", "")
 		refused(t, got, http.StatusMethodNotAllowed, "method_not_allowed")
 		if got.header.Get("Allow") != http.MethodPost {
 			t.Fatalf("GET %s: Allow %q", path, got.header.Get("Allow"))
+		}
+		if n := lastCount(t, e.logs.String(), "method_not_allowed"); n != i+1 {
+			t.Fatalf("GET %s: method_not_allowed counted %d, want %d", path, n, i+1)
+		}
+		status, raw := e.head(t, fmt.Sprintf("GET %s HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n", path, MaxBodyBytes+1))
+		big := reply{status: status, raw: string(raw)}
+		_ = json.Unmarshal(raw, &big.body)
+		refused(t, big, http.StatusRequestEntityTooLarge, "request_too_large")
+		if n := lastCount(t, e.logs.String(), "request_too_large"); n != i+1 {
+			t.Fatalf("an oversized body on %s: request_too_large counted %d, want %d", path, n, i+1)
 		}
 	}
 	// A code that is garbage, or one never issued, is not valid.
@@ -245,6 +258,26 @@ func TestInvitationRedemptionRefusals(t *testing.T) {
 	cc := e.begin(t, "bc", coordCode)
 	refused(t, e.complete(t, "cc", coordCode, cc.body["challenge_id"].(string), e.identity("amr1_"+strings.Repeat("C", 43), "user-8")),
 		http.StatusConflict, "role_conflict")
+}
+
+// lastCount is the running total the log last recorded for a refusal code
+// on the redemption routes, or 0.
+func lastCount(t *testing.T, logs, code string) int {
+	t.Helper()
+	n := 0
+	for _, line := range strings.Split(logs, "\n") {
+		if !strings.Contains(line, `"invitation redemption refused"`) {
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			t.Fatalf("log line: %s", line)
+		}
+		if rec["code"] == code {
+			n = int(rec["count"].(float64))
+		}
+	}
+	return n
 }
 
 func (e *redeemEnv) seedLink(t *testing.T, agentID, user string) {

@@ -78,10 +78,12 @@ Use the installed oh-code-review skill and read a repository-specific
 custom-codereview-guide if present. Pre-push: medium inline, no subagents,
 against the final pending changes. Pre-merge: high, including docs-only PRs,
 with verified findings, risk and verdict posted on the actual final head.
-After source changes, high delta review and renewed external review are
-required. Max/ultra only on explicit operator request.
+After a change of your own, high delta review and renewed external review
+are required; a base-only update follows the patch-identity rule below.
+Max/ultra only on explicit operator request.
 
-A base-only update keeps the verdicts (ai-skills 1.26.0, review-gates).
+A base-only update keeps the verdicts (ai-skills 1.26.0,
+[review-gates](https://github.com/BlackVS/aiskills/blob/main/agents/review-gates.md)).
 Before and after updating a PR branch from main, compute the patch identity
 of your change against its merge base:
 `git diff $(git merge-base origin/main <head>) <head> | git patch-id --stable`.

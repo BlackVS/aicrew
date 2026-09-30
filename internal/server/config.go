@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/aimemread"
 	"github.com/BlackVS/aicrew/internal/verifier"
 )
 
@@ -44,11 +45,21 @@ type AimemConfig struct {
 	// RedemptionTokenFile is the private file holding the redemption bearer
 	// aimem issued to this service.
 	RedemptionTokenFile string `json:"redemption_token_file"`
+	// ReadTokenFile is the private file holding the reservation.read bearer
+	// aimem issued to this service, a separate credential. Without it aicrew
+	// has no read scope, and member-driven steps stay pending
+	// (docs/CREW-CONTRACT.md, "Attempt steps").
+	ReadTokenFile string `json:"read_token_file,omitempty"`
 }
 
 func (a AimemConfig) verifierConfig(serviceID string) verifier.Config {
 	return verifier.Config{BaseURL: a.BaseURL, ServiceID: serviceID, TLSMode: a.TLSTrustMode,
 		TLSValue: a.TLSTrustValue, TokenFile: a.RedemptionTokenFile}
+}
+
+func (a AimemConfig) readerConfig(serviceID string) aimemread.Config {
+	return aimemread.Config{BaseURL: a.BaseURL, ServiceID: serviceID, TLSMode: a.TLSTrustMode,
+		TLSValue: a.TLSTrustValue, TokenFile: a.ReadTokenFile, RedemptionTokenFile: a.RedemptionTokenFile}
 }
 
 // Duration is a time.Duration written as a Go duration string, like "15s".
@@ -138,6 +149,11 @@ func (c Config) validate() error {
 	if c.Aimem != nil {
 		if _, err := verifier.New(c.Aimem.verifierConfig(c.ServiceID)); err != nil {
 			return fmt.Errorf("config: aimem: %w", err)
+		}
+		if c.Aimem.ReadTokenFile != "" {
+			if _, err := aimemread.New(c.Aimem.readerConfig(c.ServiceID)); err != nil {
+				return fmt.Errorf("config: aimem: %w", err)
+			}
 		}
 	}
 	return nil

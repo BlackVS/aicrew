@@ -126,7 +126,8 @@ an address; it holds no secret itself:
     "base_url": "https://aimem.example:8443",
     "tls_trust_mode": "ca_dns",
     "tls_trust_value": "aimem.example",
-    "redemption_token_file": "/etc/aicrew/aimem-redemption.token"
+    "redemption_token_file": "/etc/aicrew/aimem-redemption.token",
+    "read_token_file": "/etc/aicrew/aimem-read.token"
   }
   ```
 
@@ -136,6 +137,16 @@ an address; it holds no secret itself:
   bearer aimem issued to this service; it must be readable by the service's
   account only, and the service refuses to start otherwise. It is read on
   every redemption, so replacing it rotates the bearer without a restart.
+- `read_token_file` is optional. It holds the separate `reservation.read`
+  credential aimem issued to this service (`aimem_peer_` and 64 lowercase
+  hex), which reads aimem's reservation scope: the receipts and holds this
+  service's proofs established (`docs/CREW-CONTRACT.md`, "Attempt steps").
+  With it, a member's settle resolves from aimem's answers; without it,
+  member-driven steps stay pending. The service refuses to start if the file
+  is missing, readable by another account, not a peer credential, the
+  redemption file, or holding the redemption credential. It is read on every
+  call, like the redemption bearer. A refused or unreadable answer from
+  aimem never counts as "nothing committed": the step stays pending.
 - Keep the TLS key readable only by the service's account.
 
 The service logs JSON lines to stderr: each request's method, matched route,

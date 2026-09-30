@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/aimemread"
 	"github.com/BlackVS/aicrew/internal/store"
 	"github.com/BlackVS/aicrew/internal/verifier"
 )
@@ -43,7 +44,7 @@ type Server struct {
 	// hub is configured.
 	verifier store.Verifier
 	// reader is aimem's read scope for settling member-driven steps; nil
-	// until aicrew has one (crew-execution b3), so those steps stay pending.
+	// when no read credential is configured, so those steps stay pending.
 	reader store.ReservationReader
 	// Per-address limits on the unauthenticated routes, and per-session on
 	// handle refresh.
@@ -57,8 +58,8 @@ type Option func(*Server)
 // exists for tests of the service's clients, which stand in for aimem.
 func WithVerifier(v store.Verifier) Option { return func(s *Server) { s.verifier = v } }
 
-// WithReader gives the service aimem's read scope, for tests of the step
-// routes until the real client arrives (crew-execution b3).
+// WithReader replaces the read scope the configuration would build. It
+// exists for tests, which stand in for aimem.
 func WithReader(r store.ReservationReader) Option { return func(s *Server) { s.reader = r } }
 
 // New builds the service over an open store. It loads the certificate and
@@ -88,6 +89,16 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 			return nil, fmt.Errorf("aimem.redemption_token_file: %w", err)
 		}
 		s.verifier = v
+		if cfg.Aimem.ReadTokenFile != "" {
+			r, err := aimemread.New(cfg.Aimem.readerConfig(cfg.ServiceID))
+			if err != nil {
+				return nil, fmt.Errorf("aimem: %w", err)
+			}
+			if err := r.CheckCredential(); err != nil {
+				return nil, fmt.Errorf("aimem.read_token_file: %w", err)
+			}
+			s.reader = r
+		}
 	}
 	for _, o := range opts {
 		o(s)

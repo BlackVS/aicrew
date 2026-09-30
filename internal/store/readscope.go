@@ -8,12 +8,12 @@ import (
 )
 
 // ReservationReader is aimem's read-only reservation scope for this service
-// (coordination.v1 §2, frozen at aimem 8ac4ef1). Aicrew holds no credential
-// that can change a reservation: the acting member's own connection sends
-// each mutation, and aicrew confirms what happened only through this scope,
-// which sees exactly the receipts and holds its own proofs established. The
-// real client and its credential arrive in b3; b1 tests use a fake built from
-// the scope's fixture exchanges.
+// (coordination.v1 §2, with C5c-w's closure evidence). Aicrew holds no
+// credential that can change a reservation: the acting member's own
+// connection sends each mutation, and aicrew confirms what happened only
+// through this scope, which sees exactly the receipts and holds its own
+// proofs established. The production client is internal/aimemread; tests
+// use fakes built from the scope's fixture exchanges.
 type ReservationReader interface {
 	// ReceiptByProof returns the transition committed under a proof, by the
 	// proof's p1_ digest, or state "none".

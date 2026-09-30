@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -271,4 +272,49 @@ func TestReconcilerReachesTheNewestOfManyProofs(t *testing.T) {
 	if a, _ := e.store.GetAttempt(ctx, id); a.State != store.AttemptRunning {
 		t.Fatalf("after the round: %+v", a)
 	}
+}
+
+// An update superseded until it has more keys than the loop reads in a
+// minute, whose hold aimem then closes by an admin recovery, is settled
+// not committed across windows, and the attempt is then closed as
+// recovered: through the routes and the production client over HTTPS.
+func TestReconcilerFinishesAnUpdateWithManyKeys(t *testing.T) {
+	readOverHTTPS = true
+	t.Cleanup(func() { readOverHTTPS = false })
+	ctx := context.Background()
+	e := setupCoordination(t)
+	now := time.Now()
+	loop := reconcile.New(e.store, e.srv.reader, slogDiscard())
+	loop.Now = func() time.Time { return now }
+
+	got := e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-1"))
+	claim, id := stepOf(t, got), attemptOf(t, got)
+	if code := e.aimem.send(t, e.task("task-1"), claim); code != "" {
+		t.Fatalf("claim: %s", code)
+	}
+	settled(t, e.settleAs(t, e.indep, id, claim, "committed", ""), "committed", "running")
+	path := AttemptsPath + "/" + id + "/work"
+	upd := updateStepOf(t, e.call(t, e.indep.token, path, "block-0", map[string]string{"intent": "block", "detail": "waiting"}))
+	for i := 1; i < 30; i++ {
+		upd = updateStepOf(t, e.call(t, e.indep.token, path, fmt.Sprintf("block-%d", i),
+			map[string]string{"intent": "block", "detail": "waiting", "supersedes": upd.RequestKey}))
+	}
+	// The member crashes; aimem's admin recovery closes the hold.
+	e.aimem.mu.Lock()
+	h := e.aimem.holds["task-1"]
+	h.active, h.closedBy, h.fence = false, "recovery_release", h.fence+1
+	e.aimem.mu.Unlock()
+
+	for window := 0; window < 4; window++ {
+		loop.Round(ctx)
+		now = now.Add(time.Minute + time.Second)
+		if a, _ := e.store.GetAttempt(ctx, id); a.State == store.AttemptClosed {
+			if a.CloseReason != "recovered" || a.RecoveredBy != "recovery_release" {
+				t.Fatalf("closed as %+v", a)
+			}
+			return
+		}
+	}
+	a, _ := e.store.GetAttempt(ctx, id)
+	t.Fatalf("four windows later the attempt is %+v", a)
 }

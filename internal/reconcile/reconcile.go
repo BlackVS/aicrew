@@ -110,10 +110,12 @@ func (l *Loop) Round(ctx context.Context) (settled, closed int) {
 	for _, c := range cands {
 		if c.Pending {
 			_, set, err := l.Store.ReconcileStep(ctx, reader, c.AttemptID)
+			// A step cut short by the budget kept its progress in the
+			// store; it goes to the back of the line, not the front.
+			l.mark(c.AttemptID)
 			if errors.Is(err, errBudget) {
 				return settled, closed
 			}
-			l.mark(c.AttemptID)
 			if err != nil && !errors.Is(err, store.ErrOutcomeUnknown) {
 				l.Log.Warn("reconcile: settle a step", "attempt_id", c.AttemptID, "error", err.Error())
 			}

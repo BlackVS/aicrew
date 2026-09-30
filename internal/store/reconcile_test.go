@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -416,4 +417,54 @@ func TestReconcileStepProgressesAcrossBudgetWindows(t *testing.T) {
 			t.Fatalf("a none read within the grace was recorded final")
 		}
 	})
+}
+
+func finalKeys(t *testing.T, s *Store, attemptID string) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM update_key_finals WHERE attempt_id = ?`, attemptID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// An update superseded until it has more keys than a budget window still
+// settles once its hold is seen past it: each key's "none" read after that
+// observation is recorded final, so later windows go on from there. Before
+// the hold moves, nothing is recorded.
+func TestReconcileUpdateProgressesAcrossBudgetWindows(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	_, st, err := e.s.BeginWorkWithToken(ctx, "block-0", e.indepTk, a.ID, IntentBlock, "waiting")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < 30; i++ {
+		if _, st, err = e.s.SupersedeWorkWithToken(ctx, fmt.Sprintf("block-%d", i), e.indepTk, a.ID, st.RequestKey,
+			IntentBlock, "waiting"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The hold has not moved: every key is read, nothing is final.
+	e.reader.setHold(heldAs(a, a.Fence, a.TaskRevision))
+	w := &windowReader{fakeReader: e.reader, left: 31}
+	if _, set, err := e.s.ReconcileStep(ctx, w, a.ID); err != nil || set.Settled || w.reads != 31 || finalKeys(t, e.s, a.ID) != 0 {
+		t.Fatalf("with the hold in place: %+v after %d reads, %d final, %v", set, w.reads, finalKeys(t, e.s, a.ID), err)
+	}
+	// aimem's admin recovery closes the hold at a later fence.
+	e.reader.setHold(ScopeHold{State: ScopeClosed, ReservationID: a.ReservationID, ClosingFence: "5",
+		ClosedBy: "recovery_release", ClosedAt: "2026-09-28T04:12:00Z", TaskRevision: 9})
+	w = &windowReader{fakeReader: e.reader, left: 30}
+	if _, set, err := e.s.ReconcileStep(ctx, w, a.ID); set.Settled || !errors.Is(err, ErrOutcomeUnknown) || w.reads != 30 {
+		t.Fatalf("the first window: %+v after %d reads, %v", set, w.reads, err)
+	}
+	if n := finalKeys(t, e.s, a.ID); n != 29 {
+		t.Fatalf("%d keys final after the first window", n)
+	}
+	w = &windowReader{fakeReader: e.reader, left: 30}
+	cur, set, err := e.s.ReconcileStep(ctx, w, a.ID)
+	if err != nil || !set.Settled || set.Outcome != "not_committed" || cur.PendingKey != "" || w.reads != 2 {
+		t.Fatalf("the second window: %+v %+v after %d reads, %v", cur, set, w.reads, err)
+	}
 }

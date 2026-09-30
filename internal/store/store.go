@@ -410,13 +410,20 @@ var schemaV5 = []string{
 // outcome and dropped here.
 // schemaV19 records an attempt closed as recovered by the reconciler
 // (crew-execution b3b): the read scope's closure evidence for its exact
-// reservation. It also records when a proof's "none" became final, so a
-// step with many proofs is resolved across reads instead of re-read whole.
+// reservation. It also records when a proof's, or an update key's, "none"
+// became final, so a step with many proofs or keys is resolved across reads
+// instead of re-read whole.
 var schemaV19 = []string{
 	`ALTER TABLE attempts ADD COLUMN recovered_by TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE attempts ADD COLUMN recovered_fence TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE attempts ADD COLUMN recovered_at TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE coordination_proofs ADD COLUMN none_final_at TEXT NOT NULL DEFAULT ''`,
+	`CREATE TABLE update_key_finals (
+		request_key TEXT PRIMARY KEY,
+		attempt_id  TEXT NOT NULL REFERENCES attempts (id),
+		final_at    TEXT NOT NULL
+	)`,
+	`CREATE INDEX update_key_finals_attempt ON update_key_finals (attempt_id)`,
 }
 
 var schemaV18 = []string{

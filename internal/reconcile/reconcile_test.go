@@ -294,3 +294,33 @@ func TestUnresolvedStepsDoNotStarve(t *testing.T) {
 		t.Fatalf("the second window did not reach the hold: %d reads, %v", r.reads, r.order)
 	}
 }
+
+// hungryStore's one pending step needs more reads than a window, so it is
+// always cut short by the budget; its hold closes when read.
+type hungryStore struct{ *fakeStore }
+
+func (s hungryStore) ReconcileStep(ctx context.Context, r store.ReservationReader, id string) (store.Attempt, store.Settlement, error) {
+	for i := 0; i < PerMinute+1; i++ {
+		if _, err := r.HoldStatus(ctx, store.TaskRef{TaskID: id}); err != nil {
+			return store.Attempt{}, store.Settlement{}, fmt.Errorf("attempt %s: read scope: %w: %w", id, store.ErrOutcomeUnknown, err)
+		}
+	}
+	return store.Attempt{}, store.Settlement{}, nil
+}
+
+// A step cut short by the budget goes to the back of the line: the work
+// behind it is reached in the next window, not starved by its scan.
+func TestAStepCutShortDoesNotStayFirst(t *testing.T) {
+	c := &clock{t: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+	st := hungryStore{newFakeStore(candidates(1, 1))}
+	r := &fakeReader{hold: store.ScopeHold{State: store.ScopeClosed, ReservationID: "r", ClosingFence: "3", ClosedBy: "recovery_release"}}
+	l := New(st, r, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	l.Now = c.now
+	if _, closed := l.Round(context.Background()); closed != 0 {
+		t.Fatal("the first window reached the hold")
+	}
+	c.t = c.t.Add(time.Minute + time.Second)
+	if _, closed := l.Round(context.Background()); closed != 1 {
+		t.Fatalf("the hold waited behind the step cut short: %v", r.order[len(r.order)-3:])
+	}
+}

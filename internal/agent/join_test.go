@@ -53,6 +53,8 @@ func init() {
 		fmt.Printf(`{"hub": %q, "credential": "set", "state": "active", "scope": "user", "user_id": "user-1", "token_id": "tok-1"}`+"\n", args[2])
 	case "garbled":
 		fmt.Println("not json")
+	case "incomplete":
+		fmt.Println("{}")
 	}
 	os.Exit(0)
 }
@@ -629,7 +631,8 @@ func TestExecAimemCredential(t *testing.T) {
 	for mode, want := range map[string]struct {
 		known bool
 		err   bool
-	}{"active": {true, false}, "old": {false, false}, "garbled": {false, false}, "unknown-hub": {false, true}} {
+	}{"active": {true, false}, "old": {false, false}, "garbled": {false, true}, "incomplete": {false, true},
+		"unknown-hub": {false, true}} {
 		t.Setenv(joinFakeEnv, mode)
 		st, known, err := am.Credential(context.Background())
 		if known != want.known || (err != nil) != want.err {
@@ -771,5 +774,33 @@ func TestJoinSerializesRunsPerHome(t *testing.T) {
 	cfg, err := LoadConfig(e.home)
 	if err != nil || cfg.AgentID != "agent-other" || cfg.TeamID != "team-other" {
 		t.Fatalf("config %+v, %v", cfg, err)
+	}
+}
+
+// An aimem that runs the credential command but answers with something
+// other than a status confirms nothing: the run stops before the prompt,
+// the home and any invitation attempt. Only an aimem without the command
+// (its hub usage) is left to the proof.
+func TestJoinMalformedCredentialAnswerStops(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"garbled", "incomplete"} {
+		t.Run(mode, func(t *testing.T) {
+			e := setupJoin(t)
+			t.Setenv(joinFakeEnv, mode)
+			crew := &recCrew{}
+			reads := 0
+			deps := e.deps(crew, nil, &reads, e.invite(t, "inv-1", store.RoleWorker))
+			deps.Aimem = func(_, hub string) JoinAimem { return ExecAimem{Command: self, Hub: hub}.JoinAimem() }
+			rep, err := Join(context.Background(), e.opts(), deps)
+			if err != nil || rep.Status != JoinBlocked || rep.Reason != "aimem_failed" || reads != 0 || len(crew.beginKeys) != 0 {
+				t.Fatalf("%+v, %v, %d reads, begins %v", rep, err, reads, crew.beginKeys)
+			}
+			if _, err := os.Stat(e.home); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("the refused run created the home")
+			}
+		})
 	}
 }

@@ -333,9 +333,10 @@ bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh only
 - Before the prompt it checks the installation's individual aimem
   credential with `aimem hub credential <hub> --json`. A missing, refused or
   unconfirmed credential stops the run with the instruction to install it
-  through aimem (`aimem hub task-token`). An aimem without that command is
-  left to the identity proof, and a proof that names the missing credential
-  gives the same instruction.
+  through aimem (`aimem hub task-token`), as does an answer that is not a
+  credential status. Only an aimem without that command (it answers with
+  its usage) is left to the identity proof, and a proof that names the
+  missing credential gives the same instruction.
 - It then begins the redemption, proves the identity with
   `aimem identity proof`, and completes it, recovering on its own: a lost
   reply or a retryable refusal is retried with the same key, a refused

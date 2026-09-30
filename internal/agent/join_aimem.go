@@ -53,9 +53,11 @@ func (e joinExec) Credential(ctx context.Context) (CredentialStatus, bool, error
 	case err != nil:
 		return CredentialStatus{}, false, fmt.Errorf("aimem could not be run: %w", err)
 	}
+	// The command ran and answered: an answer that is not a status confirms
+	// nothing, so it stops the run like any other failure.
 	var st CredentialStatus
 	if json.Unmarshal(out, &st) != nil || st.Credential == "" || st.State == "" {
-		return CredentialStatus{}, false, nil
+		return CredentialStatus{}, false, errors.New("aimem hub credential gave no credential status")
 	}
 	return st, true, nil
 }

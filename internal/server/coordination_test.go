@@ -256,7 +256,10 @@ func setupCoordinationWith(t *testing.T, withReader bool) *coordEnv {
 		kinds: loadCoordFixture(t).FactKinds, receipts: map[string]store.ScopeReceiptLookup{},
 		byKey: map[string]store.ScopeReceiptLookup{}}
 	r := startWith(t, coordService, func(s *Server) {
-		if withReader {
+		switch {
+		case withReader && readOverHTTPS:
+			s.reader = httpsReadScope(t, aimem)
+		case withReader:
 			s.reader = aimem
 		}
 	})

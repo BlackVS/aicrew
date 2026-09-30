@@ -81,6 +81,7 @@ var attemptRefusals = []struct {
 	{store.ErrProcessChanged, "process_changed"},
 	{store.ErrStepUnknown, "step_unknown"},
 	{store.ErrDeliveryUnconfirmed, "delivery_unconfirmed"},
+	{store.ErrSupersedeLimit, "supersede_limit"},
 	{store.ErrOutcomeUnknown, "outcome_unknown"},
 }
 

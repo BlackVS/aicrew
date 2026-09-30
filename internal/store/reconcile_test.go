@@ -343,8 +343,9 @@ func (w *windowReader) HoldStatus(ctx context.Context, t TaskRef) (ScopeHold, er
 
 func proofCounts(t *testing.T, s *Store, attemptID string) (all, final int) {
 	t.Helper()
-	if err := s.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(none_final_at, '')) FROM coordination_proofs WHERE attempt_id = ?`,
-		attemptID).Scan(&all, &final); err != nil {
+	if err := s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM coordination_proofs WHERE attempt_id = ?),
+		(SELECT COUNT(*) FROM scan_finals WHERE attempt_id = ? AND lookup LIKE 'proof:%')`,
+		attemptID, attemptID).Scan(&all, &final); err != nil {
 		t.Fatal(err)
 	}
 	return all, final
@@ -422,16 +423,17 @@ func TestReconcileStepProgressesAcrossBudgetWindows(t *testing.T) {
 func finalKeys(t *testing.T, s *Store, attemptID string) int {
 	t.Helper()
 	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM update_key_finals WHERE attempt_id = ?`, attemptID).Scan(&n); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM scan_finals WHERE attempt_id = ? AND lookup LIKE 'key:%'`, attemptID).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
 }
 
-// An update superseded until it has more keys than a budget window still
-// settles once its hold is seen past it: each key's "none" read after that
-// observation is recorded final, so later windows go on from there. Before
-// the hold moves, nothing is recorded.
+// An update with the most keys it may have (MaxSupersededKeys superseded)
+// still settles across read windows smaller than its scan once its hold is
+// seen past it: each key's "none" read after that observation is recorded
+// final, so later windows go on from there. Before the hold moves, nothing is
+// recorded.
 func TestReconcileUpdateProgressesAcrossBudgetWindows(t *testing.T) {
 	ctx := context.Background()
 	e := newClaimStopEnv(t)
@@ -440,31 +442,58 @@ func TestReconcileUpdateProgressesAcrossBudgetWindows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 1; i < 30; i++ {
+	for i := 1; i <= MaxSupersededKeys; i++ {
 		if _, st, err = e.s.SupersedeWorkWithToken(ctx, fmt.Sprintf("block-%d", i), e.indepTk, a.ID, st.RequestKey,
 			IntentBlock, "waiting"); err != nil {
 			t.Fatal(err)
 		}
 	}
+	keys := MaxSupersededKeys + 1
 	// The hold has not moved: every key is read, nothing is final.
 	e.reader.setHold(heldAs(a, a.Fence, a.TaskRevision))
-	w := &windowReader{fakeReader: e.reader, left: 31}
-	if _, set, err := e.s.ReconcileStep(ctx, w, a.ID); err != nil || set.Settled || w.reads != 31 || finalKeys(t, e.s, a.ID) != 0 {
+	w := &windowReader{fakeReader: e.reader, left: keys + 1}
+	if _, set, err := e.s.ReconcileStep(ctx, w, a.ID); err != nil || set.Settled || w.reads != keys+1 || finalKeys(t, e.s, a.ID) != 0 {
 		t.Fatalf("with the hold in place: %+v after %d reads, %d final, %v", set, w.reads, finalKeys(t, e.s, a.ID), err)
 	}
-	// aimem's admin recovery closes the hold at a later fence.
+	// aimem's admin recovery closes the hold at a later fence; windows of 5.
 	e.reader.setHold(ScopeHold{State: ScopeClosed, ReservationID: a.ReservationID, ClosingFence: "5",
 		ClosedBy: "recovery_release", ClosedAt: "2026-09-28T04:12:00Z", TaskRevision: 9})
-	w = &windowReader{fakeReader: e.reader, left: 30}
-	if _, set, err := e.s.ReconcileStep(ctx, w, a.ID); set.Settled || !errors.Is(err, ErrOutcomeUnknown) || w.reads != 30 {
-		t.Fatalf("the first window: %+v after %d reads, %v", set, w.reads, err)
+	for window, want := range []int{4, 8} {
+		w = &windowReader{fakeReader: e.reader, left: 5}
+		if _, set, err := e.s.ReconcileStep(ctx, w, a.ID); set.Settled || !errors.Is(err, ErrOutcomeUnknown) || w.reads != 5 {
+			t.Fatalf("window %d: %+v after %d reads, %v", window, set, w.reads, err)
+		}
+		if n := finalKeys(t, e.s, a.ID); n != want {
+			t.Fatalf("%d keys final after window %d, want %d", n, window, want)
+		}
 	}
-	if n := finalKeys(t, e.s, a.ID); n != 29 {
-		t.Fatalf("%d keys final after the first window", n)
-	}
-	w = &windowReader{fakeReader: e.reader, left: 30}
+	w = &windowReader{fakeReader: e.reader, left: 5}
 	cur, set, err := e.s.ReconcileStep(ctx, w, a.ID)
 	if err != nil || !set.Settled || set.Outcome != "not_committed" || cur.PendingKey != "" || w.reads != 2 {
-		t.Fatalf("the second window: %+v %+v after %d reads, %v", cur, set, w.reads, err)
+		t.Fatalf("the last window: %+v %+v after %d reads, %v", cur, set, w.reads, err)
+	}
+}
+
+// An update step supersedes at most MaxSupersededKeys keys: the next
+// supersede is refused and changes nothing.
+func TestSupersedeIsCapped(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	_, st, err := e.s.BeginWorkWithToken(ctx, "block-0", e.indepTk, a.ID, IntentBlock, "waiting")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= MaxSupersededKeys; i++ {
+		if _, st, err = e.s.SupersedeWorkWithToken(ctx, fmt.Sprintf("block-%d", i), e.indepTk, a.ID, st.RequestKey,
+			IntentBlock, "waiting"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := e.s.SupersedeWorkWithToken(ctx, "block-over", e.indepTk, a.ID, st.RequestKey, IntentBlock, "waiting"); !errors.Is(err, ErrSupersedeLimit) {
+		t.Fatalf("a supersede past the cap: %v", err)
+	}
+	if cur, _ := e.s.GetAttempt(ctx, a.ID); cur.PendingKey != st.RequestKey {
+		t.Fatalf("a refused supersede changed the pending key: %+v", cur)
 	}
 }

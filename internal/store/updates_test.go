@@ -259,7 +259,7 @@ func TestWorkWritesRecheckTheToken(t *testing.T) {
 	// The test now rewinds aimem, which no real hold does: the hold moves
 	// back and the key commits. The "none" read above was final for the
 	// hold it saw, so its record goes with the rewind.
-	if _, err := e.s.db.Exec(`DELETE FROM update_key_finals`); err != nil {
+	if _, err := e.s.db.Exec(`DELETE FROM scan_finals`); err != nil {
 		t.Fatal(err)
 	}
 	e.reader.setHold(heldAs(a, a.Fence, a.TaskRevision))

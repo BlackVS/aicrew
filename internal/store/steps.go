@@ -361,8 +361,12 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 		// the intent's proofs can carry the committed transition. The
 		// newest, the only one that may still live, is read first; a proof
 		// whose "none" is already final is not read again.
+		finals, err := s.scanFinals(ctx, a.ID)
+		if err != nil {
+			return a, Settlement{}, err
+		}
 		for _, p := range proofs {
-			if p.noneFinal {
+			if finals[proofLookup(p.digest)] {
 				continue
 			}
 			digest, err := proofDigestP1(p.digest)
@@ -387,7 +391,7 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 				// the grace period after its end has passed: a "none" read
 				// from then on is final for it (none_finality).
 				if !readAt.Before(p.end().Add(NoneFinalAfter)) {
-					if err := s.markNoneFinal(ctx, p.digest, readAt); err != nil {
+					if err := s.markScanFinal(ctx, a.ID, proofLookup(p.digest), readAt); err != nil {
 						return a, pending, err
 					}
 				}
@@ -456,9 +460,6 @@ func (s *Store) voidStep(ctx context.Context, c Caller, a Attempt, report StepRe
 type stepProof struct {
 	digest         string
 	expires, ended time.Time
-	// noneFinal: a read scope "none" for this proof was read after its end
-	// and the grace period, so it can never show a commit.
-	noneFinal bool
 }
 
 // end is when the proof stopped being usable: its expiry, or its end if
@@ -470,22 +471,12 @@ func (p stepProof) end() time.Time {
 	return p.expires
 }
 
-// markNoneFinal records that a proof's "none", read at readAt, is final.
-func (s *Store) markNoneFinal(ctx context.Context, digest string, readAt time.Time) error {
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE coordination_proofs SET none_final_at = ? WHERE digest = ? AND none_final_at = ''`,
-		formatTime(readAt), digest); err != nil {
-		return fmt.Errorf("record a final none: %w", err)
-	}
-	return nil
-}
-
 // stepProofs lists every proof issued for one step, replaced ones included.
 func (s *Store) stepProofs(ctx context.Context, attemptID, requestKey string) ([]stepProof, error) {
 	var out []stepProof
 	err := s.snapshot(ctx, func(q querier) error {
 		rows, err := q.QueryContext(ctx,
-			`SELECT digest, expires_at, ended_at, none_final_at != '' FROM coordination_proofs
+			`SELECT digest, expires_at, ended_at FROM coordination_proofs
 			 WHERE attempt_id = ? AND request_key = ?
 			 ORDER BY issued_at DESC, rowid DESC`, attemptID, requestKey)
 		if err != nil {
@@ -495,7 +486,7 @@ func (s *Store) stepProofs(ctx context.Context, attemptID, requestKey string) ([
 		for rows.Next() {
 			var p stepProof
 			var expires, ended string
-			if err := rows.Scan(&p.digest, &expires, &ended, &p.noneFinal); err != nil {
+			if err := rows.Scan(&p.digest, &expires, &ended); err != nil {
 				return err
 			}
 			if p.expires, err = parseTime(expires); err != nil {

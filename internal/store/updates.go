@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -106,12 +107,12 @@ func (s *Store) settleUpdate(ctx context.Context, c Caller, reader ReservationRe
 		return a, pending, fmt.Errorf("attempt %s: read scope: %w: %w", a.ID, ErrOutcomeUnknown, err)
 	}
 	overtaken := updateOvertaken(a, hold)
-	final, err := s.finalUpdateKeys(ctx, a.ID)
+	finals, err := s.scanFinals(ctx, a.ID)
 	if err != nil {
 		return a, Settlement{}, err
 	}
 	for _, k := range keys {
-		if final[k] {
+		if finals[keyLookup(k)] {
 			continue
 		}
 		look, err := reader.ReceiptByKey(ctx, a.Task, ReservationUpdate, requestKeyDigest(k))
@@ -130,7 +131,7 @@ func (s *Store) settleUpdate(ctx context.Context, c Caller, reader ReservationRe
 			// Read after the hold was seen past the request, this key's
 			// "none" is final (none_finality's proofless rule).
 			if overtaken {
-				if err := s.markKeyFinal(ctx, a.ID, k); err != nil {
+				if err := s.markScanFinal(ctx, a.ID, keyLookup(k), s.now()); err != nil {
 					return a, pending, err
 				}
 			}
@@ -145,33 +146,13 @@ func (s *Store) settleUpdate(ctx context.Context, c Caller, reader ReservationRe
 	return out, Settlement{Settled: true, Outcome: string(outcomeNotCommitted)}, err
 }
 
-// finalUpdateKeys are attemptID's update keys whose "none" is final.
-func (s *Store) finalUpdateKeys(ctx context.Context, attemptID string) (map[string]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT request_key FROM update_key_finals WHERE attempt_id = ?`, attemptID)
-	if err != nil {
-		return nil, fmt.Errorf("read final update keys: %w", err)
-	}
-	defer rows.Close()
-	out := map[string]bool{}
-	for rows.Next() {
-		var k string
-		if err := rows.Scan(&k); err != nil {
-			return nil, err
-		}
-		out[k] = true
-	}
-	return out, rows.Err()
-}
+// MaxSupersededKeys bounds the keys an update step can supersede, so that
+// settling it takes at most one hold read and MaxSupersededKeys+1 receipt
+// reads: well within one read window of the reconciler (crew-execution b3b).
+const MaxSupersededKeys = 8
 
-// markKeyFinal records that an update key's "none" is final.
-func (s *Store) markKeyFinal(ctx context.Context, attemptID, key string) error {
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO update_key_finals (request_key, attempt_id, final_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
-		key, attemptID, formatTime(s.now())); err != nil {
-		return fmt.Errorf("record a final none: %w", err)
-	}
-	return nil
-}
+// ErrSupersedeLimit refuses a supersede past MaxSupersededKeys.
+var ErrSupersedeLimit = errors.New("supersede_limit")
 
 // supersedeUpdateCommand gives the holder's pending update step a new request
 // key. The update itself does not change: the same intent and detail, at the
@@ -198,6 +179,14 @@ func supersedeUpdateCommand(c Caller, key, attemptID string, in WorkUpdate, supe
 			}
 			if string(in.Intent) != a.PendingIntent || in.Detail != a.PendingDetail {
 				return nil, fmt.Errorf("%w: a superseding update repeats the pending update's intent and detail", ErrInvalid)
+			}
+			var aliases int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM superseded_updates WHERE attempt_id = ?`,
+				a.ID).Scan(&aliases); err != nil {
+				return nil, fmt.Errorf("count superseded keys: %w", err)
+			}
+			if aliases >= MaxSupersededKeys {
+				return nil, fmt.Errorf("attempt %s: the update already superseded %d keys: %w", a.ID, aliases, ErrSupersedeLimit)
 			}
 			n, err := nextIntent(ctx, tx, a.ID)
 			if err != nil {

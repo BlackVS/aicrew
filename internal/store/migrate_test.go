@@ -108,7 +108,7 @@ func downgradeToV10(t *testing.T, path string) {
 	}
 	stmts = append(stmts,
 		// Tables added after v10 that reference attempts go first.
-		`DROP TABLE update_key_finals`, `DROP TABLE coordination_proofs`, `DROP TABLE superseded_updates`,
+		`DROP TABLE scan_finals`, `DROP TABLE coordination_proofs`, `DROP TABLE superseded_updates`,
 		`INSERT INTO attempts_v10 (`+attemptsV10Columns+`) SELECT `+attemptsV10Columns+` FROM attempts`,
 		`DROP TABLE attempts`,
 		`ALTER TABLE attempts_v10 RENAME TO attempts`,
@@ -468,10 +468,8 @@ func dropRecoveredColumns(t *testing.T, raw *sql.DB) {
 			t.Fatal(err)
 		}
 	}
-	for _, stmt := range []string{`ALTER TABLE coordination_proofs DROP COLUMN none_final_at`, `DROP TABLE update_key_finals`} {
-		if _, err := raw.Exec(stmt); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := raw.Exec(`DROP TABLE scan_finals`); err != nil {
+		t.Fatal(err)
 	}
 }
 

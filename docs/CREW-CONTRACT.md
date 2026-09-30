@@ -508,6 +508,9 @@ begin needs an `Idempotency-Key`; settle does not.
       aimem's revision check lets at most one of its keys commit.
     - Every key is an alias of the one step: settling under any of them
       settles it, and each keeps the step's outcome.
+    - A step supersedes at most 8 keys; the next supersede is refused with
+      `409 supersede_limit`. Settling the step then takes at most one hold
+      read and 9 receipt reads.
 - **Decline.** `/{id}/decline`, with an empty body or `{}`: the offer's
   worker declines.
   - It is local: there is no step and no proof. The coordinator then
@@ -586,7 +589,7 @@ begin needs an `Idempotency-Key`; settle does not.
     in any team;
   - `409` for `agent_busy`, `attempt_state`, `offer_expired`,
     `offer_declined`, `offer_stale`, `instruction_mismatch`,
-    `delivery_unconfirmed` and `step_settled`;
+    `delivery_unconfirmed`, `supersede_limit` and `step_settled`;
   - `404 step_unknown`: no step of the attempt has that request key;
   - the retryable `503 outcome_unknown`, with `Retry-After`: the read scope
     did not answer, or showed a receipt that is not the step's.
@@ -626,12 +629,27 @@ answers, as its own reconciler caller.
   rule is checked again inside the closing transaction.
 - **Nothing on time alone.** A read that fails, is refused or is malformed
   settles and closes nothing, however long it lasts.
-- **Pacing.** A round runs every 15 s: pending steps oldest first, then the
-  holds least recently checked first. Its reads stay within 30 in any
-  rolling minute, half of the read credential's 60, the rest being left to
-  members' settles. When aimem answers `rate_limited` or
-  `request_in_progress`, the loop pauses for aimem's `Retry-After`, and at
-  least one round.
+- **Progress across windows.** A step's settle reads one lookup per proof,
+  or per key of an update. A lookup whose `none` is final is recorded as the
+  step's scan progress and not read again: a proof's, when read at least
+  10 s after the proof ended or expired; an update key's, when read after
+  the hold's fence or revision was seen past the request. So a step with
+  more lookups than a read window finishes across windows and restarts,
+  whatever its kind. Proofs are read newest first, since only the newest can
+  still be live.
+- **Bounded work per step.** An update step reads at most its hold and 9
+  keys (the supersede cap). A proof-backed step reads its proofs that are
+  not yet final: in practice the newest, and those replaced in the last
+  10 s.
+- **Pacing.** A round runs every 15 s and takes every candidate, a pending
+  step or a hold, least recently checked first (pending steps first among
+  equals). A candidate whose scan the budget interrupts counts as checked:
+  it goes to the back of the line and resumes from its recorded progress,
+  so no candidate holds the head of the queue across windows. Its reads
+  stay within 30 in any rolling minute, half of the read credential's 60,
+  the rest being left to members' settles. When aimem answers
+  `rate_limited` or `request_in_progress`, the loop pauses for aimem's
+  `Retry-After`, and at least one round.
 
 ### Working in a team session: a fresh conversation
 

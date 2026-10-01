@@ -222,7 +222,15 @@ func fakeServe(port, status string) int {
 			w.WriteHeader(http.StatusUnauthorized)
 			return false
 		}
-		return r.URL.Query().Get("location[directory]") == cwd
+		// The same directory under another name (macOS's /var is a link to
+		// /private/var) is the same directory.
+		dir, err := filepath.EvalSymlinks(r.URL.Query().Get("location[directory]"))
+		self, _ := filepath.EvalSymlinks(cwd)
+		if err != nil || dir != self {
+			http.Error(w, "unknown directory", http.StatusNotFound)
+			return false
+		}
+		return true
 	}
 	mux.HandleFunc("/api/skill", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {

@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -510,12 +511,35 @@ func TestRefusalCodeMapping(t *testing.T) {
 	}
 }
 
+// frozenClock holds the server's limiters at one instant, so that a burst is
+// judged against the limits however long the runner takes over it; advance
+// moves the instant on. The handlers read it while the test advances it.
+type frozenClock struct{ ns atomic.Int64 }
+
+func newFrozenClock() *frozenClock {
+	c := &frozenClock{}
+	c.ns.Store(time.Unix(1_000_000, 0).UnixNano())
+	return c
+}
+
+func (c *frozenClock) now() time.Time          { return time.Unix(0, c.ns.Load()) }
+func (c *frozenClock) advance(d time.Duration) { c.ns.Add(int64(d)) }
+
+// drive sets the clock of s's limiters; it runs after New builds them and
+// before the server serves.
+func (c *frozenClock) drive(s *Server) {
+	for _, l := range []*limiter{s.challengeLimit, s.tokenLimit, s.refreshLimit} {
+		l.now = c.now
+	}
+}
+
 // D-2e: the per-address and per-session limits.
 func TestRateLimits(t *testing.T) {
 	if ChallengesPerMinute != 10 || ExchangesPerMinute != 20 || RefreshesPerMinute != 6 {
 		t.Fatal("the rate limits differ from D-2e's 10, 20 and 6 a minute")
 	}
-	e := setupAPI(t)
+	clock := newFrozenClock()
+	e := setupAPI(t, clock.drive)
 	for i := 0; i < ChallengesPerMinute; i++ {
 		if got := e.challenge(t, "k"+strings.Repeat("c", i+1), e.agentID); got.status != http.StatusOK {
 			t.Fatalf("challenge %d: %d %s", i, got.status, got.raw)
@@ -526,8 +550,14 @@ func TestRateLimits(t *testing.T) {
 	if got.header.Get("Retry-After") == "" {
 		t.Fatal("no Retry-After")
 	}
+	// The limit is the frozen clock's: once it moves past one refill, a
+	// challenge is admitted again.
+	clock.advance(time.Minute / ChallengesPerMinute)
+	if got := e.challenge(t, "after-refill", e.agentID); got.status != http.StatusOK {
+		t.Fatalf("challenge after a refill: %d %s", got.status, got.raw)
+	}
 
-	e2 := setupAPI(t)
+	e2 := setupAPI(t, newFrozenClock().drive)
 	token := e2.enter(t, "enter").body["access_token"].(string)
 	for i := 0; i < RefreshesPerMinute; i++ {
 		if got := e2.exchange(t, "r"+strings.Repeat("r", i+1), refreshForm(token)); got.status != http.StatusOK {

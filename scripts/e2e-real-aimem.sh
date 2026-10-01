@@ -63,7 +63,7 @@ if [ -n "$skip" ]; then
   failed=0
   : > "$out/skip-matrix.txt"
   cases="F1-reply F1-request F2-begin F2-settle F5-stale F5-replay F5-resume F5-delay"
-  cases="$cases F3-launcher F3-aicrewd F3-hub F4-second F4-race F4-busy F6-release F6-cancel F6-unreachable F7-leak"
+  cases="$cases F3-launcher F3-aicrewd F3-hub F4-second F4-race F4-lost F4-busy F6-release F6-cancel F6-unreachable F7-leak"
   for c in $cases; do
     scenario="${c%%-*}"
     rm -f "$out/report-skip-$c.jsonl"

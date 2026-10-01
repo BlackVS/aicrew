@@ -187,8 +187,9 @@ held back.
     aicrew's at begin (`task_busy`, `agent_busy`), or aimem's at the claim
     (`reservation_conflict`, `revision_conflict`, `stale_fence`). A
     failure, a non-answer, or a step lost before commit and settled as
-    `not_committed` is none of them, and the scenario checks that its
-    predicate rejects the last.
+    `not_committed` is none of them. The scenario checks that its
+    predicate rejects the last, and the F4-lost case shows the race's own
+    assertion failing on it.
 - **F6. Recovery through the read scope.**
   - aimem's `recover release`, and `recover cancel`, on a running attempt:
     aicrewd closes it as recovered, with `closed_by` and the closing fence.
@@ -228,13 +229,16 @@ rather than failing by construction:
 - the F5 replay and resume cases replay a live proof under its own step's
   key, which aimem accepts;
 - the F4 cases aim the competing step at a free task, or free the worker;
+- F4-lost replaces the race loser's real answer with a step lost before
+  commit (the driver's synthesized `not_committed`), which the race's
+  assertion must refuse;
 - F7-leak plants a secret in a scanned log.
 
 The cases are:
 - F1-reply, F1-request;
 - F2-begin, F2-settle;
 - F3-launcher, F3-aicrewd, F3-hub;
-- F4-second, F4-race, F4-busy;
+- F4-second, F4-race, F4-lost, F4-busy;
 - F5-stale, F5-replay, F5-resume, F5-delay;
 - F6-release, F6-cancel, F6-unreachable;
 - F7-leak.

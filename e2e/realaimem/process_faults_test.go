@@ -355,6 +355,21 @@ func (h *harness) f4CompetingSteps(t *testing.T) {
 		_ = json.Unmarshal(r.ans.Result, &sr)
 		return r.code == 0 && sr.Settled && sr.Outcome == "committed"
 	}
+	// A step lost before commit settles as the driver's not_committed: no
+	// commit, and no conflict either.
+	lost := StepAnswerLite{Status: "refused",
+		Result: json.RawMessage(`{"report":{"outcome":"refused","code":"not_committed"},"settled":true,"outcome":"not_committed"}`)}
+	raceCase := "F4-race"
+	if skipFault("F4-lost") {
+		// The control: the loser's answer becomes a lost step's, and the
+		// race's own assertion must refuse it.
+		raceCase = "F4-lost"
+		if !committed(o) {
+			o.ans, o.code = lost, 3
+		} else {
+			c.ans, c.code = lost, 3
+		}
+	}
 	wins := 0
 	var loser *out
 	for _, r := range []out{o, c} {
@@ -366,13 +381,9 @@ func (h *harness) f4CompetingSteps(t *testing.T) {
 		}
 	}
 	// The loser must be a conflict refusal: aicrew's at begin, or aimem's
-	// at the claim. A failure or a non-answer is neither.
+	// at the claim. A failure, a non-answer or a lost step is none of them.
 	loserRefused := loser != nil && (refusedAtBegin(loser.ans, "task_busy", "agent_busy") || refusedByAimem(loser.ans))
-	// The predicate's own negatives: a step lost before commit and settled
-	// as not committed, and a failure, are not conflict refusals.
-	lost := StepAnswerLite{Status: "refused",
-		Result: json.RawMessage(`{"report":{"outcome":"refused","code":"not_committed"},"settled":true,"outcome":"not_committed"}`)}
-	sc.check("F4: a step lost before commit is not taken for a conflict refusal",
+	sc.check("F4: a step lost before commit, or a failure, is not taken for a conflict refusal",
 		!refusedByAimem(lost) && !refusedAtBegin(lost, "task_busy", "agent_busy") && !refusedByAimem(StepAnswerLite{Status: "failed"}))
 	open := 0
 	for _, a := range h.attemptsOfTask(sc, race.ID) {
@@ -380,7 +391,7 @@ func (h *harness) f4CompetingSteps(t *testing.T) {
 			open++
 		}
 	}
-	sc.checkCase("F4-race", "F4: of an offer and a claim racing for one task, exactly one commits, the other is refused, one attempt is open",
+	sc.checkCase(raceCase, "F4: of an offer and a claim racing for one task, exactly one commits, the other is refused, one attempt is open",
 		wins == 1 && loserRefused && open == 1 && holdState(h.hold(sc, race.ID)) == "held", describe(o.ans), describe(c.ans))
 	for _, tk := range []taskRef{race, other} {
 		for _, a := range h.attemptsOfTask(sc, tk.ID) {

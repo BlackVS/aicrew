@@ -49,6 +49,7 @@ Run these before every push; CI runs the same:
 bash scripts/check-repo.sh     # repository hygiene
 gofmt -l .                     # must print nothing
 go vet ./...
+GOOS=linux go vet -tags realaimem ./e2e/...   # the real-aimem harness compiles
 go mod verify
 go mod tidy -diff              # must print nothing
 go test -count=1 ./...
@@ -66,6 +67,9 @@ CGO_ENABLED=1 go test -race -count=1 ./internal/agent/
 ```
 
 It needs cgo (a C compiler). On a Windows host without one, run it in WSL.
+
+The end-to-end runs against a real aimem are not part of these checks:
+`scripts/e2e-real-aimem.sh` (`docs/E2E-REAL-AIMEM.md`).
 
 ## Layout
 

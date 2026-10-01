@@ -42,6 +42,8 @@ jobs:
         run: go mod tidy -diff
       - name: go vet
         run: go vet ./...
+      - name: go vet (the real-aimem harness, behind its build tag)
+        run: GOOS=linux go vet -tags realaimem ./e2e/...
 
   go-test:
     strategy:

@@ -183,9 +183,12 @@ held back.
   - A claim of a task with an open attempt is refused `task_busy` at begin.
   - An offer to a busy worker is refused `agent_busy` at begin.
   - An offer and a claim racing for one task: exactly one commits, and one
-    attempt is open. The loser's answer must be a conflict refusal, aicrew's
-    at begin or aimem's at the claim. A failure or a non-answer is
-    neither.
+    attempt is open. The loser's answer must be a conflict refusal:
+    aicrew's at begin (`task_busy`, `agent_busy`), or aimem's at the claim
+    (`reservation_conflict`, `revision_conflict`, `stale_fence`). A
+    failure, a non-answer, or a step lost before commit and settled as
+    `not_committed` is none of them, and the scenario checks that its
+    predicate rejects the last.
 - **F6. Recovery through the read scope.**
   - aimem's `recover release`, and `recover cancel`, on a running attempt:
     aicrewd closes it as recovered, with `closed_by` and the closing fence.

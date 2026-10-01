@@ -48,15 +48,22 @@ func refusedAtBegin(ans StepAnswerLite, codes ...string) bool {
 	return ans.Status == "refused" && !ans.OK && ans.Error != nil && contains(codes, ans.Error.Code)
 }
 
-// refusedByAimem reports whether a step's answer is aimem's refusal of the
-// mutation: the report refused with aimem's code, and not committed.
+// aimemConflictCodes are aimem's own refusals of a mutation that lost to
+// another (internal/server/reservations.go at the pin). The driver's
+// not_committed, made from a receipt after a lost reply, is not one: it
+// proves no commit, not a conflict.
+var aimemConflictCodes = []string{"reservation_conflict", "revision_conflict", "stale_fence"}
+
+// refusedByAimem reports whether a step's answer is aimem's conflict refusal
+// of the mutation: the report refused with one of aimem's conflict codes,
+// and not committed.
 func refusedByAimem(ans StepAnswerLite) bool {
 	var sr stepResult
 	if json.Unmarshal(ans.Result, &sr) != nil {
 		return false
 	}
-	return (ans.Status == "refused" || ans.Status == "pending") && sr.Report.Outcome == "refused" && sr.Report.Code != "" &&
-		sr.Outcome != "committed"
+	return (ans.Status == "refused" || ans.Status == "pending") && sr.Report.Outcome == "refused" &&
+		contains(aimemConflictCodes, sr.Report.Code) && sr.Outcome != "committed"
 }
 
 // pendingStepKey is the request key of mem's recorded step on task.
@@ -361,6 +368,12 @@ func (h *harness) f4CompetingSteps(t *testing.T) {
 	// The loser must be a conflict refusal: aicrew's at begin, or aimem's
 	// at the claim. A failure or a non-answer is neither.
 	loserRefused := loser != nil && (refusedAtBegin(loser.ans, "task_busy", "agent_busy") || refusedByAimem(loser.ans))
+	// The predicate's own negatives: a step lost before commit and settled
+	// as not committed, and a failure, are not conflict refusals.
+	lost := StepAnswerLite{Status: "refused",
+		Result: json.RawMessage(`{"report":{"outcome":"refused","code":"not_committed"},"settled":true,"outcome":"not_committed"}`)}
+	sc.check("F4: a step lost before commit is not taken for a conflict refusal",
+		!refusedByAimem(lost) && !refusedAtBegin(lost, "task_busy", "agent_busy") && !refusedByAimem(StepAnswerLite{Status: "failed"}))
 	open := 0
 	for _, a := range h.attemptsOfTask(sc, race.ID) {
 		if a.State != "closed" {

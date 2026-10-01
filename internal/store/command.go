@@ -202,8 +202,18 @@ func decodeResult(result string, out any) error {
 	return nil
 }
 
+// timeType is time.Time, which validateText does not enter.
+var timeType = reflect.TypeFor[time.Time]()
+
 // validateText refuses any string reachable from v that is not valid UTF-8.
+// It does not enter a time.Time: JSON encodes one through its MarshalJSON,
+// as RFC 3339 with a numeric offset, so no string inside it reaches the
+// input, and its *Location may be time.Local, which the time package fills
+// in lazily from another goroutine.
 func validateText(v reflect.Value) error {
+	if v.IsValid() && v.Type() == timeType {
+		return nil
+	}
 	switch v.Kind() {
 	case reflect.Pointer, reflect.Interface:
 		if v.IsNil() {

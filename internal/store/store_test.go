@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func openTemp(t *testing.T) (*Store, string) {
@@ -467,5 +469,31 @@ func TestConcurrentConflictingWritesHaveOneWinner(t *testing.T) {
 	got, err := s.GetTeam(ctx, tm.ID)
 	if err != nil || got.Revision != 2 || len(got.Projects) != 1 {
 		t.Errorf("team after race = %+v, %v", got, err)
+	}
+}
+
+// A command's input is checked for invalid UTF-8 in the strings it encodes,
+// and only those: validateText does not enter a time.Time, whose zone name
+// JSON never encodes and whose *Location the time package may be filling in
+// meanwhile (a data race under -race).
+func TestInputDigestStopsAtTime(t *testing.T) {
+	odd := time.Date(2026, 10, 1, 12, 0, 0, 0, time.FixedZone("zone-\xff", 2*60*60))
+	type input struct {
+		Text string
+		At   time.Time
+		When *time.Time
+	}
+	encoded, _, err := inputDigest(input{Text: "ok", At: odd, When: &odd})
+	if err != nil {
+		t.Fatalf("a time in a zone named with invalid UTF-8: %v, want it accepted", err)
+	}
+	if strings.Contains(encoded, "zone-") || !strings.Contains(encoded, `"2026-10-01T12:00:00+02:00"`) {
+		t.Fatalf("encoded input = %s, want the time as RFC 3339 with its offset and no zone name", encoded)
+	}
+	if _, _, err := inputDigest(input{Text: "bad \xff", At: odd}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid text beside a time: %v, want ErrInvalid", err)
+	}
+	if _, _, err := inputDigest(map[string]any{"at": odd, "note": []string{"fine", "\xff"}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid text in a nested slice beside a time: %v, want ErrInvalid", err)
 	}
 }

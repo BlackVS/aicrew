@@ -36,6 +36,26 @@ type TrustedDelivery struct {
 // post-merge CI.
 var DevelopmentDelivery = []string{"reviewed_head", "human_merge", "post_merge_ci"}
 
+// maxOfferedEvidence is the most references a member or a trusted caller
+// may give: a finalize adds the attempt's identity (withAttemptIdentity)
+// and carries at most maxDeliveryEvidence to aimem.
+const maxOfferedEvidence = maxDeliveryEvidence - 1
+
+// withAttemptIdentity is the evidence a finalize of a carries (1aad G2): the
+// delivery references, then one naming the attempt and the member that
+// worked it. It is part of the terminal evidence, so the
+// accepted_for_finalization evidence digest covers it.
+func withAttemptIdentity(a Attempt, delivered []Evidence) []Evidence {
+	out := append([]Evidence(nil), delivered...)
+	return append(out, Evidence{Kind: "text", Ref: attemptIdentity(a.ID, a.WorkerAgentID)})
+}
+
+// attemptIdentity names an attempt and its member in a reference aimem keeps
+// with the task's results.
+func attemptIdentity(attemptID, agentID string) string {
+	return "aicrew attempt " + attemptID + " by member " + agentID
+}
+
 // check requires a stated requirement and a reference for every required
 // kind, at most maxDeliveryEvidence of them, each of a shape aimem accepts
 // as terminal evidence (checkEvidenceRef).
@@ -43,8 +63,8 @@ func (d TrustedDelivery) check() error {
 	if len(d.Required) == 0 {
 		return fmt.Errorf("%w: the project's delivery requirement is missing", ErrInvalid)
 	}
-	if len(d.Evidence) > maxDeliveryEvidence {
-		return fmt.Errorf("%w: at most %d delivery references", ErrInvalid, maxDeliveryEvidence)
+	if len(d.Evidence) > maxOfferedEvidence {
+		return fmt.Errorf("%w: at most %d delivery references", ErrInvalid, maxOfferedEvidence)
 	}
 	have := map[string]bool{}
 	for _, e := range d.Evidence {

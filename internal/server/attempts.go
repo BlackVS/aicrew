@@ -164,6 +164,9 @@ type offerBody struct {
 	Process           processPin    `json:"process"`
 	InstructionDigest string        `json:"instruction_digest"`
 	ExpiresAt         time.Time     `json:"expires_at"`
+	// DependencyEvidence is the client's read of the task's dependencies,
+	// recorded in the offer's audit (1aad G1).
+	DependencyEvidence []store.DependencyEvidence `json:"dependency_evidence"`
 }
 
 // offer begins the coordinator's offer of a task to a named worker. The
@@ -179,6 +182,7 @@ func (s *Server) offer(w http.ResponseWriter, r *http.Request) {
 		BaseCommit: in.BaseCommit, Branch: in.Branch, ExpiresAt: in.ExpiresAt,
 		Process: store.TrustedProcess{InstructionDigest: in.InstructionDigest, Identity: store.ProcessIdentity{
 			Repository: in.Process.Repo, Commit: in.Process.Commit, Manifest: in.Process.Manifest}},
+		Dependencies: in.DependencyEvidence,
 	})
 	s.writeStep(w, r, a, step, err)
 }

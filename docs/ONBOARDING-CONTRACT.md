@@ -7,9 +7,10 @@ Implemented: the invitation store and redemption (crew-onboarding 1 and 2),
 and the invitation surface (1a81-3): the operator's `aicrew invitation`
 command and the `aicrewd` begin and complete routes (CREW-CONTRACT, "Client
 session API"), and the client bootstrap (1a81-4): `aicrew-agent join`
-(DEVELOPMENT, "Joining a team"). Client dependency and wiring checks remain
-an implementation review (1a81-5).
-Updated 2026-09-30.
+(DEVELOPMENT, "Joining a team"), with its dependency and client check
+(1a81-5a, "Checking dependencies and clients"). Installing and upgrading
+dependencies remains an implementation review (1a81-5b).
+Updated 2026-10-01.
 
 Parent contracts, pinned:
 

@@ -223,7 +223,8 @@ func (e *joinEnv) invite(t *testing.T, key string, role store.Role) string {
 
 func (e *joinEnv) opts() JoinOptions {
 	return JoinOptions{Home: e.home, Label: "builder", URL: e.url,
-		Trust: tlstrust.Binding{Mode: tlstrust.SPKI, Value: e.pin}, AimemHub: "main", Terminal: true}
+		Trust: tlstrust.Binding{Mode: tlstrust.SPKI, Value: e.pin}, AimemHub: "main", Terminal: true,
+		Clients: []string{"claude"}}
 }
 
 // deps wires the real client through crew, aimem in process, and a prompt
@@ -245,6 +246,7 @@ func (e *joinEnv) deps(crew *recCrew, am *fakeJoinAimem, reads *int, codes ...st
 		},
 		Out:   &e.out,
 		Sleep: func(context.Context, time.Duration) error { return nil },
+		check: readyCheck,
 	}
 }
 
@@ -385,7 +387,7 @@ func TestJoinRerunLinkedHome(t *testing.T) {
 	os.WriteFile(path("creds/aimem.main.agent"), []byte("material\n"), 0o600)
 	doc := readJSON(t, path("agent.json"))
 	doc["managed"].(map[string]any)["CLAUDE.md"] = digestOf([]byte(old))
-	doc["clients"] = map[string]any{"claude": "configured"}
+	doc["notes"] = map[string]any{"owner": "operator"}
 	doc["aicrew"].(map[string]any)["client_command"] = "/opt/claude"
 	raw, _ := json.Marshal(doc)
 	os.WriteFile(path("agent.json"), raw, 0o644)
@@ -412,7 +414,7 @@ func TestJoinRerunLinkedHome(t *testing.T) {
 	if managed["CLAUDE.md"] != digestOf([]byte(claudeMD)) || managed["AGENTS.md"] != digestOf([]byte(agentsMD)) {
 		t.Fatalf("managed digests %v", managed)
 	}
-	if doc["clients"] == nil || doc["aicrew"].(map[string]any)["client_command"] != "/opt/claude" {
+	if doc["notes"] == nil || doc["aicrew"].(map[string]any)["client_command"] != "/opt/claude" {
 		t.Fatalf("agent.json lost keys: %v", doc)
 	}
 	if _, err := LoadConfig(e.home); err != nil {
@@ -803,4 +805,16 @@ func TestJoinMalformedCredentialAnswerStops(t *testing.T) {
 			}
 		})
 	}
+}
+
+// readyCheck stands in for the dependency and client check in the join
+// tests, which check_test.go covers: it records the selected clients as the
+// real check does, and reports ready.
+func readyCheck(_ context.Context, o CheckOptions, doc *agentDoc, _ bool) (CheckReport, error) {
+	sel, err := selectClients(o.Clients, *doc)
+	if err != nil {
+		return CheckReport{}, err
+	}
+	doc.set(doc.top, "clients", sel)
+	return CheckReport{Status: JoinReady}, nil
 }

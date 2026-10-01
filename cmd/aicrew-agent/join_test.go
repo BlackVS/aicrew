@@ -31,7 +31,7 @@ func noJoinDeps(t *testing.T) agent.JoinDeps {
 }
 
 var joinFlags = []string{"-label", "builder", "-url", "https://aicrew.example", "-tls-trust-mode", "ca_dns",
-	"-tls-trust-value", "aicrew.example", "-aimem-hub", "main"}
+	"-tls-trust-value", "aicrew.example", "-aimem-hub", "main", "-client", "claude"}
 
 // The code is accepted from no flag, and incomplete or malformed options
 // are usage errors.
@@ -43,7 +43,7 @@ func TestJoinUsage(t *testing.T) {
 		append([]string{"-home", home, "-code", "ABCD"}, joinFlags...),
 		{"-home", home, "-label", "builder"},
 		{"-home", home, "-label", "builder", "-url", "http://aicrew.example", "-tls-trust-mode", "ca_dns",
-			"-tls-trust-value", "aicrew.example", "-aimem-hub", "main"},
+			"-tls-trust-value", "aicrew.example", "-aimem-hub", "main", "-client", "claude"},
 	} {
 		var out, errb bytes.Buffer
 		if code := join(context.Background(), args, true, &out, &errb, noJoinDeps(t)); code != exitUsage {
@@ -74,13 +74,18 @@ func TestJoinCommand(t *testing.T) {
 	cfg := `{"layout": 1, "label": "builder", "aicrew": {"url": "https://aicrew.example", "tls_trust_mode": "ca_dns",
 		"tls_trust_value": "aicrew.example", "agent_id": "agent-1", "team_id": "team-1", "aimem_hub": "main"}}`
 	os.WriteFile(filepath.Join(home, "agent.json"), []byte(cfg), 0o600)
+	// A home linked before clients were recorded: the refresh writes the
+	// managed files, and the check stops it until a client is selected,
+	// before asking any client anything.
 	out.Reset()
-	if code := join(context.Background(), []string{"-home", home}, false, &out, &errb, noJoinDeps(t)); code != exitOK {
+	if code := join(context.Background(), []string{"-home", home}, false, &out, &errb, noJoinDeps(t)); code != exitFailed {
 		t.Fatalf("refresh: exit %d, %s %s", code, out.String(), errb.String())
 	}
-	if !bytes.Contains(out.Bytes(), []byte("status: ready")) ||
-		!bytes.Contains(out.Bytes(), []byte("aicrew-agent session start -home")) {
+	if !bytes.Contains(out.Bytes(), []byte("status: blocked")) || !bytes.Contains(out.Bytes(), []byte("-client claude")) {
 		t.Fatalf("refresh output %s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, "AGENTS.md")); err != nil {
+		t.Fatalf("the refresh did not write the managed files: %v", err)
 	}
 	out.Reset()
 	code = join(context.Background(), []string{"-home", home, "-url", "https://other.example"}, false, &out, &errb,

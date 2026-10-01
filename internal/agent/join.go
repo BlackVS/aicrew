@@ -60,6 +60,9 @@ type JoinOptions struct {
 	// Terminal reports whether the code can be read at a hidden prompt. The
 	// code is never taken from anywhere else.
 	Terminal bool
+	// Clients are the clients the home is for (claude, opencode): required
+	// on the first run, kept in agent.json after.
+	Clients []string
 }
 
 // JoinDeps are the bootstrap's collaborators; tests replace them.
@@ -69,6 +72,9 @@ type JoinDeps struct {
 	ReadCode func() (string, error) // the hidden prompt
 	Out      io.Writer              // the plan and progress, never a secret
 	Sleep    func(context.Context, time.Duration) error
+	// check runs the dependency and client check at the end of a run; nil
+	// means the real one (runCheck). Package tests replace it.
+	check func(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) (CheckReport, error)
 }
 
 // JoinAimem is what the bootstrap asks of aimem.
@@ -92,6 +98,8 @@ type JoinReport struct {
 	Redeemed    bool         `json:"redeemed"` // this run redeemed an invitation
 	Changes     []FileChange `json:"changes,omitempty"`
 	Next        string       `json:"next,omitempty"`
+	// Check is the dependency and client check of the home (1a81-5a).
+	Check *CheckReport `json:"check,omitempty"`
 }
 
 // ErrJoinUsage is an invalid option; the report's instruction says which.
@@ -123,6 +131,9 @@ func blocked(o JoinOptions, reason, instruction string) JoinReport {
 func Join(ctx context.Context, o JoinOptions, deps JoinDeps) (JoinReport, error) {
 	if deps.Sleep == nil {
 		deps.Sleep = sleepCtx
+	}
+	if deps.check == nil {
+		deps.check = runCheck
 	}
 	if deps.Out == nil {
 		deps.Out = io.Discard
@@ -157,7 +168,7 @@ func Join(ctx context.Context, o JoinOptions, deps JoinDeps) (JoinReport, error)
 	// One run at a time per home. A run that waited here reads what the
 	// other wrote, so it never writes back an agent.json read before the
 	// home was linked.
-	unlock, err := filelock.Lock(ctx, filepath.Join(j.o.Home, "state", "aicrew-join.lock"))
+	unlock, err := filelock.Lock(ctx, filepath.Join(j.o.Home, "state", homeLockName))
 	if err != nil {
 		return JoinReport{}, err
 	}
@@ -175,9 +186,9 @@ func Join(ctx context.Context, o JoinOptions, deps JoinDeps) (JoinReport, error)
 		}
 	}
 	if j.doc.linked() {
-		fmt.Fprintf(j.deps.Out, "This home is linked to agent %s in team %s: refreshing its files only.\n",
+		fmt.Fprintf(j.deps.Out, "This home is linked to agent %s in team %s: refreshing its files and checking its clients.\n",
 			str(j.doc.aicrew, "agent_id"), str(j.doc.aicrew, "team_id"))
-		return j.prepare(false)
+		return j.prepare(ctx, false)
 	}
 	return j.join(ctx)
 }
@@ -194,8 +205,14 @@ func (j *joiner) options() error {
 	if o.AimemHub != "" && !aimemHubShape.MatchString(o.AimemHub) {
 		return errors.New("-aimem-hub must be an aimem hub name: lowercase letters, digits and '-'")
 	}
+	if _, err := selectClients(o.Clients, j.doc); err != nil {
+		return err
+	}
 	if j.doc.linked() {
 		return nil // refresh checks the flags against the recorded binding
+	}
+	if len(o.Clients) == 0 && len(j.doc.clients()) == 0 {
+		return errors.New("-client claude or -client opencode is required to join: the client this home is for")
 	}
 	if o.URL == "" || o.Trust.Mode == "" || o.AimemHub == "" {
 		return errors.New("-url, -tls-trust-mode, -tls-trust-value and -aimem-hub are required to join")
@@ -279,7 +296,7 @@ func (j *joiner) join(ctx context.Context) (JoinReport, error) {
 		return JoinReport{}, err
 	}
 	fmt.Fprintf(j.deps.Out, "Linked: agent %s, team %s, role %s.\n", res.AgentID, res.TeamID, res.Role)
-	rep, err := j.prepare(true)
+	rep, err := j.prepare(ctx, true)
 	rep.Role = res.Role
 	return rep, err
 }
@@ -508,7 +525,7 @@ func (j *joiner) stop(err error) JoinReport {
 
 // prepare creates the layout and applies the home files, showing the plan
 // first, and reports the result.
-func (j *joiner) prepare(redeemed bool) (JoinReport, error) {
+func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error) {
 	o := j.o
 	if err := makeLayout(o.Home); err != nil {
 		return JoinReport{}, err
@@ -545,6 +562,22 @@ func (j *joiner) prepare(redeemed bool) (JoinReport, error) {
 				"locally, so its new version was written beside it as <file>.aicrew-new: merge it by hand"
 			break
 		}
+	}
+	// The home is ready only when its dependencies and clients are (K7).
+	fmt.Fprintln(j.deps.Out, "Client wiring:")
+	crep, err := j.deps.check(ctx, CheckOptions{Home: o.Home, Clients: o.Clients, Out: j.deps.Out}, &j.doc, redeemed)
+	if err != nil {
+		return JoinReport{}, err
+	}
+	if err := j.doc.write(o.Home); err != nil {
+		return JoinReport{}, err
+	}
+	rep.Check = &crep
+	switch {
+	case crep.Status == JoinBlocked:
+		rep.Status, rep.Reason = JoinBlocked, crep.Reason
+	case crep.Status == JoinRestartRequired && rep.Status == JoinReady:
+		rep.Status = JoinRestartRequired
 	}
 	return rep, nil
 }

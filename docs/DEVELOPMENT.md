@@ -326,14 +326,16 @@ redeems an invitation and prepares the agent home (`docs/WORKSPACE.md`):
 
 ```sh
 bin/aicrew-agent join -label builder -url https://aicrew.example:8443 \
-  -tls-trust-mode ca_dns -tls-trust-value aicrew.example -aimem-hub main
-bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh only
+  -tls-trust-mode ca_dns -tls-trust-value aicrew.example -aimem-hub main -client claude
+bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh and check
 ```
 
 - `-home` defaults to `~/aicrew/agents/<label>` (`%USERPROFILE%\aicrew\agents\<label>`
   on Windows). `-aimem-hub` is aimem's name for the hub whose identity the
   invitation names; `-aimem-command` overrides the `aimem` executable.
-  `-json` prints the report as JSON.
+  `-client claude|opencode` (or both, comma-separated) names the clients
+  the home is for: required on the first run, recorded in `agent.json`
+  after. `-json` prints the report as JSON.
 - The invitation code is read only at a hidden prompt on a terminal, never
   from an argument, a pipe, a file or the environment; off a terminal the
   command refuses. A code with a typing error (its checksum) is caught
@@ -358,14 +360,78 @@ bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh only
   after a crash or a lost reply resumes with the same keys. It is removed
   once the home is linked.
 - A linked home (its `agent.json` names the agent and team) is only
-  refreshed: no prompt, aimem or `aicrewd` call. One home serves one team,
-  so options naming another server, trust or aimem hub are refused.
-- The report is `ready`, `restart_required` (a managed guidance file
-  changed, so restart any client open in the home) or `blocked` with its
-  instruction; exit 0 for the first two, 1 when blocked or failed, 2 on
-  usage. It opens no session: it prints the `session start` command.
+  refreshed: no prompt, no identity proof and no `aicrewd` call. One home
+  serves one team, so options naming another server, trust or aimem hub
+  are refused.
+- Every run ends with the dependency and client check below, and its
+  report includes the check's.
+- The report is `ready`, `restart_required` (a managed guidance file or the
+  client wiring changed, so restart any client open in the home) or
+  `blocked` with its instructions; exit 0 for the first two, 1 when blocked
+  or failed, 2 on usage. A blocked check leaves the home linked: rerun
+  after following its instructions. It opens no session: it prints the
+  `session start` command.
 - It writes no secret. `creds/` is created empty and owner-only; the
   individual aimem credential stays in aimem's own storage.
+
+### Checking dependencies and clients: `aicrew-agent check`
+
+```sh
+bin/aicrew-agent check -home ~/aicrew/agents/builder [-client claude|opencode] [-json]
+bin/aicrew-agent version [-json]
+```
+
+The check (`join` runs it at its end) installs nothing. It reports:
+
+- **Versions against the supported set**, which is embedded in the build
+  (`internal/agent/supported.json`):
+  - aimem from `aimem version`;
+  - ai-skills from its installer's `.ai-skills.json` beside the skills the
+    clients read. The ai-skills installer does not write it yet
+    ([aiskills#24](https://github.com/BlackVS/aiskills/issues/24)); until a
+    release does, the ai-skills version is "unknown";
+  - each selected client from `--version`.
+
+  Older than the minimum gives `blocked`. Newer than tested gives a notice.
+  A source build's or an unrecorded version is "unknown": a notice that
+  neither blocks nor counts as supported.
+- **The client wiring.** One MCP entry per selected client, inside the
+  home only: `.mcp.json` `mcpServers.aimem` for Claude Code, and
+  `opencode.json` `mcp.aimem` for OpenCode, both running
+  `<aimem_command> mcp`.
+  - The entry is managed like the guidance files: added when missing,
+    updated only while it matches its recorded digest, and otherwise left
+    alone with the proposed file written as `<file>.aicrew-new`.
+  - Other keys in those files are kept.
+  - No hook is installed, and no user-level client configuration is read or
+    written.
+- **What the client sees.** Each selected client is asked whether aimem's
+  MCP server runs in the home and whether the required skills are
+  visible. There is no model call: the model endpoint is a local port that
+  closes every connection, and the key is a dummy.
+  - Claude Code: the print-mode init event and `claude mcp list`.
+  - OpenCode 1.x: `mcp list` and `debug skill`.
+  - OpenCode 2.x: its own `serve`, read through `/api/mcp` and `/api/skill`.
+
+  Each step is bounded (90 s). Print mode never shows Claude Code's
+  workspace-trust dialog. A project server Claude Code has not yet approved
+  for interactive use is reported as a notice: the first interactive start
+  in the home asks to trust the folder and to approve it.
+- **The instructions of a blocked report** are exact and pinned:
+  - aimem's verifying boot script with `AIMEM_VERSION`;
+  - the ai-skills release archive checked against its `SHA256SUMS` and
+    installed with `install.sh --user -t claude -s <skills>` (OpenCode reads
+    the same directory), because the ai-skills one-line boot does not
+    verify its download yet
+    ([aiskills#25](https://github.com/BlackVS/aiskills/issues/25));
+  - the client's npm package at the tested version.
+
+  OpenCode 1.x refusing data that OpenCode 2 wrote is reported, not
+  resolved.
+
+`version` reports the build: a release build stamps
+`github.com/BlackVS/aicrew/internal/version.Override` with `-ldflags -X`;
+a source build reports `dev` and its commit.
 
 ### Driving steps: `aicrew-agent step`
 

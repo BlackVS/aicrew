@@ -2,9 +2,11 @@
 
 Status: convention (task crew-workspace). `aicrew-agent join` (1a81-4)
 implements the home layout, `agent.json`, the managed files and the rerun
-rules (DEVELOPMENT, "Joining a team"). Repositories, worktrees and
-credential files are not implemented yet, and no installer is defined.
-Updated 2026-09-30.
+rules; `aicrew-agent check` (1a81-5a) the client wiring and the readiness
+check (DEVELOPMENT, "Joining a team" and "Checking dependencies and
+clients"). Repositories, worktrees and credential files are not implemented
+yet, and no installer is defined.
+Updated 2026-10-01.
 
 This document fixes where an aicrew agent keeps its configuration,
 credentials, guidance, recovery data, logs, repositories and worktrees, and
@@ -69,7 +71,9 @@ other key as it finds it:
     "agent_id": "01a0...",
     "team_id": "01a0..."
   },
-  "managed": {"AGENTS.md": "sha256:...", "CLAUDE.md": "sha256:...", "docs/START.md": "sha256:..."}
+  "clients": ["claude"],
+  "managed": {"AGENTS.md": "sha256:...", "CLAUDE.md": "sha256:...", "docs/START.md": "sha256:...",
+              ".mcp.json#mcpServers.aimem": "sha256:..."}
 }
 ```
 
@@ -79,7 +83,15 @@ other key as it finds it:
   `agent_id` and `team_id` are written once the invitation is redeemed; a
   home that has them is linked, to one team. `aimem_hub` is the reference to
   the individual aimem credential, which stays in aimem's own storage.
-- `managed` holds each managed file's digest at its last managed write.
+- `clients` are the clients the home is for (`claude`, `opencode`); the
+  check wires and verifies each.
+- `managed` holds each managed file's digest at its last managed write, and
+  each client's managed MCP entry (`<file>#<parent>.<name>`) the same way.
+
+Client wiring is project-level only: `.mcp.json` (Claude Code) and
+`opencode.json` (OpenCode) in the home, each with one managed `aimem` MCP
+entry and nothing else of the onboarding's. Hooks and user-level client
+configuration are not part of the home.
 
 ## Credentials
 
@@ -229,5 +241,5 @@ Reruns are non-destructive and repeatable:
 | Credential file format, OS store backend, encryption | onboarding and context implementation reviews |
 | Roles, grants and knowledge permissions | context contract and aimem knowledge access matrix |
 | Session persistence and `state/` formats | context contract local-session slice; aicrew execution and onboarding tasks |
-| Installer behavior, version sets, client wiring | crew-onboarding (1a81-5) |
+| Installing and upgrading dependencies (verified installers) | crew-onboarding (1a81-5b) |
 | Attempt identifiers and reservation fencing | crew-contract and the aimem reservation contract |

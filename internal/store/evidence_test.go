@@ -156,7 +156,9 @@ func TestFinalizeFactCarriesTheEvidenceDigest(t *testing.T) {
 	}
 	f := e.fact(t, st.CoordinationProof)
 	sent := reservationRequest(a, "").TerminalEvidence
-	if !f.Active || f.Kind != FactAcceptedForFinalization || f.EvidenceDigest != evidenceDigest(refsOf(evidence)) ||
+	identity := "aicrew attempt " + a.ID + " by member " + a.WorkerAgentID
+	if !f.Active || f.Kind != FactAcceptedForFinalization ||
+		f.EvidenceDigest != evidenceDigest(append(refsOf(evidence), identity)) ||
 		f.EvidenceDigest != evidenceDigest(sent) {
 		t.Fatalf("the finalize fact: %+v, sent %q", f, sent)
 	}

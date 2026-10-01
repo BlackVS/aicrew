@@ -308,22 +308,31 @@ func finalizeCommand(c Caller, key, attemptID string, in FinalizeRequest, confir
 				return nil, fmt.Errorf("%w: only the holder or the reviewing coordinator may finalize attempt %s",
 					ErrForbidden, a.ID)
 			}
-			var evidence string
+			var delivered []Evidence
 			if confirmed {
 				if a.DeliveryResult == 0 || a.DeliveryResult != a.AcceptedResult {
 					return nil, fmt.Errorf("attempt %s: result %d: %w", a.ID, a.AcceptedResult, ErrDeliveryUnconfirmed)
 				}
-				evidence = a.DeliveryEvidence
+				if err := json.Unmarshal([]byte(a.DeliveryEvidence), &delivered); err != nil {
+					return nil, fmt.Errorf("attempt %s: confirmed delivery evidence: %w", a.ID, err)
+				}
+				// A confirmation recorded before the identity reference
+				// existed may leave it no room: it is confirmed again.
+				if len(delivered) > maxOfferedEvidence {
+					return nil, fmt.Errorf("attempt %s: the confirmed delivery has more than %d references: %w",
+						a.ID, maxOfferedEvidence, ErrDeliveryUnconfirmed)
+				}
 			} else {
 				if err := in.Delivery.check(); err != nil {
 					return nil, err
 				}
-				b, err := json.Marshal(in.Delivery.Evidence)
-				if err != nil {
-					return nil, fmt.Errorf("encode delivery evidence: %w", err)
-				}
-				evidence = string(b)
+				delivered = in.Delivery.Evidence
 			}
+			b, err := json.Marshal(withAttemptIdentity(a, delivered))
+			if err != nil {
+				return nil, fmt.Errorf("encode delivery evidence: %w", err)
+			}
+			evidence := string(b)
 			a, err = startWorkIntent(ctx, tx, a, ReservationFinalize, AttemptRunning, "", "", evidence, "", now)
 			if err != nil {
 				return nil, err

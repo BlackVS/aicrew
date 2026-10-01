@@ -26,6 +26,8 @@ type OfferInput struct {
 	Branch           string         `json:"branch"`
 	Process          TrustedProcess `json:"process"`
 	ExpiresAt        time.Time      `json:"expires_at"`
+	// Dependencies is the client's dependency evidence (OfferRequest).
+	Dependencies []DependencyEvidence `json:"dependency_evidence,omitempty"`
 }
 
 // guard is a check a write runs first inside its transaction; nil checks
@@ -127,7 +129,7 @@ func (s *Store) BeginOfferWithToken(ctx context.Context, key, token string, in O
 	var proof string
 	cmd, g := s.withToken(intentOnly(offerCommand(c, key, OfferRequest{SessionID: t.sessionID, Generation: t.generation,
 		WorkerAgentID: in.WorkerAgentID, Task: in.Task, ExpectedRevision: in.ExpectedRevision, BaseCommit: in.BaseCommit,
-		Branch: in.Branch, Process: in.Process, ExpiresAt: in.ExpiresAt}, &proof)), token, t)
+		Branch: in.Branch, Process: in.Process, ExpiresAt: in.ExpiresAt, Dependencies: in.Dependencies}, &proof)), token, t)
 	return s.beginNew(ctx, c, cmd, &proof, FactOffer, t.sessionID, t.generation, g)
 }
 

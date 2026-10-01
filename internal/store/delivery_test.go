@@ -129,12 +129,15 @@ func TestConfirmedDeliveryGatesFinalize(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, st, err := e.s.BeginFinalizeWithToken(ctx, "fin-3", e.indepTk, a.ID, seq)
+	// The finalize ends its evidence with the attempt and its member (1aad G2).
+	withIdentity := append(append([]Evidence(nil), deliveryEvidence...),
+		Evidence{Kind: "text", Ref: "aicrew attempt " + a.ID + " by member " + a.WorkerAgentID})
 	if err != nil || st.Operation != ReservationFinalize || st.TargetState != "DONE" || st.Reason == "" ||
-		!reflect.DeepEqual(st.TerminalEvidence, refsOf(deliveryEvidence)) {
+		!reflect.DeepEqual(st.TerminalEvidence, refsOf(withIdentity)) {
 		t.Fatalf("begin finalize: %+v %v", st, err)
 	}
 	var recorded []Evidence
-	if err := json.Unmarshal([]byte(a.PendingEvidence), &recorded); err != nil || !reflect.DeepEqual(recorded, deliveryEvidence) {
+	if err := json.Unmarshal([]byte(a.PendingEvidence), &recorded); err != nil || !reflect.DeepEqual(recorded, withIdentity) {
 		t.Fatalf("the finalize's evidence %q: %v", a.PendingEvidence, err)
 	}
 	if f, err := e.s.CoordinationFact(ctx, st.CoordinationProof, "hub-test"); err != nil || f.Kind != FactAcceptedForFinalization {

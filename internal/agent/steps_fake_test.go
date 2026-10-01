@@ -195,6 +195,7 @@ func fakeReservation(root string, args []string) int {
 		h.Fence++
 		h.WorkRef = holder.WorkRef
 	case "update":
+		h.Fence++ // as aimem: every mutation advances the fence
 		t.Content = contentOf(body)
 	case "release", "finalize":
 		h.Fence++

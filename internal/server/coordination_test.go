@@ -433,6 +433,8 @@ func (f *fakeAimem) Mutate(_ context.Context, op store.ReservationOp, req store.
 	case store.ReservationTransfer:
 		h.fence++
 		h.workRef = req.Holder.WorkRef
+	case store.ReservationUpdate:
+		h.fence++ // as aimem: every mutation advances the fence
 	case store.ReservationRelease, store.ReservationFinalize:
 		h.fence++
 		h.active = false

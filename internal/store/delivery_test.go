@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -19,7 +20,8 @@ func (p *updatePort) Mutate(_ context.Context, op ReservationOp, req Reservation
 		Receipt: ReservationReceipt{ID: "rcpt-update-" + req.RequestKey, State: ReceiptCommitted, Operation: string(op),
 			RequestKey: req.RequestKey, VerifiedMode: "team"},
 		TaskRevision: req.ExpectedRevision + 1,
-		Reservation: ReservationState{ID: req.ReservationID, Fence: req.Fence, Active: true, HolderMode: "external",
+		// An update advances the fence by one, as aimem does.
+		Reservation: ReservationState{ID: req.ReservationID, Fence: strconv.FormatInt(fenceNumber(req.Fence)+1, 10), Active: true, HolderMode: "external",
 			OwnWorkRef: "aicrew-attempt-" + p.attempt},
 	}, nil
 }

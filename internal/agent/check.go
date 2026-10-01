@@ -367,7 +367,8 @@ func skillDirs(client, home string) []string {
 
 // checkSkills reads the version of the ai-skills installation the clients
 // take the first required skill from: its installer's .ai-skills.json, when
-// the installer wrote one (decision K5).
+// the installer wrote one (decision K5; written from ai-skills
+// https://github.com/BlackVS/aiskills/issues/24 on).
 func (c *checker) checkSkills(clients []string) {
 	comp := c.set.Components["ai-skills"]
 	r := ComponentReport{Name: "ai-skills", Required: comp.minimum() + " or later"}
@@ -388,8 +389,8 @@ func (c *checker) checkSkills(clients []string) {
 			}
 			if err != nil || json.Unmarshal(raw, &m) != nil || m.Version == "" {
 				r.State, r.Detail = StateUnknown, "installed in "+dir+" without a version record"
-				c.notice("the ai-skills version is unknown: its installer records no version yet, so it neither blocks " +
-					"nor counts as supported")
+				c.notice("the ai-skills version is unknown: its installer records no version yet " +
+					"(https://github.com/BlackVS/aiskills/issues/24), so it neither blocks nor counts as supported")
 				return
 			}
 			r.Found, r.Detail = m.Version, "installed in "+dir

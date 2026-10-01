@@ -387,7 +387,9 @@ The check (`join` runs it at its end) installs nothing. It reports:
   (`internal/agent/supported.json`):
   - aimem from `aimem version`;
   - ai-skills from its installer's `.ai-skills.json` beside the skills the
-    clients read;
+    clients read. The ai-skills installer does not write it yet
+    ([aiskills#24](https://github.com/BlackVS/aiskills/issues/24)); until a
+    release does, the ai-skills version is "unknown";
   - each selected client from `--version`.
 
   Older than the minimum gives `blocked`. Newer than tested gives a notice.
@@ -419,7 +421,9 @@ The check (`join` runs it at its end) installs nothing. It reports:
   - aimem's verifying boot script with `AIMEM_VERSION`;
   - the ai-skills release archive checked against its `SHA256SUMS` and
     installed with `install.sh --user -t claude -s <skills>` (OpenCode reads
-    the same directory);
+    the same directory), because the ai-skills one-line boot does not
+    verify its download yet
+    ([aiskills#25](https://github.com/BlackVS/aiskills/issues/25));
   - the client's npm package at the tested version.
 
   OpenCode 1.x refusing data that OpenCode 2 wrote is reported, not

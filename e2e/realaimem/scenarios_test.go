@@ -41,6 +41,9 @@ func TestRealAimem(t *testing.T) {
 	t.Run("S3_stop", func(t *testing.T) { h.s3Stop(t) })
 	t.Run("S4_never_accepted", func(t *testing.T) { h.s4NeverAccepted(t) })
 	t.Run("S5_dependencies", func(t *testing.T) { h.s5Dependencies(t) })
+	t.Run("F1_lost_aimem_replies", func(t *testing.T) { h.f1LostAimemReplies(t) })
+	t.Run("F2_lost_aicrewd_replies", func(t *testing.T) { h.f2LostAicrewdReplies(t) })
+	t.Run("F5_stale_steps", func(t *testing.T) { h.f5StaleSteps(t) })
 }
 
 // --- steps ----------------------------------------------------------------
@@ -405,8 +408,9 @@ func (h *harness) s1OfferFlow(t *testing.T) {
 		sc.check("aimem: the "+op+"'s receipt is committed under aicrew's request key", keys[op] != "" &&
 			h.receiptCommitted(sc, task.ID, op, keys[op]), keys[op])
 	}
-	sc.check("aimem accepted terminal evidence ending with the attempt's identity (C5-w3 digest)",
-		strings.Contains(string(got.raw), identityRef(id, worker)), string(got.raw))
+	// aimem committed the finalize under its C5-w3 digest check; the evidence
+	// it persisted must end with the attempt's identity (01a0f6d4-2170).
+	h.checkTerminalIdentity(sc, task.ID, identityRef(id, worker))
 	a := h.attempt(sc, id)
 	sc.check("aicrew: the attempt is closed as finalized", a.State == "closed" && a.PendingKey == "", a)
 	sc.check("aicrew: the worker's capacity is free", h.openWorkOf(sc, worker.agentID) == 0)
@@ -428,8 +432,9 @@ func (h *harness) s2IndependentClaim(t *testing.T) {
 	h.committed(sc, coord, "finalize", id, task.ID, map[string]any{"result_seq": 1})
 	got := h.readTask(sc, task.ID)
 	sc.check("aimem: the task is DONE", got.State == "DONE", got.State)
-	sc.check("aimem: the terminal evidence names the worker, not the finalizer",
-		strings.Contains(string(got.raw), identityRef(id, indep)) && !strings.Contains(string(got.raw), identityRef(id, coord)))
+	h.checkTerminalIdentity(sc, task.ID, identityRef(id, indep))
+	ev := h.terminalEvidence(sc, task.ID)
+	sc.check("aimem: the terminal evidence names the worker, not the finalizer", !contains(ev, identityRef(id, coord)), ev)
 	sc.check("aicrew: the attempt is closed", h.attempt(sc, id).State == "closed", h.attempt(sc, id))
 }
 
@@ -513,7 +518,7 @@ func (h *harness) s5Dependencies(t *testing.T) {
 	dep2 := h.createTask(sc, "S5 dependency reopened")
 	dep2 = h.setTaskState(sc, dep2.ID, "DONE")
 	task2 := h.createTask(sc, "S5 dependency race", dep2.ID)
-	if err := os.WriteFile(filepath.Join(h.gate, "hold-claim"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(h.gate, "hold-reservation-claim"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	type stepOut struct {
@@ -526,12 +531,12 @@ func (h *harness) s5Dependencies(t *testing.T) {
 		done <- stepOut{a, c}
 	}()
 	h.waitFor("the coordinator's claim to pause", 60*time.Second, func() bool {
-		_, err := os.Stat(filepath.Join(h.gate, "claim-paused"))
+		_, err := os.Stat(filepath.Join(h.gate, "paused-reservation-claim"))
 		return err == nil
 	})
 	h.setTaskState(sc, dep2.ID, "IN_PROGRESS")
-	os.Remove(filepath.Join(h.gate, "claim-paused"))
-	if err := os.WriteFile(filepath.Join(h.gate, "claim-go"), nil, 0o600); err != nil {
+	os.Remove(filepath.Join(h.gate, "paused-reservation-claim"))
+	if err := os.WriteFile(filepath.Join(h.gate, "go-reservation-claim"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out := <-done

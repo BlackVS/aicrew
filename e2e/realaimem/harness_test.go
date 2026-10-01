@@ -95,6 +95,9 @@ type harness struct {
 	hubProc     *proc
 	aicrewdProc *proc
 	httpClient  *http.Client // trusts the run's CA
+	// The fault proxies (b4b-1): the members' way to the hub, and the
+	// members' and the hub's way to aicrewd.
+	hubProxy, aicrewdProxy *faultProxy
 }
 
 // member is one agent: its own aimem state, its agent home and launcher.
@@ -252,20 +255,32 @@ func repoRoot(t *testing.T) string {
 // leading arguments, which hold no secret.
 func (h *harness) writeAimemWrapper() {
 	script := fmt.Sprintf(`#!/bin/sh
+umask 077
 gate=%q
-if [ "$1" = reservation ] && [ "$2" = claim ] && [ -e "$gate/hold-claim" ]; then
-  rm -f "$gate/hold-claim"
-  : > "$gate/claim-paused"
-  while [ ! -e "$gate/claim-go" ]; do sleep 0.05; done
-  rm -f "$gate/claim-go"
+name="$1-$2"
+input=""
+if [ -e "$gate/capture-$name" ]; then
+  rm -f "$gate/capture-$name"
+  cat > "$gate/captured-$name"
+  input="$gate/captured-$name"
+fi
+if [ -e "$gate/hold-$name" ]; then
+  rm -f "$gate/hold-$name"
+  : > "$gate/paused-$name"
+  while [ ! -e "$gate/go-$name" ]; do sleep 0.05; done
+  rm -f "$gate/go-$name"
 fi
 start=$(date +%%s%%N)
-%q "$@"
+if [ -n "$input" ]; then
+  %q "$@" < "$input"
+else
+  %q "$@"
+fi
 rc=$?
 end=$(date +%%s%%N)
 printf '{"cmd":"%%s","op":"%%s","start_ns":%%s,"end_ns":%%s,"exit":%%s}\n' "$1" "$2" "$start" "$end" "$rc" >> %q
 exit $rc
-`, h.gate, filepath.Join(h.bin, "aimem"), h.timingLog)
+`, h.gate, filepath.Join(h.bin, "aimem"), filepath.Join(h.bin, "aimem"), h.timingLog)
 	path := filepath.Join(h.bin, "aimem-timed")
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		h.t.Fatal(err)
@@ -451,7 +466,13 @@ func (p *proc) stop(grace time.Duration) error {
 
 func (h *harness) teardown() {
 	for i := len(h.procs) - 1; i >= 0; i-- {
-		if err := h.procs[i].stop(20 * time.Second); err != nil {
+		p := h.procs[i]
+		if strings.HasPrefix(p.name, "launcher-") && p.cmd.ProcessState == nil {
+			// A launcher keeping a session for open work waits out its
+			// leave; at the end of a run it is simply ended, with its client.
+			_ = killGroup(p)
+		}
+		if err := p.stop(45 * time.Second); err != nil {
 			h.t.Logf("teardown: %v", err)
 		}
 	}
@@ -580,4 +601,10 @@ func lines(path string) []string {
 		out = append(out, sc.Text())
 	}
 	return out
+}
+
+// killGroup kills p and every process it started (it leads its group), as
+// a crash would.
+func killGroup(p *proc) error {
+	return syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
 }

@@ -24,8 +24,10 @@ scripts/e2e-real-aimem.sh -aimem-src ../aimem -runs 3
   only read: the commit is archived into the run directory and built there.
 - `-runs` is the number of consecutive runs, each on a fresh hub. The
   evidence for a change is three green runs.
-- `-out` sets where the reports and logs go (default `.work/e2e`), and
-  `-keep` keeps each run directory.
+- `-out` sets where the reports and logs go, absolute or relative to where
+  the script runs (default `.work/e2e` in the repository). `-keep` keeps
+  each run directory.
+- `-skip-faults` runs the skip-the-fault matrix instead (see "Faults").
 
 It needs Go 1.25 or later, git, tar, and network access the first time, to
 download both modules' dependencies. Windows is best effort and not wired
@@ -81,6 +83,10 @@ Every listener is on 127.0.0.1.
 
 ## Scenarios (b4a)
 
+These run with every member's traffic going through the fault proxies, with
+no fault armed.
+
+
 - **H. The setup above.**
 - **S1. An offer whose dependency is DONE:**
   - accepted, submitted, reviewed, its delivery confirmed, and finalized
@@ -106,6 +112,64 @@ Every listener is on 127.0.0.1.
 Each scenario asserts both stores: aicrew's attempts, audit and capacity,
 read-only; and aimem's tasks, holds and receipts, through admin reads.
 
+## Faults (b4b-1)
+
+**The fault proxy.** An HTTP-aware, re-encrypting proxy (`proxy_test.go`)
+stands in three places:
+- between the members' aimem and the hub;
+- between the members' clients and aicrewd;
+- between the hub and aicrewd's introspection and coordination routes.
+
+It terminates its client's TLS with its target's own run key, so the
+members' CA trust and both SPKI pins hold, and opens its own TLS to the
+target. The hub therefore still terminates TLS itself. It never presents a
+key or trusts a CA from outside the run.
+
+A fault is armed for the next request matching a method and a path, and
+fires once:
+- drop the reply after the target answered;
+- drop the request before forwarding it;
+- delay the reply.
+
+The timed aimem adds **gates**: it can pause a named command until the
+harness releases it, and keep a command's standard input in an owner-only
+run file, which is never copied to the artifacts.
+
+- **F1. Lost aimem replies.** For each of claim, transfer, update, finalize
+  and release:
+  - **The reply is lost after the hub committed:** aimem's CLI exits 5, the
+    driver reads the receipt with the same key, and the step settles
+    committed.
+  - **The request is lost:** the step settles not committed. A lost update
+    request cannot be decided while the hold has not moved, so the holder
+    supersedes it.
+  - The finalize's identity is asserted in the terminal evidence aimem
+    persisted in its reservation event. No hub route reads these events, so
+    the harness reads the hub's project store, read-only.
+- **F2. Lost aicrewd replies.**
+  - A lost begin is replayed under its Idempotency-Key, and reaches the one
+    attempt the lost reply began.
+  - A lost settle is retried and settles once.
+- **F5. Stale steps.**
+  - **A held task cannot be edited by the admin (409).** The staleness
+    tested is therefore the real one: an offer begun at the task's revision,
+    its claim paused while the admin edits the unheld task. aimem refuses
+    the claim, aicrew settles the offer not committed, and the offer begun
+    again commits.
+  - **A proof replayed after its step settled** is refused.
+  - **After a member resumes to a new generation,** its old proof is refused,
+    and the new generation may not continue the old generation's offer.
+    That offer keeps its proof until it expires, and the report records this
+    as an observation.
+  - **aicrewd's coordination answer delayed past aimem's 2 s call budget** is
+    refused retryable, and the driver's retry commits.
+
+**The skip-the-fault matrix.** `AICREW_E2E_SKIP_FAULT=<case>` leaves one
+fault out. `scripts/e2e-real-aimem.sh -skip-faults` runs each case's
+scenario that way, and every such run must fail. The cases are F1-reply,
+F1-request, F2-begin, F2-settle, F5-stale, F5-replay, F5-resume and
+F5-delay. Every injected or skipped fault is recorded in the report.
+
 ## The report
 
 `report-N.jsonl` holds one JSON object per line:
@@ -119,6 +183,10 @@ read-only; and aimem's tasks, holds and receipts, through admin reads.
   - `coordination_fact_ms`, each coordination.v1 fact aimem asked aicrewd
     for meanwhile.
 - `scenario`: PASS or FAIL, its assertions and its duration.
+- `fault`: each fault armed, injected or skipped (its case, proxy or gate,
+  action and path).
+- `observation`: behaviour the run observed and reported, which no
+  assertion encodes.
 - `summary`: the counts, and the slowest coordination fact and aimem call
   against aimem's 5 s context-age bound.
 

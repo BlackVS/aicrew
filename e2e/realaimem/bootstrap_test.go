@@ -41,6 +41,11 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	h.hubPort, h.aicrewdPort = freePort(t), freePort(t)
 	h.hubURL = fmt.Sprintf("https://127.0.0.1:%d", h.hubPort)
 	h.aicrewdURL = fmt.Sprintf("https://127.0.0.1:%d", h.aicrewdPort)
+	// The fault proxies (b4b-1): the members reach the hub, and the members
+	// and the hub reach aicrewd, through them. Each presents its target's
+	// own run key, so the members' CA trust and the SPKI pins still hold.
+	h.hubProxy = h.newFaultProxy("hub", hubCert, hubKey, h.hubURL)
+	h.aicrewdProxy = h.newFaultProxy("aicrewd", aCert, aKey, h.aicrewdURL)
 	h.adminToken = secret(t, "e2e-admin-")
 	h.adminFile = filepath.Join(h.root, "admin.token")
 	h.writePrivate(h.adminFile, []byte(h.adminToken+"\n"))
@@ -71,7 +76,7 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 
 	// 4. The peer, and the hub's ID.
 	h.must(host, nil, h.identity("peer", "register", serviceID,
-		"--endpoint", h.aicrewdURL+"/v1/crew/introspect", "--peer-trust-pin", h.aicrewdPin)...)
+		"--endpoint", h.aicrewdProxy.url+"/v1/crew/introspect", "--peer-trust-pin", h.aicrewdPin)...)
 	list := h.must(host, nil, h.identity("peer", "list")...)
 	m := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(serviceID) + `\s+enabled\s+hub\s+(\S+)`).FindStringSubmatch(list)
 	if m == nil {
@@ -229,7 +234,7 @@ func (h *harness) joinMember(mem *member) {
 	// member's user token as its checkpoint and task credential. Both are
 	// read from standard input, never from an argument (aimem #165).
 	token := []byte(mem.token + "\n")
-	h.must(mem.env, token, h.aimem(), "hub", "add", hubName, h.hubURL, "--token-file", "-", "--ca-file", h.caFile)
+	h.must(mem.env, token, h.aimem(), "hub", "add", hubName, h.hubProxy.url, "--token-file", "-", "--ca-file", h.caFile)
 	h.must(mem.env, token, h.aimem(), "hub", "task-token", hubName, "--token-file", "-")
 	mem.token = ""
 	var cred struct {
@@ -267,7 +272,7 @@ func (h *harness) join(mem *member, code string) {
 	}
 	defer master.Close()
 	cmd := exec.Command(filepath.Join(h.bin, "aicrew-agent"), "join", "-label", mem.name, "-home", mem.home,
-		"-url", h.aicrewdURL, "-tls-trust-mode", "spki_sha256", "-tls-trust-value", h.aicrewdPin,
+		"-url", h.aicrewdProxy.url, "-tls-trust-mode", "spki_sha256", "-tls-trust-value", h.aicrewdPin,
 		"-aimem-hub", hubName, "-aimem-command", filepath.Join(h.bin, "aimem-timed"), "-client", "claude", "-json")
 	cmd.Env = mem.env
 	cmd.Stdin = slave

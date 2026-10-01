@@ -44,6 +44,10 @@ func check(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(out, "Client wiring:")
 	rep, err := agent.Check(ctx, agent.CheckOptions{Home: *home, Clients: splitList(*clients), Out: out})
 	switch {
+	case errors.Is(err, agent.ErrUnknownClient):
+		fmt.Fprintln(stderr, err)
+		fmt.Fprintln(stderr, checkUsage)
+		return exitUsage
 	case errors.Is(err, agent.ErrNotHome):
 		fmt.Fprintln(stderr, err)
 		return exitFailed

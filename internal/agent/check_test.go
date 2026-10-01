@@ -737,3 +737,77 @@ func TestJoinRunsTheCheck(t *testing.T) {
 		}
 	})
 }
+
+// A client file whose MCP parent is null (or another non-object) is the
+// user's: a conflict with the proposal beside it, never a crash.
+func TestCheckWiringNullParent(t *testing.T) {
+	for _, c := range []struct{ client, file, doc string }{
+		{"claude", ".mcp.json", `{"mcpServers": null}`},
+		{"opencode", "opencode.json", `{"mcp": null, "theme": "dark"}`},
+		{"claude", ".mcp.json", `{"mcpServers": [1]}`},
+	} {
+		t.Run(c.file+" "+c.doc, func(t *testing.T) {
+			e := setupCheck(t, readyTools, "aimem", c.client)
+			e.installSkills(t, "1.26.1", "oh-code-review")
+			path := filepath.Join(e.home, c.file)
+			os.WriteFile(path, []byte(c.doc), 0o644)
+			rep := e.check(t, c.client)
+			if rep.Wiring[0].Action != "conflict" || !hasNotice(rep, c.file+".aicrew-new") {
+				t.Fatalf("%+v", rep)
+			}
+			if raw, _ := os.ReadFile(path); string(raw) != c.doc {
+				t.Fatalf("the file was rewritten: %s", raw)
+			}
+			proposal := readJSON(t, path+".aicrew-new")
+			parent := map[string]string{".mcp.json": "mcpServers", "opencode.json": "mcp"}[c.file]
+			if p, ok := proposal[parent].(map[string]any); !ok || p["aimem"] == nil {
+				t.Fatalf("proposal %v", proposal)
+			}
+		})
+	}
+}
+
+// A version record that exists but cannot be used blocks, with a reinstall
+// instruction; only an absent record is an unknown version.
+func TestCheckSkillsRecordUnusable(t *testing.T) {
+	for _, record := range []string{"{", `{"commit": "abc"}`, `{"version": ""}`} {
+		t.Run(record, func(t *testing.T) {
+			e := setupCheck(t, readyTools, "aimem", "claude")
+			e.installSkills(t, "", "oh-code-review")
+			os.WriteFile(filepath.Join(e.user, ".claude", "skills", ".ai-skills.json"), []byte(record), 0o644)
+			rep := e.check(t, "claude")
+			if rep.Status != JoinBlocked || rep.Reason != "ai-skills_record" || !hasInstruction(rep, "reinstall it") ||
+				component(rep, "ai-skills").State != StateFailed {
+				t.Fatalf("%+v", rep)
+			}
+		})
+	}
+}
+
+// Every distinct installation the selected clients read is checked: one
+// below the minimum blocks whichever client reads it, in either order.
+func TestCheckSkillsEveryInstallation(t *testing.T) {
+	for _, order := range [][]string{{"claude", "opencode"}, {"opencode", "claude"}} {
+		t.Run(strings.Join(order, ","), func(t *testing.T) {
+			e := setupCheck(t, readyTools, "aimem", "claude", "opencode")
+			e.installSkills(t, "1.26.1", "oh-code-review") // the user's .claude/skills: Claude Code's
+			old := filepath.Join(e.home, ".opencode", "skills")
+			os.MkdirAll(filepath.Join(old, "oh-code-review"), 0o755)
+			os.WriteFile(filepath.Join(old, "oh-code-review", "SKILL.md"), []byte("---\nname: oh-code-review\n---\n"), 0o644)
+			os.WriteFile(filepath.Join(old, ".ai-skills.json"), []byte(`{"version": "1.20.0"}`), 0o644)
+			rep := e.check(t, order...)
+			if rep.Status != JoinBlocked || rep.Reason != "ai-skills_below" {
+				t.Fatalf("%+v", rep)
+			}
+			n := 0
+			for _, c := range rep.Components {
+				if c.Name == "ai-skills" {
+					n++
+				}
+			}
+			if n != 2 {
+				t.Fatalf("%d ai-skills installations reported: %+v", n, rep.Components)
+			}
+		})
+	}
+}

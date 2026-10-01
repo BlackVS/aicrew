@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,6 +23,15 @@ func TestCheckCommandUsage(t *testing.T) {
 	if code := check(context.Background(), []string{"-home", filepath.Join(t.TempDir(), "none")}, &out, &errb); code != exitFailed ||
 		!strings.Contains(errb.String(), "not an agent home") {
 		t.Fatalf("a missing home: exit %d, %s", code, errb.String())
+	}
+	// An unknown client on an existing home is a usage error (exit 2), not
+	// a failed check.
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, "agent.json"), []byte(`{"layout": 1, "label": "builder", "aicrew": {}}`), 0o600)
+	errb.Reset()
+	if code := check(context.Background(), []string{"-home", home, "-client", "cursor"}, &out, &errb); code != exitUsage ||
+		!strings.Contains(errb.String(), `unknown client "cursor"`) {
+		t.Fatalf("an unknown client: exit %d, %s", code, errb.String())
 	}
 }
 

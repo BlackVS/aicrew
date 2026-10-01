@@ -70,6 +70,10 @@ type CheckReport struct {
 // homeLockName serializes join and check runs on one home.
 const homeLockName = "aicrew-join.lock"
 
+// ErrUnknownClient is a selected client the check does not know: a usage
+// error.
+var ErrUnknownClient = errors.New("unknown client")
+
 // ErrNotHome is a directory without an agent.json.
 var ErrNotHome = errors.New("not an agent home: no agent.json (run aicrew-agent join first)")
 
@@ -120,7 +124,7 @@ func selectClients(given []string, d agentDoc) ([]string, error) {
 	for _, c := range sel {
 		c = strings.TrimSpace(c)
 		if !slices.Contains(knownClients, c) {
-			return nil, fmt.Errorf("unknown client %q (claude or opencode)", c)
+			return nil, fmt.Errorf("%w %q (claude or opencode)", ErrUnknownClient, c)
 		}
 		if !slices.Contains(out, c) {
 			out = append(out, c)
@@ -365,40 +369,76 @@ func skillDirs(client, home string) []string {
 	return dirs
 }
 
-// checkSkills reads the version of the ai-skills installation the clients
-// take the first required skill from: its installer's .ai-skills.json, when
-// the installer wrote one (decision K5; written from ai-skills
-// https://github.com/BlackVS/aiskills/issues/24 on).
+// checkSkills checks every distinct ai-skills installation the selected
+// clients take the first required skill from: for each client, the first
+// of its skill directories holding the skill. Each is reported and judged
+// by its installer's .ai-skills.json (decision K5; written from ai-skills
+// https://github.com/BlackVS/aiskills/issues/24 on). An absent record is an
+// unknown version; a record that exists but cannot be read, decoded or
+// names no version is blocked.
 func (c *checker) checkSkills(clients []string) {
 	comp := c.set.Components["ai-skills"]
-	r := ComponentReport{Name: "ai-skills", Required: comp.minimum() + " or later"}
-	defer func() { c.rep.Components = append(c.rep.Components, r) }()
+	required := comp.minimum() + " or later"
 	if len(c.set.RequiredSkills) == 0 || len(clients) == 0 {
-		r.State = StateUnknown
+		c.rep.Components = append(c.rep.Components, ComponentReport{Name: "ai-skills", Required: required, State: StateUnknown})
 		return
 	}
 	skill := c.set.RequiredSkills[0]
+	seen := map[string]bool{}
+	unknownNoticed := false
 	for _, client := range clients {
 		for _, dir := range skillDirs(client, c.o.Home) {
 			if _, err := os.Stat(filepath.Join(dir, skill, "SKILL.md")); err != nil {
 				continue
 			}
-			raw, err := os.ReadFile(filepath.Join(dir, ".ai-skills.json"))
-			var m struct {
-				Version string `json:"version"`
+			if !seen[dir] {
+				seen[dir] = true
+				r := c.skillsInstallation(comp, dir, &unknownNoticed)
+				r.Required = required
+				c.rep.Components = append(c.rep.Components, r)
 			}
-			if err != nil || json.Unmarshal(raw, &m) != nil || m.Version == "" {
-				r.State, r.Detail = StateUnknown, "installed in "+dir+" without a version record"
-				c.notice("the ai-skills version is unknown: its installer records no version yet " +
-					"(https://github.com/BlackVS/aiskills/issues/24), so it neither blocks nor counts as supported")
-				return
-			}
-			r.Found, r.Detail = m.Version, "installed in "+dir
-			c.classify(&r, comp, m.Version, func() string { return skillsInstruction(comp, m.Version, c.set.RequiredSkills) })
-			return
+			break // the first directory holding the skill is this client's installation
 		}
 	}
-	// Not installed where the clients look; the discovery reports which
-	// client misses it.
-	r.State = StateMissing
+	if len(seen) == 0 {
+		// Not installed where the clients look; the discovery reports which
+		// client misses it.
+		c.rep.Components = append(c.rep.Components, ComponentReport{Name: "ai-skills", Required: required, State: StateMissing})
+	}
+}
+
+// skillsInstallation judges one installation by its record.
+func (c *checker) skillsInstallation(comp supportedComponent, dir string, unknownNoticed *bool) ComponentReport {
+	r := ComponentReport{Name: "ai-skills", Detail: "installed in " + dir}
+	record := filepath.Join(dir, ".ai-skills.json")
+	raw, err := os.ReadFile(record)
+	if errors.Is(err, os.ErrNotExist) {
+		r.State, r.Detail = StateUnknown, "installed in "+dir+" without a version record"
+		if !*unknownNoticed {
+			*unknownNoticed = true
+			c.notice("the ai-skills version is unknown: its installer records no version yet " +
+				"(https://github.com/BlackVS/aiskills/issues/24), so it neither blocks nor counts as supported")
+		}
+		return r
+	}
+	var m struct {
+		Version string `json:"version"`
+	}
+	if err == nil {
+		if jerr := json.Unmarshal(raw, &m); jerr != nil {
+			err = jerr
+		} else if m.Version == "" {
+			err = errors.New("it names no version")
+		}
+	}
+	if err != nil {
+		r.State = StateFailed
+		r.Detail = "the record " + record + " cannot be used: " + tail(err.Error(), 200)
+		c.block("ai-skills_record", fmt.Sprintf("the ai-skills installation in %s has a version record that cannot be used "+
+			"(%s): reinstall it: %s", dir, tail(err.Error(), 200), skillsInstruction(comp, "", c.set.RequiredSkills)))
+		return r
+	}
+	r.Found = m.Version
+	c.classify(&r, comp, m.Version, func() string { return skillsInstruction(comp, m.Version, c.set.RequiredSkills) })
+	return r
 }

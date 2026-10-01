@@ -80,8 +80,10 @@ func planWiring(home string, w wiringEntry, recorded string) (FileChange, []byte
 		ch.Action = "conflict"
 	}
 	parent := map[string]json.RawMessage{}
-	if p, ok := doc[w.parent]; ok && json.Unmarshal(p, &parent) != nil {
-		parent = map[string]json.RawMessage{} // a non-object parent is the user's: conflict below
+	// A parent that is not an object (null included, which decodes to a nil
+	// map) is the user's: a conflict, with the proposal built afresh.
+	if p, ok := doc[w.parent]; ok && (json.Unmarshal(p, &parent) != nil || parent == nil) {
+		parent = map[string]json.RawMessage{}
 		ch.Action = "conflict"
 	}
 	if ch.Action == "" {

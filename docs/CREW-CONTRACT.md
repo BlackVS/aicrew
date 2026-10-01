@@ -242,7 +242,8 @@ by C5-w3 at aimem `0dd404a`; its fixtures are unchanged at `a9b9b6f`). Aicrew se
     big-endian length of its UTF-8 bytes, then the bytes. Nothing is
     normalised.
   - It covers exactly the references the finalize sends aimem: the
-    confirmed delivery's, in their confirmed order, or the one-shot path's.
+    confirmed delivery's, in their confirmed order, or the one-shot path's,
+    then the attempt's identity reference ("Confirmed delivery").
     aimem recomputes it in the committing transaction and refuses a
     mismatch with `evidence_mismatch`.
   - A finalize whose recorded evidence cannot be read answers inactive.
@@ -439,7 +440,12 @@ begin needs an `Idempotency-Key`; settle does not.
     - `task`, as `hub_id`, `project_id` and `task_id`;
     - `expected_revision`, `base_commit` and `branch`;
     - `process`, as `repo`, `commit` and `manifest`;
-    - `instruction_digest` and `expires_at`.
+    - `instruction_digest` and `expires_at`;
+    - `dependency_evidence?`: `[{task_id, state, revision}]`, the
+      coordinator's client's read of the task's dependencies ("Cross-project
+      references"), at most 64, distinct, each `DONE` with a positive
+      revision. Anything else is `400 invalid_request`. aicrewd records it
+      in the offer's audit and verifies nothing with it.
 
     The pin and the digest are the coordinator's ("Process pins").
   - `/{id}/accept`: the offer's worker accepts. The body carries the
@@ -465,6 +471,10 @@ begin needs an `Idempotency-Key`; settle does not.
   - `/{id}/work`, with `{intent, detail?}`: the holder's work update.
     - `intent` is `block` (with the blocker as `detail`), `submit` (with
       the result reference) or `resume`.
+    - The member's client adds a submitted result's reference to the
+      task's `candidate_refs` with the note `aicrew attempt <id> by member
+      <agent>`, naming the attempt and the submitting member. A resend of
+      the same reference with the same note adds nothing.
     - It is a fenced update of the holder's own hold, with no coordination
       fact, so it has no proof.
   - A begin records the intent and the capacity it needs, as "Ordering
@@ -477,7 +487,8 @@ begin needs an `Idempotency-Key`; settle does not.
       - a stopped attempt's release carries `target_state`, `reason` and
         `blocker?`;
       - a finalize carries `target_state: DONE`, `reason` and
-        `terminal_evidence` (the confirmed delivery's references);
+        `terminal_evidence` (the confirmed delivery's references, then the
+        attempt's identity reference);
       - a work update carries `intent`, `target_state`, and `blocker` or
         `result_ref`.
     - A work update's answer has no `coordination_proof`.
@@ -532,7 +543,15 @@ begin needs an `Idempotency-Key`; settle does not.
   It is local, and it is audited.
   - `evidence` is a list of `{kind, ref}`: the `reviewed_head`,
     `human_merge` and `post_merge_ci` of the current development process,
-    with at most 16 references.
+    with at most 15 references.
+  - A finalize carries those references and then one more, which aicrew
+    adds: `{kind: text, ref: "aicrew attempt <id> by member <agent>"}`,
+    naming the attempt and its worker. aimem keeps it with the task's
+    terminal evidence, and the evidence digest covers it, so a finalize
+    carries at most 16. The one-shot path's evidence has the same cap and
+    the same last reference. A finalize refuses a confirmation recorded with
+    more references as `delivery_unconfirmed`, and the delivery is confirmed
+    again.
   - Each reference is of a shape aimem accepts as terminal evidence, so a
     confirmed set is never refused for it at finalize: valid UTF-8, not
     blank, at most 256 bytes, with no control character but tab, newline
@@ -1068,8 +1087,16 @@ references and receipt, and never a secret, session handle or proof.
 - Task, dependency and evidence references carry the hub ID and stable
   aimem IDs, never a copied task.
 - Dependencies are evaluated by aimem when the reservation is claimed
-  (reservation contract). Aicrew may read them first to avoid a useless
-  offer, but that read never makes a task eligible: aimem's refusal wins.
+  (reservation contract). Before an offer, the coordinator's client reads
+  them over its own aimem connection, to avoid a useless offer:
+  - a dependency it cannot read counts as open: unknown is not DONE;
+  - an open dependency refuses the offer locally with `dependencies_open`,
+    before anything is recorded or begun;
+  - otherwise the offer's begin carries the evidence of that read (each
+    dependency's ID, state and revision), which aicrewd records in the
+    offer's audit. A recovered offer resends the evidence it began with.
+
+  That read never makes a task eligible: aimem's refusal at the claim wins.
 - A reference to another hub is display-only and can never satisfy a claim.
 - Removing a project from the team does not release running work; it blocks
   new offers for that project and leaves existing attempts to be finished or

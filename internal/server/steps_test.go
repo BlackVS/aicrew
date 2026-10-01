@@ -652,7 +652,8 @@ func TestReviewDeliveryFinalizeEndToEnd(t *testing.T) {
 
 	// The reviewing coordinator finalizes.
 	st := stepOf(t, e.call(t, e.lead.token, path("finalize"), "fin-3", fin))
-	want := []string{confirmedEvidence[0].Ref, confirmedEvidence[1].Ref, confirmedEvidence[2].Ref}
+	want := []string{confirmedEvidence[0].Ref, confirmedEvidence[1].Ref, confirmedEvidence[2].Ref,
+		"aicrew attempt " + id + " by member " + e.worker.agent.ID}
 	if st.Operation != store.ReservationFinalize || st.TargetState != "DONE" || st.Reason == "" ||
 		strings.Join(st.TerminalEvidence, "|") != strings.Join(want, "|") {
 		t.Fatalf("finalize begin %+v", st)

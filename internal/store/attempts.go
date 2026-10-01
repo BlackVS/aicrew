@@ -245,6 +245,42 @@ type OfferRequest struct {
 	Branch           string         `json:"branch"`
 	Process          TrustedProcess `json:"process"`
 	ExpiresAt        time.Time      `json:"expires_at"`
+	// Dependencies is the evidence the offering member's client read of
+	// the task's dependencies before the offer (1aad G1): recorded in the
+	// offer's audit, never a reason the task is eligible. aimem decides
+	// that at the claim.
+	Dependencies []DependencyEvidence `json:"dependency_evidence,omitempty"`
+}
+
+// DependencyEvidence is one dependency of an offered task as the offering
+// member's client read it from aimem: DONE at that revision.
+type DependencyEvidence struct {
+	TaskID   string `json:"task_id"`
+	State    string `json:"state"`
+	Revision int64  `json:"revision"`
+}
+
+// maxDependencyEvidence bounds the dependencies an offer's evidence names.
+const maxDependencyEvidence = 64
+
+// checkDependencies refuses evidence that is malformed or names a
+// dependency that is not DONE: a client that read an open dependency must
+// not offer.
+func checkDependencies(deps []DependencyEvidence) error {
+	if len(deps) > maxDependencyEvidence {
+		return fmt.Errorf("%w: at most %d dependencies in an offer's evidence", ErrInvalid, maxDependencyEvidence)
+	}
+	seen := map[string]bool{}
+	for _, d := range deps {
+		if !validRefs(d.TaskID) || d.Revision < 1 || seen[d.TaskID] {
+			return fmt.Errorf("%w: dependency evidence needs distinct task IDs, each with its revision", ErrInvalid)
+		}
+		if d.State != "DONE" {
+			return fmt.Errorf("%w: dependency %s is %s, not DONE", ErrInvalid, d.TaskID, d.State)
+		}
+		seen[d.TaskID] = true
+	}
+	return nil
 }
 
 // AcceptRequest accepts an offer. Selected is the project's currently
@@ -285,7 +321,7 @@ func (r OfferRequest) validate() error {
 	if !r.Process.valid() {
 		return fmt.Errorf("%w: an offer needs the process pin in the hub selection's forms (a Git URL, the full commit, a relative manifest path) and the instruction digest", ErrInvalid)
 	}
-	return nil
+	return checkDependencies(r.Dependencies)
 }
 
 // OfferTask offers a task to a worker of the caller's team. The caller must

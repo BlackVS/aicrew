@@ -287,6 +287,21 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 			return refuse("invalid_request", "The body names no task.", "Pass the step's body with its task.")
 		}
 		req.TaskID = b.Task.TaskID
+		if call.Op == "offer" {
+			// Before anything is recorded or begun (1aad G1).
+			evidence, err := s.driver.Dependencies(ctx, req.TaskID)
+			var open *DependenciesOpen
+			if errors.As(err, &open) {
+				return refuse("dependencies_open", "The task has dependencies that are not DONE: "+strings.Join(open.Open, ", ")+".",
+					"Offer the task once its dependencies are DONE.")
+			}
+			if err != nil {
+				return answerErr(err)
+			}
+			if req.Body, err = withDependencies(req.Body, evidence); err != nil {
+				return refuse("invalid_request", "The offer's body is not a JSON object.", "Pass the offer's body.")
+			}
+		}
 	} else {
 		if !attemptIDShape(call.AttemptID) || call.TaskID == "" {
 			return refuse("invalid_request", "This step needs the attempt's ID and the aimem task's ID.", "Pass -attempt and -task.")

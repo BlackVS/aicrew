@@ -232,10 +232,11 @@ func checkPayload(root string, f *fakeReservations, op, task, key string, body m
 		return "no aicrew store: " + err.Error()
 	}
 	defer db.Close()
-	var id, pendingOp, intent, detail, evidence, origin, stop string
+	var id, pendingOp, intent, detail, evidence, origin, stop, worker string
 	var revision int64
-	if err := db.QueryRow(`SELECT id, pending_op, pending_intent, pending_detail, pending_evidence, origin, stop, task_revision
-		FROM attempts WHERE pending_key = ?`, key).Scan(&id, &pendingOp, &intent, &detail, &evidence, &origin, &stop, &revision); err != nil {
+	if err := db.QueryRow(`SELECT id, pending_op, pending_intent, pending_detail, pending_evidence, origin, stop, task_revision,
+		worker_agent_id FROM attempts WHERE pending_key = ?`, key).Scan(&id, &pendingOp, &intent, &detail, &evidence, &origin, &stop,
+		&revision, &worker); err != nil {
 		return "no pending step with this key"
 	}
 	if pendingOp != op {
@@ -302,12 +303,14 @@ func checkPayload(root string, f *fakeReservations, op, task, key string, body m
 		if intent == "submit" {
 			var refs []map[string]string
 			json.Unmarshal(content["candidate_refs"], &refs)
+			// The reference names the attempt and its member (1aad G2).
+			note := "aicrew attempt " + id + " by member " + worker
 			found := false
 			for _, r := range refs {
-				found = found || r["ref"] == detail
+				found = found || (r["ref"] == detail && r["note"] == note)
 			}
 			if !found {
-				return "the result reference is missing"
+				return "the result reference, noted " + note + ", is missing"
 			}
 		}
 	case "release":

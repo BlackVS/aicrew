@@ -147,6 +147,7 @@ type ReservationCLI interface {
 type stepSession interface {
 	stepToken() string
 	stepAimemFile() string
+	stepAgent() string
 }
 
 func (e *Engine) stepToken() string {
@@ -160,6 +161,9 @@ func (e *Engine) stepAimemFile() string {
 	defer e.live.RUnlock()
 	return e.aimemFile
 }
+
+// stepAgent is the member's agent ID, which a submitted result names.
+func (e *Engine) stepAgent() string { return e.Cfg.AgentID }
 
 func (e *Engine) setAimemFile(path string) {
 	e.live.Lock()
@@ -405,7 +409,7 @@ func (d *Driver) send(ctx context.Context, p *pendingStep, proof string) (StepRe
 		}
 		task = &t
 	}
-	body, err := composeBody(st, proof, task)
+	body, err := composeBody(st, proof, task, resultNote(p.AttemptID, d.Session.stepAgent()))
 	if err != nil {
 		return StepReport{}, err
 	}
@@ -487,11 +491,18 @@ func refusalOf(out []byte) string {
 var contentFields = []string{"title", "objective", "acceptance_criteria", "non_goals", "state", "assignee", "blocker",
 	"dependencies", "candidate_refs", "evidence_refs", "next_action", "archived", "epic"}
 
+// resultNote names the attempt and the member on a submitted result's
+// reference (1aad G2): the same words as the identity reference a finalize
+// carries in its terminal evidence.
+func resultNote(attemptID, agentID string) string {
+	return "aicrew attempt " + attemptID + " by member " + agentID
+}
+
 // composeBody builds the reservation body for st: the begin response's
 // values, the proof, and for update, release and finalize the complete
 // content, with only the state, the blocker and a submitted result's
-// reference set by aicrew.
-func composeBody(st *Step, proof string, task *TaskDoc) (map[string]any, error) {
+// reference, noted with note, set by aicrew.
+func composeBody(st *Step, proof string, task *TaskDoc, note string) (map[string]any, error) {
 	body := map[string]any{"expected_revision": st.ExpectedRevision}
 	if st.ReservationID != "" {
 		body["reservation_id"], body["fence"] = st.ReservationID, st.Fence
@@ -533,7 +544,7 @@ func composeBody(st *Step, proof string, task *TaskDoc) (map[string]any, error) 
 	content["state"], _ = json.Marshal(target)
 	content["blocker"], _ = json.Marshal(st.Blocker)
 	if st.ResultRef != "" {
-		refs, err := withRef(content["candidate_refs"], st.ResultRef)
+		refs, err := withRef(content["candidate_refs"], st.ResultRef, note)
 		if err != nil {
 			return nil, err
 		}
@@ -543,8 +554,9 @@ func composeBody(st *Step, proof string, task *TaskDoc) (map[string]any, error) 
 	return body, nil
 }
 
-// withRef appends a result reference to candidate_refs unless it is there.
-func withRef(raw json.RawMessage, ref string) (json.RawMessage, error) {
+// withRef appends a result reference with its note to candidate_refs
+// unless that reference is there with that note.
+func withRef(raw json.RawMessage, ref, note string) (json.RawMessage, error) {
 	var refs []map[string]any
 	if len(raw) > 0 && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &refs); err != nil {
@@ -552,7 +564,7 @@ func withRef(raw json.RawMessage, ref string) (json.RawMessage, error) {
 		}
 	}
 	for _, r := range refs {
-		if r["ref"] == ref {
+		if r["ref"] == ref && r["note"] == note {
 			return json.Marshal(refs)
 		}
 	}
@@ -560,6 +572,6 @@ func withRef(raw json.RawMessage, ref string) (json.RawMessage, error) {
 	if strings.HasPrefix(ref, "https://") || strings.HasPrefix(ref, "http://") {
 		kind = "url"
 	}
-	refs = append(refs, map[string]any{"kind": kind, "ref": ref})
+	refs = append(refs, map[string]any{"kind": kind, "ref": ref, "note": note})
 	return json.Marshal(refs)
 }

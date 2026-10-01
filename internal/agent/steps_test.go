@@ -57,7 +57,12 @@ func setupStepsWith(t *testing.T, o crewOptions) *stepEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.store.AddMember(ctx, c.operator, "member-lead", c.teamID, lead.ID, store.RoleCoordinator); err != nil {
+	// When the agent is the coordinator, "lead" is the worker it offers to.
+	leadRole := store.RoleCoordinator
+	if o.role == store.RoleCoordinator {
+		leadRole = store.RoleWorker
+	}
+	if _, err := c.store.AddMember(ctx, c.operator, "member-lead", c.teamID, lead.ID, leadRole); err != nil {
 		t.Fatal(err)
 	}
 	db, err := sql.Open("sqlite", c.storePath)
@@ -574,7 +579,7 @@ func TestDriverKeepsAPendingStep(t *testing.T) {
 func TestComposeNeverAcceptedRelease(t *testing.T) {
 	task := &TaskDoc{Revision: 5, Fields: map[string]json.RawMessage{"title": json.RawMessage(`"T"`),
 		"state": json.RawMessage(`"IN_PROGRESS"`), "next_action": json.RawMessage(`"N"`), "id": json.RawMessage(`"task-1"`)}}
-	body, err := composeBody(&Step{Operation: "release", ExpectedRevision: 5, ReservationID: "r-1", Fence: "1"}, "acp1_x", task)
+	body, err := composeBody(&Step{Operation: "release", ExpectedRevision: 5, ReservationID: "r-1", Fence: "1"}, "acp1_x", task, "")
 	if err != nil {
 		t.Fatal(err)
 	}

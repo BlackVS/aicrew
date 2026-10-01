@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/BlackVS/aicrew/internal/store"
+	"github.com/BlackVS/aicrew/internal/version"
 )
 
 var bearerShape = regexp.MustCompile(`^aicrew_introspect_[0-9a-f]{64}\n$`)
@@ -221,5 +222,21 @@ func TestIssueOperations(t *testing.T) {
 		if (ierr == nil) != tc.introspect || (cerr == nil) != tc.facts {
 			t.Fatalf("-operations %q: introspection %v, coordination %v", tc.flag, ierr, cerr)
 		}
+	}
+}
+
+func TestVersionCommand(t *testing.T) {
+	defer func(o string) { version.Override = o }(version.Override)
+	version.Override = "v1.2.3"
+	var out, errb bytes.Buffer
+	if code := run(context.Background(), []string{"version"}, &out, &errb); code != 0 || !strings.HasPrefix(out.String(), "aicrew v1.2.3") {
+		t.Fatalf("%d %q", code, out.String())
+	}
+	out.Reset()
+	if code := run(context.Background(), []string{"version", "-json"}, &out, &errb); code != 0 || !strings.Contains(out.String(), `"version":"v1.2.3"`) {
+		t.Fatalf("%d %q", code, out.String())
+	}
+	if code := run(context.Background(), []string{"version", "extra"}, &out, &errb); code != 2 {
+		t.Fatalf("extra argument: %d", code)
 	}
 }

@@ -8,6 +8,9 @@
 package version
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
 	"runtime"
 	"runtime/debug"
 )
@@ -43,4 +46,28 @@ func Get() Info {
 		i.Version = Override
 	}
 	return i
+}
+
+// Line is the one-line form: "NAME VERSION (COMMIT[, modified])".
+func (i Info) Line(name string) string {
+	line := name + " " + i.Version
+	if i.Commit != "" {
+		line += " (" + i.Commit[:min(12, len(i.Commit))]
+		if i.Modified {
+			line += ", modified"
+		}
+		line += ")"
+	}
+	return line
+}
+
+// Print writes the running build as one line, or as JSON.
+func Print(w io.Writer, name string, asJSON bool) {
+	i := Get()
+	if asJSON {
+		raw, _ := json.Marshal(i)
+		fmt.Fprintln(w, string(raw))
+		return
+	}
+	fmt.Fprintln(w, i.Line(name))
 }

@@ -108,20 +108,6 @@ func versionCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: aicrew-agent version [-json]")
 		return exitUsage
 	}
-	i := version.Get()
-	if *asJSON {
-		raw, _ := json.Marshal(i)
-		fmt.Fprintln(stdout, string(raw))
-		return exitOK
-	}
-	line := "aicrew-agent " + i.Version
-	if i.Commit != "" {
-		line += " (" + i.Commit[:min(12, len(i.Commit))]
-		if i.Modified {
-			line += ", modified"
-		}
-		line += ")"
-	}
-	fmt.Fprintln(stdout, line)
+	version.Print(stdout, "aicrew-agent", *asJSON)
 	return exitOK
 }

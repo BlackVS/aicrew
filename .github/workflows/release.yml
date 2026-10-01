@@ -1,0 +1,102 @@
+name: Release
+
+# A release is a vX.Y.Z tag on a commit of main, pushed by the operator:
+#   git tag -a vX.Y.Z origin/main -m "aicrew X.Y.Z" && git push origin vX.Y.Z
+# The tag's CHANGELOG.md section must already be on main (the
+# release-preparation PR writes it). This workflow never creates a tag.
+# Run it by hand (Actions -> Release -> Run workflow, from main) to publish an
+# existing tag again after a failed run, or with dry_run to build, stamp and
+# print the sums of a tag that need not exist yet, publishing nothing.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The release tag, vX.Y.Z. It must exist unless dry_run is set.'
+        required: true
+      dry_run:
+        description: 'Build, stamp and print the sums only; publish nothing'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One release at a time, so "latest" is decided after every earlier run.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.TAG }}
+      dry_run: ${{ steps.resolve.outputs.DRY_RUN }}
+    env:
+      INPUT_TAG: ${{ inputs.tag }}
+      INPUT_DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # full history: the check needs merge-base and the tags
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25'
+          cache: true
+      # The check checks out the commit to release, which may predate the
+      # script: every step runs the copy from this workflow's commit.
+      - name: Resolve the release
+        id: resolve
+        run: |
+          cp scripts/release.sh "$RUNNER_TEMP/release.sh"
+          bash "$RUNNER_TEMP/release.sh" resolve
+      - name: Check the tag, main and the CHANGELOG
+        env:
+          GH_TOKEN: ${{ github.token }}   # read-only here: gh release view
+          GH_REPO: ${{ github.repository }}
+        run: bash "$RUNNER_TEMP/release.sh" check "$TAG" $([ "$DRY_RUN" = true ] && echo --dry-run)
+      - name: Test before building
+        run: go test -count=1 ./...
+      - name: Build, stamp and sum
+        run: bash "$RUNNER_TEMP/release.sh" build "$TAG"
+      - name: Release notes
+        run: |
+          bash "$RUNNER_TEMP/release.sh" notes "$TAG" $([ "$DRY_RUN" = true ] && echo --dry-run)
+          cat release_notes.md
+      - name: Keep the assets for the publishing job
+        if: env.DRY_RUN != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release
+          path: |
+            dist/
+            release_notes.md
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: needs.build.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # only this job: create the release and upload its assets
+    env:
+      TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # the tags decide "latest"
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cp scripts/release.sh "$RUNNER_TEMP/release.sh"
+          bash "$RUNNER_TEMP/release.sh" publish "$TAG"

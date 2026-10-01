@@ -120,9 +120,14 @@ func (d agentDoc) layout() (int, bool) {
 	return v, true
 }
 
+// managed is the record of managed writes. A record that is absent, null
+// (which decodes to a nil map) or not an object is empty: every existing
+// managed file then counts as unrecorded and is never overwritten.
 func (d agentDoc) managed() map[string]string {
-	m := map[string]string{}
-	_ = json.Unmarshal(d.top["managed"], &m)
+	var m map[string]string
+	if json.Unmarshal(d.top["managed"], &m) != nil || m == nil {
+		return map[string]string{}
+	}
 	return m
 }
 

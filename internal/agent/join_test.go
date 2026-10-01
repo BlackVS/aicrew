@@ -818,3 +818,50 @@ func readyCheck(_ context.Context, o CheckOptions, doc *agentDoc, _ bool) (Check
 	doc.set(doc.top, "clients", sel)
 	return CheckReport{Status: JoinReady}, nil
 }
+
+// A hand-edited agent.json whose managed record is null or not an object
+// is refreshed without a panic: the record counts as empty, so unchanged
+// managed files are recorded again and an edited one is not overwritten.
+func TestJoinRefreshUnusableManagedRecord(t *testing.T) {
+	for _, record := range []string{`null`, `[1]`, `"x"`} {
+		t.Run(record, func(t *testing.T) {
+			e := setupJoin(t)
+			e.join(t, e.opts(), &recCrew{}, activeAimem(), e.invite(t, "inv-1", store.RoleWorker))
+			path := filepath.Join(e.home, "agent.json")
+			doc := readJSON(t, path)
+			raw, _ := json.Marshal(doc)
+			raw = bytes.Replace(raw, mustJSON(t, doc["managed"]), []byte(record), 1)
+			os.WriteFile(path, raw, 0o600)
+			edited := "# edited by the operator\n"
+			os.WriteFile(filepath.Join(e.home, "AGENTS.md"), []byte(edited), 0o644)
+
+			rep, reads := e.join(t, JoinOptions{Home: e.home}, &recCrew{}, activeAimem())
+			if rep.Status != JoinReady || reads != 0 {
+				t.Fatalf("%+v", rep)
+			}
+			actions := map[string]string{}
+			for _, c := range rep.Changes {
+				actions[c.Path] = c.Action
+			}
+			if actions["AGENTS.md"] != "conflict" || actions["CLAUDE.md"] != "unchanged" {
+				t.Fatalf("%v", actions)
+			}
+			if b, _ := os.ReadFile(filepath.Join(e.home, "AGENTS.md")); string(b) != edited {
+				t.Fatalf("the edited file was overwritten: %s", b)
+			}
+			managed, ok := readJSON(t, path)["managed"].(map[string]any)
+			if !ok || managed["CLAUDE.md"] == nil {
+				t.Fatalf("the record was not rebuilt: %v", managed)
+			}
+		})
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}

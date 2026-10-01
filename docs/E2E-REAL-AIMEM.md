@@ -164,11 +164,86 @@ run file, which is never copied to the artifacts.
   - **aicrewd's coordination answer delayed past aimem's 2 s call budget** is
     refused retryable, and the driver's retry commits.
 
-**The skip-the-fault matrix.** `AICREW_E2E_SKIP_FAULT=<case>` leaves one
-fault out. `scripts/e2e-real-aimem.sh -skip-faults` runs each case's
-scenario that way, and every such run must fail. The cases are F1-reply,
-F1-request, F2-begin, F2-settle, F5-stale, F5-replay, F5-resume and
-F5-delay. Every injected or skipped fault is recorded in the report.
+## Faults (b4b-2)
+
+The timed aimem also pauses **after** a command returns (`hold-after-…`).
+aicrewd reaches the hub through the fault proxy too, so its reads can be
+held back.
+
+- **F3. Restarts.**
+  - **The member's launcher is killed after aimem committed its claim and
+    before the settle.** aicrewd's reconciler settles the claim alone,
+    within 45 s; the audit names the reconciler as the settle's caller. The
+    restarted launcher has no recorded step left.
+  - **aicrewd is killed outright between begin and send.** The step commits
+    and settles against the restarted aicrewd.
+  - **The hub is killed outright between steps.** It restarts with its hold
+    intact, and the next step releases the hold.
+- **F4. Competing steps.**
+  - A claim of a task with an open attempt is refused `task_busy` at begin.
+  - An offer to a busy worker is refused `agent_busy` at begin.
+  - An offer and a claim racing for one task: exactly one commits, and one
+    attempt is open. The loser's answer must be a conflict refusal:
+    aicrew's at begin (`task_busy`, `agent_busy`), or aimem's at the claim
+    (`reservation_conflict`, `revision_conflict`, `stale_fence`). A
+    failure, a non-answer, or a step lost before commit and settled as
+    `not_committed` is none of them. The scenario checks that its
+    predicate rejects the last, and the F4-lost case shows the race's own
+    assertion failing on it.
+- **F6. Recovery through the read scope.**
+  - aimem's `recover release`, and `recover cancel`, on a running attempt:
+    aicrewd closes it as recovered, with `closed_by` and the closing fence.
+  - A held hold is not closed across 4 ticks.
+  - **Nothing closes while the hub is unreachable for aicrewd.** aicrewd's
+    reads are held back by the proxy from just before the recovery, then
+    the hub is stopped. Once the hub is back, the attempt is closed as
+    recovered.
+- **F7. Secrets.** None of the run's secrets appears in any process log,
+  the aimem call timings, the report, any command's output, or aicrew's
+  audit table. The secrets are the admin bearer, user tokens, aicrew's
+  credentials, invitation codes, captured proofs and aimem session handles.
+  Each captured proof is registered when it is read, before a later
+  capture replaces it, and F7 checks that the scan finds the earliest. The
+  one command whose job is to print a secret, aimem's token issue, is left
+  out of the scan.
+
+F5 runs after F3, F4 and F6. Its crashed coordinator's offer holds the
+worker's capacity until the offer's proof expires (01a0f758-c827), and F7
+runs last.
+
+## The skip-the-fault matrix
+
+`AICREW_E2E_SKIP_FAULT=<case>` leaves one fault out. Every assertion that
+the fault exists for is tagged with its case.
+
+At the end of such a run, the test itself writes a `skip_verdict` record.
+It reports `failed_as_expected` only when H passed, and the case's scenario
+failed on an assertion tagged with that case.
+
+`scripts/e2e-real-aimem.sh -skip-faults` runs every case on its scenario,
+and accepts a case only on that record in a fresh report. An absent report,
+a bootstrap failure, or a failure for another reason is rejected.
+
+Each case's control reaches the same assertion as its fault and fails it,
+rather than failing by construction:
+- the F5 replay and resume cases replay a live proof under its own step's
+  key, which aimem accepts;
+- the F4 cases aim the competing step at a free task, or free the worker;
+- F4-lost replaces the race loser's real answer with a step lost before
+  commit (the driver's synthesized `not_committed`), which the race's
+  assertion must refuse;
+- F7-leak plants a secret in a scanned log.
+
+The cases are:
+- F1-reply, F1-request;
+- F2-begin, F2-settle;
+- F3-launcher, F3-aicrewd, F3-hub;
+- F4-second, F4-race, F4-lost, F4-busy;
+- F5-stale, F5-replay, F5-resume, F5-delay;
+- F6-release, F6-cancel, F6-unreachable;
+- F7-leak.
+
+Every injected or skipped fault is recorded in the report.
 
 ## The report
 
@@ -187,6 +262,8 @@ F5-delay. Every injected or skipped fault is recorded in the report.
   action and path).
 - `observation`: behaviour the run observed and reported, which no
   assertion encodes.
+- `skip_verdict`: under `AICREW_E2E_SKIP_FAULT`, whether the run failed as
+  expected, and if not, why.
 - `summary`: the counts, and the slowest coordination fact and aimem call
   against aimem's 5 s context-age bound.
 

@@ -58,8 +58,10 @@ type faultRule struct {
 	Method string
 	Path   *regexp.Regexp
 	Delay  time.Duration
-	fired  chan struct{}
-	once   sync.Once
+	// Persist keeps the rule for every matching request until disarm.
+	Persist bool
+	fired   chan struct{}
+	once    sync.Once
 }
 
 // newFaultProxy listens on 127.0.0.1 with the run leaf certFile/keyFile and
@@ -129,11 +131,25 @@ func (p *faultProxy) take(method, path string) *faultRule {
 	defer p.mu.Unlock()
 	for i, r := range p.rules {
 		if r.Method == method && r.Path.MatchString(path) {
-			p.rules = append(p.rules[:i], p.rules[i+1:]...)
+			if !r.Persist {
+				p.rules = append(p.rules[:i], p.rules[i+1:]...)
+			}
 			return r
 		}
 	}
 	return nil
+}
+
+// disarm removes a rule.
+func (p *faultProxy) disarm(rule *faultRule) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, r := range p.rules {
+		if r == rule {
+			p.rules = append(p.rules[:i], p.rules[i+1:]...)
+			return
+		}
+	}
 }
 
 func (p *faultProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {

@@ -43,7 +43,17 @@ func TestRealAimem(t *testing.T) {
 	t.Run("S5_dependencies", func(t *testing.T) { h.s5Dependencies(t) })
 	t.Run("F1_lost_aimem_replies", func(t *testing.T) { h.f1LostAimemReplies(t) })
 	t.Run("F2_lost_aicrewd_replies", func(t *testing.T) { h.f2LostAicrewdReplies(t) })
+	t.Run("F3_restarts", func(t *testing.T) { h.f3Restarts(t) })
+	t.Run("F4_competing_steps", func(t *testing.T) { h.f4CompetingSteps(t) })
+	t.Run("F6_recovery", func(t *testing.T) { h.f6Recovery(t) })
+	// F5 crashes the coordinator, whose never-sent offer holds the worker's
+	// capacity until its proof expires (01a0f758-c827): it runs after every
+	// scenario that needs the worker. F7 scans everything, so it runs last.
 	t.Run("F5_stale_steps", func(t *testing.T) { h.f5StaleSteps(t) })
+	t.Run("F7_secrets", func(t *testing.T) { h.f7Secrets(t) })
+	if c := os.Getenv("AICREW_E2E_SKIP_FAULT"); c != "" {
+		h.report.verdict(c)
+	}
 }
 
 // --- steps ----------------------------------------------------------------

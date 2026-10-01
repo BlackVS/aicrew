@@ -48,6 +48,7 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	h.aicrewdProxy = h.newFaultProxy("aicrewd", aCert, aKey, h.aicrewdURL)
 	h.adminToken = secret(t, "e2e-admin-")
 	h.adminFile = filepath.Join(h.root, "admin.token")
+	h.knowSecret(h.adminToken)
 	h.writePrivate(h.adminFile, []byte(h.adminToken+"\n"))
 
 	// 2. The hub.
@@ -110,12 +111,15 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	aEnv := h.isolatedEnv(aDir)
 	h.must(aEnv, nil, filepath.Join(h.bin, "aicrew"), "introspection-credential", "issue",
 		"-store", h.storePath, "-hub", h.hubID, "-secret-file", introFile)
+	h.knowSecretFile(introFile)
 
 	// 6. aicrew's aimem credentials.
 	redeem, read := filepath.Join(aDir, "redeem.secret"), filepath.Join(aDir, "read.secret")
 	h.must(host, nil, h.identity("cred", "issue", serviceID, "--expires", "30d", "--secret-file", redeem)...)
+	h.knowSecretFile(redeem)
 	h.must(host, nil, h.identity("cred", "issue", serviceID, "--expires", "30d", "--secret-file", read,
 		"--operation", "reservation.read")...)
+	h.knowSecretFile(read)
 
 	// 7. The team's profile and grant.
 	h.must(host, nil, h.identity("team", "create", serviceID, h.teamID)...)
@@ -131,7 +135,9 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	cfg := map[string]any{
 		"store_path": h.storePath, "listen_addr": fmt.Sprintf("127.0.0.1:%d", h.aicrewdPort),
 		"tls_cert_file": aCert, "tls_key_file": aKey, "service_id": serviceID,
-		"aimem": map[string]any{"base_url": h.hubURL, "tls_trust_mode": "spki_sha256", "tls_trust_value": h.hubPin,
+		// aicrewd reaches the hub through the fault proxy too (F6 holds its
+		// reads back); the proxy presents the hub's own run key.
+		"aimem": map[string]any{"base_url": h.hubProxy.url, "tls_trust_mode": "spki_sha256", "tls_trust_value": h.hubPin,
 			"redemption_token_file": redeem, "read_token_file": read},
 	}
 	raw, _ := json.MarshalIndent(cfg, "", "  ")
@@ -209,6 +215,7 @@ func (h *harness) prepareMember(sp memberSpec, aEnv []string) *member {
 
 	dir := h.mkdir(filepath.Join(h.root, "m", name))
 	mem := &member{name: name, role: role, dir: dir, userID: user.ID, home: filepath.Join(dir, "a"), token: tok.Secret}
+	h.knowSecret(tok.Secret)
 	mem.env = h.isolatedEnv(dir)
 	codeFile := filepath.Join(h.mkdir(filepath.Join(h.root, "codes")), name+".code")
 	h.must(aEnv, nil, filepath.Join(h.bin, "aicrew"), "invitation", "issue",
@@ -220,6 +227,7 @@ func (h *harness) prepareMember(sp memberSpec, aEnv []string) *member {
 	}
 	os.Remove(codeFile)
 	mem.code = strings.TrimSpace(string(code))
+	h.knowSecret(mem.code)
 	return mem
 }
 

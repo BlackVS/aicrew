@@ -112,7 +112,12 @@ const (
 
 // anyCaller admits every caller: challenges carry no authority (context
 // contract), and completing one requires a receipt only aimem can vouch for.
-func anyCaller(Caller) error { return nil }
+func anyCaller(c Caller) error {
+	if c.kind == callerReconciler {
+		return fmt.Errorf("%w: the reconciler only settles and closes as recovered", ErrForbidden)
+	}
+	return nil
+}
 
 type agentChallengeRequest struct {
 	AgentID string `json:"agent_id"`

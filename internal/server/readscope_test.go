@@ -5,6 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +19,7 @@ import (
 	"github.com/BlackVS/aicrew/internal/aimemread"
 	"github.com/BlackVS/aicrew/internal/privatefile"
 	"github.com/BlackVS/aicrew/internal/privatefile/privatefiletest"
+	"github.com/BlackVS/aicrew/internal/reconcile"
 	"github.com/BlackVS/aicrew/internal/store"
 )
 
@@ -161,12 +165,237 @@ func TestNewChecksReadCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s.reader.(*aimemread.Client); !ok {
-		t.Fatalf("the service's read scope is %T", s.reader)
+	if _, ok := s.reader.(*aimemread.Client); !ok || s.loop == nil {
+		t.Fatalf("the service's read scope is %T, loop %v", s.reader, s.loop != nil)
+	}
+	// Serving starts the reconciliation loop, and stopping stops it.
+	var logs syncBuffer
+	s.log = slog.New(slog.NewTextHandler(&logs, nil))
+	s.loop.Log = s.log
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sctx, stop := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- s.Serve(sctx, ln) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(logs.String(), "reconcile: started") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the loop did not start: %s", logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stop()
+	if err := <-served; err != nil {
+		t.Fatalf("serve: %v", err)
 	}
 	// Without a read credential, the service has no read scope.
 	cfg.Aimem.ReadTokenFile = ""
-	if s, err = New(cfg, st, log); err != nil || s.reader != nil {
+	if s, err = New(cfg, st, log); err != nil || s.reader != nil || s.loop != nil {
 		t.Fatalf("no read credential: reader %T, %v", s.reader, err)
+	}
+}
+
+// With no member online, aicrewd's reconciler settles a member's claim and
+// update that aimem committed but the member never settled, and closes as
+// recovered an attempt whose reservation aimem closed outside aicrew: through
+// the production read scope client over HTTPS.
+func TestReconcilerSettlesCrashedSteps(t *testing.T) {
+	readOverHTTPS = true
+	t.Cleanup(func() { readOverHTTPS = false })
+	ctx := context.Background()
+	e := setupCoordination(t)
+	loop := reconcile.New(e.store, e.srv.reader, slogDiscard())
+
+	got := e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-1"))
+	claim, id := stepOf(t, got), attemptOf(t, got)
+	if code := e.aimem.send(t, e.task("task-1"), claim); code != "" {
+		t.Fatalf("aimem refused the claim: %s", code)
+	}
+	// The member crashes: it never settles.
+	if settled, _ := loop.Round(ctx); settled != 1 {
+		t.Fatalf("the claim's round settled %d", settled)
+	}
+	if a, _ := e.store.GetAttempt(ctx, id); a.State != store.AttemptRunning {
+		t.Fatalf("after the round: %+v", a)
+	}
+
+	upd := updateStepOf(t, e.call(t, e.indep.token, AttemptsPath+"/"+id+"/work", "block-1",
+		map[string]string{"intent": "block", "detail": "waiting on design"}))
+	if code := e.aimem.send(t, e.task("task-1"), upd); code != "" {
+		t.Fatalf("aimem refused the update: %s", code)
+	}
+	if settled, _ := loop.Round(ctx); settled != 1 {
+		t.Fatalf("the update's round settled %d", settled)
+	}
+	if a, _ := e.store.GetAttempt(ctx, id); a.Phase != store.PhaseBlocked || a.PendingKey != "" {
+		t.Fatalf("after the update's round: %+v", a)
+	}
+
+	// An admin recovery at aimem closes the hold outside aicrew.
+	a, _ := e.store.GetAttempt(ctx, id)
+	e.aimem.mu.Lock()
+	h := e.aimem.holds["task-1"]
+	h.active, h.closedBy, h.fence = false, "recovery_release", h.fence+1
+	e.aimem.mu.Unlock()
+	if _, closed := loop.Round(ctx); closed != 1 {
+		t.Fatalf("the recovery's round closed %d", closed)
+	}
+	if r, _ := e.store.GetAttempt(ctx, id); r.State != store.AttemptClosed || r.CloseReason != "recovered" ||
+		r.RecoveredBy != "recovery_release" || r.ReservationID != "" || a.ReservationID == "" {
+		t.Fatalf("the recovered attempt: %+v", r)
+	}
+}
+
+// A claim replayed until it has more proofs than the loop reads in a
+// minute, and committed under the newest, is settled by one round: the
+// newest proof is read first.
+func TestReconcilerReachesTheNewestOfManyProofs(t *testing.T) {
+	readOverHTTPS = true
+	t.Cleanup(func() { readOverHTTPS = false })
+	ctx := context.Background()
+	e := setupCoordination(t)
+	loop := reconcile.New(e.store, e.srv.reader, slogDiscard())
+	var claim store.Step
+	var id string
+	for i := 0; i < 31; i++ {
+		got := e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-1"))
+		claim, id = stepOf(t, got), attemptOf(t, got)
+	}
+	if code := e.aimem.send(t, e.task("task-1"), claim); code != "" {
+		t.Fatalf("aimem refused the newest proof: %s", code)
+	}
+	if settled, _ := loop.Round(ctx); settled != 1 {
+		t.Fatalf("the round settled %d", settled)
+	}
+	if a, _ := e.store.GetAttempt(ctx, id); a.State != store.AttemptRunning {
+		t.Fatalf("after the round: %+v", a)
+	}
+}
+
+// windowLoop is a reconciliation loop over e's read scope with a clock the
+// test moves and a read window of perMinute. window runs the rounds of one
+// minute at the production cadence, one every Tick, the ones after the
+// budget is spent included.
+func windowLoop(e *coordEnv, perMinute int) (*reconcile.Loop, func(context.Context)) {
+	now := time.Now()
+	loop := reconcile.New(e.store, e.srv.reader, slogDiscard())
+	loop.Now = func() time.Time { return now }
+	loop.PerMinute = perMinute
+	return loop, func(ctx context.Context) {
+		for range time.Minute / reconcile.Tick {
+			loop.Round(ctx)
+			now = now.Add(reconcile.Tick)
+		}
+	}
+}
+
+// indepUpdateWithMostKeys has the independent member claim task-1 and leave
+// a block update that superseded the most keys it may: settling it reads its
+// hold and MaxSupersededKeys+1 keys.
+func indepUpdateWithMostKeys(t *testing.T, e *coordEnv) string {
+	t.Helper()
+	got := e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-1"))
+	claim, id := stepOf(t, got), attemptOf(t, got)
+	if code := e.aimem.send(t, e.task("task-1"), claim); code != "" {
+		t.Fatalf("claim: %s", code)
+	}
+	settled(t, e.settleAs(t, e.indep, id, claim, "committed", ""), "committed", "running")
+	path := AttemptsPath + "/" + id + "/work"
+	upd := updateStepOf(t, e.call(t, e.indep.token, path, "block-0", map[string]string{"intent": "block", "detail": "waiting"}))
+	for i := 1; i <= store.MaxSupersededKeys; i++ {
+		upd = updateStepOf(t, e.call(t, e.indep.token, path, fmt.Sprintf("block-%d", i),
+			map[string]string{"intent": "block", "detail": "waiting", "supersedes": upd.RequestKey}))
+	}
+	refused(t, e.call(t, e.indep.token, path, "block-over",
+		map[string]string{"intent": "block", "detail": "waiting", "supersedes": upd.RequestKey}),
+		http.StatusConflict, "supersede_limit")
+	return id
+}
+
+// workerRunning has the lead offer task-2 to the worker, who accepts: the
+// worker then holds task-2's reservation.
+func workerRunning(t *testing.T, e *coordEnv) string {
+	t.Helper()
+	got := e.call(t, e.lead.token, AttemptsPath, "offer-2", e.offerBody("task-2", time.Now().Add(time.Hour)))
+	offer, id := stepOf(t, got), attemptOf(t, got)
+	if code := e.aimem.send(t, e.task("task-2"), offer); code != "" {
+		t.Fatalf("offer: %s", code)
+	}
+	settled(t, e.settleAs(t, e.lead, id, offer, "committed", ""), "committed", "offered")
+	acc := e.accept(t, id, "accept-2")
+	if code := e.aimem.send(t, e.task("task-2"), acc); code != "" {
+		t.Fatalf("accept: %s", code)
+	}
+	settled(t, e.settleAs(t, e.worker, id, acc, "committed", ""), "committed", "running")
+	return id
+}
+
+// recoverHold has aimem's admin recovery close task's hold at a later fence.
+func (e *coordEnv) recoverHold(task string) {
+	e.aimem.mu.Lock()
+	h := e.aimem.holds[task]
+	h.active, h.closedBy, h.fence = false, "recovery_release", h.fence+1
+	e.aimem.mu.Unlock()
+}
+
+// An update with the most keys it may have, whose hold aimem then closes by
+// an admin recovery, is settled not committed across read windows smaller
+// than its scan, and the attempt is then closed as recovered: through the
+// routes, the real store and the production client over HTTPS.
+func TestReconcilerFinishesAnUpdateWithManyKeys(t *testing.T) {
+	readOverHTTPS = true
+	t.Cleanup(func() { readOverHTTPS = false })
+	ctx := context.Background()
+	e := setupCoordination(t)
+	_, window := windowLoop(e, 5)
+	id := indepUpdateWithMostKeys(t, e)
+	e.recoverHold("task-1")
+	for w := 0; w < 5; w++ {
+		window(ctx)
+		if a, _ := e.store.GetAttempt(ctx, id); a.State == store.AttemptClosed {
+			if a.CloseReason != "recovered" || a.RecoveredBy != "recovery_release" || w < 2 {
+				t.Fatalf("closed as %+v in window %d", a, w)
+			}
+			return
+		}
+	}
+	a, _ := e.store.GetAttempt(ctx, id)
+	t.Fatalf("five windows later the attempt is %+v", a)
+}
+
+// For each step kind, a step whose scan the read window interrupts does not
+// starve the recoverable hold behind it: the next window reaches the hold.
+func TestAnInterruptedStepDoesNotStarveARecoverableHold(t *testing.T) {
+	for kind, pending := range map[string]func(*testing.T, *coordEnv) string{
+		"an update whose hold has not moved": indepUpdateWithMostKeys,
+		"a claim with more live proofs than a window": func(t *testing.T, e *coordEnv) string {
+			var id string
+			for i := 0; i < 7; i++ {
+				id = attemptOf(t, e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-1")))
+			}
+			return id
+		},
+	} {
+		t.Run(kind, func(t *testing.T) {
+			readOverHTTPS = true
+			t.Cleanup(func() { readOverHTTPS = false })
+			ctx := context.Background()
+			e := setupCoordination(t)
+			_, window := windowLoop(e, 5)
+			stuck := pending(t, e)
+			recoverable := workerRunning(t, e)
+			e.recoverHold("task-2")
+			for w := 0; w < 2; w++ {
+				window(ctx)
+			}
+			if a, _ := e.store.GetAttempt(ctx, recoverable); a.State != store.AttemptClosed || a.CloseReason != "recovered" {
+				t.Fatalf("the recoverable hold after two windows: %+v", a)
+			}
+			if a, _ := e.store.GetAttempt(ctx, stuck); a.State == store.AttemptClosed {
+				t.Fatalf("the interrupted step closed: %+v", a)
+			}
+		})
 	}
 }

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -106,7 +107,14 @@ func (s *Store) settleUpdate(ctx context.Context, c Caller, reader ReservationRe
 		return a, pending, fmt.Errorf("attempt %s: read scope: %w: %w", a.ID, ErrOutcomeUnknown, err)
 	}
 	overtaken := updateOvertaken(a, hold)
+	finals, err := s.scanFinals(ctx, a.ID)
+	if err != nil {
+		return a, Settlement{}, err
+	}
 	for _, k := range keys {
+		if finals[keyLookup(k)] {
+			continue
+		}
 		look, err := reader.ReceiptByKey(ctx, a.Task, ReservationUpdate, requestKeyDigest(k))
 		if err != nil {
 			return a, pending, fmt.Errorf("attempt %s: read scope: %w: %w", a.ID, ErrOutcomeUnknown, err)
@@ -120,6 +128,13 @@ func (s *Store) settleUpdate(ctx context.Context, c Caller, reader ReservationRe
 			out, err := s.settleGuarded(ctx, c, a, callOutcome{kind: outcomeCommitted, result: res}, g)
 			return out, Settlement{Settled: true, Outcome: string(outcomeCommitted)}, err
 		case ScopeNone:
+			// Read after the hold was seen past the request, this key's
+			// "none" is final (none_finality's proofless rule).
+			if overtaken {
+				if err := s.markScanFinal(ctx, a.ID, keyLookup(k), s.now()); err != nil {
+					return a, pending, err
+				}
+			}
 		default:
 			return a, pending, fmt.Errorf("attempt %s: read scope answered %q: %w", a.ID, look.State, ErrOutcomeUnknown)
 		}
@@ -130,6 +145,14 @@ func (s *Store) settleUpdate(ctx context.Context, c Caller, reader ReservationRe
 	out, err := s.settleGuarded(ctx, c, a, callOutcome{kind: outcomeNotCommitted}, g)
 	return out, Settlement{Settled: true, Outcome: string(outcomeNotCommitted)}, err
 }
+
+// MaxSupersededKeys bounds the keys an update step can supersede, so that
+// settling it takes at most one hold read and MaxSupersededKeys+1 receipt
+// reads: well within one read window of the reconciler (crew-execution b3b).
+const MaxSupersededKeys = 8
+
+// ErrSupersedeLimit refuses a supersede past MaxSupersededKeys.
+var ErrSupersedeLimit = errors.New("supersede_limit")
 
 // supersedeUpdateCommand gives the holder's pending update step a new request
 // key. The update itself does not change: the same intent and detail, at the
@@ -156,6 +179,14 @@ func supersedeUpdateCommand(c Caller, key, attemptID string, in WorkUpdate, supe
 			}
 			if string(in.Intent) != a.PendingIntent || in.Detail != a.PendingDetail {
 				return nil, fmt.Errorf("%w: a superseding update repeats the pending update's intent and detail", ErrInvalid)
+			}
+			var aliases int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM superseded_updates WHERE attempt_id = ?`,
+				a.ID).Scan(&aliases); err != nil {
+				return nil, fmt.Errorf("count superseded keys: %w", err)
+			}
+			if aliases >= MaxSupersededKeys {
+				return nil, fmt.Errorf("attempt %s: the update already superseded %d keys: %w", a.ID, aliases, ErrSupersedeLimit)
 			}
 			n, err := nextIntent(ctx, tx, a.ID)
 			if err != nil {

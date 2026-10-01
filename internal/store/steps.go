@@ -251,11 +251,18 @@ type StepHint string
 type StepReport struct {
 	Outcome StepHint `json:"outcome"`
 	Code    string   `json:"code,omitempty"`
+	// reconciled marks the reconciler's settle, which carries no member's
+	// report: it voids nothing and settles only on what the read scope
+	// shows (ReconcileStep).
+	reconciled bool
 }
 
 var refusalCodeShape = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 func (r StepReport) validate() error {
+	if r.reconciled {
+		return nil
+	}
 	switch r.Outcome {
 	case HintRefused:
 		if !refusalCodeShape.MatchString(r.Code) {
@@ -351,12 +358,22 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 	asked := s.now()
 	if reader != nil {
 		// A proof replaced by a replay may still have been used: any of
-		// the intent's proofs can carry the committed transition.
+		// the intent's proofs can carry the committed transition. The
+		// newest, the only one that may still live, is read first; a proof
+		// whose "none" is already final is not read again.
+		finals, err := s.scanFinals(ctx, a.ID)
+		if err != nil {
+			return a, Settlement{}, err
+		}
 		for _, p := range proofs {
+			if finals[proofLookup(p.digest)] {
+				continue
+			}
 			digest, err := proofDigestP1(p.digest)
 			if err != nil {
 				return a, Settlement{}, err
 			}
+			readAt := s.now()
 			look, err := reader.ReceiptByProof(ctx, digest)
 			if err != nil {
 				return a, pending, fmt.Errorf("attempt %s: read scope: %w: %w", a.ID, ErrOutcomeUnknown, err)
@@ -370,6 +387,14 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 				out, err := s.settleGuarded(ctx, c, a, callOutcome{kind: outcomeCommitted, result: res}, g)
 				return out, Settlement{Settled: true, Outcome: string(outcomeCommitted)}, err
 			case ScopeNone:
+				// A proof that ended or expired commits nothing more once
+				// the grace period after its end has passed: a "none" read
+				// from then on is final for it (none_finality).
+				if !readAt.Before(p.end().Add(NoneFinalAfter)) {
+					if err := s.markScanFinal(ctx, a.ID, proofLookup(p.digest), readAt); err != nil {
+						return a, pending, err
+					}
+				}
 			default:
 				return a, pending, fmt.Errorf("attempt %s: read scope answered %q: %w", a.ID, look.State, ErrOutcomeUnknown)
 			}
@@ -378,7 +403,7 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 	// Nothing committed yet. A report of a refusal or an unknown outcome
 	// ends the step's proofs, so nothing can commit under them any more; a
 	// report of a commit that the read scope does not show yet waits.
-	if report.Outcome != HintCommitted {
+	if report.Outcome != HintCommitted && !report.reconciled {
 		if err := s.voidStep(ctx, c, a, report, g); err != nil {
 			return a, Settlement{}, err
 		}
@@ -391,10 +416,7 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 	}
 	var last time.Time
 	for _, p := range proofs {
-		end := p.expires
-		if !p.ended.IsZero() && p.ended.Before(end) {
-			end = p.ended
-		}
+		end := p.end()
 		if end.After(asked) {
 			return a, pending, nil // a proof still lives: aimem may still commit under it
 		}
@@ -418,7 +440,7 @@ func (s *Store) voidStep(ctx context.Context, c Caller, a Attempt, report StepRe
 	}
 	var out stepRef
 	return s.run(ctx, c, command{
-		op: opVoidStep, scope: a.ID, key: key, authorize: anyCaller,
+		op: opVoidStep, scope: a.ID, key: key, authorize: settleCallers,
 		input: struct {
 			stepRef
 			Report StepReport `json:"report"`
@@ -440,13 +462,23 @@ type stepProof struct {
 	expires, ended time.Time
 }
 
+// end is when the proof stopped being usable: its expiry, or its end if
+// earlier.
+func (p stepProof) end() time.Time {
+	if !p.ended.IsZero() && p.ended.Before(p.expires) {
+		return p.ended
+	}
+	return p.expires
+}
+
 // stepProofs lists every proof issued for one step, replaced ones included.
 func (s *Store) stepProofs(ctx context.Context, attemptID, requestKey string) ([]stepProof, error) {
 	var out []stepProof
 	err := s.snapshot(ctx, func(q querier) error {
 		rows, err := q.QueryContext(ctx,
-			`SELECT digest, expires_at, ended_at FROM coordination_proofs WHERE attempt_id = ? AND request_key = ?
-			 ORDER BY issued_at, digest`, attemptID, requestKey)
+			`SELECT digest, expires_at, ended_at FROM coordination_proofs
+			 WHERE attempt_id = ? AND request_key = ?
+			 ORDER BY issued_at DESC, rowid DESC`, attemptID, requestKey)
 		if err != nil {
 			return fmt.Errorf("read step proofs: %w", err)
 		}

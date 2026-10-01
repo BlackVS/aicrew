@@ -256,6 +256,12 @@ func TestWorkWritesRecheckTheToken(t *testing.T) {
 	if current().PendingKey != st.RequestKey {
 		t.Fatal("a dead token settled the update as not committed")
 	}
+	// The test now rewinds aimem, which no real hold does: the hold moves
+	// back and the key commits. The "none" read above was final for the
+	// hold it saw, so its record goes with the rewind.
+	if _, err := e.s.db.Exec(`DELETE FROM scan_finals`); err != nil {
+		t.Fatal(err)
+	}
 	e.reader.setHold(heldAs(a, a.Fence, a.TaskRevision))
 	e.reader.commitUpdate(st.RequestKey, updateReceipt(a, st.RequestKey))
 	e.reader.answered = die

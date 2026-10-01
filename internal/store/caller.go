@@ -11,6 +11,10 @@ const (
 	callerNone callerKind = iota
 	callerOperator
 	callerAgent
+	// callerReconciler is aicrewd's own reconciler (crew-execution b3b): no
+	// route constructs it, and it may only settle a pending step on the read
+	// scope's answers and close an attempt as recovered.
+	callerReconciler
 )
 
 func (k callerKind) String() string {
@@ -19,6 +23,8 @@ func (k callerKind) String() string {
 		return "operator"
 	case callerAgent:
 		return "agent"
+	case callerReconciler:
+		return "reconciler"
 	default:
 		return "none"
 	}
@@ -52,6 +58,10 @@ func AgentCaller(agentID string) (Caller, error) {
 	return Caller{kind: callerAgent, id: agentID}, nil
 }
 
+// ReconcilerCaller returns aicrewd's reconciler. Only the service's own
+// reconciliation loop uses it; no request surface constructs it.
+func ReconcilerCaller() Caller { return Caller{kind: callerReconciler, id: "aicrewd"} }
+
 func (c Caller) String() string {
 	if c.kind == callerNone {
 		return "none"
@@ -76,6 +86,18 @@ func requireOperator(c Caller) error {
 	}
 	return nil
 }
+
+// requireReconciler admits aicrewd's reconciler only.
+func requireReconciler(c Caller) error {
+	if c.kind != callerReconciler {
+		return fmt.Errorf("%w: the reconciler is required, caller is %s", ErrForbidden, c)
+	}
+	return nil
+}
+
+// settleCallers admits every caller of the settle family: a member or the
+// operator (mayReconcile decides which), and the reconciler.
+func settleCallers(Caller) error { return nil }
 
 func validateCallerID(id string) error {
 	if id == "" || len(id) > 128 || !utf8.ValidString(id) {

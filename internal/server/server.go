@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/aimemread"
+	"github.com/BlackVS/aicrew/internal/reconcile"
 	"github.com/BlackVS/aicrew/internal/store"
 	"github.com/BlackVS/aicrew/internal/verifier"
 )
@@ -46,6 +47,9 @@ type Server struct {
 	// reader is aimem's read scope for settling member-driven steps; nil
 	// when no read credential is configured, so those steps stay pending.
 	reader store.ReservationReader
+	// loop is aicrewd's reconciliation loop over the configured read scope
+	// (crew-execution b3b); nil without one, and never for a test's reader.
+	loop *reconcile.Loop
 	// Per-address limits on the unauthenticated routes, and per-session on
 	// handle refresh.
 	challengeLimit, tokenLimit, refreshLimit *limiter
@@ -99,6 +103,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 				return nil, fmt.Errorf("aimem.read_token_file: %w", err)
 			}
 			s.reader = r
+			s.loop = reconcile.New(st, r, log)
 		}
 	}
 	for _, o := range opts {
@@ -145,6 +150,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 // a handler.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	s.log.Info("listening", "addr", ln.Addr().String())
+	if s.loop != nil {
+		loopCtx, stopLoop := context.WithCancel(ctx)
+		looped := make(chan struct{})
+		go func() { s.loop.Run(loopCtx); close(looped) }()
+		defer func() { stopLoop(); <-looped }()
+	}
 	served := make(chan error, 1)
 	go func() { served <- s.http.Serve(tls.NewListener(ln, s.tls)) }()
 	select {

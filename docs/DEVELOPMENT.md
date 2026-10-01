@@ -197,6 +197,15 @@ bin/aicrew introspection-credential revoke -store aicrew.db -id ID
   the new credential permits both, aimem moves to it, then `revoke` the old
   one.
 
+## Reconciliation
+
+With `aimem.read_token_file` configured, aicrewd also runs its
+reconciliation loop: every 15 s it settles the steps members left pending
+and closes as recovered the attempts whose reservation aimem closed outside
+aicrew, reading at most 30 times a minute (`docs/CREW-CONTRACT.md`,
+"Reconciliation by aicrewd"). It logs each recovered closure. Without the
+read credential the loop does not run.
+
 ## Invitations
 
 An invitation lets one agent join a team, or link or rebind an agent record

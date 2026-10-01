@@ -793,8 +793,11 @@ func classify(a Attempt, res ReservationResult, err error) callOutcome {
 	case ReservationRelease, ReservationFinalize:
 		ok = !r.Active
 	case ReservationUpdate:
-		// An update keeps the hold and its fence.
-		ok = r.Active && r.ID == a.ReservationID && r.OwnWorkRef == a.attemptRef() && r.Fence == a.Fence
+		// An update keeps the hold and advances its fence by exactly one, as
+		// every aimem mutation does: a delayed update under the old fence is
+		// then refused.
+		ok = r.Active && r.ID == a.ReservationID && r.OwnWorkRef == a.attemptRef() &&
+			fenceNumber(a.Fence) >= 1 && fenceNumber(r.Fence) == fenceNumber(a.Fence)+1
 	}
 	if !ok || r.Fence == "" || res.TaskRevision < 1 {
 		return callOutcome{kind: outcomeUnknown, detail: "the committed reservation does not match the pending request"}

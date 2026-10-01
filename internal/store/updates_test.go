@@ -4,15 +4,16 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 )
 
 // updateReceipt is the read scope's receipt for an update committed under key
-// on a's hold, moving the task's revision.
+// on a's hold, moving the task's revision and advancing the fence by one.
 func updateReceipt(a Attempt, key string) ScopeReceipt {
 	return ScopeReceipt{ID: "rcpt-" + key, Operation: string(ReservationUpdate), TaskID: a.Task.TaskID,
-		RequestKeyDigest: requestKeyDigest(key), ReservationID: a.ReservationID, Fence: a.Fence,
+		RequestKeyDigest: requestKeyDigest(key), ReservationID: a.ReservationID, Fence: strconv.FormatInt(fenceNumber(a.Fence)+1, 10),
 		TaskRevision: a.TaskRevision + 1, MemberUserID: "user-x", VerifiedMode: "team", CommittedAt: "2026-09-29T04:00:00Z"}
 }
 

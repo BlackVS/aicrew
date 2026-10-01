@@ -71,18 +71,20 @@ func resultRefs(t *testing.T, s *Store, a Attempt) []string {
 }
 
 // The whole work lifecycle: block, resume, submit, review, finalize. Updates
-// keep the hold and its fence; finalize closes it and frees the capacity; the
-// task content keeps fields aicrew does not own.
+// keep the hold and advance its fence by one each, as aimem does, and the
+// attempt records the new fence; finalize closes it and frees the capacity;
+// the task content keeps fields aicrew does not own.
 func TestWorkLifecycle(t *testing.T) {
 	e, a := running(t)
-	fence := a.Fence
+	fence := fenceNumber(a.Fence)
+	reservation := a.ReservationID
 	a = e.mustWork(t, "w1", a, IntentBlock, "The test database is unavailable.")
-	if a.Phase != PhaseBlocked || a.Fence != fence {
+	if a.Phase != PhaseBlocked || fenceNumber(a.Fence) != fence+1 || a.ReservationID != reservation {
 		t.Fatalf("after block: %+v", a)
 	}
 	a = e.mustWork(t, "w2", a, IntentResume, "")
 	a = e.mustWork(t, "w3", a, IntentSubmit, "https://example.invalid/pull/1")
-	if a.Phase != PhaseSubmitted || a.Fence != fence {
+	if a.Phase != PhaseSubmitted || fenceNumber(a.Fence) != fence+3 || a.ReservationID != reservation {
 		t.Fatalf("after submit: %+v", a)
 	}
 	if got := resultRefs(t, e.s, a); !reflect.DeepEqual(got, []string{"https://example.invalid/pull/1"}) {

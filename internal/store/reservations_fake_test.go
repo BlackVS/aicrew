@@ -233,8 +233,8 @@ func (f *fakeReservations) Mutate(_ context.Context, op ReservationOp, req Reser
 		}
 		f.mergeOwned(task, req.Owned)
 		f.revision[task]++
+		h.fence++ // as aimem: every mutation advances the fence
 		if op == ReservationFinalize {
-			h.fence++
 			h.active, h.id, h.workRef = false, "", ""
 		}
 	}

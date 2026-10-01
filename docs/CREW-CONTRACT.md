@@ -476,7 +476,10 @@ begin needs an `Idempotency-Key`; settle does not.
       <agent>`, naming the attempt and the submitting member. A resend of
       the same reference with the same note adds nothing.
     - It is a fenced update of the holder's own hold, with no coordination
-      fact, so it has no proof.
+      fact, so it has no proof. Like every aimem mutation it advances the
+      hold's fence by exactly one: aicrew confirms a committed update only
+      at the next fence and records it, so the holder's later steps send it,
+      and a delayed update under the old fence is refused.
   - A begin records the intent and the capacity it needs, as "Ordering
     across the two stores" requires. It answers `200` with coordination.v1's
     begin response: `{operation, request_key, expected_revision,
@@ -861,9 +864,9 @@ keys still show nothing when read after that.
 | Accept | `ACCEPTING` → `RUNNING` | Transfer from offer to attempt, to the worker's verified context; the fence advances. The worker's client sends it. |
 | Decline, withdraw or offer expiry | → `CLOSED` | Release under the current fence; the task returns to `READY`. The coordinator's client sends it. |
 | Independent claim | `CLAIMING` → `RUNNING` | Claim with an external holder referencing the attempt, under the worker's own verified context. The claimer's client sends it. |
-| Block | `RUNNING` → `BLOCKED` | Fenced work mutation recording the blocker; hold kept. The holder's client sends it. |
-| Submit result | `RUNNING` → `SUBMITTED` | Fenced work mutation to task `REVIEW`; result reference recorded. The holder's client sends it. |
-| Review: return for rework | `SUBMITTED` → `RUNNING` | The worker, as holder, makes the fenced work mutation back to `IN_PROGRESS` when it resumes; the hold is unchanged |
+| Block | `RUNNING` → `BLOCKED` | Fenced work mutation recording the blocker; hold kept, its fence advanced by one. The holder's client sends it. |
+| Submit result | `RUNNING` → `SUBMITTED` | Fenced work mutation to task `REVIEW`; result reference recorded; hold kept, its fence advanced by one. The holder's client sends it. |
+| Review: return for rework | `SUBMITTED` → `RUNNING` | The worker, as holder, makes the fenced work mutation back to `IN_PROGRESS` when it resumes; the hold is kept, its fence advanced by one |
 | Review: accept result | `SUBMITTED` → `ACCEPTED` | none; acceptance is not delivery |
 | Finalize after human merge | `ACCEPTED` → `FINALIZED` | Finalize `DONE` with the confirmed delivery evidence as terminal evidence. The finalizer's client sends it. |
 | Stop | `STOP_REQUESTED` → `STOPPED` → `CLOSED` | Release to `READY`, or `BLOCKED` with a recorded blocker, after the worker confirms the stop. The holder's client sends it, under the `stopped` fact. |

@@ -210,11 +210,17 @@ func (h *harness) sessionFile(mem *member) string {
 // replayClaim sends body as mem's own `aimem reservation claim` under a new
 // key, with the task's current revision: a replay of a proof, not a step.
 func (h *harness) replayClaim(sc *scenario, mem *member, task taskRef, body map[string]json.RawMessage) (int, string) {
+	return h.replayClaimKey(sc, mem, task, body, newKey())
+}
+
+// replayClaimKey sends body as mem's own `aimem reservation claim` under
+// key, with the task's current revision.
+func (h *harness) replayClaimKey(sc *scenario, mem *member, task taskRef, body map[string]json.RawMessage, key string) (int, string) {
 	sc.t.Helper()
 	body["expected_revision"], _ = json.Marshal(h.readTask(sc, task.ID).Revision)
 	raw, _ := json.Marshal(body)
 	env := append(append([]string(nil), mem.env...), "AIMEM_TEAM_SESSION="+h.sessionFile(mem))
-	r := h.run(env, raw, h.aimem(), "reservation", "claim", "--task", task.ID, "--key", newKey())
+	r := h.run(env, raw, h.aimem(), "reservation", "claim", "--task", task.ID, "--key", key)
 	var env2 struct {
 		Code string `json:"code"`
 	}
@@ -236,8 +242,8 @@ func (h *harness) lostReply(sc *scenario, mem *member, op, stepOp, attempt, task
 	w := h.mark()
 	res := h.committed(sc, mem, stepOp, attempt, task, body)
 	calls := h.aimemCalls(w)
-	sc.check("F1: the "+op+"'s reply was dropped after aimem committed it", rule.wasFired())
-	sc.check("F1: aimem's CLI answered the lost "+op+" reply with exit 5, and the receipt reconciled it",
+	sc.checkCase("F1-reply", "F1: the "+op+"'s reply was dropped after aimem committed it", rule.wasFired())
+	sc.checkCase("F1-reply", "F1: aimem's CLI answered the lost "+op+" reply with exit 5, and the receipt reconciled it",
 		contains(calls, "reservation "+op+" 5") && contains(calls, "reservation receipt 0"), calls)
 	return res
 }
@@ -251,8 +257,8 @@ func (h *harness) lostRequest(sc *scenario, mem *member, op, stepOp, attempt, ta
 	ans, _ := h.step(sc, mem, stepOp, attempt, task, body)
 	var res stepResult
 	_ = json.Unmarshal(ans.Result, &res)
-	sc.check("F1: the "+op+"'s request was dropped before the hub", rule.wasFired())
-	sc.check("F1: the dropped "+op+" did not commit", res.Outcome != "committed", describe(ans))
+	sc.checkCase("F1-request", "F1: the "+op+"'s request was dropped before the hub", rule.wasFired())
+	sc.checkCase("F1-request", "F1: the dropped "+op+" did not commit", res.Outcome != "committed", describe(ans))
 	return ans
 }
 
@@ -320,11 +326,11 @@ func (h *harness) f2LostAicrewdReplies(t *testing.T) {
 	task := h.createTask(sc, "F2 lost begin")
 	rule := h.aicrewdProxy.arm(&faultRule{Case: "F2-begin", Action: dropReply, Method: "POST", Path: route(`^/v1/crew/attempts$`)})
 	ans, code := h.step(sc, coord, "offer", "", "", h.offerBody(task, worker, time.Now().Add(time.Hour)))
-	sc.check("F2: the offer's begin reply was dropped", rule.wasFired())
-	sc.check("F2: the client saw the begin fail", code != 0 && !ans.OK, describe(ans))
+	sc.checkCase("F2-begin", "F2: the offer's begin reply was dropped", rule.wasFired())
+	sc.checkCase("F2-begin", "F2: the client saw the begin fail", code != 0 && !ans.OK, describe(ans))
 	h.recoverStep(sc, coord)
 	all := h.attemptsOfTask(sc, task.ID)
-	sc.check("F2: the replayed begin reached the one attempt the lost reply began", len(all) == 1 && all[0].State == "offered", all)
+	sc.checkCase("F2-begin", "F2: the replayed begin reached the one attempt the lost reply began", len(all) == 1 && all[0].State == "offered", all)
 	sc.check("aimem holds the task once", holdState(h.hold(sc, task.ID)) == "held")
 	if len(all) == 1 {
 		h.committed(sc, coord, "withdraw", all[0].ID, task.ID, map[string]any{})
@@ -334,8 +340,8 @@ func (h *harness) f2LostAicrewdReplies(t *testing.T) {
 	task2 := h.createTask(sc, "F2 lost settle")
 	rule = h.aicrewdProxy.arm(&faultRule{Case: "F2-settle", Action: dropReply, Method: "POST", Path: route(`^/v1/crew/attempts/[^/]+/settle$`)})
 	ans, code = h.step(sc, indep, "claim", "", "", h.claimBody(task2))
-	sc.check("F2: the claim's settle reply was dropped", rule.wasFired())
-	sc.check("F2: the client saw the settle fail", code != 0 && !ans.OK, describe(ans))
+	sc.checkCase("F2-settle", "F2: the claim's settle reply was dropped", rule.wasFired())
+	sc.checkCase("F2-settle", "F2: the client saw the settle fail", code != 0 && !ans.OK, describe(ans))
 	h.recoverStep(sc, indep)
 	a := h.attemptOf(sc, task2.ID)
 	sc.check("F2: the retried settle left the claim running, settled once", a.State == "running" && a.PendingKey == "", a)
@@ -384,7 +390,7 @@ func (h *harness) f5StaleSteps(t *testing.T) {
 	}
 	first := <-done
 	calls := h.aimemCalls(w)
-	sc.check("F5: aimem refused the claim begun at the old revision", contains(calls, "reservation claim 3"), calls, describe(first.ans))
+	sc.checkCase("F5-stale", "F5: aimem refused the claim begun at the old revision", contains(calls, "reservation claim 3"), calls, describe(first.ans))
 	stale := h.attemptOf(sc, task.ID)
 	h.settledNotCommitted(sc, "the stale offer", stale.ID, func(a attemptRow) bool { return a.State == "closed" })
 	cur := h.readTask(sc, task.ID)
@@ -402,9 +408,13 @@ func (h *harness) f5StaleSteps(t *testing.T) {
 	h.committed(sc, coord, "withdraw", id2, task2.ID, map[string]any{})
 	if !skipFault("F5-replay") {
 		code, refusal := h.replayClaim(sc, coord, task2, body)
-		sc.check("F5: aimem refuses a settled step's proof replayed under a new key", code == 3 && refusal != "", code, refusal)
+		sc.checkCase("F5-replay", "F5: aimem refuses a settled step's proof replayed under a new key", code == 3 && refusal != "", code, refusal)
 	} else {
-		sc.check("F5: aimem refuses a settled step's proof replayed under a new key", false, "skipped")
+		// The active-proof control: the same rejection check, on a live
+		// proof replayed under its own step's key, which aimem accepts.
+		code, refusal := h.activeProofControl(sc)
+		sc.checkCase("F5-replay", "F5: aimem refuses a settled step's proof replayed under a new key", code == 3 && refusal != "",
+			code, refusal)
 	}
 	sc.check("aimem holds nothing after the replay", holdState(h.hold(sc, task2.ID)) != "held")
 
@@ -414,14 +424,18 @@ func (h *harness) f5StaleSteps(t *testing.T) {
 	resumed := h.holdNext("F5-resume", gateName("reservation", "claim"))
 	// The launcher dies under this step: its answer is the channel's EOF.
 	offer3, _ := json.Marshal(h.offerBody(task3, worker, time.Now().Add(time.Hour)))
-	go h.run(coord.env, offer3, filepath.Join(h.bin, "aicrew-agent"), "step", "offer", "-home", coord.home, "-body", "-")
+	offer3Done := make(chan struct{})
+	go func() {
+		h.run(coord.env, offer3, filepath.Join(h.bin, "aicrew-agent"), "step", "offer", "-home", coord.home, "-body", "-")
+		close(offer3Done)
+	}()
 	if resumed {
 		h.waitPaused(gateName("reservation", "claim"))
 		h.crashLauncher(coord)
 		body3 := h.captured(sc, gateName("reservation", "claim"))
 		h.restartLauncher(coord)
 		code, refusal := h.replayClaim(sc, coord, task3, body3)
-		sc.check("F5: the old generation's proof is refused after the member resumed", code == 3 && refusal != "", code, refusal)
+		sc.checkCase("F5-resume", "F5: the old generation's proof is refused after the member resumed", code == 3 && refusal != "", code, refusal)
 		// The offer is the old generation's: the resumed coordinator may not
 		// continue it, and aicrewd settles the never-sent offer itself.
 		rec := h.recoverStep(sc, coord)
@@ -436,7 +450,13 @@ func (h *harness) f5StaleSteps(t *testing.T) {
 		h.report.write(map[string]any{"type": "observation", "scenario": "F5",
 			"what": "the resumed coordinator's never-sent offer stays pending until its proof expires", "attempt_state": a.State})
 	} else {
-		sc.check("F5: the old generation's proof is refused after the member resumed", false, "skipped")
+		// The active-proof control: the member did not resume, so its
+		// proof is live under its own generation and step key. The offer
+		// above ran through unpaused first.
+		<-offer3Done
+		code, refusal := h.activeProofControl(sc)
+		sc.checkCase("F5-resume", "F5: the old generation's proof is refused after the member resumed", code == 3 && refusal != "",
+			code, refusal)
 	}
 
 	// aicrewd's coordination answer delayed past aimem's 2 s call budget:
@@ -450,8 +470,8 @@ func (h *harness) f5StaleSteps(t *testing.T) {
 	w = h.mark()
 	id4 := h.committed(sc, indep, "claim", "", "", h.claimBody(task4)).AttemptID
 	calls = h.aimemCalls(w)
-	sc.check("F5: aicrewd's coordination answer was delayed past aimem's budget", rule.wasFired())
-	sc.check("F5: aimem refused the slow claim as retryable, and the retry committed",
+	sc.checkCase("F5-delay", "F5: aicrewd's coordination answer was delayed past aimem's budget", rule.wasFired())
+	sc.checkCase("F5-delay", "F5: aimem refused the slow claim as retryable, and the retry committed",
 		contains(calls, "reservation claim 4") && contains(calls, "reservation claim 0"), calls)
 	h.local(sc, coord, "stop", id4, map[string]string{"reason": "F5 done"})
 	h.local(sc, indep, "confirm-stop", id4, map[string]any{})

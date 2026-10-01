@@ -33,6 +33,7 @@ type report struct {
 
 	maxFactMs, maxAimemMs int64
 	pass, fail            int
+	results               []*scenario
 }
 
 func newReport(t *testing.T, defaultPath string) *report {
@@ -87,6 +88,7 @@ type scenario struct {
 	start      time.Time
 	assertions []map[string]any
 	finished   bool
+	failed     bool
 }
 
 func (r *report) scenario(t *testing.T, name string) *scenario {
@@ -98,7 +100,18 @@ func (r *report) scenario(t *testing.T, name string) *scenario {
 // check records an assertion and fails the scenario when it does not hold.
 func (sc *scenario) check(what string, ok bool, detail ...any) {
 	sc.t.Helper()
-	sc.assertions = append(sc.assertions, map[string]any{"what": what, "ok": ok})
+	sc.checkCase("", what, ok, detail...)
+}
+
+// checkCase records an assertion that belongs to a skip-the-fault case: the
+// one the case's run must fail when its fault is left out.
+func (sc *scenario) checkCase(c, what string, ok bool, detail ...any) {
+	sc.t.Helper()
+	a := map[string]any{"what": what, "ok": ok}
+	if c != "" {
+		a["case"] = c
+	}
+	sc.assertions = append(sc.assertions, a)
 	if !ok {
 		sc.t.Errorf("%s: %s %v", sc.name, what, detail)
 	}
@@ -127,6 +140,51 @@ func (sc *scenario) finish() {
 	}
 	sc.r.write(map[string]any{"type": "scenario", "name": sc.name, "result": result, "assertions": sc.assertions,
 		"duration_ms": time.Since(sc.start).Milliseconds()})
+	sc.r.mu.Lock()
+	sc.r.results = append(sc.r.results, sc)
+	sc.r.mu.Unlock()
+	sc.failed = result == "FAIL"
+}
+
+// verdict writes the skip-the-fault verdict of case c: failed_as_expected
+// only when H passed, and c's scenario failed on an assertion tagged with
+// c. Anything else (H failing, the scenario passing, or failing for
+// another reason) is not_as_expected. An absent record, as when the run
+// never got this far, is a rejected result too.
+func (r *report) verdict(c string) {
+	scenarioName, _, _ := strings.Cut(c, "-")
+	var hPassed, ran, failed, caseFailed bool
+	var reasons []string
+	for _, sc := range r.results {
+		switch sc.name {
+		case "H":
+			hPassed = !sc.failed
+		case scenarioName:
+			ran, failed = true, sc.failed
+			for _, a := range sc.assertions {
+				if a["case"] == c && a["ok"] == false {
+					caseFailed = true
+				}
+			}
+		}
+	}
+	if !hPassed {
+		reasons = append(reasons, "H did not pass")
+	}
+	if !ran {
+		reasons = append(reasons, scenarioName+" did not run")
+	}
+	if ran && !failed {
+		reasons = append(reasons, scenarioName+" passed without its fault")
+	}
+	if failed && !caseFailed {
+		reasons = append(reasons, scenarioName+" failed, but not on an assertion of "+c)
+	}
+	v := "failed_as_expected"
+	if len(reasons) > 0 {
+		v = "not_as_expected"
+	}
+	r.write(map[string]any{"type": "skip_verdict", "case": c, "verdict": v, "reasons": reasons})
 }
 
 // window marks the logs' ends before a step, so its entries can be told

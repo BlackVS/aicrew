@@ -95,9 +95,13 @@ type harness struct {
 	hubProc     *proc
 	aicrewdProc *proc
 	httpClient  *http.Client // trusts the run's CA
-	// The fault proxies (b4b-1): the members' way to the hub, and the
-	// members' and the hub's way to aicrewd.
+	// The fault proxies (b4b-1): the members' and aicrewd's way to the
+	// hub, and the members' and the hub's way to aicrewd.
 	hubProxy, aicrewdProxy *faultProxy
+	// F7: every command's output, and every secret the run made.
+	outMu   sync.Mutex
+	outputs []string
+	secrets []string
 }
 
 // member is one agent: its own aimem state, its agent home and launcher.
@@ -277,6 +281,12 @@ else
   %q "$@"
 fi
 rc=$?
+if [ -e "$gate/hold-after-$name" ]; then
+  rm -f "$gate/hold-after-$name"
+  : > "$gate/paused-after-$name"
+  while [ ! -e "$gate/go-after-$name" ]; do sleep 0.05; done
+  rm -f "$gate/go-after-$name"
+fi
 end=$(date +%%s%%N)
 printf '{"cmd":"%%s","op":"%%s","start_ns":%%s,"end_ns":%%s,"exit":%%s}\n' "$1" "$2" "$start" "$end" "$rc" >> %q
 exit $rc
@@ -526,7 +536,34 @@ func (h *harness) run(env []string, stdin []byte, args ...string) result {
 	} else if err != nil {
 		h.t.Fatalf("%s: %v", strings.Join(args[:min(3, len(args))], " "), err)
 	}
+	// Every command's output is kept for F7's scan, except that of the one
+	// command whose job is to print a secret once (aimem's token issue).
+	if !contains(args, "token-issue-user") {
+		h.outMu.Lock()
+		h.outputs = append(h.outputs, out.String(), errb.String())
+		h.outMu.Unlock()
+	}
 	return result{stdout: out.String(), stderr: errb.String(), code: code}
+}
+
+// knowSecret records a secret F7 must find nowhere it scans.
+func (h *harness) knowSecret(s string) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return
+	}
+	h.outMu.Lock()
+	h.secrets = append(h.secrets, s)
+	h.outMu.Unlock()
+}
+
+// knowSecretFile records the contents of a secret file.
+func (h *harness) knowSecretFile(path string) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		h.t.Fatalf("a secret file: %v", err)
+	}
+	h.knowSecret(string(b))
 }
 
 // must runs a command that must succeed.

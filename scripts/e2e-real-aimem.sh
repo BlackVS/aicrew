@@ -55,16 +55,24 @@ run() {
 
 if [ -n "$skip" ]; then
   # Each case leaves one fault out (AICREW_E2E_SKIP_FAULT) and runs only its
-  # scenario; the case passes when that run fails.
+  # scenario. The test itself judges the run: it writes a skip_verdict of
+  # failed_as_expected only when H passed and the scenario failed on an
+  # assertion of that case. A case is accepted only on that record in a
+  # fresh report; an absent report, a bootstrap failure or any other cause
+  # is a rejected result.
   failed=0
   : > "$out/skip-matrix.txt"
-  for c in F1-reply F1-request F2-begin F2-settle F5-stale F5-replay F5-resume F5-delay; do
+  cases="F1-reply F1-request F2-begin F2-settle F5-stale F5-replay F5-resume F5-delay"
+  cases="$cases F3-launcher F3-aicrewd F3-hub F4-second F4-race F4-busy F6-release F6-cancel F6-unreachable F7-leak"
+  for c in $cases; do
     scenario="${c%%-*}"
-    if AICREW_E2E_SKIP_FAULT="$c" run "skip-$c" "TestRealAimem/${scenario}_"; then
-      line="$c: the run PASSED without its fault (expected a failure)"
-      failed=1
+    rm -f "$out/report-skip-$c.jsonl"
+    AICREW_E2E_SKIP_FAULT="$c" run "skip-$c" "TestRealAimem/${scenario}_" || true
+    if grep -q "\"type\":\"skip_verdict\".*\"verdict\":\"failed_as_expected\"" "$out/report-skip-$c.jsonl" 2>/dev/null; then
+      line="$c: failed as expected (H passed; ${scenario} failed on its own assertion)"
     else
-      line="$c: the run failed without its fault, as expected"
+      line="$c: REJECTED ($(grep -o '"reasons":\[[^]]*\]' "$out/report-skip-$c.jsonl" 2>/dev/null || echo 'no verdict: no report, or the run did not get that far'))"
+      failed=1
     fi
     echo "$line" | tee -a "$out/skip-matrix.txt"
   done

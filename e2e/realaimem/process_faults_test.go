@@ -42,6 +42,23 @@ func (h *harness) stepRaw(mem *member, op, attempt, task string, body any) (Step
 	return ans, r.code
 }
 
+// refusedAtBegin reports whether a step's answer is aicrewd's refusal at
+// begin with one of codes: a refused status and its error code.
+func refusedAtBegin(ans StepAnswerLite, codes ...string) bool {
+	return ans.Status == "refused" && !ans.OK && ans.Error != nil && contains(codes, ans.Error.Code)
+}
+
+// refusedByAimem reports whether a step's answer is aimem's refusal of the
+// mutation: the report refused with aimem's code, and not committed.
+func refusedByAimem(ans StepAnswerLite) bool {
+	var sr stepResult
+	if json.Unmarshal(ans.Result, &sr) != nil {
+		return false
+	}
+	return (ans.Status == "refused" || ans.Status == "pending") && sr.Report.Outcome == "refused" && sr.Report.Code != "" &&
+		sr.Outcome != "committed"
+}
+
 // pendingStepKey is the request key of mem's recorded step on task.
 func (h *harness) pendingStepKey(sc *scenario, mem *member, task string) string {
 	sc.t.Helper()
@@ -282,8 +299,8 @@ func (h *harness) f4CompetingSteps(t *testing.T) {
 		target = h.createTask(sc, "F4 second step, control")
 	}
 	ans, code := h.step(sc, indep, "claim", "", "", h.claimBody(target))
-	sc.checkCase("F4-second", "F4: a claim of a task with an open attempt is refused", code != 0 && !ans.OK && len(h.attemptsOfTask(sc, task.ID)) == 1,
-		describe(ans))
+	sc.checkCase("F4-second", "F4: a claim of a task with an open attempt is refused task_busy at begin",
+		code == 3 && refusedAtBegin(ans, "task_busy") && len(h.attemptsOfTask(sc, task.ID)) == 1, describe(ans))
 	if target != task {
 		if a := h.attemptsOfTask(sc, target.ID); len(a) == 1 && a[0].State == "running" {
 			h.stopAndRelease(sc, indep, a[0].ID, target.ID)
@@ -296,7 +313,8 @@ func (h *harness) f4CompetingSteps(t *testing.T) {
 		h.committed(sc, coord, "withdraw", id, task.ID, map[string]any{})
 	}
 	ans, code = h.step(sc, coord, "offer", "", "", h.offerBody(task2, worker, time.Now().Add(time.Hour)))
-	sc.checkCase("F4-busy", "F4: an offer to a busy worker is refused", code != 0 && !ans.OK, describe(ans))
+	sc.checkCase("F4-busy", "F4: an offer to a busy worker is refused agent_busy at begin", code == 3 && refusedAtBegin(ans, "agent_busy"),
+		describe(ans))
 	for _, tk := range []taskRef{task, task2} {
 		for _, a := range h.attemptsOfTask(sc, tk.ID) {
 			if a.State == "offered" {
@@ -331,19 +349,26 @@ func (h *harness) f4CompetingSteps(t *testing.T) {
 		return r.code == 0 && sr.Settled && sr.Outcome == "committed"
 	}
 	wins := 0
+	var loser *out
 	for _, r := range []out{o, c} {
 		if committed(r) {
 			wins++
+		} else {
+			r := r
+			loser = &r
 		}
 	}
+	// The loser must be a conflict refusal: aicrew's at begin, or aimem's
+	// at the claim. A failure or a non-answer is neither.
+	loserRefused := loser != nil && (refusedAtBegin(loser.ans, "task_busy", "agent_busy") || refusedByAimem(loser.ans))
 	open := 0
 	for _, a := range h.attemptsOfTask(sc, race.ID) {
 		if a.State != "closed" {
 			open++
 		}
 	}
-	sc.checkCase("F4-race", "F4: of an offer and a claim racing for one task, exactly one commits and one attempt is open",
-		wins == 1 && open == 1 && holdState(h.hold(sc, race.ID)) == "held", describe(o.ans), describe(c.ans))
+	sc.checkCase("F4-race", "F4: of an offer and a claim racing for one task, exactly one commits, the other is refused, one attempt is open",
+		wins == 1 && loserRefused && open == 1 && holdState(h.hold(sc, race.ID)) == "held", describe(o.ans), describe(c.ans))
 	for _, tk := range []taskRef{race, other} {
 		for _, a := range h.attemptsOfTask(sc, tk.ID) {
 			switch {
@@ -456,13 +481,14 @@ func (h *harness) f6Recovery(t *testing.T) {
 
 func (h *harness) f7Secrets(t *testing.T) {
 	sc := h.report.scenario(t, "F7")
-	// The secrets the run made, besides those recorded as they were made:
-	// the captured proofs and the members' aimem session handles.
+	// The secrets the run made, besides those recorded as they were made
+	// (every captured proof included, as it was read): any capture still
+	// on disk that no scenario read, and the members' aimem session handles.
 	captured, _ := filepath.Glob(filepath.Join(h.gate, "captured-*"))
 	for _, f := range captured {
 		var body map[string]any
 		if raw, err := os.ReadFile(f); err == nil && json.Unmarshal(raw, &body) == nil {
-			if p, ok := body["coordination_proof"].(string); ok {
+			if p, ok := body["coordination_proof"].(string); ok && p != "" {
 				h.knowSecret(p)
 			}
 		}
@@ -481,8 +507,21 @@ func (h *harness) f7Secrets(t *testing.T) {
 	h.outMu.Lock()
 	secrets := append([]string(nil), h.secrets...)
 	outputs := append([]string(nil), h.outputs...)
+	proofs := append([]string(nil), h.proofs...)
 	h.outMu.Unlock()
 	sc.require("F7: the run knows its secrets", len(secrets) >= 8, len(secrets))
+	// Every captured proof is among the secrets scanned for, the earliest
+	// as well as the last; the scan finds the earliest one where it lies.
+	known := 0
+	for _, p := range proofs {
+		if contains(secrets, p) {
+			known++
+		}
+	}
+	sc.check(fmt.Sprintf("F7: all %d proofs the run captured are among the secrets scanned for", len(proofs)), known == len(proofs))
+	if len(proofs) > 0 {
+		sc.check("F7: the scan finds the run's earliest captured proof", len(leaksIn(map[string]string{"probe": "x " + proofs[0]}, secrets)) == 1)
+	}
 
 	if skipFault("F7-leak") {
 		// The control: a secret planted in a scanned log must be found.
@@ -510,6 +549,13 @@ func (h *harness) f7Secrets(t *testing.T) {
 	db.Close()
 	sources["aicrew audit"] = audit.String()
 
+	leaks := leaksIn(sources, secrets)
+	sc.checkCase("F7-leak", fmt.Sprintf("F7: none of the run's %d secrets appears in %d scanned sources", len(secrets), len(sources)),
+		len(leaks) == 0, leaks)
+}
+
+// leaksIn names each secret found in each source.
+func leaksIn(sources map[string]string, secrets []string) []string {
 	var leaks []string
 	for name, text := range sources {
 		for i, s := range secrets {
@@ -518,6 +564,5 @@ func (h *harness) f7Secrets(t *testing.T) {
 			}
 		}
 	}
-	sc.checkCase("F7-leak", fmt.Sprintf("F7: none of the run's %d secrets appears in %d scanned sources", len(secrets), len(sources)),
-		len(leaks) == 0, leaks)
+	return leaks
 }

@@ -102,6 +102,7 @@ type harness struct {
 	outMu   sync.Mutex
 	outputs []string
 	secrets []string
+	proofs  []string // every captured proof, in order
 }
 
 // member is one agent: its own aimem state, its agent home and launcher.

@@ -180,10 +180,12 @@ held back.
   - **The hub is killed outright between steps.** It restarts with its hold
     intact, and the next step releases the hold.
 - **F4. Competing steps.**
-  - A claim of a task with an open attempt is refused.
-  - An offer to a busy worker is refused.
+  - A claim of a task with an open attempt is refused `task_busy` at begin.
+  - An offer to a busy worker is refused `agent_busy` at begin.
   - An offer and a claim racing for one task: exactly one commits, and one
-    attempt is open. aicrew refuses the loser at begin.
+    attempt is open. The loser's answer must be a conflict refusal, aicrew's
+    at begin or aimem's at the claim. A failure or a non-answer is
+    neither.
 - **F6. Recovery through the read scope.**
   - aimem's `recover release`, and `recover cancel`, on a running attempt:
     aicrewd closes it as recovered, with `closed_by` and the closing fence.
@@ -196,8 +198,10 @@ held back.
   the aimem call timings, the report, any command's output, or aicrew's
   audit table. The secrets are the admin bearer, user tokens, aicrew's
   credentials, invitation codes, captured proofs and aimem session handles.
-  The one command whose job is to print a secret, aimem's token issue, is
-  left out of the scan.
+  Each captured proof is registered when it is read, before a later
+  capture replaces it, and F7 checks that the scan finds the earliest. The
+  one command whose job is to print a secret, aimem's token issue, is left
+  out of the scan.
 
 F5 runs after F3, F4 and F6. Its crashed coordinator's offer holds the
 worker's capacity until the offer's proof expires (01a0f758-c827), and F7

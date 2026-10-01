@@ -72,6 +72,15 @@ func (h *harness) captured(sc *scenario, name string) map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &body); err != nil {
 		sc.t.Fatalf("the captured %s body is not JSON", name)
 	}
+	// The proof is a secret: register it now, before a later capture
+	// replaces this file, so that F7 scans for every proof the run saw.
+	var proof string
+	if json.Unmarshal(body["coordination_proof"], &proof) == nil && proof != "" {
+		h.knowSecret(proof)
+		h.outMu.Lock()
+		h.proofs = append(h.proofs, proof)
+		h.outMu.Unlock()
+	}
 	return body
 }
 

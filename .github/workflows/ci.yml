@@ -60,13 +60,14 @@ jobs:
           go-version: '1.25'
           cache: true
       - run: go test -count=1 ./...
-      # The launcher's step channel reads the engine's session state from
-      # its own goroutines; the race detector checks the agent package on
-      # one OS (about five minutes under -race).
-      - name: go test -race (agent)
+      # The race detector checks, on one OS, the packages whose goroutines
+      # share state: the launcher's step channel reads the engine's session
+      # state (agent), and the server's handlers, reconciler and logging run
+      # store commands concurrently (server, store).
+      - name: go test -race (agent, server, store)
         if: matrix.os == 'ubuntu-latest'
         timeout-minutes: 30
-        run: go test -race -count=1 -timeout 20m ./internal/agent/
+        run: go test -race -count=1 -timeout 20m ./internal/agent/ ./internal/server/ ./internal/store/
 
   go-build:
     runs-on: ubuntu-latest

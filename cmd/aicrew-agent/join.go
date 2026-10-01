@@ -8,15 +8,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/BlackVS/aicrew/internal/agent"
 )
 
 const joinUsage = `usage: aicrew-agent join -label LABEL [-home DIR] -url https://HOST[:PORT]
          -tls-trust-mode ca_dns|spki_sha256 -tls-trust-value VALUE -aimem-hub NAME
-         [-aimem-command PATH] [-json]
+         -client claude|opencode[,…] [-aimem-command PATH] [-json]
        The invitation code is read at a hidden prompt. On a linked home, only
-       -home (or -label) is needed: the run refreshes the home's files.`
+       -home (or -label) is needed: the run refreshes the home's files and
+       checks its dependencies and clients.`
 
 // joinDeps builds the bootstrap's collaborators on the real terminal,
 // aicrewd and aimem.
@@ -44,6 +46,7 @@ func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.W
 	fs.StringVar(&o.Trust.Value, "tls-trust-value", "", "")
 	fs.StringVar(&o.AimemHub, "aimem-hub", "", "")
 	fs.StringVar(&o.AimemCommand, "aimem-command", "", "")
+	clients := fs.String("client", "", "")
 	asJSON := fs.Bool("json", false, "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || (o.Home == "" && o.Label == "") {
 		fmt.Fprintln(stderr, joinUsage)
@@ -58,6 +61,7 @@ func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.W
 		o.Home = home
 	}
 	o.Terminal = terminal
+	o.Clients = splitList(*clients)
 	rep, err := agent.Join(ctx, o, deps)
 	switch {
 	case errors.Is(err, agent.ErrJoinUsage):
@@ -91,7 +95,21 @@ func printJoinReport(w io.Writer, rep agent.JoinReport) {
 	if rep.Instruction != "" {
 		fmt.Fprintf(w, "next: %s\n", rep.Instruction)
 	}
-	if rep.Next != "" {
+	if rep.Check != nil {
+		printCheck(w, *rep.Check)
+	}
+	if rep.Next != "" && rep.Status != agent.JoinBlocked {
 		fmt.Fprintf(w, "start the session with: %s\n", rep.Next)
 	}
+}
+
+// splitList reads a comma-separated flag value.
+func splitList(s string) []string {
+	var out []string
+	for _, f := range strings.Split(s, ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }

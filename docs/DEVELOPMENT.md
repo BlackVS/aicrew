@@ -54,10 +54,13 @@ go mod verify
 go mod tidy -diff              # must print nothing
 go test -count=1 ./...
 CGO_ENABLED=0 go build ./...
+bash scripts/release.sh build v0.0.0   # every release asset, sums, stamp check
+bash scripts/release_test.sh           # the release script's refusals
 ```
 
 CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,
-`go-test (windows-latest)`, `go-test (macos-latest)`, `go-build`.
+`go-test (windows-latest)`, `go-test (macos-latest)`, `go-build`,
+`release-build`.
 
 `go-test (ubuntu-latest)` also runs the agent package under the race
 detector, which takes about five minutes:
@@ -513,3 +516,81 @@ aicrew-agent step recover
   - 1: `failed`, meaning no launcher, or aicrewd, aimem or the channel
     failed;
   - 2: usage.
+
+## Releasing
+
+A release is a `vX.Y.Z` tag on a commit of main. Cutting it is the
+operator's decision. `.github/workflows/release.yml` builds and publishes it;
+`scripts/release.sh` holds the steps, and CI runs its build and its tests on
+every pull request (`release-build`), publishing nothing.
+
+**The CHANGELOG rule.**
+- Ordinary pull requests do not edit `CHANGELOG.md`. Parallel pull requests
+  would collide on it, and resolving that collision turns a base-only update
+  into an edited one, which costs a new review.
+- One release-preparation pull request writes the version's section,
+  `## [X.Y.Z] - YYYY-MM-DD`, from the titles of the pull requests merged since
+  the last tag. That section is the release's notes.
+- The workflow refuses a tag whose section is missing.
+
+**Cutting a release:**
+
+1. Merge the release-preparation pull request (the CHANGELOG section).
+2. Tag main and push the tag:
+
+   ```sh
+   git fetch origin && git tag -a vX.Y.Z origin/main -m "aicrew X.Y.Z" && git push origin vX.Y.Z
+   ```
+
+3. The workflow checks the release, refusing it when:
+   - the tag is not `vX.Y.Z` (no pre-release or build suffix);
+   - its commit is not on main;
+   - the section is missing;
+   - the release already exists.
+
+   It then runs the tests, builds and checks that the built `aicrew-agent`
+   reports exactly the tag. A separate job, the only one allowed to write,
+   publishes with the `gh` CLI. A release is marked latest only when no
+   higher tag exists.
+4. Running the workflow by hand from main republishes an **existing** tag (after
+   a failed run). It never creates a tag. With `dry_run` (the default) it
+   checks, builds, stamps and prints the sums of a tag that need not exist yet,
+   main's tip standing in, and publishes nothing. Use it before the first real
+   tag.
+
+**What is published:**
+- `aicrewd`, `aicrew` and `aicrew-agent` for linux/amd64, linux/arm64,
+  darwin/amd64, darwin/arm64 and windows/amd64, as single binaries named
+  `<binary>-<os>-<arch>` (`.exe` on Windows);
+- `LICENSE`;
+- `SHA256SUMS` over every other asset.
+
+The notes end with the license URL and its `Required Notice:` lines. Each
+binary is stamped with the tag through
+`-ldflags "-X github.com/BlackVS/aicrew/internal/version.Override=vX.Y.Z"`,
+and reports it with `aicrewd -version`, `aicrew version` and
+`aicrew-agent version` (`-json` for the build as JSON).
+
+**Verifying a download.** In the directory holding the downloaded assets and
+`SHA256SUMS`:
+
+- Linux:
+
+  ```sh
+  sha256sum --ignore-missing -c SHA256SUMS
+  ```
+
+- macOS:
+
+  ```sh
+  shasum -a 256 --ignore-missing -c SHA256SUMS
+  ```
+
+- Windows (PowerShell), for each downloaded file, here `aicrew-agent-windows-amd64.exe`:
+
+  ```powershell
+  $h = (Get-FileHash aicrew-agent-windows-amd64.exe -Algorithm SHA256).Hash.ToLower()
+  if (-not (Select-String -Path SHA256SUMS -Pattern "^$h\s+aicrew-agent-windows-amd64.exe$" -Quiet)) { throw 'checksum mismatch' }
+  ```
+
+Then the binary's version must be the release's.

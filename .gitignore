@@ -14,3 +14,8 @@ docs/SESSION-STATE.md
 /.env
 /.env.*
 !/.env.example
+
+# Release build output (scripts/release.sh); ignored so it never marks the
+# build as modified in its stamped VCS information.
+/dist/
+/release_notes.md

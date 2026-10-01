@@ -80,3 +80,46 @@ jobs:
           cache: true
       - name: Build with CGO disabled
         run: CGO_ENABLED=0 go build ./...
+
+  # The release workflow's build on every change, publishing nothing: the
+  # cross-build of every release asset, SHA256SUMS and the stamped version,
+  # then the verification command DEVELOPMENT ("Releasing") gives for each
+  # platform, run on that platform, and the release script's refusals.
+  release-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25'
+          cache: true
+      - name: Release build (uploads nothing)
+        shell: bash
+        run: bash scripts/release.sh build v0.0.0
+      - name: Verify the sums (Linux)
+        if: runner.os == 'Linux'
+        working-directory: dist
+        run: sha256sum --ignore-missing -c SHA256SUMS
+      - name: Verify the sums (macOS)
+        if: runner.os == 'macOS'
+        working-directory: dist
+        run: shasum -a 256 --ignore-missing -c SHA256SUMS
+      - name: Verify the sums (Windows)
+        if: runner.os == 'Windows'
+        working-directory: dist
+        shell: pwsh
+        run: |
+          Get-ChildItem -File | Where-Object Name -ne 'SHA256SUMS' | ForEach-Object {
+            $h = (Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower()
+            if (-not (Select-String -Path SHA256SUMS -Pattern "^$h\s+$([regex]::Escape($_.Name))$" -Quiet)) { throw "checksum mismatch: $($_.Name)" }
+          }
+          'all sums match'
+      - name: Release script refusals
+        if: runner.os == 'Linux'
+        run: bash scripts/release_test.sh

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/store"
+	"github.com/BlackVS/aicrew/internal/version"
 )
 
 type syncBuffer struct {
@@ -156,5 +157,26 @@ func TestRunRefusals(t *testing.T) {
 	defer held.Close()
 	if code := run(ctx, []string{"-config", configPath}, &syncBuffer{}); code != 1 {
 		t.Fatalf("store in use: exit %d, want 1", code)
+	}
+}
+
+// `aicrewd -version [-json]` prints the build and exits; any other command
+// line is the service's.
+func TestVersionFlag(t *testing.T) {
+	defer func(o string) { version.Override = o }(version.Override)
+	version.Override = "v1.2.3"
+	var out, errb bytes.Buffer
+	if code, ok := versionFlag([]string{"-version"}, &out, &errb); !ok || code != 0 || !strings.HasPrefix(out.String(), "aicrewd v1.2.3") {
+		t.Fatalf("%d %v %q", code, ok, out.String())
+	}
+	out.Reset()
+	if code, ok := versionFlag([]string{"--version", "-json"}, &out, &errb); !ok || code != 0 || !strings.Contains(out.String(), `"version":"v1.2.3"`) {
+		t.Fatalf("%d %v %q", code, ok, out.String())
+	}
+	if code, ok := versionFlag([]string{"-version", "extra"}, &out, &errb); !ok || code != 2 {
+		t.Fatalf("extra argument: %d %v", code, ok)
+	}
+	if _, ok := versionFlag([]string{"-config", "x"}, &out, &errb); ok {
+		t.Fatal("the service's command line was taken for -version")
 	}
 }

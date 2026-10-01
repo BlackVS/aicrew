@@ -5,6 +5,7 @@
 //	aicrew introspection-credential list   -store PATH [-hub HUB]
 //	aicrew introspection-credential revoke -store PATH -id ID
 //	aicrew invitation issue|list|revoke ... (see invitation.go)
+//	aicrew version [-json]
 //
 // -operations names what the new credential permits, comma-separated:
 // introspection (identity.v1 session introspection), coordination
@@ -33,6 +34,7 @@ import (
 
 	"github.com/BlackVS/aicrew/internal/privatefile"
 	"github.com/BlackVS/aicrew/internal/store"
+	"github.com/BlackVS/aicrew/internal/version"
 )
 
 func main() {
@@ -45,6 +47,7 @@ const usage = `usage:
   aicrew introspection-credential list   -store PATH [-hub HUB]
   aicrew introspection-credential revoke -store PATH -id ID
   aicrew invitation issue|list|revoke ...   (run "aicrew invitation" for its usage)
+  aicrew version [-json]
 `
 
 // writeSecret writes the bearer to its file; tests replace it to fail.
@@ -59,6 +62,17 @@ var writeSecret = func(f *os.File, bearer string) error {
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) >= 1 && args[0] == "invitation" {
 		return runInvitation(ctx, args[1:], stdout, stderr)
+	}
+	if len(args) >= 1 && args[0] == "version" {
+		fs := flag.NewFlagSet("aicrew version", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		asJSON := fs.Bool("json", false, "print the build as JSON")
+		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
+			fmt.Fprint(stderr, usage)
+			return 2
+		}
+		version.Print(stdout, "aicrew", *asJSON)
+		return 0
 	}
 	if len(args) < 2 || args[0] != "introspection-credential" {
 		fmt.Fprint(stderr, usage)

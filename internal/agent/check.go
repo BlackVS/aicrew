@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -234,10 +235,20 @@ func (c *checker) checkAimem(ctx context.Context) {
 	c.classify(&r, comp, r.Found, func() string { return aimemInstruction(comp, r.Found) })
 }
 
+// unstampedBuild is a version output whose last word is "dev": a source
+// build without version stamping (`aimem dev`).
+var unstampedBuild = regexp.MustCompile(`(?:^|\s)dev$`)
+
 // classify sets a component's state from the version text and records the
 // blocker or notice that goes with it.
 func (c *checker) classify(r *ComponentReport, comp supportedComponent, found string, instruction func() string) {
 	v, dev, ok := parseVersion(found)
+	label := versionText.FindString(found)
+	if !ok && unstampedBuild.MatchString(strings.TrimSpace(found)) {
+		// A source build without version stamping reports "dev" (aimem's
+		// default): a development build, like a git-describe-stamped one.
+		dev, ok, label = true, true, "dev"
+	}
 	switch {
 	case !ok:
 		r.State = StateFailed
@@ -247,7 +258,7 @@ func (c *checker) classify(r *ComponentReport, comp supportedComponent, found st
 	case dev:
 		r.State = StateUnknown
 		r.Detail = "a development build, not a release"
-		c.notice(fmt.Sprintf("%s %s is a development build: its version is unknown, so it neither blocks nor counts as supported", r.Name, versionText.FindString(found)))
+		c.notice(fmt.Sprintf("%s %s is a development build: its version is unknown, so it neither blocks nor counts as supported", r.Name, label))
 		return
 	}
 	st, rg := comp.classify(v)

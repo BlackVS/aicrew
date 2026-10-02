@@ -111,6 +111,23 @@ func TestWorkLifecycle(t *testing.T) {
 	texts := []string{}
 	for _, it := range read(t, e.s, e.lead, 20) {
 		texts = append(texts, it.Text)
+		if it.AttemptID != a.ID {
+			t.Errorf("%q names attempt %q, want %s", it.Text, it.AttemptID, a.ID)
+		}
+	}
+	// The worker's inbox holds the offer, naming the attempt it accepts by
+	// (pilot G1).
+	offers := 0
+	for _, it := range read(t, e.s, e.builder, 20) {
+		if it.AttemptID != a.ID {
+			t.Errorf("the worker's %q names attempt %q, want %s", it.Text, it.AttemptID, a.ID)
+		}
+		if it.Text == "lead offered task hub-a/project-a/task-1 to builder." {
+			offers++
+		}
+	}
+	if offers != 1 {
+		t.Errorf("the worker read %d offers, want 1", offers)
 	}
 	want := []string{
 		"builder accepted task hub-a/project-a/task-1 and started work.",

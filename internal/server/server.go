@@ -120,6 +120,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 	s.handle(http.MethodGet, SessionPath, s.sessionStatus)
 	s.handleOwnBody(http.MethodPost, LeavePath, s.leave)
 	s.registerAttempts()
+	s.registerInbox()
 	s.registerRedemption()
 	s.http = &http.Server{
 		Handler:           s.logged(s.limitBody(http.HandlerFunc(s.dispatch))),

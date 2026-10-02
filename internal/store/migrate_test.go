@@ -113,8 +113,9 @@ func downgradeToV10(t *testing.T, path string) {
 		`DROP TABLE attempts`,
 		`ALTER TABLE attempts_v10 RENAME TO attempts`,
 		schemaV6[1], schemaV6[3],
-		// Tables added after v10.
+		// Tables and columns added after v10.
 		`DROP TABLE session_tokens`, `DROP TABLE session_handles`, `DROP TABLE introspection_credentials`,
+		`ALTER TABLE messages DROP COLUMN attempt_id`,
 		`UPDATE schema_version SET version = 10`)
 	tx, err := db.Begin()
 	if err != nil {
@@ -463,6 +464,7 @@ func dropSupersededUpdates(t *testing.T, raw *sql.DB) {
 // dropRecoveredColumns takes a store back to v18.
 func dropRecoveredColumns(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropMessageAttempt(t, raw)
 	for _, c := range []string{"recovered_by", "recovered_fence", "recovered_at"} {
 		if _, err := raw.Exec(`ALTER TABLE attempts DROP COLUMN ` + c); err != nil {
 			t.Fatal(err)
@@ -470,6 +472,45 @@ func dropRecoveredColumns(t *testing.T, raw *sql.DB) {
 	}
 	if _, err := raw.Exec(`DROP TABLE scan_finals`); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// dropMessageAttempt takes a store back to v19.
+func dropMessageAttempt(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	if _, err := raw.Exec(`ALTER TABLE messages DROP COLUMN attempt_id`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Schema v20 adds the attempt a lifecycle message names to a populated v19
+// store and keeps every message, none of them naming one.
+func TestMigrationV20AddsTheMessagesAttempt(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropMessageAttempt(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 19`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v19 store: %v", err)
+	}
+	defer s2.Close()
+	var after, named int
+	if err := s2.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(attempt_id, '')) FROM messages`).Scan(&after, &named); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || before == 0 || named != 0 {
+		t.Fatalf("after v20: %d messages (was %d), %d naming an attempt", after, before, named)
 	}
 }
 

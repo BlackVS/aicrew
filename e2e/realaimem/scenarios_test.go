@@ -111,6 +111,38 @@ func (h *harness) step(sc *scenario, mem *member, op, attempt, task string, body
 	return ans, r.code
 }
 
+// inboxMessage is one message `aicrew-agent inbox -json` delivered.
+type inboxMessage struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	AttemptID string `json:"attempt_id"`
+	Task      *struct {
+		TaskID string `json:"task_id"`
+	} `json:"task"`
+	Text string `json:"text"`
+}
+
+// inbox reads mem's inbox through its launcher, as its client does.
+func (h *harness) inbox(sc *scenario, mem *member) []inboxMessage {
+	sc.t.Helper()
+	r := h.run(mem.env, nil, filepath.Join(h.bin, "aicrew-agent"), "inbox", "-home", mem.home, "-limit", "100", "-json")
+	var ans StepAnswerLite
+	var page struct {
+		Messages []inboxMessage `json:"messages"`
+	}
+	if json.Unmarshal([]byte(r.stdout), &ans) != nil || !ans.OK || json.Unmarshal(ans.Result, &page) != nil {
+		sc.t.Fatalf("inbox of %s exited %d: %s %s", mem.name, r.code, r.stdout, r.stderr)
+	}
+	return page.Messages
+}
+
+// ackInbox acknowledges mem's messages ids through its launcher.
+func (h *harness) ackInbox(sc *scenario, mem *member, ids []string) bool {
+	sc.t.Helper()
+	r := h.run(mem.env, nil, filepath.Join(h.bin, "aicrew-agent"), "inbox", "-home", mem.home, "-ack", strings.Join(ids, ","))
+	return r.code == 0
+}
+
 // committed runs a reservation step that must commit, and returns its
 // result.
 func (h *harness) committed(sc *scenario, mem *member, op, attempt, task string, body any) stepResult {
@@ -397,7 +429,18 @@ func (h *harness) s1OfferFlow(t *testing.T) {
 		ev[0]["state"] == "DONE" && ev[0]["revision"] == float64(dep.Revision), ev)
 	sc.check("aimem holds the task for the offer", holdState(h.hold(sc, task.ID)) == "held", h.hold(sc, task.ID))
 
-	keys["transfer"] = h.committed(sc, worker, "accept", id, task.ID, map[string]string{"instruction_digest": instructionHash}).RequestKey
+	// The worker finds the offer in its own inbox (pilot G1) and accepts by
+	// the attempt ID it names there; nothing is relayed.
+	found, ids := "", []string{}
+	for _, m := range h.inbox(sc, worker) {
+		ids = append(ids, m.ID)
+		if m.Kind == "lifecycle" && m.Task != nil && m.Task.TaskID == task.ID && m.AttemptID != "" {
+			found = m.AttemptID
+		}
+	}
+	sc.check("the worker's inbox names the offered attempt", found == id, found, id)
+	sc.check("the worker acknowledges what it read", h.ackInbox(sc, worker, ids))
+	keys["transfer"] = h.committed(sc, worker, "accept", found, task.ID, map[string]string{"instruction_digest": instructionHash}).RequestKey
 	sc.check("aicrew: the attempt runs", h.attempt(sc, id).State == "running", h.attempt(sc, id))
 
 	pr := "https://forge.example.test/e2e/pull/1"

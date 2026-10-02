@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -487,7 +488,7 @@ func TestLifecycleMessageSharesTheTransition(t *testing.T) {
 			apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
 				return postLifecycle(ctx, tx, tm.ID, lead.agent.ID,
 					"The coordinator offered the parser task to the builder.",
-					&TaskRef{HubID: "hub-a", ProjectID: "docs", TaskID: "task-7"}, now)
+					&TaskRef{HubID: "hub-a", ProjectID: "docs", TaskID: "task-7"}, "", now)
 			},
 		}, nil)
 	}
@@ -524,7 +525,7 @@ func TestLifecycleTextMustBeValidUTF8(t *testing.T) {
 		return s.run(ctx, lead.caller, command{
 			op: "test.lifecycle", scope: tm.ID, key: key, input: struct{ Key string }{key}, authorize: requireAgent,
 			apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
-				return postLifecycle(ctx, tx, tm.ID, lead.agent.ID, text, nil, now)
+				return postLifecycle(ctx, tx, tm.ID, lead.agent.ID, text, nil, "", now)
 			},
 		}, nil)
 	}
@@ -612,5 +613,67 @@ func TestMessageRecordsSenderAndText(t *testing.T) {
 	// Reading is not a command and writes no audit record.
 	if n := count(t, s, "audit WHERE operation LIKE 'inbox.read%'"); n != 0 {
 		t.Errorf("reads wrote %d audit records", n)
+	}
+}
+
+// A page of the inbox is bounded as encoded JSON as well as by count: it
+// holds the messages that fit, always the first, and only those are
+// delivered; the rest stay first in line (pilot G1).
+func TestInboxPageFitsItsBudget(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	_, lead, builder, _ := crew(t, s)
+	// Every byte of this text is escaped in JSON (<): one message is
+	// about 96 KiB on the wire, the largest a valid message gets.
+	worst := strings.Repeat("<", maxMessageText)
+	for i := range 3 {
+		send(t, s, lead, fmt.Sprintf("worst-%d", i), NewMessage{To: builder.agent.ID, Text: worst})
+	}
+	plain := strings.Repeat("a", 8<<10)
+	for i := range 20 {
+		send(t, s, lead, fmt.Sprintf("plain-%d", i), NewMessage{To: builder.agent.ID, Text: plain})
+	}
+	pageSize := func(items []InboxItem) int {
+		n := 0
+		for _, it := range items {
+			b, _ := json.Marshal(it)
+			n += len(b)
+		}
+		return n
+	}
+
+	first := read(t, s, builder, 100)
+	if len(first) != 1 || first[0].Text != worst || pageSize(first) <= 64<<10 {
+		t.Fatalf("the first page holds %d messages of %d bytes, want the one worst message alone", len(first), pageSize(first))
+	}
+	// Unacknowledged, it comes first again; the messages left out were not
+	// delivered.
+	var delivered int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM message_recipients WHERE agent_id = ? AND deliveries > 0`,
+		builder.agent.ID).Scan(&delivered); err != nil {
+		t.Fatal(err)
+	}
+	if delivered != 1 {
+		t.Fatalf("%d messages were delivered, want only the one returned", delivered)
+	}
+	ack := func(items []InboxItem) {
+		var ids []string
+		for _, it := range items {
+			ids = append(ids, it.ID)
+		}
+		if _, err := s.AckMessages(ctx, builder.caller, fmt.Sprintf("ack-%s", ids[0]), builder.sess.ID, builder.sess.Generation, ids); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ack(first)
+	ack(read(t, s, builder, 100))
+	ack(read(t, s, builder, 100))
+
+	page := read(t, s, builder, 100)
+	if len(page) < 2 || len(page) >= 20 || pageSize(page) > maxInboxPageBytes {
+		t.Fatalf("a page of plain messages holds %d messages of %d bytes, want several within %d", len(page), pageSize(page), maxInboxPageBytes)
+	}
+	if small := read(t, s, builder, 3); len(small) != 3 || small[0].ID != page[0].ID {
+		t.Fatalf("a small limit still bounds the page: %d messages", len(small))
 	}
 }

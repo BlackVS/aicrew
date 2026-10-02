@@ -27,6 +27,9 @@ const (
 	// connection is closed: the attempt is abandoned before any retry.
 	requestTimeout = 30 * time.Second
 	maxReply       = 64 << 10
+	// maxInboxReply bounds an inbox page's reply: aicrewd keeps a page's
+	// JSON within 128 KiB (one message may reach about 100 KiB).
+	maxInboxReply = 256 << 10
 )
 
 // Refusal is aicrewd's refusal envelope. Its texts are aicrewd's fixed ones
@@ -146,6 +149,12 @@ func (c *Crew) do(ctx context.Context, method, path, contentType, key, bearer st
 // envelope.
 func (c *Crew) exchange(ctx context.Context, method, path, contentType, key, bearer string, body []byte, out any,
 	accepted ...int) (int, http.Header, error) {
+	return c.exchangeUpTo(ctx, maxReply, method, path, contentType, key, bearer, body, out, accepted...)
+}
+
+// exchangeUpTo is exchange with a reply of at most limit bytes.
+func (c *Crew) exchangeUpTo(ctx context.Context, limit int, method, path, contentType, key, bearer string, body []byte,
+	out any, accepted ...int) (int, http.Header, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
@@ -167,8 +176,8 @@ func (c *Crew) exchange(ctx context.Context, method, path, contentType, key, bea
 		return 0, nil, &TransportError{Err: errors.New(scrub(err))}
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxReply+1))
-	if err != nil || len(raw) > maxReply {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
+	if err != nil || len(raw) > limit {
 		return 0, nil, &TransportError{Err: errors.New("the reply could not be read")}
 	}
 	ok := false
@@ -331,6 +340,20 @@ func (c *Crew) Leave(ctx context.Context, key, token string) (Session, error) {
 func (c *Crew) LocalStep(ctx context.Context, key, token, path string, body []byte) (json.RawMessage, error) {
 	var out json.RawMessage
 	if err := c.do(ctx, http.MethodPost, path, "application/json", key, token, body, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// inboxPath is aicrewd's member inbox (pilot G1).
+const inboxPath = "/v1/crew/inbox"
+
+// Inbox reads a page of the member's oldest unacknowledged messages, which
+// aicrewd records as delivered.
+func (c *Crew) Inbox(ctx context.Context, token string, limit int) (json.RawMessage, error) {
+	var out json.RawMessage
+	if _, _, err := c.exchangeUpTo(ctx, maxInboxReply, http.MethodGet, inboxPath+"?limit="+strconv.Itoa(limit), "", "",
+		token, nil, &out, http.StatusOK); err != nil {
 		return nil, err
 	}
 	return out, nil

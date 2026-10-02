@@ -155,7 +155,7 @@ func requestStopCommand(c Caller, key, attemptID string, in StopRequest) command
 				return nil, err
 			}
 			task := a.Task
-			if _, err := postLifecycle(ctx, tx, a.TeamID, actorID, text, &task, now); err != nil {
+			if _, err := postLifecycle(ctx, tx, a.TeamID, actorID, text, &task, a.ID, now); err != nil {
 				return nil, err
 			}
 			return getAttempt(ctx, tx, a.ID)
@@ -296,7 +296,7 @@ func applyStopRelease(ctx context.Context, tx *sql.Tx, a Attempt, r ReservationR
 		return err
 	}
 	task := a.Task
-	_, err := postLifecycle(ctx, tx, a.TeamID, a.WorkerAgentID, a.PendingMessage, &task, now)
+	_, err := postLifecycle(ctx, tx, a.TeamID, a.WorkerAgentID, a.PendingMessage, &task, a.ID, now)
 	return err
 }
 

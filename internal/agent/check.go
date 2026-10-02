@@ -361,6 +361,16 @@ func (c *checker) checkClient(ctx context.Context, name string, single bool) {
 	}
 }
 
+// claudeUserDir is Claude Code's user configuration directory:
+// CLAUDE_CONFIG_DIR when set (a member's own, on a shared account), else
+// ~/.claude.
+func claudeUserDir(uh string) string {
+	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+		return d
+	}
+	return filepath.Join(uh, ".claude")
+}
+
 // skillDirs are where a client reads skills, in its order.
 func skillDirs(client, home string) []string {
 	uh, _ := os.UserHomeDir()
@@ -373,7 +383,11 @@ func skillDirs(client, home string) []string {
 		dirs = append(dirs, filepath.Join(home, ".agents", "skills"), filepath.Join(home, ".opencode", "skills"),
 			filepath.Join(cfg, "opencode", "skills"))
 	}
-	dirs = append(dirs, filepath.Join(uh, ".claude", "skills"))
+	if client == "claude" {
+		dirs = append(dirs, filepath.Join(claudeUserDir(uh), "skills"))
+	} else {
+		dirs = append(dirs, filepath.Join(uh, ".claude", "skills"))
+	}
 	if client == "opencode" {
 		dirs = append(dirs, filepath.Join(uh, ".agents", "skills"))
 	}

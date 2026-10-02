@@ -414,7 +414,11 @@ bin/aicrew-agent check -home ~/aicrew/agents/builder [-client claude|opencode] [
 bin/aicrew-agent version [-json]
 ```
 
-The check (`join` runs it at its end) installs nothing. It reports:
+The check (`join` runs it at its end) installs nothing. Members who share
+one OS account each set their own `AIMEM_STATE_DIR` and `CLAUDE_CONFIG_DIR`
+in their shell before `join`, `check` and `run`: the check probes Claude
+Code with that `CLAUDE_CONFIG_DIR`, and reads the member's user-level skills
+under it. It reports:
 
 - **Versions against the supported set**, which is embedded in the build
   (`internal/agent/supported.json`):

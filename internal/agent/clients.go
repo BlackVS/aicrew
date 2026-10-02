@@ -77,11 +77,17 @@ func modelSink() (string, func(), error) {
 }
 
 // clientEnv is base without the calling session's client and provider
-// variables, plus the closed model endpoint and a dummy key.
+// variables, plus the closed model endpoint and a dummy key. It keeps
+// CLAUDE_CONFIG_DIR, the member's own Claude Code configuration directory
+// when members share an account, so the probes read that member's client.
 func clientEnv(base []string, sink string) []string {
 	out := make([]string, 0, len(base)+2)
 	for _, kv := range base {
 		k := strings.ToUpper(kv[:max(strings.IndexByte(kv, '='), 0)])
+		if k == "CLAUDE_CONFIG_DIR" {
+			out = append(out, kv)
+			continue
+		}
 		if strings.HasPrefix(k, "CLAUDE") || strings.HasPrefix(k, "ANTHROPIC_") {
 			continue
 		}

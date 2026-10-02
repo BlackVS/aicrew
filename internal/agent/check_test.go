@@ -80,7 +80,7 @@ func providerGuard() error {
 		return errors.New("the API key is not the dummy")
 	}
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(strings.ToUpper(kv), "CLAUDE") {
+		if strings.HasPrefix(strings.ToUpper(kv), "CLAUDE") && !strings.HasPrefix(strings.ToUpper(kv), "CLAUDE_CONFIG_DIR=") {
 			return fmt.Errorf("inherited %s", kv[:strings.IndexByte(kv, '=')])
 		}
 	}
@@ -98,12 +98,17 @@ func providerGuard() error {
 }
 
 // skillsSeen lists the skills a client would find: the home's and the
-// user's .claude/skills directories.
+// user's skills directories, the user's under CLAUDE_CONFIG_DIR when set,
+// as Claude Code reads them.
 func skillsSeen() []string {
 	cwd, _ := os.Getwd()
 	uh, _ := os.UserHomeDir()
+	user := filepath.Join(uh, ".claude")
+	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+		user = d
+	}
 	var out []string
-	for _, d := range []string{filepath.Join(cwd, ".claude", "skills"), filepath.Join(uh, ".claude", "skills")} {
+	for _, d := range []string{filepath.Join(cwd, ".claude", "skills"), filepath.Join(user, "skills")} {
 		ents, _ := os.ReadDir(d)
 		for _, e := range ents {
 			if _, err := os.Stat(filepath.Join(d, e.Name(), "SKILL.md")); err == nil && !slices.Contains(out, e.Name()) {
@@ -817,5 +822,39 @@ func TestCheckSkillsEveryInstallation(t *testing.T) {
 				t.Fatalf("%d ai-skills installations reported: %+v", n, rep.Components)
 			}
 		})
+	}
+}
+
+// A member on a shared account sets CLAUDE_CONFIG_DIR in their shell: the
+// client probes run with it, and the skills and their ai-skills record are
+// judged in that member's directory, not the account's ~/.claude. Without
+// the variable, the same home finds no skills.
+func TestCheckHonorsClaudeConfigDir(t *testing.T) {
+	e := setupCheck(t, readyTools, "aimem", "claude")
+	member := filepath.Join(t.TempDir(), "member-claude")
+	dir := filepath.Join(member, "skills", "oh-code-review")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: oh-code-review\n---\n"), 0o644)
+	os.WriteFile(filepath.Join(member, "skills", ".ai-skills.json"), []byte(`{"version": "1.26.1"}`), 0o644)
+	t.Setenv("CLAUDE_CONFIG_DIR", member)
+	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "cli") // the calling session's: never kept
+
+	e.check(t, "claude") // creates the wiring
+	rep := e.check(t)
+	if rep.Status != JoinReady || component(rep, "ai-skills").State != StateSupported ||
+		len(rep.Clients[0].MissingSkills) != 0 || rep.Clients[0].MCP != "connected" {
+		t.Fatalf("with the member's CLAUDE_CONFIG_DIR: %+v", rep)
+	}
+
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	if rep := e.check(t); rep.Status != JoinBlocked || len(rep.Clients[0].MissingSkills) == 0 {
+		t.Fatalf("the account's own ~/.claude holds no skills, yet: %+v", rep)
+	}
+
+	env := clientEnv([]string{"PATH=x", "CLAUDE_CONFIG_DIR=" + member, "CLAUDE_CODE_ENTRYPOINT=cli", "CLAUDECODE=1",
+		"ANTHROPIC_API_KEY=k"}, "http://127.0.0.1:1")
+	if !slices.Contains(env, "CLAUDE_CONFIG_DIR="+member) || slices.Contains(env, "CLAUDE_CODE_ENTRYPOINT=cli") ||
+		slices.Contains(env, "CLAUDECODE=1") || slices.Contains(env, "ANTHROPIC_API_KEY=k") {
+		t.Fatalf("clientEnv: %v", env)
 	}
 }

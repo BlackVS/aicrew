@@ -514,7 +514,9 @@ func TestCheckOutcomes(t *testing.T) {
 		instruction string
 		notice      string
 	}{
-		{"aimem missing", []string{"claude"}, nil, "1.26.1", JoinBlocked, "aimem_missing", "No aimem release provides it yet", ""},
+		{"aimem missing", []string{"claude"}, nil, "1.26.1", JoinBlocked, "aimem_missing", "Install aimem v0.7.4 with its verifying installer", ""},
+		{"aimem newer", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.7.5" }, "1.26.1", JoinRestartRequired, "",
+			"", "aimem 0.7.5 is newer than the tested 0.7.4"},
 		{"aimem v0.7.3", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.7.3" }, "1.26.1", JoinBlocked,
 			"aimem_below", "aimem 0.7.4 or later is required", ""},
 		{"aimem source build", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.7.3-52-gabc1234" }, "1.26.1",
@@ -655,7 +657,7 @@ func TestSupportedSet(t *testing.T) {
 		}
 	}
 	am := set.Components["aimem"]
-	for v, want := range map[string]string{"0.7.3": StateBelow, "0.7.4": StateSupported, "0.9.1": StateSupported, "1.0.0": StateNewer} {
+	for v, want := range map[string]string{"0.7.3": StateBelow, "0.7.4": StateSupported, "0.7.5": StateNewer, "0.9.1": StateNewer, "1.0.0": StateNewer} {
 		s, _, _ := parseVersion(v)
 		if got, _ := am.classify(s); got != want {
 			t.Fatalf("aimem %s: %s, want %s", v, got, want)

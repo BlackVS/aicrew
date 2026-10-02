@@ -190,9 +190,7 @@ func (s *Server) offer(w http.ResponseWriter, r *http.Request) {
 // accept begins the worker's acceptance of its offer.
 func (s *Server) accept(w http.ResponseWriter, r *http.Request) {
 	id, _, _ := attemptPath(requestPath(r))
-	var in struct {
-		InstructionDigest string `json:"instruction_digest"`
-	}
+	var in acceptBody
 	token, key, ok := s.stepRequest(w, r, true, &in)
 	if !ok {
 		return
@@ -286,9 +284,7 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 // running attempt. It is local: no step, no proof.
 func (s *Server) requestStop(w http.ResponseWriter, r *http.Request) {
 	id, _, _ := attemptPath(requestPath(r))
-	var in struct {
-		Reason string `json:"reason"`
-	}
+	var in stopBody
 	token, key, ok := s.stepRequest(w, r, true, &in)
 	if !ok {
 		return
@@ -313,10 +309,7 @@ func (s *Server) confirmStop(w http.ResponseWriter, r *http.Request) {
 // READY or to BLOCKED with a blocker, under the stopped fact.
 func (s *Server) releaseStopped(w http.ResponseWriter, r *http.Request) {
 	id, _, _ := attemptPath(requestPath(r))
-	var in struct {
-		Target  store.ReleaseTarget `json:"target"`
-		Blocker string              `json:"blocker,omitempty"`
-	}
+	var in releaseBody
 	token, key, ok := s.stepRequest(w, r, true, &in)
 	if !ok {
 		return
@@ -372,10 +365,7 @@ func retrySeconds(d time.Duration) int {
 // submitted result: accept or rework. It is local.
 func (s *Server) review(w http.ResponseWriter, r *http.Request) {
 	id, _, _ := attemptPath(requestPath(r))
-	var in struct {
-		ResultSeq int64                `json:"result_seq"`
-		Decision  store.ReviewDecision `json:"decision"`
-	}
+	var in reviewBody
 	token, key, ok := s.stepRequest(w, r, true, &in)
 	if !ok {
 		return
@@ -389,10 +379,7 @@ func (s *Server) review(w http.ResponseWriter, r *http.Request) {
 // forge. It is local; aicrew queries no forge.
 func (s *Server) confirmDelivery(w http.ResponseWriter, r *http.Request) {
 	id, _, _ := attemptPath(requestPath(r))
-	var in struct {
-		ResultSeq int64            `json:"result_seq"`
-		Evidence  []store.Evidence `json:"evidence"`
-	}
+	var in deliveryBody
 	token, key, ok := s.stepRequest(w, r, true, &in)
 	if !ok {
 		return
@@ -406,9 +393,7 @@ func (s *Server) confirmDelivery(w http.ResponseWriter, r *http.Request) {
 // begin response returns for the member to send.
 func (s *Server) finalize(w http.ResponseWriter, r *http.Request) {
 	id, _, _ := attemptPath(requestPath(r))
-	var in struct {
-		ResultSeq int64 `json:"result_seq"`
-	}
+	var in finalizeBody
 	token, key, ok := s.stepRequest(w, r, true, &in)
 	if !ok {
 		return
@@ -423,11 +408,7 @@ func (s *Server) finalize(w http.ResponseWriter, r *http.Request) {
 // the superseded key becomes an alias of the step.
 func (s *Server) work(w http.ResponseWriter, r *http.Request) {
 	id, _, _ := attemptPath(requestPath(r))
-	var in struct {
-		Intent     store.WorkIntent `json:"intent"`
-		Detail     string           `json:"detail,omitempty"`
-		Supersedes string           `json:"supersedes,omitempty"`
-	}
+	var in workBody
 	token, key, ok := s.stepRequest(w, r, true, &in)
 	if !ok {
 		return

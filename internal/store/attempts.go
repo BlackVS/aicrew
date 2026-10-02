@@ -992,8 +992,7 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 				 process_verified_receipt = ?, `+clearPending,
 				r.Reservation.ID, r.Reservation.Fence, r.TaskRevision, r.Receipt.ID, r.Receipt.ID)
 			if err == nil {
-				err = announce(ctx, tx, a, a.CoordinatorAgentID, "%s offered task %s to %s.",
-					now, labelOf(a.CoordinatorAgentID), taskName(a.Task), labelOf(a.WorkerAgentID))
+				err = announceOffer(ctx, tx, a, now)
 			}
 		case ReservationTransfer:
 			err = updateAttempt(ctx, tx, a.ID, now,
@@ -1081,6 +1080,26 @@ type label string
 func labelOf(agentID string) label { return label(agentID) }
 
 func taskName(t TaskRef) string { return t.HubID + "/" + t.ProjectID + "/" + t.TaskID }
+
+// announceOffer writes the offer's lifecycle message, which carries the
+// offer's details for its worker (pilot G2).
+func announceOffer(ctx context.Context, tx *sql.Tx, a Attempt, now time.Time) error {
+	from, err := getAgent(ctx, tx, a.CoordinatorAgentID)
+	if err != nil {
+		return err
+	}
+	to, err := getAgent(ctx, tx, a.WorkerAgentID)
+	if err != nil {
+		return err
+	}
+	task := a.Task
+	_, err = postLifecycleMessage(ctx, tx, Message{TeamID: a.TeamID, Kind: KindLifecycle, SenderAgentID: a.CoordinatorAgentID,
+		Task: &task, AttemptID: a.ID, Text: fmt.Sprintf("%s offered task %s to %s.", from.Label, taskName(a.Task), to.Label),
+		Offer: &OfferDetail{BaseCommit: a.BaseCommit, Branch: a.Branch, InstructionDigest: a.Process.InstructionDigest,
+			ExpiresAt: a.OfferExpiresAt, Process: OfferProcess{Repo: a.Process.Identity.Repository,
+				Commit: a.Process.Identity.Commit, Manifest: a.Process.Identity.Manifest}}}, now)
+	return err
+}
 
 // announce writes a lifecycle message to the attempt's team.
 func announce(ctx context.Context, tx *sql.Tx, a Attempt, actorID, format string, now time.Time, args ...any) error {

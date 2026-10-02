@@ -75,9 +75,29 @@ type Message struct {
 	Task             *TaskRef    `json:"task,omitempty"`
 	// AttemptID is the attempt a lifecycle message announces; a member's
 	// own message names none.
-	AttemptID string    `json:"attempt_id,omitempty"`
-	Text      string    `json:"text"`
-	CreatedAt time.Time `json:"created_at"`
+	AttemptID string `json:"attempt_id,omitempty"`
+	// Offer is the offer an offer's announcement makes: what the worker
+	// needs to verify the pin and start its worktree.
+	Offer     *OfferDetail `json:"offer,omitempty"`
+	Text      string       `json:"text"`
+	CreatedAt time.Time    `json:"created_at"`
+}
+
+// OfferDetail is an offer as its announcement carries it, in the shape of
+// the offer route's body.
+type OfferDetail struct {
+	BaseCommit        string       `json:"base_commit"`
+	Branch            string       `json:"branch"`
+	Process           OfferProcess `json:"process"`
+	InstructionDigest string       `json:"instruction_digest"`
+	ExpiresAt         time.Time    `json:"expires_at"`
+}
+
+// OfferProcess is the offer's process pin, as the offer route takes it.
+type OfferProcess struct {
+	Repo     string `json:"repo"`
+	Commit   string `json:"commit"`
+	Manifest string `json:"manifest"`
 }
 
 // InboxItem is a message as delivered to one recipient.
@@ -209,14 +229,21 @@ func (s *Store) SendMessage(ctx context.Context, c Caller, key string, in NewMes
 // active member except the actor. Crew-execution's transitions call it.
 func postLifecycle(ctx context.Context, tx *sql.Tx, teamID, actorAgentID, text string, task *TaskRef, attemptID string,
 	now time.Time) (Message, error) {
-	if err := validateMessageText(text); err != nil {
+	return postLifecycleMessage(ctx, tx, Message{TeamID: teamID, Kind: KindLifecycle, SenderAgentID: actorAgentID,
+		Task: task, AttemptID: attemptID, Text: text}, now)
+}
+
+// postLifecycleMessage writes a lifecycle message m to every active member
+// but its actor.
+func postLifecycleMessage(ctx context.Context, tx *sql.Tx, m Message, now time.Time) (Message, error) {
+	if err := validateMessageText(m.Text); err != nil {
 		return Message{}, err
 	}
-	recipients, err := activeMembersExcept(ctx, tx, teamID, actorAgentID)
+	actorAgentID := m.SenderAgentID
+	recipients, err := activeMembersExcept(ctx, tx, m.TeamID, actorAgentID)
 	if err != nil {
 		return Message{}, err
 	}
-	m := Message{TeamID: teamID, Kind: KindLifecycle, SenderAgentID: actorAgentID, Task: task, AttemptID: attemptID, Text: text}
 	if actorAgentID != "" {
 		actor, err := getAgent(ctx, tx, actorAgentID)
 		if err != nil {
@@ -299,14 +326,22 @@ func insertMessage(ctx context.Context, tx *sql.Tx, m Message, recipients []stri
 	if m.Task != nil {
 		task = *m.Task
 	}
+	offer := ""
+	if m.Offer != nil {
+		b, err := json.Marshal(m.Offer)
+		if err != nil {
+			return Message{}, fmt.Errorf("encode offer: %w", err)
+		}
+		offer = string(b)
+	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO messages (id, team_id, seq, kind, sender_agent_id, sender_session_id, sender_generation,
 		        sender_model, sender_client, sender_client_version, to_agent_id, project_hub_id, project_id,
-		        task_hub_id, task_project_id, task_id, attempt_id, text, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		        task_hub_id, task_project_id, task_id, attempt_id, offer, text, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.TeamID, m.Seq, string(m.Kind), m.SenderAgentID, m.SenderSessionID, m.SenderGeneration,
 		m.SenderProfile.Model, m.SenderProfile.Client, m.SenderProfile.ClientVersion, m.To,
-		project.HubID, project.ProjectID, task.HubID, task.ProjectID, task.TaskID, m.AttemptID,
+		project.HubID, project.ProjectID, task.HubID, task.ProjectID, task.TaskID, m.AttemptID, offer,
 		m.Text, formatTime(now)); err != nil {
 		return Message{}, fmt.Errorf("insert message: %w", err)
 	}
@@ -407,7 +442,7 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 	rows, err := q.QueryContext(ctx,
 		`SELECT m.id, m.team_id, m.seq, m.kind, m.sender_agent_id, m.sender_session_id, m.sender_generation,
 		        m.sender_model, m.sender_client, m.sender_client_version, m.to_agent_id,
-		        m.project_hub_id, m.project_id, m.task_hub_id, m.task_project_id, m.task_id, m.attempt_id,
+		        m.project_hub_id, m.project_id, m.task_hub_id, m.task_project_id, m.task_id, m.attempt_id, m.offer,
 		        m.text, m.created_at, r.deliveries, r.first_delivered_at
 		 FROM message_recipients r JOIN messages m ON m.id = r.message_id
 		 WHERE r.agent_id = ? AND m.team_id = ? AND r.acknowledged_at IS NULL
@@ -425,12 +460,13 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 			kind, created  string
 			project        ProjectRef
 			task           TaskRef
+			offer          string
 			firstDelivered sql.NullString
 		)
 		if err := rows.Scan(&it.ID, &it.TeamID, &it.Seq, &kind, &it.SenderAgentID, &it.SenderSessionID,
 			&it.SenderGeneration, &it.SenderProfile.Model, &it.SenderProfile.Client,
 			&it.SenderProfile.ClientVersion, &it.To, &project.HubID, &project.ProjectID,
-			&task.HubID, &task.ProjectID, &task.TaskID, &it.AttemptID, &it.Text, &created,
+			&task.HubID, &task.ProjectID, &task.TaskID, &it.AttemptID, &offer, &it.Text, &created,
 			&it.Deliveries, &firstDelivered); err != nil {
 			return nil, err
 		}
@@ -440,6 +476,13 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 		}
 		if task.TaskID != "" {
 			it.Task = &task
+		}
+		if offer != "" {
+			var o OfferDetail
+			if err := json.Unmarshal([]byte(offer), &o); err != nil {
+				return nil, fmt.Errorf("read the offer of message %s: %w", it.ID, err)
+			}
+			it.Offer = &o
 		}
 		if it.CreatedAt, err = parseTime(created); err != nil {
 			return nil, err

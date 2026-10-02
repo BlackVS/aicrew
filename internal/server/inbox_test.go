@@ -38,7 +38,8 @@ type inboxMessage struct {
 	Task      *struct {
 		TaskID string `json:"task_id"`
 	} `json:"task"`
-	Deliveries int64 `json:"deliveries"`
+	Deliveries int64          `json:"deliveries"`
+	Offer      map[string]any `json:"offer"`
 }
 
 func inboxOf(t *testing.T, got reply) []inboxMessage {
@@ -70,6 +71,11 @@ func TestInboxNamesTheOfferedAttempt(t *testing.T) {
 	}
 	if offer == nil || offer.Task == nil || offer.Task.TaskID != "task-1" || offer.Deliveries != 1 {
 		t.Fatalf("the worker's inbox holds no offer naming attempt %s: %+v", id, msgs)
+	}
+	// The offer's details come with it (pilot G2), as the offer route took them.
+	if o := offer.Offer; o == nil || o["base_commit"] != "base-1" || o["branch"] != "work/task-1" ||
+		o["instruction_digest"] != coordPin.InstructionDigest || o["process"].(map[string]any)["repo"] != coordPin.Identity.Repository {
+		t.Fatalf("the offer's details: %+v", offer.Offer)
 	}
 	// The worker accepts by the ID its inbox named.
 	e.accept(t, offer.AttemptID, "accept-1")

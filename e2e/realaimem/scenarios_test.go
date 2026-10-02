@@ -119,6 +119,17 @@ type inboxMessage struct {
 	Task      *struct {
 		TaskID string `json:"task_id"`
 	} `json:"task"`
+	// Offer is an offer's details, on the message that announces it.
+	Offer *struct {
+		BaseCommit string `json:"base_commit"`
+		Branch     string `json:"branch"`
+		Process    struct {
+			Repo     string `json:"repo"`
+			Commit   string `json:"commit"`
+			Manifest string `json:"manifest"`
+		} `json:"process"`
+		InstructionDigest string `json:"instruction_digest"`
+	} `json:"offer"`
 	Text string `json:"text"`
 }
 
@@ -431,16 +442,26 @@ func (h *harness) s1OfferFlow(t *testing.T) {
 
 	// The worker finds the offer in its own inbox (pilot G1) and accepts by
 	// the attempt ID it names there; nothing is relayed.
-	found, ids := "", []string{}
+	found, ids := inboxMessage{}, []string{}
 	for _, m := range h.inbox(sc, worker) {
 		ids = append(ids, m.ID)
 		if m.Kind == "lifecycle" && m.Task != nil && m.Task.TaskID == task.ID && m.AttemptID != "" {
-			found = m.AttemptID
+			found = m
 		}
 	}
-	sc.check("the worker's inbox names the offered attempt", found == id, found, id)
+	sc.check("the worker's inbox names the offered attempt", found.AttemptID == id, found.AttemptID, id)
+	// The offer's details come with it (pilot G2): the worker starts its
+	// worktree from them, and computes the instruction digest itself from
+	// the pinned manifest before accepting.
+	o := found.Offer
+	sc.require("the worker's inbox carries the offer's details", o != nil && o.BaseCommit == processCommit &&
+		o.Branch == "work/"+task.ID && o.Process.Repo == processRepo && o.Process.Commit == processCommit &&
+		o.Process.Manifest == processManifest, found)
+	digest := h.processDigest(o.Process.Commit, o.Process.Manifest)
+	sc.check("the worker's own digest of the pinned manifest equals the offer's", digest == o.InstructionDigest,
+		digest, o.InstructionDigest)
 	sc.check("the worker acknowledges what it read", h.ackInbox(sc, worker, ids))
-	keys["transfer"] = h.committed(sc, worker, "accept", found, task.ID, map[string]string{"instruction_digest": instructionHash}).RequestKey
+	keys["transfer"] = h.committed(sc, worker, "accept", found.AttemptID, task.ID, map[string]string{"instruction_digest": digest}).RequestKey
 	sc.check("aicrew: the attempt runs", h.attempt(sc, id).State == "running", h.attempt(sc, id))
 
 	pr := "https://forge.example.test/e2e/pull/1"

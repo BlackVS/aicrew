@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 20
+const schemaVersion = 21
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -218,7 +218,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	}
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
-		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20}
+		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -408,6 +408,14 @@ var schemaV5 = []string{
 // with a new key (D-b1b-4 (a)): each is an alias of its attempt's pending
 // update step until that step settles, when each is recorded with the step's
 // outcome and dropped here.
+// schemaV21 carries an offer's details on the message that announces it
+// (pilot G2): the base commit, branch, process pin, instruction digest and
+// expiry, as JSON, so the worker starts its worktree and verifies the pin
+// from its own inbox. Every other message carries none.
+var schemaV21 = []string{
+	`ALTER TABLE messages ADD COLUMN offer TEXT NOT NULL DEFAULT ''`,
+}
+
 // schemaV20 names the attempt a lifecycle message announces (pilot G1), so a
 // member reads an offer's attempt ID from its inbox instead of having it
 // relayed. Earlier messages, and members' own messages, name none.

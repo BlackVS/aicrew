@@ -111,6 +111,25 @@ func endProofs(ctx context.Context, tx *sql.Tx, attemptID string, now time.Time)
 	return nil
 }
 
+// endMovedProofs ends sessionID's live proofs issued at a generation older
+// than the session's current one. Each caller runs it in the transaction
+// that moved the generation (a resume, an end or a credential rotation),
+// after the move. From that instant the proofs' fact already answers
+// inactive (actingMember), so ending them there starts their none-finality
+// clock where the fact stopped, as a void does: a never-sent step then
+// settles NoneFinalAfter later instead of when its proof expires. A replayed
+// begin replaces the proof anyway, at the session's new generation.
+func endMovedProofs(ctx context.Context, tx *sql.Tx, sessionID string, now time.Time) error {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE coordination_proofs SET ended_at = ?
+		 WHERE session_id = ? AND ended_at = ''
+		   AND generation < (SELECT generation FROM sessions WHERE id = ?)`,
+		formatTime(now), sessionID, sessionID); err != nil {
+		return fmt.Errorf("end the moved session's proofs: %w", err)
+	}
+	return nil
+}
+
 // CoordinationFact answers aimem's question about a proof, for the named
 // hub, from one snapshot of current state. The proof's record only locates
 // the intent: the fact is active only while that intent is still pending

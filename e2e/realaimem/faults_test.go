@@ -450,14 +450,16 @@ func (h *harness) f5StaleSteps(t *testing.T) {
 		rec := h.recoverStep(sc, coord)
 		sc.check("F5: the new generation may not continue the old generation's offer", !rec.OK, describe(rec))
 		sc.check("aimem holds nothing for the old generation's offer", holdState(h.hold(sc, task3.ID)) != "held")
-		// Observed, and reported on the task: nothing ends a session's
-		// proofs when it resumes, so the never-sent offer keeps its
-		// proof, and the worker's capacity, until the proof expires (at
-		// most 15 minutes); only then can aicrewd settle it. Safe (its
-		// fact answers inactive), not yet prompt.
+		// The resume ended the old generation's proof (01a0f758-c827), so
+		// aicrewd's reconciler settles the never-sent offer not committed
+		// once the grace after that end has passed, well before the proof
+		// would have expired, and the worker's capacity is free again.
 		a := h.attemptOf(sc, task3.ID)
-		h.report.write(map[string]any{"type": "observation", "scenario": "F5",
-			"what": "the resumed coordinator's never-sent offer stays pending until its proof expires", "attempt_state": a.State})
+		settled := h.waitAttempt(sc, a.ID, 45*time.Second, func(r attemptRow) bool { return r.PendingKey == "" && r.State == "closed" })
+		got := h.attempt(sc, a.ID)
+		sc.check("F5: aicrewd settles the resumed coordinator's never-sent offer not committed within 45 s",
+			settled && got.CloseReason == "claim not_committed", got)
+		sc.check("aicrew: the worker's capacity is free after the resumed coordinator's offer", h.openWorkOf(sc, worker.agentID) == 0)
 	} else {
 		// The active-proof control: the member did not resume, so its
 		// proof is live under its own generation and step key. The offer

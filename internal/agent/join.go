@@ -68,9 +68,9 @@ type JoinOptions struct {
 // JoinDeps are the bootstrap's collaborators; tests replace them.
 type JoinDeps struct {
 	Crew     func(Config) (InvitationAPI, error)
-	Aimem    func(command, hub string) JoinAimem
-	ReadCode func() (string, error) // the hidden prompt
-	Out      io.Writer              // the plan and progress, never a secret
+	Aimem    func(command, hub, home string) JoinAimem // the home's installation
+	ReadCode func() (string, error)                    // the hidden prompt
+	Out      io.Writer                                 // the plan and progress, never a secret
 	Sleep    func(context.Context, time.Duration) error
 	// check runs the dependency and client check at the end of a run; nil
 	// means the real one (runCheck). Package tests replace it.
@@ -260,7 +260,7 @@ func (j *joiner) precheck(ctx context.Context) (JoinReport, bool) {
 		return blocked(j.o, "no_terminal", "run aicrew-agent join in an interactive terminal: the invitation "+
 			"code is read only at its hidden prompt, never from an argument, a pipe, a file or the environment"), true
 	}
-	j.aimem = j.deps.Aimem(j.aimemCommand(), j.o.AimemHub)
+	j.aimem = j.deps.Aimem(j.aimemCommand(), j.o.AimemHub, j.o.Home)
 	return j.checkCredential(ctx, j.aimem)
 }
 
@@ -325,11 +325,9 @@ func (j *joiner) bind() {
 	}
 }
 
-// credentialInstruction tells how to install the individual credential.
-func credentialInstruction(hub string) string {
-	return fmt.Sprintf("install this installation's individual aimem credential for hub %q through aimem's own "+
-		"flow (`aimem hub task-token %s <token>`, with the user-scoped token your aimem operator issues), then rerun", hub, hub)
-}
+// credentialInstruction tells how to provision the home's aimem
+// installation with the individual credential.
+func credentialInstruction(home, hub string) string { return provisionInstruction(home, hub) }
 
 // checkCredential is decision D1: an individual aimem credential must be
 // installed and accepted before an invitation attempt is spent.
@@ -337,17 +335,21 @@ func (j *joiner) checkCredential(ctx context.Context, am JoinAimem) (JoinReport,
 	o := j.o
 	st, known, err := am.Credential(ctx)
 	switch {
+	case err != nil && strings.Contains(err.Error(), "is not configured"):
+		// The home's installation does not know the hub yet.
+		return blocked(o, "credential_missing", credentialInstruction(o.Home, o.AimemHub)), true
 	case err != nil:
 		return blocked(o, "aimem_failed", err.Error()), true
 	case !known:
 		fmt.Fprintln(j.deps.Out, "This aimem cannot report its credential; the identity proof will check it.")
 		return JoinReport{}, false
 	case st.Credential != "set":
-		return blocked(o, "credential_missing", credentialInstruction(o.AimemHub)), true
+		return blocked(o, "credential_missing", credentialInstruction(o.Home, o.AimemHub)), true
 	case st.State == "refused":
 		return blocked(o, "credential_refused", fmt.Sprintf("the aimem hub %q does not accept the stored "+
 			"individual credential (revoked, expired or unknown): ask your aimem operator to reissue it, install "+
-			"it with `aimem hub task-token %s <token>`, then rerun", o.AimemHub, o.AimemHub)), true
+			"it with `aimem hub task-token %s --token-file -` under the home's AIMEM_STATE_DIR=%s and AIMEM_SOCKET=%s, "+
+			"then rerun", o.AimemHub, o.AimemHub, AimemDir(o.Home), AimemSocket(o.Home))), true
 	case st.State != "active":
 		return blocked(o, "aimem_unreachable", fmt.Sprintf("the aimem hub %q could not confirm the credential "+
 			"(%s: %s); rerun when it is reachable", o.AimemHub, st.State, st.Detail)), true
@@ -508,7 +510,7 @@ func (j *joiner) stop(err error) JoinReport {
 	switch {
 	case errors.As(err, &pe) && strings.Contains(pe.Error(), "no individual credential"):
 		// An aimem that cannot report its credential names it here.
-		return blocked(j.o, "credential_missing", credentialInstruction(j.o.AimemHub))
+		return blocked(j.o, "credential_missing", credentialInstruction(j.o.Home, j.o.AimemHub))
 	case errors.As(err, &pe):
 		return blocked(j.o, "proof_failed", "aimem could not prove the identity: "+pe.Error()+
 			"; fix it and rerun with the same code")

@@ -13,7 +13,7 @@ import (
 // `aicrew-agent run` finds aimem's MCP server; `AIMEM_TEAM_SESSION`, which
 // the launcher sets, switches that same server to team mode. Nothing else in
 // those files is touched, no hook is installed, and no user-level client
-// configuration is read or written.
+// configuration is written.
 //
 // The entry follows the managed-file rule (docs/WORKSPACE.md): it is added
 // when missing, updated only while it still matches the digest recorded at
@@ -34,15 +34,17 @@ type wiringEntry struct {
 // managedKey is the entry's record name in agent.json's "managed".
 func (w wiringEntry) managedKey() string { return w.file + "#" + w.parent + "." + w.name }
 
-// wiringFor is the entry of a client, running aimem as command.
-func wiringFor(client, command string) wiringEntry {
+// wiringFor is the entry of a client, running aimem as command. Claude
+// Code's entry carries the home's aimem installation in its env (D-STORE);
+// OpenCode has no such carrier yet.
+func wiringFor(client, command, home string) wiringEntry {
 	if client == "opencode" {
 		return wiringEntry{client: client, file: "opencode.json", parent: "mcp", name: "aimem",
 			value:    map[string]any{"type": "local", "command": []string{command, "mcp"}, "enabled": true},
 			skeleton: map[string]any{"$schema": "https://opencode.ai/config.json"}}
 	}
 	return wiringEntry{client: client, file: ".mcp.json", parent: "mcpServers", name: "aimem",
-		value: map[string]any{"command": command, "args": []string{"mcp"}}}
+		value: map[string]any{"command": command, "args": []string{"mcp"}, "env": aimemVarMap(home)}}
 }
 
 // canonical is v as compact JSON with sorted keys, for comparison and digests.

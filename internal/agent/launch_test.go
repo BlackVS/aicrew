@@ -299,7 +299,7 @@ func (c *crewEnv) unreachableEngine(t *testing.T) (e *Engine, waits <-chan struc
 	if err != nil {
 		t.Fatal(err)
 	}
-	e = NewEngine(cfg, crew, ExecAimem{Command: cfg.AimemCommand}, slog.New(slog.NewTextHandler(c.logs, nil)))
+	e = NewEngine(cfg, crew, ExecAimem{Command: cfg.AimemCommand, Home: cfg.Home}, slog.New(slog.NewTextHandler(c.logs, nil)))
 	w := make(chan struct{}, 1)
 	e.Sleep = func(ctx context.Context, d time.Duration) error {
 		select {

@@ -33,7 +33,10 @@ const fakeToolsEnv = "AICREW_FAKE_TOOLS"
 
 // fakeTools configures the stand-ins.
 type fakeTools struct {
-	Aimem         string `json:"aimem,omitempty"`  // `aimem version` output; "" fails
+	Aimem string `json:"aimem,omitempty"` // `aimem version` output; "" fails
+	// Credential is the home installation's credential for its hub: ""
+	// (active), "none", "refused", "unreachable" or "unconfigured".
+	Credential    string `json:"credential,omitempty"`
 	Claude        string `json:"claude,omitempty"` // `claude --version`
 	ClaudeMCP     string `json:"claude_mcp,omitempty"`
 	ClaudePending bool   `json:"claude_pending,omitempty"`
@@ -54,11 +57,21 @@ func init() {
 	}
 	name := strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
 	args := os.Args[1:]
+	if name == "aimem" || name == "claude" || name == "opencode" {
+		guardOrExit(name)
+		if v, ok := os.LookupEnv(SessionEnv); ok {
+			fmt.Fprintf(os.Stderr, "%s: inherited team session %q\n", name, v)
+			os.Exit(97)
+		}
+	}
 	switch name {
 	case "aimem":
 		if len(args) == 1 && args[0] == "version" && f.Aimem != "" {
 			fmt.Println(f.Aimem)
 			os.Exit(0)
+		}
+		if len(args) == 4 && args[0] == "hub" && args[1] == "credential" && args[3] == "--json" {
+			os.Exit(fakeCredential(f.Credential, args[2]))
 		}
 		fmt.Fprintln(os.Stderr, "aimem: broken")
 		os.Exit(1)
@@ -67,6 +80,22 @@ func init() {
 	case "opencode":
 		os.Exit(fakeOpenCode(f, args))
 	}
+}
+
+// fakeCredential answers `aimem hub credential HUB --json`.
+func fakeCredential(mode, hub string) int {
+	cred, state := "set", "active"
+	switch mode {
+	case "unconfigured":
+		fmt.Fprintf(os.Stderr, "hub %q is not configured on this machine\n", hub)
+		return 1
+	case "none":
+		cred, state = "none", "absent"
+	case "refused", "unreachable":
+		state = mode
+	}
+	fmt.Printf(`{"hub": %q, "credential": %q, "state": %q, "scope": "user", "user_id": "user-1"}`+"\n", hub, cred, state)
+	return 0
 }
 
 // providerGuard refuses to run a client stand-in whose model endpoint is not
@@ -310,9 +339,14 @@ func setupCheck(t *testing.T, f fakeTools, tools ...string) *checkEnv {
 	raw, _ := json.Marshal(f)
 	t.Setenv(fakeToolsEnv, string(raw))
 	t.Setenv("CLAUDECODE", "1") // the calling session's variables must not reach a client
+	foreignInstallation(t, e.home)
+	t.Setenv(SessionEnv, filepath.Join(e.user, "foreign-session.json")) // another installation's session
 	doc := `{"layout": 1, "label": "builder", "aicrew": {"url": "https://aicrew.example", "tls_trust_mode": "ca_dns",
 		"tls_trust_value": "aicrew.example", "agent_id": "agent-1", "team_id": "team-1", "aimem_hub": "main"}}`
 	os.WriteFile(filepath.Join(e.home, "agent.json"), []byte(doc), 0o600)
+	// join's carrier for clients started in the home by hand.
+	os.MkdirAll(filepath.Join(e.home, ".claude"), 0o755)
+	os.WriteFile(filepath.Join(e.home, ".claude", "settings.json"), []byte(claudeSettings(e.home)), 0o644)
 	return e
 }
 
@@ -413,16 +447,19 @@ func TestCheckReadyClaude(t *testing.T) {
 	var mcp map[string]map[string]map[string]any
 	raw, _ := os.ReadFile(filepath.Join(e.home, ".mcp.json"))
 	if json.Unmarshal(raw, &mcp) != nil || mcp["mcpServers"]["aimem"]["command"] != "aimem" ||
-		fmt.Sprint(mcp["mcpServers"]["aimem"]["args"]) != "[mcp]" {
+		fmt.Sprint(mcp["mcpServers"]["aimem"]["args"]) != "[mcp]" ||
+		fmt.Sprint(mcp["mcpServers"]["aimem"]["env"]) != fmt.Sprint(map[string]any{StateDirEnv: AimemDir(e.home), SocketEnv: AimemSocket(e.home)}) {
 		t.Fatalf(".mcp.json %s", raw)
 	}
 	if _, err := os.Stat(filepath.Join(e.home, "opencode.json")); err == nil {
 		t.Fatal("opencode.json written for a Claude-only home")
 	}
-	for _, f := range []string{"settings.json", "settings.local.json"} {
-		if _, err := os.Stat(filepath.Join(e.home, ".claude", f)); err == nil {
-			t.Fatalf("a hook file %s was written", f)
-		}
+	// check writes no hook and leaves join's settings.json as it is.
+	if _, err := os.Stat(filepath.Join(e.home, ".claude", "settings.local.json")); err == nil {
+		t.Fatal("a hook file settings.local.json was written")
+	}
+	if b, _ := os.ReadFile(filepath.Join(e.home, ".claude", "settings.json")); string(b) != claudeSettings(e.home) {
+		t.Fatalf("settings.json is %s", b)
 	}
 	doc := readJSON(t, filepath.Join(e.home, "agent.json"))
 	if fmt.Sprint(doc["clients"]) != "[claude]" || doc["managed"].(map[string]any)[".mcp.json#mcpServers.aimem"] == nil {

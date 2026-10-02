@@ -176,7 +176,7 @@ func runCheck(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) 
 		return CheckReport{}, err
 	}
 	defer closeSink()
-	c.disc = discoveryEnv{env: clientEnv(os.Environ(), sink), timeout: o.Timeout}
+	c.disc = discoveryEnv{env: checkProbeEnv(clientEnv(os.Environ(), sink), o.Home), timeout: o.Timeout}
 
 	c.checkAimem(ctx)
 	if len(sel) == 0 {
@@ -193,6 +193,7 @@ func runCheck(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) 
 		c.checkClient(ctx, name, len(sel) == 1)
 	}
 	doc.set(doc.top, "managed", rec)
+	c.checkInstallation(sel)
 	c.checkSkills(sel)
 
 	c.rep.Instructions = c.blockers
@@ -225,7 +226,7 @@ func (c *checker) checkAimem(ctx context.Context) {
 		c.block("aimem_missing", aimemInstruction(comp, ""))
 		return
 	}
-	out, errOut, err := discoveryEnv{env: os.Environ(), timeout: 30 * time.Second}.capture(ctx, c.o.Home, path, "version")
+	out, errOut, err := discoveryEnv{env: checkProbeEnv(os.Environ(), c.o.Home), timeout: 30 * time.Second}.capture(ctx, c.o.Home, path, "version")
 	if err != nil {
 		r.State, r.Detail = StateFailed, tail(errOut+out+err.Error(), 300)
 		c.block("aimem_failed", "`aimem version` failed ("+r.Detail+"): check the aimem installation, then rerun `aicrew-agent check`")
@@ -233,6 +234,9 @@ func (c *checker) checkAimem(ctx context.Context) {
 	}
 	r.Found = strings.TrimSpace(out)
 	c.classify(&r, comp, r.Found, func() string { return aimemInstruction(comp, r.Found) })
+	if r.State != StateBelow && r.State != StateFailed {
+		c.checkCredential(ctx, path)
+	}
 }
 
 // unstampedBuild is a version output whose last word is "dev": a source
@@ -274,7 +278,7 @@ func (c *checker) classify(r *ComponentReport, comp supportedComponent, found st
 // wire plans and applies a client's MCP entry. It reports whether the
 // client's configuration changed.
 func (c *checker) wire(client string, rec map[string]string) bool {
-	w := wiringFor(client, c.aimemCommand())
+	w := wiringFor(client, c.aimemCommand(), c.o.Home)
 	ch, doc, err := planWiring(c.o.Home, w, rec[w.managedKey()])
 	if err == nil {
 		err = applyWiring(c.o.Home, w, ch, doc)

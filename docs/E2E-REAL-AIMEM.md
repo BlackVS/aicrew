@@ -66,8 +66,10 @@ Every listener is on 127.0.0.1.
      introspection-credential issue`.
    - One invitation per member, issued with `aicrew invitation issue`.
 4. **Members:** a coordinator, a worker and an independent member.
-   - Each is an aimem user with an admin-issued `aimem_user_` token, and has
-     its own aimem client state.
+   - Each is an aimem user with an admin-issued `aimem_user_` token. Its
+     aimem client state is the installation in its agent home, `<home>/aimem`,
+     which `aicrew-agent` gives every aimem process it starts there
+     (`docs/WORKSPACE.md`, "The member's aimem installation").
    - The member's aimem gets the hub with `aimem hub add … --token-file -
      --ca-file <the run's CA>` and `aimem hub task-token … --token-file -`.
      The token is on standard input, never an argument.

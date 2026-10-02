@@ -86,7 +86,7 @@ func setupStepsWith(t *testing.T, o crewOptions) *stepEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := NewDriver(c.cfg.Home, crew, ExecAimem{Command: c.cfg.AimemCommand}, e, slog.New(slog.NewTextHandler(c.logs, nil)))
+	d := NewDriver(c.cfg.Home, crew, ExecAimem{Command: c.cfg.AimemCommand, Home: c.cfg.Home}, e, slog.New(slog.NewTextHandler(c.logs, nil)))
 	d.Sleep = func(context.Context, time.Duration) error { return nil }
 	agent, _ := store.AgentCaller(c.agentID)
 	return &stepEnv{crewEnv: c, e: e, d: d, coord: coord, coordSess: coordSess, agent: agent}

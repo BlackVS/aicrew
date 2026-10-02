@@ -254,11 +254,32 @@ func rotateIfNeeded(ctx context.Context, tx *sql.Tx, agent Agent, id VerifiedIde
 		id.TokenID, at, agent.ID); err != nil {
 		return false, fmt.Errorf("rotate credential: %w", err)
 	}
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE agent_id = ? AND state = 'active'`, agent.ID)
+	if err != nil {
+		return false, fmt.Errorf("rebind sessions: %w", err)
+	}
+	var moved []string
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			rows.Close()
+			return false, err
+		}
+		moved = append(moved, sid)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return false, err
+	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE sessions SET token_id = ?, generation = generation + 1, updated_at = ?
 		 WHERE agent_id = ? AND state = 'active'`,
 		id.TokenID, at, agent.ID); err != nil {
 		return false, fmt.Errorf("rebind sessions: %w", err)
+	}
+	for _, sid := range moved {
+		if err := endMovedProofs(ctx, tx, sid, now); err != nil {
+			return false, err
+		}
 	}
 	return true, nil
 }

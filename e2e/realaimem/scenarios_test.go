@@ -46,9 +46,11 @@ func TestRealAimem(t *testing.T) {
 	t.Run("F3_restarts", func(t *testing.T) { h.f3Restarts(t) })
 	t.Run("F4_competing_steps", func(t *testing.T) { h.f4CompetingSteps(t) })
 	t.Run("F6_recovery", func(t *testing.T) { h.f6Recovery(t) })
-	// F5 crashes the coordinator, whose never-sent offer holds the worker's
-	// capacity until its proof expires (01a0f758-c827): it runs after every
-	// scenario that needs the worker. F7 scans everything, so it runs last.
+	// F5 crashes the coordinator. Its never-sent offer once held the
+	// worker's capacity until the offer's proof expired; since the resume
+	// ends that proof (01a0f758-c827), F5 frees the worker within its own
+	// run, and its place after F3, F4 and F6 is kept only to avoid churn.
+	// F7 scans everything, so it runs last.
 	t.Run("F5_stale_steps", func(t *testing.T) { h.f5StaleSteps(t) })
 	t.Run("F7_secrets", func(t *testing.T) { h.f7Secrets(t) })
 	if c := os.Getenv("AICREW_E2E_SKIP_FAULT"); c != "" {

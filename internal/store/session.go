@@ -189,6 +189,9 @@ func resumeSessionTx(ctx context.Context, tx *sql.Tx, c Caller, sessionID string
 		coordGen, at, at, sessionID); err != nil {
 		return Session{}, fmt.Errorf("resume session: %w", err)
 	}
+	if err := endMovedProofs(ctx, tx, sessionID, now); err != nil {
+		return Session{}, err
+	}
 	return getSession(ctx, tx, sessionID)
 }
 
@@ -354,6 +357,9 @@ func endSession(ctx context.Context, tx *sql.Tx, sess Session, state SessionStat
 		return err
 	} else if n != 1 {
 		return fmt.Errorf("session %s: %w", sess.ID, ErrContextStale)
+	}
+	if err := endMovedProofs(ctx, tx, sess.ID, now); err != nil {
+		return err
 	}
 	if sess.Role == RoleCoordinator {
 		if _, err := bumpCoordinatorGeneration(ctx, tx, sess.TeamID); err != nil {

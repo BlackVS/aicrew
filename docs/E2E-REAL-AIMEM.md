@@ -158,8 +158,8 @@ run file, which is never copied to the artifacts.
   - **A proof replayed after its step settled** is refused.
   - **After a member resumes to a new generation,** its old proof is refused,
     and the new generation may not continue the old generation's offer.
-    That offer keeps its proof until it expires, and the report records this
-    as an observation.
+    The resume ended that offer's proof, so aicrewd settles the offer not
+    committed within 45 s and the worker's capacity is free.
   - **aicrewd's coordination answer delayed past aimem's 2 s call budget** is
     refused retryable, and the driver's retry commits.
 
@@ -206,9 +206,11 @@ held back.
   one command whose job is to print a secret, aimem's token issue, is left
   out of the scan.
 
-F5 runs after F3, F4 and F6. Its crashed coordinator's offer holds the
-worker's capacity until the offer's proof expires (01a0f758-c827), and F7
-runs last.
+F5 runs after F3, F4 and F6, and F7 runs last. F5's crashed coordinator
+once held the worker's capacity until its offer's proof expired; since a
+resume ends the session's old proofs (01a0f758-c827), F5 asserts that
+aicrewd settles that offer within 45 s and frees the worker, and its place
+is kept only to avoid churn.
 
 ## The skip-the-fault matrix
 

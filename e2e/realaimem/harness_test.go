@@ -56,12 +56,16 @@ const (
 	serviceID = "aicrew-e2e"
 	projectID = "pilot"
 	hubName   = "e2e"
-	// The process the project selects, which every offer and claim pins.
+	// The process the project selects, which every offer and claim pins:
+	// its URL is recorded, never fetched.
 	processRepo     = "https://git.example.test/e2e/process.git"
-	processCommit   = "0123456789abcdef0123456789abcdef01234567"
 	processManifest = "process/manifest.json"
-	instructionHash = "sha256:e2e-instructions-v1"
 )
+
+// processCommit and instructionHash are the bootstrap's: the commit of the
+// real process repository it makes, and the digest of the manifest's exact
+// bytes there (CREW-CONTRACT, "Process pins").
+var processCommit, instructionHash string
 
 // harness is one isolated run: a fresh directory, a hub, aicrewd, and the
 // members, torn down at the end.
@@ -93,6 +97,7 @@ type harness struct {
 	procs       []*proc
 	members     map[string]*member
 	hubProc     *proc
+	processDir  string // the process repository the bootstrap makes
 	aicrewdProc *proc
 	httpClient  *http.Client // trusts the run's CA
 	// The fault proxies (b4b-1): the members' and aicrewd's way to the

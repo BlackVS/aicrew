@@ -43,6 +43,7 @@ func homeFiles() []homeFile {
 		{"AGENTS.md", agentsMD, true},
 		{"CLAUDE.md", claudeMD, true},
 		{"docs/START.md", startMD, true},
+		{"docs/ROLES.md", rolesMD(), true},
 		{"docs/HANDOFF.md", handoffMD, false},
 	}
 }
@@ -294,6 +295,8 @@ Repository instructions live in each repository, not here.
    the session: ` + "`aicrew-agent session start -home <this directory>`" + `. When
    something is missing or refused, stop and ask the operator instead of
    improvising.
+6. **Your role.** ` + "`docs/ROLES.md`" + ` teaches your role's steps, the inbox rule and
+   how to write for others. Read it at the start of every session.
 
 ` + managedNote
 

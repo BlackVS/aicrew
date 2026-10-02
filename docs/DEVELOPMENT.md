@@ -547,7 +547,9 @@ aicrew-agent step recover
 
 Offers, acceptances, submissions, stops and other lifecycle messages reach
 a member's team inbox, each naming its attempt; a worker accepts an offer by
-the attempt ID its inbox shows. The client reads it through the launcher,
+the attempt ID its inbox shows, and reads the offer's base commit, branch,
+process pin, instruction digest and expiry from the offer's message. The
+agent home's managed `docs/ROLES.md` teaches each role these steps. The client reads it through the launcher,
 which holds the session, like a step:
 
 ```sh

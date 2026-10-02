@@ -4,6 +4,8 @@ package realaimem
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -70,7 +72,9 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	// The host-side commands reach the hub through its local socket.
 	host := h.hostEnv()
 
-	// 3. The project.
+	// 3. The project, and its process: a real repository, so the instruction
+	// digest is the manifest's at the pinned commit.
+	h.makeProcess()
 	h.must(host, nil, h.aimem(), "tasks", "on", "-p", projectID)
 	h.must(host, nil, h.aimem(), "process", "select", processRepo, processCommit, processManifest, "-p", projectID)
 
@@ -396,4 +400,44 @@ func (h *harness) restartAicrewd() {
 		resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	})
+}
+
+// makeProcess commits a process manifest to a repository of its own and
+// sets processCommit and instructionHash from it.
+func (h *harness) makeProcess() {
+	h.t.Helper()
+	h.processDir = h.mkdir(filepath.Join(h.root, "process"))
+	if err := os.MkdirAll(filepath.Join(h.processDir, "process"), 0o755); err != nil {
+		h.t.Fatal(err)
+	}
+	manifest := `{
+  "name": "e2e process",
+  "roles": ["coordinator", "worker", "independent"]
+}
+`
+	if err := os.WriteFile(filepath.Join(h.processDir, filepath.FromSlash(processManifest)), []byte(manifest), 0o644); err != nil {
+		h.t.Fatal(err)
+	}
+	env := h.isolatedEnv(h.processDir)
+	git := func(args ...string) string {
+		return strings.TrimSpace(h.must(env, nil, append([]string{"git", "-C", h.processDir, "-c", "user.name=e2e",
+			"-c", "user.email=e2e@example.test", "-c", "commit.gpgsign=false"}, args...)...))
+	}
+	git("init", "-q")
+	git("add", processManifest)
+	git("commit", "-q", "-m", "process")
+	processCommit = git("rev-parse", "HEAD")
+	instructionHash = h.processDigest(processCommit, processManifest)
+}
+
+// processDigest is the instruction digest of the process at commit, as a
+// member computes it: sha256 of the manifest's exact bytes there.
+func (h *harness) processDigest(commit, manifest string) string {
+	h.t.Helper()
+	out, err := exec.Command("git", "-C", h.processDir, "show", commit+":"+manifest).Output()
+	if err != nil {
+		h.t.Fatalf("read the manifest at %s: %v", commit, err)
+	}
+	sum := sha256.Sum256(out)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }

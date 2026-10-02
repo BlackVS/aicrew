@@ -115,7 +115,7 @@ func downgradeToV10(t *testing.T, path string) {
 		schemaV6[1], schemaV6[3],
 		// Tables and columns added after v10.
 		`DROP TABLE session_tokens`, `DROP TABLE session_handles`, `DROP TABLE introspection_credentials`,
-		`ALTER TABLE messages DROP COLUMN attempt_id`,
+		`ALTER TABLE messages DROP COLUMN offer`, `ALTER TABLE messages DROP COLUMN attempt_id`,
 		`UPDATE schema_version SET version = 10`)
 	tx, err := db.Begin()
 	if err != nil {
@@ -475,9 +475,49 @@ func dropRecoveredColumns(t *testing.T, raw *sql.DB) {
 	}
 }
 
+// dropMessageOffer takes a store back to v20.
+func dropMessageOffer(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	if _, err := raw.Exec(`ALTER TABLE messages DROP COLUMN offer`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Schema v21 adds the offer an announcement carries to a populated v20
+// store and keeps every message, none of them carrying one.
+func TestMigrationV21AddsTheMessagesOffer(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropMessageOffer(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 20`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v20 store: %v", err)
+	}
+	defer s2.Close()
+	var after, offers int
+	if err := s2.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(offer, '')) FROM messages`).Scan(&after, &offers); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || before == 0 || offers != 0 {
+		t.Fatalf("after v21: %d messages (was %d), %d carrying an offer", after, before, offers)
+	}
+}
+
 // dropMessageAttempt takes a store back to v19.
 func dropMessageAttempt(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropMessageOffer(t, raw)
 	if _, err := raw.Exec(`ALTER TABLE messages DROP COLUMN attempt_id`); err != nil {
 		t.Fatal(err)
 	}

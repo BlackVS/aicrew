@@ -1013,6 +1013,15 @@ route, the coordinator supplies the pin and the digest (D-b1(a), D-b1a-3):
 - The digest is not authoritative: a wrong one can only make acceptance
   fail.
 
+**The instruction digest** is `sha256:` followed by the lowercase hex
+SHA-256 of the process manifest's exact bytes at the pinned commit
+(`git show <commit>:<manifest>`), with nothing normalized. The coordinator
+computes it for an offer, and the worker computes it again from its own clone
+before accepting; equal digests show both read the same manifest. The offer's
+announcement carries the pin and the digest with the base commit, branch and
+expiry, so the worker reads them from its inbox ("Inbox, receipts and
+audit").
+
 The independent claim works the same way: the claimer supplies the pin and
 the digest, and the claim's fact carries the pin for aimem to compare.
 
@@ -1066,7 +1075,11 @@ Each team has one durable, ordered message log with a monotonic sequence.
   review, stop or recovery are written in the same local transaction as the
   transition they announce. Each names the attempt it announces
   (`attempt_id`), so a worker learns an offer's attempt ID from its own
-  inbox, with nothing relayed; a member's own message names none.
+  inbox, with nothing relayed; a member's own message names none. The
+  offer's announcement also carries the offer (`offer`: `base_commit`,
+  `branch`, `process {repo, commit, manifest}`, `instruction_digest` and
+  `expires_at`), from which the worker verifies the pin and starts its
+  worktree; no other message carries one.
 - **Reading over the session API.** A member reads its inbox with
   `GET /v1/crew/inbox` and acknowledges with `POST /v1/crew/inbox/ack`, as
   its session token's session and generation ("Client session API"); its

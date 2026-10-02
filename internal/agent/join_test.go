@@ -330,7 +330,7 @@ func TestJoinEndToEnd(t *testing.T) {
 		t.Fatalf("agent.json %v", doc)
 	}
 	managed, _ := doc["managed"].(map[string]any)
-	for _, f := range []string{"AGENTS.md", "CLAUDE.md", "docs/START.md"} {
+	for _, f := range []string{"AGENTS.md", "CLAUDE.md", "docs/START.md", "docs/ROLES.md"} {
 		b, err := os.ReadFile(filepath.Join(e.home, filepath.FromSlash(f)))
 		if err != nil || managed[f] != digestOf(b) {
 			t.Fatalf("%s: digest %v, %v", f, managed[f], err)
@@ -397,7 +397,7 @@ func TestJoinRerunLinkedHome(t *testing.T) {
 		t.Fatalf("rerun after edits: %+v", rep)
 	}
 	want := map[string]string{"AGENTS.md": "conflict", "CLAUDE.md": "update", "docs/START.md": "unchanged",
-		"docs/HANDOFF.md": "kept"}
+		"docs/ROLES.md": "unchanged", "docs/HANDOFF.md": "kept"}
 	for _, c := range rep.Changes {
 		if want[c.Path] != c.Action {
 			t.Fatalf("%s: %s, want %s", c.Path, c.Action, want[c.Path])
@@ -864,4 +864,58 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// A home made before the role guidance gets docs/ROLES.md and the START.md
+// that points to it on its next rerun, which reports restart_required; a
+// ROLES.md the agent edited is kept, with the new version beside it
+// (pilot G2).
+func TestJoinAddsRoleGuidance(t *testing.T) {
+	e := setupJoin(t)
+	code := e.invite(t, "inv-1", store.RoleWorker)
+	e.join(t, e.opts(), &recCrew{}, activeAimem(), code)
+	path := func(p string) string { return filepath.Join(e.home, filepath.FromSlash(p)) }
+
+	// Back to a home of the previous release: the older START.md, recorded
+	// as its last managed write, and no ROLES.md.
+	olderStart := strings.Replace(startMD, "6. **Your role.**", "", 1)
+	os.WriteFile(path("docs/START.md"), []byte(olderStart), 0o644)
+	os.Remove(path("docs/ROLES.md"))
+	doc := readJSON(t, path("agent.json"))
+	managed := doc["managed"].(map[string]any)
+	managed["docs/START.md"] = digestOf([]byte(olderStart))
+	delete(managed, "docs/ROLES.md")
+	raw, _ := json.Marshal(doc)
+	os.WriteFile(path("agent.json"), raw, 0o644)
+
+	rep, _ := e.join(t, JoinOptions{Home: e.home}, &recCrew{}, activeAimem())
+	if rep.Status != JoinRestartRequired {
+		t.Fatalf("rerun of an older home: %+v", rep)
+	}
+	want := map[string]string{"docs/START.md": "update", "docs/ROLES.md": "create"}
+	for _, c := range rep.Changes {
+		if w, ok := want[c.Path]; ok && w != c.Action {
+			t.Fatalf("%s: %s, want %s", c.Path, c.Action, w)
+		}
+	}
+	start, _ := os.ReadFile(path("docs/START.md"))
+	roles, _ := os.ReadFile(path("docs/ROLES.md"))
+	if string(start) != startMD || !strings.Contains(string(start), "docs/ROLES.md") || string(roles) != rolesMD() {
+		t.Fatal("the rerun did not write the role guidance and the START.md that points to it")
+	}
+
+	edited := string(roles) + "\nMy own note.\n"
+	os.WriteFile(path("docs/ROLES.md"), []byte(edited), 0o644)
+	rep, _ = e.join(t, JoinOptions{Home: e.home}, &recCrew{}, activeAimem())
+	for _, c := range rep.Changes {
+		if c.Path == "docs/ROLES.md" && c.Action != "conflict" {
+			t.Fatalf("an edited ROLES.md: %s, want conflict", c.Action)
+		}
+	}
+	if b, _ := os.ReadFile(path("docs/ROLES.md")); string(b) != edited {
+		t.Fatal("the agent's edit of ROLES.md was overwritten")
+	}
+	if b, _ := os.ReadFile(path("docs/ROLES.md.aicrew-new")); string(b) != rolesMD() {
+		t.Fatal("no new version beside the edited ROLES.md")
+	}
 }

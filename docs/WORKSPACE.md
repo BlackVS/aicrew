@@ -72,7 +72,7 @@ other key as it finds it:
     "team_id": "01a0..."
   },
   "clients": ["claude"],
-  "managed": {"AGENTS.md": "sha256:...", "CLAUDE.md": "sha256:...", "docs/START.md": "sha256:...",
+  "managed": {"AGENTS.md": "sha256:...", "CLAUDE.md": "sha256:...", "docs/START.md": "sha256:...", "docs/ROLES.md": "sha256:...",
               ".mcp.json#mcpServers.aimem": "sha256:..."}
 }
 ```
@@ -209,12 +209,30 @@ Onboarding writes `docs/START.md` (managed). It tells the agent:
    never managed.
 5. How to verify readiness (versions, client, MCP and skills) and when to
    stop and ask instead of improvising.
+6. That `docs/ROLES.md` (managed) teaches its role.
+
+`docs/ROLES.md` holds the guidance every member follows and one section per
+role (coordinator, worker, independent), since a member's role can change
+and a refresh does not ask aicrewd. It teaches:
+- each transition as an `aicrew-agent step` command with an example body;
+- the inbox rule: read at session start and after each step, act only on
+  what the inbox or one's own step answers show, and acknowledge what was
+  handled;
+- the exit codes, following a refusal's next action, and never another
+  credential;
+- the instruction digest's definition (`docs/CREW-CONTRACT.md`, "Process
+  pins");
+- an interim rule for human-readable persisted text, which aimem task
+  01a0d996-616b's canonical rule will replace.
+
+Its operations are tested to be exactly the launcher's, and each example
+body to decode into aicrewd's body for its route.
 
 ## Managed files and repeated setup
 
 | Class | Files | Setup may |
 | --- | --- | --- |
-| Managed | `AGENTS.md`, `CLAUDE.md`, `docs/START.md`, managed keys in `agent.json` | create; update only if unchanged since its last write |
+| Managed | `AGENTS.md`, `CLAUDE.md`, `docs/START.md`, `docs/ROLES.md`, managed keys in `agent.json` | create; update only if unchanged since its last write |
 | Agent-owned | `docs/HANDOFF.md`, other `docs/` notes | create once if missing; never change |
 | Protected | `creds/`, `repos/`, `worktrees/`, `state/`, `logs/`, provider logins, unknown files | never change, move or delete |
 

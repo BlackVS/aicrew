@@ -207,6 +207,19 @@ func (h *harness) prepareMember(sp memberSpec, aEnv []string) *member {
 	mem := &member{name: name, role: role, dir: dir, userID: user.ID, home: filepath.Join(dir, "a"), token: tok.Secret}
 	h.knowSecret(tok.Secret)
 	mem.env = h.isolatedEnv(dir)
+	// The member's aimem installation is the one in its agent home (D-STORE),
+	// which aicrew-agent gives every aimem process it starts there: the
+	// operator provisions it with the home's two variables.
+	installation := h.mkdir(filepath.Join(mem.home, "aimem"))
+	for i, kv := range mem.env {
+		switch k, _, _ := strings.Cut(kv, "="); k {
+		case "AIMEM_STATE_DIR":
+			mem.env[i] = k + "=" + installation
+		case "AIMEM_SOCKET":
+			mem.env[i] = k + "=" + filepath.Join(installation, "aimem.sock")
+		}
+	}
+	h.checkIsolated(mem.env)
 	codeFile := filepath.Join(h.mkdir(filepath.Join(h.root, "codes")), name+".code")
 	h.must(aEnv, nil, filepath.Join(h.bin, "aicrew"), "invitation", "issue",
 		"-store", h.storePath, "-team", h.teamID, "-role", role, "-hub", h.hubID, "-label", name,

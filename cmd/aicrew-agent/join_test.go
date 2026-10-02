@@ -19,7 +19,7 @@ func noJoinDeps(t *testing.T) agent.JoinDeps {
 			t.Fatal("aicrewd was called")
 			return nil, nil
 		},
-		Aimem: func(string, string) agent.JoinAimem {
+		Aimem: func(string, string, string) agent.JoinAimem {
 			t.Fatal("aimem was called")
 			return nil
 		},

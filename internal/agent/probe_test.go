@@ -41,6 +41,10 @@ func probeMain(args []string) (int, bool) {
 		return 0, false
 	}
 	switch args[0] {
+	case "probe-client", "probe-grandchild":
+		guardOrExit(args[0])
+	}
+	switch args[0] {
 	case "probe-client":
 		return probeClient(args[1]), true
 	case "probe-grandchild":
@@ -115,7 +119,7 @@ func probeLauncher(home, dir string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	e := NewEngine(cfg, crew, ExecAimem{Command: cfg.AimemCommand}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	e := NewEngine(cfg, crew, ExecAimem{Command: cfg.AimemCommand, Home: cfg.Home}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	self, _ := os.Executable()
 	code, err := RunClient(context.Background(), e, Client{Path: self, Args: []string{"probe-client", dir}},
 		Stdio{Out: io.Discard, Err: io.Discard}, nil)

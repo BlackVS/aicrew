@@ -22,6 +22,10 @@ func TestMain(m *testing.M) {
 	}
 	if root := os.Getenv("AICREW_FAKE_AIMEM_ROOT"); root != "" && len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "identity", "team-session", "reservation", "mcp":
+			guardOrExit("aimem")
+		}
+		switch os.Args[1] {
 		case "identity", "team-session":
 			os.Exit(fakeAimem(root, os.Args[1:]))
 		case "reservation":

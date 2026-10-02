@@ -37,6 +37,7 @@ func (e joinExec) Credential(ctx context.Context) (CredentialStatus, bool, error
 		return CredentialStatus{}, false, errors.New("the aimem hub name is required")
 	}
 	cmd := exec.CommandContext(ctx, e.Command, "hub", "credential", e.Hub, "--json")
+	cmd.Env = e.environ("")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

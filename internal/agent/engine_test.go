@@ -135,6 +135,7 @@ func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
 	os.MkdirAll(home, 0o700)
 	os.MkdirAll(root, 0o700)
 	t.Setenv("AICREW_FAKE_AIMEM_ROOT", root)
+	foreignInstallation(t, home)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +171,7 @@ func (c *crewEnv) engine(t *testing.T) *Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewEngine(c.cfg, crew, ExecAimem{Command: c.cfg.AimemCommand}, slog.New(slog.NewTextHandler(c.logs, nil)))
+	return NewEngine(c.cfg, crew, ExecAimem{Command: c.cfg.AimemCommand, Home: c.cfg.Home}, slog.New(slog.NewTextHandler(c.logs, nil)))
 }
 
 func (c *crewEnv) handleActive(t *testing.T, handle string) bool {

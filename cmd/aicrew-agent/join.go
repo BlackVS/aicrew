@@ -25,8 +25,8 @@ const joinUsage = `usage: aicrew-agent join -label LABEL [-home DIR] -url https:
 func joinDeps(stderr io.Writer) agent.JoinDeps {
 	return agent.JoinDeps{
 		Crew: func(cfg agent.Config) (agent.InvitationAPI, error) { return agent.NewCrew(cfg, nil) },
-		Aimem: func(command, hub string) agent.JoinAimem {
-			return agent.ExecAimem{Command: command, Hub: hub}.JoinAimem()
+		Aimem: func(command, hub, home string) agent.JoinAimem {
+			return agent.ExecAimem{Command: command, Hub: hub, Home: home}.JoinAimem()
 		},
 		ReadCode: func() (string, error) { return agent.ReadHidden(os.Stdin, stderr, "Invitation code: ") },
 		Out:      stderr,

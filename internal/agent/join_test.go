@@ -37,6 +37,7 @@ func init() {
 	if mode == "" {
 		return
 	}
+	guardOrExit("aimem")
 	args := os.Args[1:]
 	if len(args) != 4 || args[0] != "hub" || args[1] != "credential" || args[3] != "--json" {
 		fmt.Fprintf(os.Stderr, "unexpected arguments %q\n", args)
@@ -176,6 +177,7 @@ func setupJoin(t *testing.T) *joinEnv {
 	certFile, keyFile, pin := writeCert(t, dir)
 	e := &joinEnv{path: filepath.Join(dir, "aicrew.db"), pin: pin, ver: &joinVerifier{hub: "hub-test", user: "user-1"},
 		home: filepath.Join(dir, "agents", "builder")}
+	foreignInstallation(t, e.home)
 	st, err := store.Open(ctx, e.path)
 	if err != nil {
 		t.Fatal(err)
@@ -236,7 +238,7 @@ func (e *joinEnv) deps(crew *recCrew, am *fakeJoinAimem, reads *int, codes ...st
 			crew.InvitationAPI = c
 			return crew, err
 		},
-		Aimem: func(string, string) JoinAimem { return am },
+		Aimem: func(string, string, string) JoinAimem { return am },
 		ReadCode: func() (string, error) {
 			*reads++
 			if *reads > len(codes) {
@@ -330,11 +332,16 @@ func TestJoinEndToEnd(t *testing.T) {
 		t.Fatalf("agent.json %v", doc)
 	}
 	managed, _ := doc["managed"].(map[string]any)
-	for _, f := range []string{"AGENTS.md", "CLAUDE.md", "docs/START.md", "docs/ROLES.md"} {
+	for _, f := range []string{"AGENTS.md", "CLAUDE.md", "docs/START.md", "docs/ROLES.md", ".claude/settings.json"} {
 		b, err := os.ReadFile(filepath.Join(e.home, filepath.FromSlash(f)))
 		if err != nil || managed[f] != digestOf(b) {
 			t.Fatalf("%s: digest %v, %v", f, managed[f], err)
 		}
+	}
+	// The carrier names the home's own installation, by absolute paths.
+	if b, _ := os.ReadFile(filepath.Join(e.home, ".claude", "settings.json")); string(b) != claudeSettings(e.home) ||
+		!strings.Contains(string(b), strconvQuote(filepath.Join(e.home, "aimem"))) {
+		t.Fatalf("settings.json %s", b)
 	}
 	if _, ok := managed["docs/HANDOFF.md"]; ok {
 		t.Fatal("the agent-owned handoff is recorded as managed")
@@ -384,6 +391,7 @@ func TestJoinRerunLinkedHome(t *testing.T) {
 	os.WriteFile(path("AGENTS.md"), []byte(edited), 0o644)
 	os.WriteFile(path("docs/HANDOFF.md"), []byte("my notes\n"), 0o644)
 	os.WriteFile(path("notes.txt"), []byte("unknown\n"), 0o644)
+	os.WriteFile(path(".claude/settings.json"), []byte(`{"env": {}}`+"\n"), 0o644)
 	os.WriteFile(path("creds/aimem.main.agent"), []byte("material\n"), 0o600)
 	doc := readJSON(t, path("agent.json"))
 	doc["managed"].(map[string]any)["CLAUDE.md"] = digestOf([]byte(old))
@@ -397,14 +405,15 @@ func TestJoinRerunLinkedHome(t *testing.T) {
 		t.Fatalf("rerun after edits: %+v", rep)
 	}
 	want := map[string]string{"AGENTS.md": "conflict", "CLAUDE.md": "update", "docs/START.md": "unchanged",
-		"docs/ROLES.md": "unchanged", "docs/HANDOFF.md": "kept"}
+		"docs/ROLES.md": "unchanged", "docs/HANDOFF.md": "kept", ".claude/settings.json": "conflict"}
 	for _, c := range rep.Changes {
 		if want[c.Path] != c.Action {
 			t.Fatalf("%s: %s, want %s", c.Path, c.Action, want[c.Path])
 		}
 	}
 	for p, content := range map[string]string{"CLAUDE.md": claudeMD, "AGENTS.md": edited, "AGENTS.md.aicrew-new": agentsMD,
-		"docs/HANDOFF.md": "my notes\n", "notes.txt": "unknown\n", "creds/aimem.main.agent": "material\n"} {
+		"docs/HANDOFF.md": "my notes\n", "notes.txt": "unknown\n", "creds/aimem.main.agent": "material\n",
+		".claude/settings.json.aicrew-new": claudeSettings(e.home)} {
 		if b, _ := os.ReadFile(path(p)); string(b) != content {
 			t.Fatalf("%s is %q", p, b)
 		}
@@ -586,7 +595,9 @@ func TestJoinCredentialCheck(t *testing.T) {
 		{"refused", &fakeJoinAimem{known: true, cred: CredentialStatus{Credential: "set", State: "refused"}}, "credential_refused"},
 		{"unreachable", &fakeJoinAimem{known: true, cred: CredentialStatus{Credential: "set", State: "unreachable",
 			Detail: "dial tcp: refused"}}, "aimem_unreachable"},
-		{"aimem failed", &fakeJoinAimem{credErr: errors.New(`aimem hub credential failed: hub "main" is not configured`)},
+		{"unprovisioned", &fakeJoinAimem{credErr: errors.New(`aimem hub credential failed: hub "main" is not configured`)},
+			"credential_missing"},
+		{"aimem failed", &fakeJoinAimem{credErr: errors.New(`aimem hub credential failed: permission denied`)},
 			"aimem_failed"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -795,7 +806,7 @@ func TestJoinMalformedCredentialAnswerStops(t *testing.T) {
 			crew := &recCrew{}
 			reads := 0
 			deps := e.deps(crew, nil, &reads, e.invite(t, "inv-1", store.RoleWorker))
-			deps.Aimem = func(_, hub string) JoinAimem { return ExecAimem{Command: self, Hub: hub}.JoinAimem() }
+			deps.Aimem = func(_, hub, home string) JoinAimem { return ExecAimem{Command: self, Hub: hub, Home: home}.JoinAimem() }
 			rep, err := Join(context.Background(), e.opts(), deps)
 			if err != nil || rep.Status != JoinBlocked || rep.Reason != "aimem_failed" || reads != 0 || len(crew.beginKeys) != 0 {
 				t.Fatalf("%+v, %v, %d reads, begins %v", rep, err, reads, crew.beginKeys)
@@ -804,6 +815,32 @@ func TestJoinMalformedCredentialAnswerStops(t *testing.T) {
 				t.Fatal("the refused run created the home")
 			}
 		})
+	}
+}
+
+// join reads the credential from the home's installation (D-STORE): one that
+// does not know the hub yet is a home to provision, and the instruction
+// names the home's two variables.
+func TestJoinUnprovisionedHome(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := setupJoin(t)
+	t.Setenv(joinFakeEnv, "unknown-hub")
+	crew := &recCrew{}
+	reads := 0
+	deps := e.deps(crew, nil, &reads, e.invite(t, "inv-1", store.RoleWorker))
+	deps.Aimem = func(_, hub, home string) JoinAimem { return ExecAimem{Command: self, Hub: hub, Home: home}.JoinAimem() }
+	rep, err := Join(context.Background(), e.opts(), deps)
+	if err != nil || rep.Status != JoinBlocked || rep.Reason != "credential_missing" || reads != 0 {
+		t.Fatalf("%+v, %v", rep, err)
+	}
+	for _, want := range []string{"AIMEM_STATE_DIR=" + AimemDir(e.home), "AIMEM_SOCKET=" + AimemSocket(e.home),
+		"aimem hub add main", "aimem hub task-token main"} {
+		if !strings.Contains(rep.Instruction, want) {
+			t.Fatalf("instruction %q lacks %q", rep.Instruction, want)
+		}
 	}
 }
 

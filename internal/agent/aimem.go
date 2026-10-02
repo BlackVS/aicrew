@@ -38,6 +38,23 @@ type Aimem interface {
 type ExecAimem struct {
 	Command string
 	Hub     string // aimem's hub name; empty for its default
+	// Home is the agent home whose aimem installation every call uses
+	// (D-STORE), whatever the caller's environment names.
+	Home string
+}
+
+// environ is the environment of an aimem call: the caller's, with the
+// home's installation and the given team session file, or none: a session
+// file the caller inherited belongs to another installation.
+func (a ExecAimem) environ(sessionFile string) []string {
+	env := os.Environ()
+	if a.Home != "" {
+		env = HomeAimemEnv(env, a.Home)
+	}
+	if sessionFile != "" {
+		return ScopedEnv(env, sessionFile)
+	}
+	return withoutEnv(env, SessionEnv)
 }
 
 func (a ExecAimem) hubArgs() []string {
@@ -52,6 +69,7 @@ func (a ExecAimem) hubArgs() []string {
 // failure.
 func (a ExecAimem) run(ctx context.Context, stdin string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, a.Command, args...)
+	cmd.Env = a.environ("")
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin + "\n")
 	}
@@ -110,6 +128,7 @@ func (a ExecAimem) Close(ctx context.Context, sessionID string) error {
 
 func (a ExecAimem) Status(ctx context.Context, sessionID string) (string, bool, error) {
 	cmd := exec.CommandContext(ctx, a.Command, "team-session", "status", sessionID)
+	cmd.Env = a.environ("")
 	out, err := cmd.Output()
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
@@ -200,7 +219,7 @@ func (s *serialAimem) Status(ctx context.Context, sessionID string) (string, boo
 // an error.
 func (a ExecAimem) Reservation(ctx context.Context, sessionFile string, stdin []byte, args ...string) (int, []byte, error) {
 	cmd := exec.CommandContext(ctx, a.Command, append([]string{"reservation"}, args...)...)
-	cmd.Env = ScopedEnv(os.Environ(), sessionFile)
+	cmd.Env = a.environ(sessionFile)
 	cmd.Stdin = bytes.NewReader(stdin)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -220,7 +239,7 @@ func (a ExecAimem) Reservation(ctx context.Context, sessionFile string, stdin []
 // CLI, which reads the task the same way.
 func (a ExecAimem) GetTask(ctx context.Context, sessionFile, taskID string) (TaskDoc, error) {
 	cmd := exec.CommandContext(ctx, a.Command, "mcp")
-	cmd.Env = ScopedEnv(os.Environ(), sessionFile)
+	cmd.Env = a.environ(sessionFile)
 	var in bytes.Buffer
 	for _, m := range []map[string]any{
 		{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2024-11-05",

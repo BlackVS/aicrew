@@ -42,6 +42,11 @@ func ScopedEnv(env []string, path string) []string { return withEnv(env, Session
 
 // withEnv returns env with name set to value, replacing any value it had.
 func withEnv(env []string, name, value string) []string {
+	return append(withoutEnv(env, name), name+"="+value)
+}
+
+// withoutEnv returns env without name.
+func withoutEnv(env []string, name string) []string {
 	out := make([]string, 0, len(env)+1)
 	for _, kv := range env {
 		n, _, _ := strings.Cut(kv, "=")
@@ -50,7 +55,7 @@ func withEnv(env []string, name, value string) []string {
 		}
 		out = append(out, kv)
 	}
-	return append(out, name+"="+value)
+	return out
 }
 
 // serveSteps serves the step channel for the client and finishes the steps
@@ -104,7 +109,7 @@ func RunClient(ctx context.Context, e *Engine, c Client, stdio Stdio, signals <-
 	}
 	cmd := exec.Command(c.Path, c.Args...)
 	cmd.Dir = e.Cfg.Home
-	cmd.Env = withEnv(ScopedEnv(os.Environ(), e.AimemFile()), HomeEnv, home)
+	cmd.Env = withEnv(HomeAimemEnv(ScopedEnv(os.Environ(), e.AimemFile()), home), HomeEnv, home)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio.In, stdio.Out, stdio.Err
 	bindToLauncher(cmd)
 	// A stop that arrived after the startup ended keeps the client from

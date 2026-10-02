@@ -134,7 +134,7 @@ func defaultEngine(cfg agent.Config, log *slog.Logger) (*agent.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return agent.NewEngine(cfg, crew, agent.ExecAimem{Command: cfg.AimemCommand, Hub: cfg.AimemHub}, log), nil
+	return agent.NewEngine(cfg, crew, agent.ExecAimem{Command: cfg.AimemCommand, Hub: cfg.AimemHub, Home: cfg.Home}, log), nil
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, build engineFor) int {
@@ -189,7 +189,7 @@ func status(ctx context.Context, cfg agent.Config, stdout io.Writer, log *slog.L
 		fmt.Fprintln(stdout, `{"session": null}`)
 		return exitOK
 	}
-	a := agent.Serialize(agent.ExecAimem{Command: cfg.AimemCommand, Hub: cfg.AimemHub}, agent.LockDir(cfg.Home))
+	a := agent.Serialize(agent.ExecAimem{Command: cfg.AimemCommand, Hub: cfg.AimemHub, Home: cfg.Home}, agent.LockDir(cfg.Home))
 	path, bound, err := a.Status(ctx, st.SessionID)
 	view := map[string]any{"session": st, "aimem_bound": bound}
 	if err != nil {

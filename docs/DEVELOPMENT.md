@@ -363,6 +363,25 @@ bin/aicrew-agent join -label builder -url https://aicrew.example:8443 \
 bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh and check
 ```
 
+- **The operator provisions the home's aimem installation once, before
+  `join`** (`docs/WORKSPACE.md`, "The member's aimem installation"). With
+  the home's two variables set for these two commands only, it gives that
+  installation the hub and the member's individual credential:
+
+  ```sh
+  export AIMEM_STATE_DIR=~/aicrew/agents/builder/aimem   # absolute paths
+  export AIMEM_SOCKET=~/aicrew/agents/builder/aimem/aimem.sock
+  aimem hub add main https://aimem.example --token-file - [--ca-file ca.pem]
+  aimem hub task-token main --token-file -
+  ```
+
+  Each command reads the member's user-scoped token on standard input,
+  never from an argument. The member sets
+  nothing: `join`, `check` and `run` give every aimem process they start
+  these two variables, replacing inherited values. `join` writes the same
+  two variables into the home's `.claude/settings.json` and `.mcp.json`
+  for clients started there by hand. `CLAUDE_CONFIG_DIR` stays an optional
+  override of the member's Claude Code directory.
 - `-home` defaults to `~/aicrew/agents/<label>` (`%USERPROFILE%\aicrew\agents\<label>`
   on Windows). `-aimem-hub` is aimem's name for the hub whose identity the
   invitation names; `-aimem-command` overrides the `aimem` executable.
@@ -374,11 +393,11 @@ bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh and chec
   command refuses. A code with a typing error (its checksum) is caught
   before it costs an invitation attempt, and asked for again: at most three
   prompts in all.
-- Before the prompt it checks the installation's individual aimem
-  credential with `aimem hub credential <hub> --json`. A missing, refused or
-  unconfirmed credential stops the run with the instruction to install it
-  through aimem (`aimem hub task-token`), as does an answer that is not a
-  credential status. Only an aimem without that command (it answers with
+- Before the prompt it checks the individual aimem credential in the home's
+  installation with `aimem hub credential <hub> --json`. A missing, refused
+  or unconfirmed credential, or a hub that installation does not know, stops
+  the run with the provisioning instruction above. An answer that is not a
+  credential status stops it too. Only an aimem without that command (it answers with
   its usage) is left to the identity proof, and a proof that names the
   missing credential gives the same instruction.
 - It then begins the redemption, proves the identity with
@@ -404,8 +423,12 @@ bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh and chec
   or failed, 2 on usage. A blocked check leaves the home linked: rerun
   after following its instructions. It opens no session: it prints the
   `session start` command.
-- It writes no secret. `creds/` is created empty and owner-only; the
-  individual aimem credential stays in aimem's own storage.
+- It writes no secret. `creds/` is created empty and owner-only. `aimem/`
+  is created owner-only, or restricted if the operator's provisioning created
+  it; the individual aimem credential stays there, in aimem's own storage.
+- It writes the managed `.claude/settings.json` (`env`: the home's
+  `AIMEM_STATE_DIR` and `AIMEM_SOCKET`, absolute), under the same digest
+  rule as the guidance files.
 
 ### Checking dependencies and clients: `aicrew-agent check`
 
@@ -414,11 +437,11 @@ bin/aicrew-agent check -home ~/aicrew/agents/builder [-client claude|opencode] [
 bin/aicrew-agent version [-json]
 ```
 
-The check (`join` runs it at its end) installs nothing. Members who share
-one OS account each set their own `AIMEM_STATE_DIR` and `CLAUDE_CONFIG_DIR`
-in their shell before `join`, `check` and `run`: the check probes Claude
-Code with that `CLAUDE_CONFIG_DIR`, and reads the member's user-level skills
-under it. It reports:
+The check (`join` runs it at its end) installs nothing. It runs every aimem
+call and client probe with the home's aimem installation, as `run` does. A
+member who shares an OS account sets nothing for aimem. `CLAUDE_CONFIG_DIR`
+is optional: when set, the check probes Claude Code with it and reads the
+member's user-level skills under it. It reports:
 
 - **Versions against the supported set**, which is embedded in the build
   (`internal/agent/supported.json`):
@@ -432,15 +455,31 @@ under it. It reports:
   Older than the minimum gives `blocked`. Newer than tested gives a notice.
   A source build's or an unrecorded version is "unknown": a notice that
   neither blocks nor counts as supported.
+- **The home's aimem installation.**
+  - **The credential.** The home's installation must hold an individual
+    credential for `agent.json`'s `aimem_hub`. A missing or refused one, or
+    an unknown hub, blocks with the provisioning instruction; an
+    unreachable hub gives a notice.
+  - **The carriers.** `.claude/settings.json` and the `.mcp.json` aimem
+    entry must name the home's installation; a carrier that does not blocks
+    (rerun `join`, merging any `.aicrew-new`). This check applies when
+    Claude Code is selected.
+  - **Notices, without blocking:**
+    - `AIMEM_*` variables in the environment or in `~/.config/aimem/env`
+      that name another installation, reported by name only;
+    - an aimem MCP server at user scope, or at local scope for the home, in
+      Claude Code's `.claude.json`;
+    - a socket path over the Unix limit.
 - **The client wiring.** One MCP entry per selected client, inside the
   home only: `.mcp.json` `mcpServers.aimem` for Claude Code, and
   `opencode.json` `mcp.aimem` for OpenCode, both running
-  `<aimem_command> mcp`.
+  `<aimem_command> mcp`. Claude Code's entry carries the home's
+  `AIMEM_STATE_DIR` and `AIMEM_SOCKET` in its `env`.
   - The entry is managed like the guidance files: added when missing,
     updated only while it matches its recorded digest, and otherwise left
     alone with the proposed file written as `<file>.aicrew-new`.
   - Other keys in those files are kept.
-  - No hook is installed, and no user-level client configuration is read or
+  - No hook is installed, and no user-level client configuration is
     written.
 - **What the client sees.** Each selected client is asked whether aimem's
   MCP server runs in the home and whether the required skills are

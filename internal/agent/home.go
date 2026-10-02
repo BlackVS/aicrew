@@ -24,8 +24,8 @@ const LayoutVersion = 1
 
 // homeDirs are created when missing; privateDirs are also made owner-only.
 var (
-	homeDirs    = []string{"docs", "logs", "work", "repos", "worktrees"}
-	privateDirs = []string{"creds", "state"}
+	homeDirs    = []string{"docs", "logs", "work", "repos", "worktrees", ".claude"}
+	privateDirs = []string{"creds", "state", aimemDirName}
 )
 
 // homeFile is a file the bootstrap writes. A managed file follows the
@@ -36,15 +36,17 @@ type homeFile struct {
 	managed bool
 }
 
-// entryFiles are the managed client entry files and the home guidance; a
-// change to one of them means an open client should restart.
-func homeFiles() []homeFile {
+// homeFiles are the managed client entry files, the home guidance and the
+// Claude Code settings carrying the home's aimem installation; a change to
+// one of them means an open client should restart.
+func homeFiles(home string) []homeFile {
 	return []homeFile{
 		{"AGENTS.md", agentsMD, true},
 		{"CLAUDE.md", claudeMD, true},
 		{"docs/START.md", startMD, true},
 		{"docs/ROLES.md", rolesMD(), true},
 		{"docs/HANDOFF.md", handoffMD, false},
+		{".claude/settings.json", claudeSettings(home), true},
 	}
 }
 
@@ -171,9 +173,9 @@ func writeAtomic(path string, data []byte) error {
 	return nil
 }
 
-// makeLayout creates the home's directories: creds/ and state/ owner-only
-// (restricted if they exist; their contents are never touched), the others
-// when missing.
+// makeLayout creates the home's directories: creds/, state/ and aimem/
+// owner-only (restricted if they exist; their contents are never touched),
+// the others when missing.
 func makeLayout(home string) error {
 	for _, d := range homeDirs {
 		if err := os.MkdirAll(filepath.Join(home, d), 0o755); err != nil {
@@ -195,7 +197,7 @@ func makeLayout(home string) error {
 // planFiles decides each home file's change against the recorded digests.
 func planFiles(home string, recorded map[string]string) ([]FileChange, error) {
 	var plan []FileChange
-	for _, f := range homeFiles() {
+	for _, f := range homeFiles(home) {
 		cur, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(f.path)))
 		switch {
 		case errors.Is(err, os.ErrNotExist):
@@ -222,7 +224,7 @@ func planFiles(home string, recorded map[string]string) ([]FileChange, error) {
 // It returns whether a managed file's existing content was replaced.
 func applyFiles(home string, plan []FileChange, rec map[string]string) (bool, error) {
 	files := map[string]homeFile{}
-	for _, f := range homeFiles() {
+	for _, f := range homeFiles(home) {
 		files[f.path] = f
 	}
 	replaced := false

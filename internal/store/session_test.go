@@ -548,3 +548,46 @@ func TestMigratesVersion1Store(t *testing.T) {
 		t.Fatalf("session on migrated store: %v", err)
 	}
 }
+
+// ListTeams lists every team, ordered by name then ID, with its projects and
+// the number of its current members; a removed member is not counted.
+func TestListTeams(t *testing.T) {
+	s, _ := openTemp(t)
+	ctx := context.Background()
+	if teams, err := s.ListTeams(ctx); err != nil || len(teams) != 0 {
+		t.Fatalf("an empty store lists %v, %v; want no teams", teams, err)
+	}
+	crewB := mustTeam(t, s, "t1", "crew-b", ProjectRef{HubID: "hub-a", ProjectID: "docs"})
+	crewA := mustTeam(t, s, "t2", "crew-a")
+	member(t, s, crewB.ID, "builder", RoleWorker)
+	member(t, s, crewB.ID, "tester", RoleWorker)
+	lead, _ := member(t, s, crewB.ID, "lead", RoleCoordinator)
+	ms, err := s.ListMembers(ctx, crewB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range ms {
+		if m.AgentID == lead.ID {
+			if err := s.RemoveMember(ctx, operator(t), "remove-lead", crewB.ID, lead.ID, m.Revision); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	teams, err := s.ListTeams(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(teams) != 2 || teams[0].ID != crewA.ID || teams[1].ID != crewB.ID {
+		t.Fatalf("teams = %+v, want crew-a then crew-b", teams)
+	}
+	if teams[0].Members != 0 || len(teams[0].Projects) != 0 {
+		t.Errorf("crew-a = %+v, want no members and no projects", teams[0])
+	}
+	if teams[1].Members != 2 {
+		t.Errorf("crew-b counts %d members, want the 2 current ones", teams[1].Members)
+	}
+	if len(teams[1].Projects) != 1 || teams[1].Projects[0] != (ProjectRef{HubID: "hub-a", ProjectID: "docs"}) {
+		t.Errorf("crew-b projects = %v", teams[1].Projects)
+	}
+}

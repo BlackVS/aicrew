@@ -213,6 +213,30 @@ aicrew, reading at most 30 times a minute (`docs/CREW-CONTRACT.md`,
 "Reconciliation by aicrewd"). It logs each recovered closure. Without the
 read credential the loop does not run.
 
+## Teams
+
+A team has a name and its intended projects (`HUB_ID/PROJECT_ID`; the list
+grants no aimem access, and aicrewd refuses an offer outside it). The
+operator manages teams with `aicrew`, which opens the store file directly:
+stop `aicrewd` first. Each command prints the team as JSON; `list` adds each
+team's member count and `show` its current members.
+
+```sh
+bin/aicrew team create   -store aicrew.db -name crew -project HUB_ID/PROJECT_ID
+bin/aicrew team list     -store aicrew.db
+bin/aicrew team show     -store aicrew.db -team TEAM
+bin/aicrew team projects -store aicrew.db -team TEAM -expect-revision N -project HUB_ID/PROJECT_ID
+bin/aicrew team rename   -store aicrew.db -team TEAM -expect-revision N -name crew-2
+```
+
+- `create` and `rename` refuse a name another team already has
+  (`team_exists`).
+- `projects` replaces the whole set; with no `-project` it clears it.
+  `projects` and `rename` apply only to the revision `show` or `list`
+  printed, and refuse a team that changed since (`revision_conflict`).
+- Members join through invitations (below); `aicrew team` does not change
+  membership.
+
 ## Invitations
 
 An invitation lets one agent join a team, or link or rebind an agent record

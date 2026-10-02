@@ -61,8 +61,7 @@ Every listener is on 127.0.0.1.
    - the identity.redeem and reservation.read credentials;
    - the team profile, with its grant.
 3. **aicrew.**
-   - The team, created through the store as its operator. There is no
-     operator command for it yet; that is a follow-up.
+   - The team with its project, created with `aicrew team create`.
    - The hub's outbound credential, issued with `aicrew
      introspection-credential issue`.
    - One invitation per member, issued with `aicrew invitation issue`.

@@ -5,6 +5,7 @@
 //	aicrew introspection-credential list   -store PATH [-hub HUB]
 //	aicrew introspection-credential revoke -store PATH -id ID
 //	aicrew invitation issue|list|revoke ... (see invitation.go)
+//	aicrew team create|list|show|projects|rename ... (see team.go)
 //	aicrew version [-json]
 //
 // -operations names what the new credential permits, comma-separated:
@@ -47,6 +48,7 @@ const usage = `usage:
   aicrew introspection-credential list   -store PATH [-hub HUB]
   aicrew introspection-credential revoke -store PATH -id ID
   aicrew invitation issue|list|revoke ...   (run "aicrew invitation" for its usage)
+  aicrew team create|list|show|projects|rename ...   (run "aicrew team" for its usage)
   aicrew version [-json]
 `
 
@@ -62,6 +64,9 @@ var writeSecret = func(f *os.File, bearer string) error {
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) >= 1 && args[0] == "invitation" {
 		return runInvitation(ctx, args[1:], stdout, stderr)
+	}
+	if len(args) >= 1 && args[0] == "team" {
+		return runTeam(ctx, args[1:], stdout, stderr)
 	}
 	if len(args) >= 1 && args[0] == "version" {
 		fs := flag.NewFlagSet("aicrew version", flag.ContinueOnError)

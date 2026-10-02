@@ -4,7 +4,6 @@ package realaimem
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -86,29 +85,16 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	h.hubID = m[1]
 
 	// 5. The aicrew store (aicrewd is not running yet: one process holds a
-	// store). The team is the operator's; there is no operator command for
-	// it yet, so the harness acts as the operator through the store.
+	// store). The operator creates the team with its project.
 	aDir := h.mkdir(filepath.Join(h.root, "aicrewd"))
 	h.storePath = filepath.Join(aDir, "aicrew.db")
-	ctx := context.Background()
-	st, err := store.Open(ctx, h.storePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	op, err := store.OperatorCaller("e2e-operator")
-	if err != nil {
-		t.Fatal(err)
-	}
-	team, err := st.CreateTeam(ctx, op, "e2e-team", store.NewTeam{Name: "e2e",
-		Projects: []store.ProjectRef{{HubID: h.hubID, ProjectID: projectID}}})
-	if err != nil {
-		t.Fatal(err)
+	aEnv := h.isolatedEnv(aDir)
+	var team store.Team
+	if err := json.Unmarshal([]byte(h.must(aEnv, nil, filepath.Join(h.bin, "aicrew"), "team", "create",
+		"-store", h.storePath, "-name", "e2e", "-project", h.hubID+"/"+projectID)), &team); err != nil || team.ID == "" {
+		t.Fatalf("aicrew team create printed no team: %v", err)
 	}
 	h.teamID = team.ID
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
-	aEnv := h.isolatedEnv(aDir)
 	h.must(aEnv, nil, filepath.Join(h.bin, "aicrew"), "introspection-credential", "issue",
 		"-store", h.storePath, "-hub", h.hubID, "-secret-file", introFile)
 	h.knowSecretFile(introFile)

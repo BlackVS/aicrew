@@ -55,7 +55,9 @@ command line) and `aicrew-agent` (each member's client).
 - `aicrew-agent check` verifies aimem, ai-skills and the client against a
   supported version set, and that the client sees aimem's MCP server and
   the required skills; it reports ready, restart required, or blocked with
-  exact instructions (#59, #62).
+  exact instructions (#59, #62). aimem v0.7.4, the first release with team
+  sessions and `aimem hub credential`, is the tested release, installed
+  through aimem's verifying installer (#74).
 
 ### Execution: attempts on aimem's reservations
 
@@ -65,9 +67,12 @@ command line) and `aicrew-agent` (each member's client).
 - Work updates (block, resume, submit), result review, confirmed delivery
   and finalize; stop and release of a running attempt (#19, #20, #43, #44).
 - Every transition that changes a task is a two-phase step: aicrewd records
-  the intent and issues a coordination proof, the member's client sends the
-  reservation to aimem, and the step settles from aimem's read scope, so a
-  lost reply never decides an outcome (#38, #39, #40, #41, #42, #48, #51).
+  the intent, the member's client sends the reservation to aimem, and the
+  step settles from aimem's read scope, so a lost reply never decides an
+  outcome. A step that needs aimem to ask aicrew carries a coordination
+  proof and settles by that proof's receipt; a work update (submit, block or
+  resume) carries none and settles by its request key (#38, #39, #40, #41,
+  #42, #44, #48, #51).
 - Process pins on every attempt, with the instruction digest defined over
   the pinned manifest's exact bytes, and dependency evidence read before an
   offer (#39, #58, #72).

@@ -11,3 +11,105 @@ request writes the next `[X.Y.Z] - YYYY-MM-DD` section here, from the titles
 of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
+
+## [0.1.0] - 2026-10-02
+
+The first release. aicrew runs a team of AI coding agents on top of aimem:
+aimem owns the tasks, their reservations and the team's knowledge, and
+aicrew owns the team, its members' sessions, the attempts and their
+delivery. This release covers one team on one aimem hub, ready for the
+first pilot: one coordinator, one worker, one project.
+
+It ships three binaries: `aicrewd` (the service), `aicrew` (the operator's
+command line) and `aicrew-agent` (each member's client).
+
+### Teams, members and the operator's commands
+
+- A store of agents, teams, their intended projects and memberships, with
+  roles (coordinator, worker, independent), one store per database file
+  and an audit of every change (#4, #13).
+- The operator's command line: `aicrew team` creates, lists, shows,
+  renames a team and sets its projects (#69); `aicrew invitation` issues,
+  lists and revokes invitations (#53); `aicrew introspection-credential`
+  issues, rotates and revokes aimem's credential (#24).
+
+### Sessions, identity and team context
+
+- Team sessions with generation fencing: a resume or an end fences the old
+  generation everywhere, and ends its live coordination proofs (#5, #70).
+- An agent is linked to its aimem identity through a proof aimem issues and
+  aicrew redeems over identity.v1, and gets a session token on a fresh
+  proof (#7, #25, #26).
+- aimem checks a team session online through aicrew's introspection
+  route, with its own credential and short-lived handles (#24).
+- The client session API over RFC 8693 token exchange: entry, resume,
+  handle refresh and leave, rate-limited (#23, #27, #28).
+
+### Onboarding
+
+- Single-use invitations for a team and role, redeemed with an identity
+  proof, recovering from lost replies and concurrent completions (#8, #9,
+  #12, #53).
+- `aicrew-agent join` redeems an invitation at a hidden prompt and prepares
+  the agent home: its layout, `agent.json` and managed guidance (#57, #60).
+- `aicrew-agent check` verifies aimem, ai-skills and the client against a
+  supported version set, and that the client sees aimem's MCP server and
+  the required skills; it reports ready, restart required, or blocked with
+  exact instructions (#59, #62).
+
+### Execution: attempts on aimem's reservations
+
+- Attempts with one execution capacity per agent: a coordinator offers a
+  task to a worker, who accepts or declines; an independent member claims
+  a task for itself (#16, #17, #18, #21, #22).
+- Work updates (block, resume, submit), result review, confirmed delivery
+  and finalize; stop and release of a running attempt (#19, #20, #43, #44).
+- Every transition that changes a task is a two-phase step: aicrewd records
+  the intent and issues a coordination proof, the member's client sends the
+  reservation to aimem, and the step settles from aimem's read scope, so a
+  lost reply never decides an outcome (#38, #39, #40, #41, #42, #48, #51).
+- Process pins on every attempt, with the instruction digest defined over
+  the pinned manifest's exact bytes, and dependency evidence read before an
+  offer (#39, #58, #72).
+- aicrewd's reconciler settles the steps crashed members left, and closes
+  attempts aimem recovered, through the read scope (#52, #54, #56).
+- A work update advances the reservation's fence, as aimem does (#61).
+
+### The member's client
+
+- `aicrew-agent session` keeps a member's team session and aimem's binding
+  of it, refreshing and resuming as needed (#29, #30, #31, #35).
+- `aicrew-agent run` starts Claude Code or OpenCode inside the session and
+  leaves when the client exits (#32, #33).
+- `aicrew-agent step` drives each transition through the launcher over a
+  private local socket, and recovers recorded steps after a crash (#45,
+  #46, #49).
+- The durable team inbox, and `aicrew-agent inbox`: lifecycle messages name
+  their attempt, and an offer's message carries what the worker needs to
+  start (#14, #15, #71, #72).
+- The managed `docs/ROLES.md` in each agent home teaches every role's steps,
+  the inbox rule and how to write for other readers (#72).
+
+### Testing, releases and CI
+
+- An end-to-end harness against a real aimem, with network, staleness,
+  process, recovery and secrets faults, and a verified skip-the-fault
+  matrix (#63, #65, #66).
+- A tag-driven release workflow that publishes the three binaries for
+  Linux, macOS and Windows with `SHA256SUMS` (#64).
+- CI on Linux, macOS and Windows, with the race detector on the agent,
+  server and store packages (#1, #50, #67, #68).
+
+### Fixes
+
+- Session routes' shared refusals use the documented envelope (#37); the
+  tests observe an oversized body's refusal without a transport race (#36).
+- Invalid UTF-8 is refused in stored text, and the input check no longer
+  races the time package (#15, #68).
+
+### Documents
+
+- The agent workspace convention, the crew membership and execution
+  contract, and the onboarding and identity-link contract (#2, #3, #6, #10,
+  #11), with the review-gate rule for base-only updates (#55) and a
+  proposal for an operator seat (#47).

@@ -336,6 +336,10 @@ func setupCheck(t *testing.T, f fakeTools, tools ...string) *checkEnv {
 	t.Setenv("HOME", e.user)
 	t.Setenv("USERPROFILE", e.user)
 	t.Setenv("XDG_CONFIG_HOME", "")
+	// The developer's own Claude Code directory must not reach the check:
+	// unset, and restored afterwards.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	os.Unsetenv("CLAUDE_CONFIG_DIR")
 	raw, _ := json.Marshal(f)
 	t.Setenv(fakeToolsEnv, string(raw))
 	t.Setenv("CLAUDECODE", "1") // the calling session's variables must not reach a client
@@ -421,6 +425,21 @@ func hasInstruction(rep CheckReport, sub string) bool {
 }
 
 var readyTools = fakeTools{Aimem: "aimem v0.7.4", Claude: "2.1.286 (Claude Code)", OpenCode: "1.18.32"}
+
+// A CLAUDE_CONFIG_DIR in the invoking shell, as a member on a shared account
+// has, does not leak into the fixture: the baseline home is still ready.
+func TestCheckFixtureIgnoresShellClaudeConfigDir(t *testing.T) {
+	shell := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", shell)
+	e := setupCheck(t, readyTools, "aimem", "claude")
+	if _, ok := os.LookupEnv("CLAUDE_CONFIG_DIR"); ok {
+		t.Fatal("setupCheck kept the shell's CLAUDE_CONFIG_DIR")
+	}
+	e.installSkills(t, "1.26.1", "oh-code-review")
+	if rep := e.check(t, "claude"); rep.Status != JoinRestartRequired || len(rep.Instructions) != 0 {
+		t.Fatalf("%+v", rep)
+	}
+}
 
 // A home with supported tools is wired and ready: the MCP entry is written
 // into the home only, the client sees aimem's server and the required skill,

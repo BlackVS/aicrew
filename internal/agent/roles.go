@@ -82,7 +82,8 @@ var guideRoles = []guideRole{
 		"finalize it as a worker does. A coordinator reviews and confirms its delivery.",
 		Steps: []guideStep{
 			{"claim", "", claimExample, "Claim a task for yourself, with the project's selected process and " +
-				"its digest (see \"The instruction digest\" above). The launcher reads the task's dependencies itself."},
+				"its digest (see \"The instruction digest\" above). aimem checks the task's dependencies when it " +
+				"takes the claim and refuses it while any is not DONE; read them first to avoid a refused claim."},
 		}},
 }
 

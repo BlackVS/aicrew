@@ -46,7 +46,7 @@ func TestRoleGuidanceContent(t *testing.T) {
 	for _, s := range []string{"## Coordinator", "## Worker", "## Independent", "## Every member",
 		"aicrew-agent session status", "aicrew-agent inbox", "inbox -ack", "at session start and after each step",
 		"lowercase hex SHA-256 of the manifest's exact bytes at the pinned commit", "01a0d996-616b",
-		"aicrew-agent step offer -body -", "aicrew-agent step accept -attempt ATTEMPT_ID -task TASK_ID",
+		"aicrew-agent step offer -body '{", "aicrew-agent step accept -attempt ATTEMPT_ID -task TASK_ID",
 		"never use another\ncredential", managedNote} {
 		if !strings.Contains(md, s) {
 			t.Errorf("ROLES.md lacks %q", s)
@@ -54,9 +54,12 @@ func TestRoleGuidanceContent(t *testing.T) {
 	}
 	for op, bodies := range GuidanceBodies() {
 		for _, b := range bodies {
-			if !json.Valid([]byte(b)) {
-				t.Errorf("%s: the example body is not JSON: %s", op, b)
+			if !json.Valid([]byte(b)) || strings.Contains(b, "'") {
+				t.Errorf("%s: the example body is not JSON a single-quoted shell argument can hold: %s", op, b)
 			}
 		}
+	}
+	if strings.Contains(md, "(below)") || strings.Contains(md, "<<'EOF'") {
+		t.Error("ROLES.md points below for the digest, or shows a heredoc")
 	}
 }

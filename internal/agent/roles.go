@@ -43,9 +43,9 @@ var guideRoles = []guideRole{
 	{Role: "coordinator", Intro: "You plan the team's work: you offer tasks to workers, review their results, and " +
 		"finalize them once their delivery is confirmed.",
 		Steps: []guideStep{
-			{"offer", "-body -", offerExample, "Offer a task to a named worker. `expected_revision` is the task's current " +
+			{"offer", "", offerExample, "Offer a task to a named worker. `expected_revision` is the task's current " +
 				"revision in aimem; `process` is the project's selected process (`aimem process show`), and " +
-				"`instruction_digest` its digest (below). The launcher reads the task's dependencies itself and " +
+				"`instruction_digest` its digest (see \"The instruction digest\" above). The launcher reads the task's dependencies itself and " +
 				"refuses an offer while any is not DONE."},
 			{"withdraw", "-attempt ATTEMPT_ID -task TASK_ID", "", "Release an offer that was declined, expired or is no " +
 				"longer wanted, before it was accepted."},
@@ -64,7 +64,8 @@ var guideRoles = []guideRole{
 		"worktree, submit the result, and finalize it once its delivery is confirmed.",
 		Steps: []guideStep{
 			{"accept", "-attempt ATTEMPT_ID -task TASK_ID", `{"instruction_digest": "sha256:DIGEST"}`, "Accept an " +
-				"offer from your inbox. Compute the digest yourself from the pin the offer names (below); it must " +
+				"offer from your inbox. Compute the digest yourself from the pin the offer names (see " +
+				"\"The instruction digest\" above); it must " +
 				"equal the offer's. Then start your worktree from the offer's `base_commit` on its `branch`."},
 			{"decline", "-attempt ATTEMPT_ID", "", "Decline an offer you cannot take, for example when the pinned " +
 				"process or its required skills are not available to you."},
@@ -80,8 +81,8 @@ var guideRoles = []guideRole{
 	{Role: "independent", Intro: "You choose your own tasks in the team's projects: you claim one, then work and " +
 		"finalize it as a worker does. A coordinator reviews and confirms its delivery.",
 		Steps: []guideStep{
-			{"claim", "-body -", claimExample, "Claim a task for yourself, with the project's selected process and " +
-				"its digest (below). The launcher reads the task's dependencies itself."},
+			{"claim", "", claimExample, "Claim a task for yourself, with the project's selected process and " +
+				"its digest (see \"The instruction digest\" above). The launcher reads the task's dependencies itself."},
 		}},
 }
 
@@ -132,9 +133,6 @@ func stepLine(s guideStep) string {
 	}
 	if s.Body == "" {
 		return fmt.Sprintf("- **%s**: %s\n\n  ```sh\n  %s\n  ```\n", s.Op, s.What, cmd)
-	}
-	if strings.Contains(s.Args, "-body -") {
-		return fmt.Sprintf("- **%s**: %s\n\n  ```sh\n  %s <<'EOF'\n%s\nEOF\n  ```\n", s.Op, s.What, cmd, s.Body)
 	}
 	return fmt.Sprintf("- **%s**: %s\n\n  ```sh\n  %s -body '%s'\n  ```\n", s.Op, s.What, cmd,
 		strings.ReplaceAll(s.Body, "\n", ""))

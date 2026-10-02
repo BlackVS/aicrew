@@ -44,13 +44,11 @@ import (
 	"time"
 )
 
-// aimemPin is the aimem commit the harness builds (b4 decision D-b4-1):
-// aimem master after every prerequisite (C5b c31ceb0, C6 6031b40, C5-w3
-// 0dd404a, `aimem hub credential` caa5468), the fixture's corrected fences
-// (#164) and `hub add --ca-file` with token files (#165). No aimem release
-// carries them yet (v0.7.3 predates them); moving the pin to the v0.7.4 tag
-// once it is cut is a follow-up.
-const aimemPin = "ddfb8bf744b0c15eabb6f7ab7bb07aa02c847c77"
+// aimemPin is the aimem commit the harness builds (b4 decision D-b4-1): the
+// v0.7.4 release, the tested aimem in supported.json. It carries every
+// prerequisite (C5b, C6, C5-w3, `aimem hub credential`), the fixture's
+// corrected fences (#164) and `hub add --ca-file` with token files (#165).
+const aimemPin = "79f713fcde7746ec2db2cca59102906da6b4a280"
 
 const (
 	serviceID = "aicrew-e2e"
@@ -217,8 +215,8 @@ func (h *harness) build(aimemSrc string) {
 	}
 	h.aimemV = aimemPin
 	// A source install stamps its version as aimem's release build does,
-	// with the commit's `git describe` (v0.7.3-55-gddfb8bf at the pin):
-	// aicrew-agent's dependency check reads that as a development build.
+	// with the commit's `git describe`: v0.7.4 at the pin, which
+	// aicrew-agent's dependency check reads as the supported release.
 	desc, err := exec.Command("git", "-C", aimemSrc, "describe", "--tags", aimemPin).Output()
 	if err != nil {
 		t.Fatalf("git describe %s: %v", aimemPin, err)

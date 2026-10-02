@@ -67,8 +67,11 @@ type Message struct {
 	To               string      `json:"to,omitempty"` // one recipient, or the team
 	Project          *ProjectRef `json:"project,omitempty"`
 	Task             *TaskRef    `json:"task,omitempty"`
-	Text             string      `json:"text"`
-	CreatedAt        time.Time   `json:"created_at"`
+	// AttemptID is the attempt a lifecycle message announces; a member's
+	// own message names none.
+	AttemptID string    `json:"attempt_id,omitempty"`
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // InboxItem is a message as delivered to one recipient.
@@ -198,7 +201,8 @@ func (s *Store) SendMessage(ctx context.Context, c Caller, key string, in NewMes
 // postLifecycle writes a lifecycle message inside the transaction of the
 // transition it announces, so both commit or neither does. It goes to every
 // active member except the actor. Crew-execution's transitions call it.
-func postLifecycle(ctx context.Context, tx *sql.Tx, teamID, actorAgentID, text string, task *TaskRef, now time.Time) (Message, error) {
+func postLifecycle(ctx context.Context, tx *sql.Tx, teamID, actorAgentID, text string, task *TaskRef, attemptID string,
+	now time.Time) (Message, error) {
 	if err := validateMessageText(text); err != nil {
 		return Message{}, err
 	}
@@ -206,7 +210,7 @@ func postLifecycle(ctx context.Context, tx *sql.Tx, teamID, actorAgentID, text s
 	if err != nil {
 		return Message{}, err
 	}
-	m := Message{TeamID: teamID, Kind: KindLifecycle, SenderAgentID: actorAgentID, Task: task, Text: text}
+	m := Message{TeamID: teamID, Kind: KindLifecycle, SenderAgentID: actorAgentID, Task: task, AttemptID: attemptID, Text: text}
 	if actorAgentID != "" {
 		actor, err := getAgent(ctx, tx, actorAgentID)
 		if err != nil {
@@ -292,11 +296,11 @@ func insertMessage(ctx context.Context, tx *sql.Tx, m Message, recipients []stri
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO messages (id, team_id, seq, kind, sender_agent_id, sender_session_id, sender_generation,
 		        sender_model, sender_client, sender_client_version, to_agent_id, project_hub_id, project_id,
-		        task_hub_id, task_project_id, task_id, text, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		        task_hub_id, task_project_id, task_id, attempt_id, text, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.TeamID, m.Seq, string(m.Kind), m.SenderAgentID, m.SenderSessionID, m.SenderGeneration,
 		m.SenderProfile.Model, m.SenderProfile.Client, m.SenderProfile.ClientVersion, m.To,
-		project.HubID, project.ProjectID, task.HubID, task.ProjectID, task.TaskID,
+		project.HubID, project.ProjectID, task.HubID, task.ProjectID, task.TaskID, m.AttemptID,
 		m.Text, formatTime(now)); err != nil {
 		return Message{}, fmt.Errorf("insert message: %w", err)
 	}
@@ -315,6 +319,22 @@ func insertMessage(ctx context.Context, tx *sql.Tx, m Message, recipients []stri
 // project no longer in the team's set are not returned. A message stays in
 // every later read until it is acknowledged.
 func (s *Store) ReadInbox(ctx context.Context, c Caller, sessionID string, generation int64, limit int) ([]InboxItem, error) {
+	return s.readInbox(ctx, c, sessionID, generation, limit, nil)
+}
+
+// ReadInboxWithToken reads the inbox of the token's session, as ReadInbox
+// does; the token is rechecked inside the read's transaction.
+func (s *Store) ReadInboxWithToken(ctx context.Context, token string, limit int) ([]InboxItem, error) {
+	t, c, err := s.tokenCaller(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	return s.readInbox(ctx, c, t.sessionID, t.generation, limit, s.requireToken(token, t.sessionID, t.generation, nil))
+}
+
+// readInbox is ReadInbox, with check run first inside its transaction.
+func (s *Store) readInbox(ctx context.Context, c Caller, sessionID string, generation int64, limit int,
+	check func(context.Context, *sql.Tx) error) ([]InboxItem, error) {
 	if err := requireAgent(c); err != nil {
 		return nil, err
 	}
@@ -326,6 +346,11 @@ func (s *Store) ReadInbox(ctx context.Context, c Caller, sessionID string, gener
 		return nil, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after commit
+	if check != nil {
+		if err := check(ctx, tx); err != nil {
+			return nil, err
+		}
+	}
 	sess, err := currentSession(ctx, tx, c, sessionID, generation)
 	if err != nil {
 		return nil, err
@@ -360,7 +385,7 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 	rows, err := q.QueryContext(ctx,
 		`SELECT m.id, m.team_id, m.seq, m.kind, m.sender_agent_id, m.sender_session_id, m.sender_generation,
 		        m.sender_model, m.sender_client, m.sender_client_version, m.to_agent_id,
-		        m.project_hub_id, m.project_id, m.task_hub_id, m.task_project_id, m.task_id,
+		        m.project_hub_id, m.project_id, m.task_hub_id, m.task_project_id, m.task_id, m.attempt_id,
 		        m.text, m.created_at, r.deliveries, r.first_delivered_at
 		 FROM message_recipients r JOIN messages m ON m.id = r.message_id
 		 WHERE r.agent_id = ? AND m.team_id = ? AND r.acknowledged_at IS NULL
@@ -383,7 +408,7 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 		if err := rows.Scan(&it.ID, &it.TeamID, &it.Seq, &kind, &it.SenderAgentID, &it.SenderSessionID,
 			&it.SenderGeneration, &it.SenderProfile.Model, &it.SenderProfile.Client,
 			&it.SenderProfile.ClientVersion, &it.To, &project.HubID, &project.ProjectID,
-			&task.HubID, &task.ProjectID, &task.TaskID, &it.Text, &created,
+			&task.HubID, &task.ProjectID, &task.TaskID, &it.AttemptID, &it.Text, &created,
 			&it.Deliveries, &firstDelivered); err != nil {
 			return nil, err
 		}
@@ -411,9 +436,27 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 // team. Every ID must have been delivered to the caller, or nothing is
 // recorded; an ID acknowledged before is reported, not an error.
 func (s *Store) AckMessages(ctx context.Context, c Caller, key, sessionID string, generation int64, ids []string) (AckResult, error) {
-	in := ackRequest{SessionID: sessionID, Generation: generation, IDs: ids}
 	var out AckResult
-	err := s.run(ctx, c, command{
+	err := s.run(ctx, c, ackCommand(c, key, sessionID, generation, ids), &out)
+	return out, err
+}
+
+// AckWithToken acknowledges messages delivered to the token's session, as
+// AckMessages does; the token is rechecked inside the command.
+func (s *Store) AckWithToken(ctx context.Context, key, token string, ids []string) (AckResult, error) {
+	t, c, err := s.tokenCaller(ctx, token)
+	if err != nil {
+		return AckResult{}, err
+	}
+	cmd, _ := s.withToken(ackCommand(c, key, t.sessionID, t.generation, ids), token, t)
+	var out AckResult
+	err = s.run(ctx, c, cmd, &out)
+	return out, err
+}
+
+func ackCommand(c Caller, key, sessionID string, generation int64, ids []string) command {
+	in := ackRequest{SessionID: sessionID, Generation: generation, IDs: ids}
+	return command{
 		op: opAckMessages, scope: sessionID, key: key, input: in,
 		authorize: requireAgent,
 		validate: func() error {
@@ -469,6 +512,5 @@ func (s *Store) AckMessages(ctx context.Context, c Caller, key, sessionID string
 			}
 			return res, nil
 		},
-	}, &out)
-	return out, err
+	}
 }

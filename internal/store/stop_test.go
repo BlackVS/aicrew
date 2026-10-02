@@ -225,6 +225,14 @@ func TestStopLifecycle(t *testing.T) {
 			if txt := lastText(t, e, e.lead); txt != tc.message {
 				t.Fatalf("release message = %q", txt)
 			}
+			// Every message of the stop names the attempt (pilot G1).
+			for _, m := range []crewMember{e.lead, e.builder} {
+				for _, it := range read(t, e.s, m, 50) {
+					if it.AttemptID != a.ID {
+						t.Errorf("%q names attempt %q, want %s", it.Text, it.AttemptID, a.ID)
+					}
+				}
+			}
 			if _, err := e.releaseStopped(t, "release-2", a, tc.target, tc.blocker); !errors.Is(err, ErrAttemptState) {
 				t.Fatalf("a second release: got %v, want ErrAttemptState", err)
 			}

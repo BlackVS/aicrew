@@ -335,3 +335,16 @@ func (c *Crew) LocalStep(ctx context.Context, key, token, path string, body []by
 	}
 	return out, nil
 }
+
+// inboxPath is aicrewd's member inbox (pilot G1).
+const inboxPath = "/v1/crew/inbox"
+
+// Inbox reads a page of the member's oldest unacknowledged messages, which
+// aicrewd records as delivered.
+func (c *Crew) Inbox(ctx context.Context, token string, limit int) (json.RawMessage, error) {
+	var out json.RawMessage
+	if err := c.do(ctx, http.MethodGet, inboxPath+"?limit="+strconv.Itoa(limit), "", "", token, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

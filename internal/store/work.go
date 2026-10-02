@@ -501,7 +501,7 @@ func applyWorkOutcome(ctx context.Context, tx *sql.Tx, a Attempt, r ReservationR
 	// The message was built and checked when the step was recorded, and is
 	// posted as it was then, so a later rename cannot make it too long.
 	task := a.Task
-	_, err := postLifecycle(ctx, tx, a.TeamID, a.WorkerAgentID, a.PendingMessage, &task, now)
+	_, err := postLifecycle(ctx, tx, a.TeamID, a.WorkerAgentID, a.PendingMessage, &task, a.ID, now)
 	return err
 }
 

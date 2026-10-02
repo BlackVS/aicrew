@@ -343,6 +343,8 @@ trusts a caller it is given, and a test enforces that.
 | `POST /v1/crew/attempts/{id}/review`, `/confirm-delivery`, `/finalize` | `Authorization: Bearer` session token | Review the latest result, confirm its delivery, or begin finalizing it as `DONE`. |
 | `POST /v1/crew/attempts/{id}/work` | `Authorization: Bearer` session token | Begin, or supersede, the holder's work update: block, submit or resume. |
 | `POST /v1/crew/attempts/{id}/settle` | `Authorization: Bearer` session token | Settle a step through aimem's read scope. |
+| `GET /v1/crew/inbox?limit=N` | `Authorization: Bearer` session token | Deliver the member's oldest unacknowledged messages, 1 to 100 (default 20), and record their delivery ("Inbox, receipts and audit"). Reply: `messages`. |
+| `POST /v1/crew/inbox/ack`, JSON `{"ids"}`, with `Idempotency-Key` | `Authorization: Bearer` session token | Acknowledge messages delivered to the member. Reply: `acknowledged`, `already`. A message never delivered to it is `409 message_not_delivered`. |
 
 - **Entry and resume.** The exchange names the proof type, this service as
   `audience`, the `challenge_id`, and either `team_id` (enter) or
@@ -1062,8 +1064,13 @@ Each team has one durable, ordered message log with a monotonic sequence.
   blank. The store does not rewrite text or judge its style.
 - **Lifecycle messages** that announce an offer, acceptance, submission,
   review, stop or recovery are written in the same local transaction as the
-  transition they announce. The store provides this as an internal step;
-  the transitions that use it arrive with crew-execution.
+  transition they announce. Each names the attempt it announces
+  (`attempt_id`), so a worker learns an offer's attempt ID from its own
+  inbox, with nothing relayed; a member's own message names none.
+- **Reading over the session API.** A member reads its inbox with
+  `GET /v1/crew/inbox` and acknowledges with `POST /v1/crew/inbox/ack`, as
+  its session token's session and generation ("Client session API"); its
+  client does so through the launcher with `aicrew-agent inbox`.
 - **Questions never assign work.** Only the offer and claim transitions
   above create an attempt. Wake-up hints from client adapters are
   best-effort; the inbox stays authoritative.

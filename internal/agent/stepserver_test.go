@@ -366,3 +366,54 @@ func TestStepChannelSurvivesAnOlderLaunchersExit(t *testing.T) {
 		t.Fatalf("the newer launcher left its socket: %v", err)
 	}
 }
+
+// The member reads its inbox and acknowledges what it read through the
+// launcher's channel, which holds the session (pilot G1).
+func TestStepChannelInbox(t *testing.T) {
+	ctx := context.Background()
+	s := setupStepsWith(t, crewOptions{role: store.RoleWorker, steps: true, shortHome: true})
+	s.serve(t)
+	var answers []byte
+	sent, err := s.store.SendMessage(ctx, s.coord, "msg-1", store.NewMessage{SessionID: s.coordSess.ID,
+		Generation: s.coordSess.Generation, To: s.agentID, Text: "Please look at the parser task when you can."})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	limit, _ := json.Marshal(map[string]int{"limit": 5})
+	ans := s.call(t, &answers, StepCall{Op: "inbox", Body: limit})
+	var page struct {
+		Messages []store.InboxItem `json:"messages"`
+	}
+	if !ans.OK || ans.Status != StepDone || json.Unmarshal(ans.Result, &page) != nil ||
+		len(page.Messages) != 1 || page.Messages[0].ID != sent.ID || page.Messages[0].Text != sent.Text {
+		t.Fatalf("inbox: %+v", ans)
+	}
+	ids, _ := json.Marshal(map[string][]string{"ids": {sent.ID}})
+	if ans := s.call(t, &answers, StepCall{Op: "ack", Body: ids}); !ans.OK || ans.Status != StepDone ||
+		!strings.Contains(string(ans.Result), sent.ID) {
+		t.Fatalf("ack: %+v", ans)
+	}
+	if ans := s.call(t, &answers, StepCall{Op: "inbox"}); json.Unmarshal(ans.Result, &page) != nil || len(page.Messages) != 0 {
+		t.Fatalf("an acknowledged message was read again: %+v", ans)
+	}
+
+	for _, c := range []StepCall{
+		{Op: "ack"},
+		{Op: "ack", Body: json.RawMessage(`{"ids": []}`)},
+		{Op: "inbox", Body: json.RawMessage(`"five"`)},
+	} {
+		if ans := s.call(t, &answers, c); ans.OK || ans.Status != StepRefused || ans.Error.Code != "invalid_request" {
+			t.Errorf("%s %s: %+v", c.Op, c.Body, ans)
+		}
+	}
+	// aicrewd's own refusal comes back as such.
+	if ans := s.call(t, &answers, StepCall{Op: "ack", Body: json.RawMessage(`{"ids": ["no-such-message"]}`)}); ans.OK ||
+		ans.Error == nil || ans.Error.Code != "message_not_delivered" {
+		t.Fatalf("ack of an unknown message: %+v", ans)
+	}
+	s.noSecrets(t, s.e.token)
+	if strings.Contains(string(answers), s.e.token) {
+		t.Fatal("the session token crossed the step channel")
+	}
+}

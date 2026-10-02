@@ -168,8 +168,9 @@ Besides `GET /healthz`, it serves aimem's session introspection,
 introspection"). Aimem registers this service with the route's full https
 URL, the service ID and the TLS trust binding of this certificate. It also
 serves agents' clients: `POST /v1/crew/challenges`, `POST /v1/crew/token`,
-`GET /v1/crew/session` and `POST /v1/crew/session/leave`
-(`docs/CREW-CONTRACT.md`, "Client session API").
+`GET /v1/crew/session`, `POST /v1/crew/session/leave`, the attempt step
+routes, and the member inbox, `GET /v1/crew/inbox` and
+`POST /v1/crew/inbox/ack` (`docs/CREW-CONTRACT.md`, "Client session API").
 
 ## Introspection credentials
 
@@ -284,6 +285,7 @@ bin/aicrew-agent session start  -home ~/aicrew/agents/builder
 bin/aicrew-agent session status -home ~/aicrew/agents/builder
 bin/aicrew-agent session leave  -home ~/aicrew/agents/builder
 bin/aicrew-agent step pending   # from the client run started ("Driving steps")
+bin/aicrew-agent inbox          # likewise ("Reading the inbox")
 ```
 
 It reads the `aicrew` section of the agent home's `agent.json`, which holds
@@ -540,6 +542,29 @@ aicrew-agent step recover
   - 1: `failed`, meaning no launcher, or aicrewd, aimem or the channel
     failed;
   - 2: usage.
+
+### Reading the inbox: `aicrew-agent inbox`
+
+Offers, acceptances, submissions, stops and other lifecycle messages reach
+a member's team inbox, each naming its attempt; a worker accepts an offer by
+the attempt ID its inbox shows. The client reads it through the launcher,
+which holds the session, like a step:
+
+```sh
+aicrew-agent inbox                 # the oldest unacknowledged messages, 20 at most
+aicrew-agent inbox -limit 50 -json
+aicrew-agent inbox -ack ID,ID      # acknowledge what was handled
+```
+
+- A message stays in every later read until it is acknowledged, so a
+  crash between reading and acting loses nothing; the next page comes once
+  the current one is acknowledged.
+- Only messages the inbox delivered can be acknowledged
+  (`message_not_delivered` otherwise); acknowledging twice reports them as
+  `already`.
+- Exit codes and the no-launcher failure are `step`'s.
+- aicrewd serves it as `GET /v1/crew/inbox` and `POST /v1/crew/inbox/ack`
+  (`docs/CREW-CONTRACT.md`, "Client session API").
 
 ## Releasing
 

@@ -84,6 +84,7 @@ type StepError struct {
 // reservation, no proof.
 type LocalAPI interface {
 	LocalStep(ctx context.Context, key, token, path string, body []byte) (json.RawMessage, error)
+	Inbox(ctx context.Context, token string, limit int) (json.RawMessage, error)
 }
 
 // stepOps are the reservation steps: the begin route and where the aimem
@@ -259,6 +260,35 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 			return answerErr(err)
 		}
 		return done(pending)
+	case call.Op == "inbox":
+		// The member's inbox (pilot G1): {"limit": N}, or no body.
+		var in struct {
+			Limit int `json:"limit"`
+		}
+		if len(call.Body) > 0 && json.Unmarshal(call.Body, &in) != nil {
+			return refuse("invalid_request", "The inbox body is not {\"limit\": N}.", "Pass -limit.")
+		}
+		if in.Limit == 0 {
+			in.Limit = 20
+		}
+		out, err := s.local.Inbox(ctx, s.driver.Session.stepToken(), in.Limit)
+		if err != nil {
+			return answerErr(err)
+		}
+		return StepAnswer{OK: true, Status: StepDone, Result: out}
+	case call.Op == "ack":
+		// Acknowledge delivered messages: {"ids": [...]}.
+		var in struct {
+			IDs []string `json:"ids"`
+		}
+		if json.Unmarshal(call.Body, &in) != nil || len(in.IDs) == 0 {
+			return refuse("invalid_request", "An acknowledgement names the messages' IDs.", "Pass -ack ID,ID.")
+		}
+		out, err := s.local.LocalStep(ctx, newKey("ack"), s.driver.Session.stepToken(), inboxPath+"/ack", call.Body)
+		if err != nil {
+			return answerErr(err)
+		}
+		return StepAnswer{OK: true, Status: StepDone, Result: out}
 	case localOps[call.Op]:
 		if !attemptIDShape(call.AttemptID) {
 			return refuse("invalid_request", "A local step needs the attempt's ID.", "Pass -attempt.")
@@ -273,7 +303,7 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 	op, ok := stepOps[call.Op]
 	if !ok {
 		return refuse("invalid_request", "Unknown step "+call.Op+".", "Use offer, accept, withdraw, claim, work, release, finalize, "+
-			"decline, review, stop, confirm-stop, confirm-delivery, recover or pending.")
+			"decline, review, stop, confirm-stop, confirm-delivery, recover, pending, inbox or ack.")
 	}
 	req := StepRequest{Body: bodyOrEmpty(call.Body), TaskID: call.TaskID}
 	if op.fromBody {

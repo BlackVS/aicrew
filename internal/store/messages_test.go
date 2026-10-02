@@ -487,7 +487,7 @@ func TestLifecycleMessageSharesTheTransition(t *testing.T) {
 			apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
 				return postLifecycle(ctx, tx, tm.ID, lead.agent.ID,
 					"The coordinator offered the parser task to the builder.",
-					&TaskRef{HubID: "hub-a", ProjectID: "docs", TaskID: "task-7"}, now)
+					&TaskRef{HubID: "hub-a", ProjectID: "docs", TaskID: "task-7"}, "", now)
 			},
 		}, nil)
 	}
@@ -524,7 +524,7 @@ func TestLifecycleTextMustBeValidUTF8(t *testing.T) {
 		return s.run(ctx, lead.caller, command{
 			op: "test.lifecycle", scope: tm.ID, key: key, input: struct{ Key string }{key}, authorize: requireAgent,
 			apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
-				return postLifecycle(ctx, tx, tm.ID, lead.agent.ID, text, nil, now)
+				return postLifecycle(ctx, tx, tm.ID, lead.agent.ID, text, nil, "", now)
 			},
 		}, nil)
 	}

@@ -1094,7 +1094,7 @@ func announce(ctx context.Context, tx *sql.Tx, a Attempt, actorID, format string
 		}
 	}
 	task := a.Task
-	_, err := postLifecycle(ctx, tx, a.TeamID, actorID, fmt.Sprintf(format, args...), &task, now)
+	_, err := postLifecycle(ctx, tx, a.TeamID, actorID, fmt.Sprintf(format, args...), &task, a.ID, now)
 	return err
 }
 

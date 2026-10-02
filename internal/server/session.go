@@ -154,6 +154,9 @@ var sessionRefusals = map[string]struct {
 		"The attempt has no step with this request key.", "Settle with the request key the step's begin returned."},
 	"outcome_unknown": {http.StatusServiceUnavailable, "", true,
 		"aicrew could not confirm the step through aimem now; nothing was applied.", "Settle again after Retry-After."},
+	"message_not_delivered": {http.StatusConflict, "", false,
+		"A message named was never delivered to this member, so it cannot be acknowledged.",
+		"Read the inbox, then acknowledge only the messages it delivered."},
 	// The shared refusals, made before a session handler runs.
 	"method_not_allowed": {http.StatusMethodNotAllowed, "invalid_request", false,
 		"This method is not served on this path.", "Use a method the Allow header names."},

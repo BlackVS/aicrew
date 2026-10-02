@@ -485,6 +485,51 @@ func (s *Store) GetTeam(ctx context.Context, id string) (Team, error) {
 	return t, err
 }
 
+// TeamSummary is a team with the number of its current members.
+type TeamSummary struct {
+	Team
+	Members int `json:"members"`
+}
+
+// ListTeams returns every team with its current member count, ordered by
+// name, then ID.
+func (s *Store) ListTeams(ctx context.Context) ([]TeamSummary, error) {
+	teams := []TeamSummary{}
+	err := s.snapshot(ctx, func(q querier) error {
+		rows, err := q.QueryContext(ctx,
+			`SELECT t.id, (SELECT COUNT(*) FROM memberships m WHERE m.team_id = t.id AND m.removed = 0)
+			 FROM teams t ORDER BY t.name, t.id`)
+		if err != nil {
+			return fmt.Errorf("list teams: %w", err)
+		}
+		type row struct {
+			id      string
+			members int
+		}
+		var found []row
+		for rows.Next() {
+			var r row
+			if err := rows.Scan(&r.id, &r.members); err != nil {
+				rows.Close()
+				return err
+			}
+			found = append(found, r)
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return err
+		}
+		for _, r := range found {
+			t, err := getTeam(ctx, q, r.id)
+			if err != nil {
+				return err
+			}
+			teams = append(teams, TeamSummary{Team: t, Members: r.members})
+		}
+		return nil
+	})
+	return teams, err
+}
+
 // ResolveTeam finds the one team with the given name, or returns
 // ErrAmbiguous when several share it.
 func (s *Store) ResolveTeam(ctx context.Context, name string) (Team, error) {

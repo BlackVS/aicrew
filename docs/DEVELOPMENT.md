@@ -375,9 +375,15 @@ bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh and chec
   aimem hub task-token main --token-file -
   ```
 
+  In PowerShell, set them with
+  `$env:AIMEM_STATE_DIR = "$HOME\aicrew\agents\builder\aimem"` and
+  `$env:AIMEM_SOCKET = "$env:AIMEM_STATE_DIR\aimem.sock"`. Either way, use
+  a shell you close afterwards, so that the operator's own aimem is not
+  pointed at the member's installation. A `join` on a home not provisioned
+  yet stops with these exact paths.
+
   Each command reads the member's user-scoped token on standard input,
-  never from an argument. The member sets
-  nothing: `join`, `check` and `run` give every aimem process they start
+  never from an argument. The member sets nothing: `join`, `check` and `run` give every aimem process they start
   these two variables, replacing inherited values. `join` writes the same
   two variables into the home's `.claude/settings.json` and `.mcp.json`
   for clients started there by hand. `CLAUDE_CONFIG_DIR` stays an optional

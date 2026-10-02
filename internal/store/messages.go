@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -31,9 +32,14 @@ const (
 	opAckMessages = "inbox.ack"
 
 	maxMessageText = 16 << 10 // bytes
-	maxInboxPage   = 100
-	maxAckIDs      = 100
-	maxRefLen      = 256
+	// maxInboxPageBytes bounds a page of the inbox as encoded JSON, so a
+	// client reads any valid page with a fixed limit: messages are added
+	// while they fit, and the first always is (a message's JSON stays under
+	// about 100 KiB even when every byte of its 16 KiB text is escaped).
+	maxInboxPageBytes = 128 << 10
+	maxInboxPage      = 100
+	maxAckIDs         = 100
+	maxRefLen         = 256
 )
 
 type MessageKind string
@@ -359,6 +365,8 @@ func (s *Store) readInbox(ctx context.Context, c Caller, sessionID string, gener
 	if err != nil {
 		return nil, err
 	}
+	// Only what fits the page is delivered; the rest stays first in line.
+	items = fitPage(items, maxInboxPageBytes)
 	now := s.now()
 	at := formatTime(now)
 	for i := range items {
@@ -379,6 +387,20 @@ func (s *Store) readInbox(ctx context.Context, c Caller, sessionID string, gener
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 	return items, nil
+}
+
+// fitPage keeps the leading items whose JSON fits budget bytes, and always
+// the first.
+func fitPage(items []InboxItem, budget int) []InboxItem {
+	total := 0
+	for i, it := range items {
+		b, _ := json.Marshal(it)
+		if i > 0 && total+len(b) > budget {
+			return items[:i]
+		}
+		total += len(b)
+	}
+	return items
 }
 
 func pendingMessages(ctx context.Context, q querier, teamID, agentID string, limit int) ([]InboxItem, error) {

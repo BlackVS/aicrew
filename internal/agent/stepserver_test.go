@@ -417,3 +417,29 @@ func TestStepChannelInbox(t *testing.T) {
 		t.Fatal("the session token crossed the step channel")
 	}
 }
+
+// A valid inbox page larger than an ordinary reply passes through the
+// launcher: here one message whose every byte JSON escapes, about 96 KiB on
+// the wire (pilot G1).
+func TestStepChannelInboxLargePage(t *testing.T) {
+	ctx := context.Background()
+	s := setupStepsWith(t, crewOptions{role: store.RoleWorker, steps: true, shortHome: true})
+	s.serve(t)
+	var answers []byte
+	text := strings.Repeat("<", 16<<10)
+	for i := range 2 {
+		if _, err := s.store.SendMessage(ctx, s.coord, "big-"+string(rune('a'+i)), store.NewMessage{SessionID: s.coordSess.ID,
+			Generation: s.coordSess.Generation, To: s.agentID, Text: text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limit, _ := json.Marshal(map[string]int{"limit": 100})
+	ans := s.call(t, &answers, StepCall{Op: "inbox", Body: limit})
+	var page struct {
+		Messages []store.InboxItem `json:"messages"`
+	}
+	if !ans.OK || ans.Status != StepDone || json.Unmarshal(ans.Result, &page) != nil || len(page.Messages) != 1 ||
+		page.Messages[0].Text != text || len(ans.Result) <= 64<<10 {
+		t.Fatalf("a large page through the launcher: status %s, %d bytes, error %+v", ans.Status, len(ans.Result), ans.Error)
+	}
+}

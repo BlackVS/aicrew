@@ -559,6 +559,9 @@ aicrew-agent inbox -ack ID,ID      # acknowledge what was handled
 - A message stays in every later read until it is acknowledged, so a
   crash between reading and acting loses nothing; the next page comes once
   the current one is acknowledged.
+- A page holds at most `-limit` messages and at most 128 KiB of JSON, and
+  always at least one message; only the messages returned are recorded as
+  delivered.
 - Only messages the inbox delivered can be acknowledged
   (`message_not_delivered` otherwise); acknowledging twice reports them as
   `already`.

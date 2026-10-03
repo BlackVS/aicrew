@@ -106,7 +106,9 @@ checkpoint token, individual task credential and CA path, and the team
 sessions, project credentials, journals, memories, spools and local socket.
 The member's whole installation lives in the home, as `aimem/`. Everything
 that defines the member is then in one portable home, and the user's own
-installation (`~/.local/state/aimem` by default) stays the human's.
+installation (`~/.local/state/aimem` by default) stays the human's. The
+survey, the options and the decision (D-STORE) are recorded in
+[proposals/STORAGE-MODEL.md](proposals/STORAGE-MODEL.md).
 
 - **`aimem/` is owner-only and secret**, like `creds/`. `join` creates it
   and restricts it, and never reads or changes its contents: aimem owns

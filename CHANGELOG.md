@@ -28,8 +28,11 @@ in its agent home, provisioned by `aicrew-agent join`.
   reaches aicrewd over TLS with `-url`, `-tls-trust-mode`,
   `-tls-trust-value` and `-token-file`, or their `AICREW_*` environment
   variables (#82).
-- A member's aimem installation is `<home>/aimem`. An agent home created by
-  0.1.0 takes the new layout and carriers on a `join` rerun (#76).
+- A member's aimem installation is `<home>/aimem`. An agent home linked by
+  0.1.0 takes the new layout and carriers on a `join` rerun; its
+  installation is then provisioned with aimem's own commands under the
+  home's variables (DEVELOPMENT.md), since `join` provisions only a new
+  home (#76, #83).
 
 ### Operator API
 

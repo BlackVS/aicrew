@@ -4,13 +4,12 @@
 // console client. Secrets travel only in an issue's answer, once: a
 // credential's bearer and an invitation's code. Every other answer is
 // metadata.
+//
+// The package depends on nothing of aicrew's, so a client links neither the
+// store nor its database driver: the service converts its records here.
 package opapi
 
-import (
-	"time"
-
-	"github.com/BlackVS/aicrew/internal/store"
-)
+import "time"
 
 // Routes. Reads take their filter in the query; writes take a JSON body.
 const (
@@ -75,23 +74,40 @@ type Credential struct {
 	Replaces   string    `json:"replaces,omitempty"`
 }
 
-// CredentialOf is a stored credential's metadata at now.
-func CredentialOf(c store.IntrospectionCredential, now time.Time) Credential {
-	return Credential{ID: c.ID, HubID: c.HubID, Active: c.Active(now), CreatedAt: c.CreatedAt,
-		ExpiresAt: c.ExpiresAt, RevokedAt: c.RevokedAt, Operations: c.Operations}
+// ProjectRef is a project on an aimem hub.
+type ProjectRef struct {
+	HubID     string `json:"hub_id"`
+	ProjectID string `json:"project_id"`
+}
+
+// Team is a team record.
+type Team struct {
+	ID                    string       `json:"id"`
+	Name                  string       `json:"name"`
+	Projects              []ProjectRef `json:"projects"`
+	Revision              int64        `json:"revision"`
+	CoordinatorGeneration int64        `json:"coordinator_generation"`
+	CreatedAt             time.Time    `json:"created_at"`
+	UpdatedAt             time.Time    `json:"updated_at"`
+}
+
+// TeamSummary is a team in a list, with its current member count.
+type TeamSummary struct {
+	Team
+	Members int `json:"members"`
 }
 
 // TeamRequest creates a team.
 type TeamRequest struct {
-	Name     string             `json:"name"`
-	Projects []store.ProjectRef `json:"projects,omitempty"`
+	Name     string       `json:"name"`
+	Projects []ProjectRef `json:"projects,omitempty"`
 }
 
 // TeamProjectsRequest replaces a team's intended projects.
 type TeamProjectsRequest struct {
-	TeamID           string             `json:"team_id"`
-	ExpectedRevision int64              `json:"expected_revision"`
-	Projects         []store.ProjectRef `json:"projects"`
+	TeamID           string       `json:"team_id"`
+	ExpectedRevision int64        `json:"expected_revision"`
+	Projects         []ProjectRef `json:"projects"`
 }
 
 // TeamRenameRequest renames a team.
@@ -103,16 +119,16 @@ type TeamRenameRequest struct {
 
 // TeamDetail is a team and its current members.
 type TeamDetail struct {
-	store.Team
+	Team
 	Members []Member `json:"members"`
 }
 
 // Member is one current membership.
 type Member struct {
-	AgentID   string     `json:"agent_id"`
-	Role      store.Role `json:"role"`
-	Revision  int64      `json:"revision"`
-	CreatedAt time.Time  `json:"created_at"`
+	AgentID   string    `json:"agent_id"`
+	Role      string    `json:"role"`
+	Revision  int64     `json:"revision"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // InvitationRequest issues an invitation. TTL is a Go duration ("24h");
@@ -147,13 +163,4 @@ type Invitation struct {
 	ExpiresAt      time.Time `json:"expires_at"`
 	CreatedAt      time.Time `json:"created_at"`
 	Code           string    `json:"code,omitempty"`
-}
-
-// InvitationOf is a stored invitation's metadata at now.
-func InvitationOf(inv store.Invitation, now time.Time) Invitation {
-	open := inv.State == store.InvitationIssued || inv.State == store.InvitationLocked
-	return Invitation{ID: inv.ID, Purpose: string(inv.Purpose), TeamID: inv.TeamID, Role: string(inv.Role),
-		HubID: inv.HubID, AgentID: inv.AgentID, ExpectedUserID: inv.ExpectedUserID, Label: inv.Label,
-		IssuedBy: inv.IssuedBy, State: string(inv.State), Expired: open && !now.Before(inv.ExpiresAt),
-		Attempts: inv.Attempts, Revision: inv.Revision, ExpiresAt: inv.ExpiresAt, CreatedAt: inv.CreatedAt}
 }

@@ -89,6 +89,15 @@ func TestAdminRefusesEveryOtherCredential(t *testing.T) {
 	if after, _ := e.store.ListTeams(context.Background()); len(after) != len(before) {
 		t.Fatal("a refused request changed the store")
 	}
+	logs := e.logs.String()
+	if !strings.Contains(logs, `"outcome":"unauthorized"`) {
+		t.Fatalf("no unauthorized outcome in the log:\n%s", logs)
+	}
+	for _, secret := range []string{wrong, session, intro} {
+		if strings.Contains(logs, secret) {
+			t.Fatalf("the log holds a refused bearer %q", secret)
+		}
+	}
 	// The member's session still works.
 	if got := e.send(t, http.MethodGet, SessionPath, "", "", session, ""); got.status != http.StatusOK {
 		t.Fatalf("session after the refusals: %d %s", got.status, got.raw)
@@ -110,16 +119,16 @@ func TestAdminOperations(t *testing.T) {
 	}
 
 	// Teams.
-	var team store.Team
+	var team opapi.Team
 	if got := e.admin(t, http.MethodPost, opapi.TeamsPath, tok,
-		opapi.TeamRequest{Name: "pilot", Projects: []store.ProjectRef{{HubID: "hub-test", ProjectID: "aicrew"}}}, &team); got.status != http.StatusCreated || team.ID == "" {
+		opapi.TeamRequest{Name: "pilot", Projects: []opapi.ProjectRef{{HubID: "hub-test", ProjectID: "aicrew"}}}, &team); got.status != http.StatusCreated || team.ID == "" {
 		t.Fatalf("team create: %d %s", got.status, got.raw)
 	}
 	adminRefused(t, e.admin(t, http.MethodPost, opapi.TeamsPath, tok, opapi.TeamRequest{Name: "pilot"}, nil),
 		http.StatusConflict, opapi.CodeTeamExists)
 	adminRefused(t, e.admin(t, http.MethodPost, opapi.TeamsPath, tok, opapi.TeamRequest{Name: "Bad Name"}, nil),
 		http.StatusBadRequest, opapi.CodeInvalid)
-	var teams []store.TeamSummary
+	var teams []opapi.TeamSummary
 	if got := e.admin(t, http.MethodGet, opapi.TeamsPath, tok, nil, &teams); got.status != http.StatusOK || len(teams) != 2 {
 		t.Fatalf("team list: %d %s", got.status, got.raw)
 	}
@@ -183,6 +192,9 @@ func TestAdminOperations(t *testing.T) {
 		inv.Code == "" || inv.State != "issued" || inv.IssuedBy != operatorCallerID {
 		t.Fatalf("invitation issue: %d %s", got.status, got.raw)
 	}
+	if _, err := e.store.BeginRedemption(context.Background(), "redeem-check", store.NewSecret(inv.Code)); err != nil {
+		t.Fatalf("the answered code does not redeem: %v", err)
+	}
 	adminRefused(t, e.admin(t, http.MethodPost, opapi.InvitationsPath, tok, opapi.InvitationRequest{Purpose: "join",
 		TeamID: e.teamID, Role: "worker", HubID: "hub-test", Label: "third", TTL: "soon"}, nil), http.StatusBadRequest, opapi.CodeInvalid)
 	var invs []opapi.Invitation
@@ -195,6 +207,9 @@ func TestAdminOperations(t *testing.T) {
 	}
 	adminRefused(t, e.admin(t, http.MethodPost, opapi.InvitationRevokePath, tok, opapi.IDRequest{ID: inv.ID}, nil),
 		http.StatusConflict, opapi.CodeInvitationFinal)
+	pasted := "pasted-" + cred.Bearer
+	adminRefused(t, e.admin(t, http.MethodPost, opapi.CredentialRevokePath, tok, opapi.IDRequest{ID: pasted}, nil),
+		http.StatusNotFound, opapi.CodeNotFound)
 	alive("the invitation operations")
 
 	// The log names each action and its outcome, and never a secret or a
@@ -207,7 +222,7 @@ func TestAdminOperations(t *testing.T) {
 			t.Fatalf("the log lacks %s:\n%s", want, logs)
 		}
 	}
-	for _, secret := range []string{tok, cred.Bearer, rotated.Bearer, inv.Code, session, "second-name"} {
+	for _, secret := range []string{tok, cred.Bearer, rotated.Bearer, inv.Code, session, "second-name", pasted} {
 		if strings.Contains(logs, secret) {
 			t.Fatalf("the log holds a secret or a body value %q", secret)
 		}

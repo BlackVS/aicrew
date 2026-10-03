@@ -108,6 +108,8 @@ func (s *Server) operator(action string, h adminAction) http.HandlerFunc {
 			adminRefuse(w, http.StatusInternalServerError, opapi.CodeInternal, "")
 			return
 		}
+		// id is one the store returned, never the request's text, which a
+		// refused request may have filled with anything.
 		outcome, id := h(w, r, op)
 		s.adminLog(action, outcome, id)
 	}
@@ -167,6 +169,39 @@ func adminFail(w http.ResponseWriter, err error) string {
 	return code
 }
 
+// The API's records, converted from the store's: opapi depends on nothing of
+// aicrew's, so its client links no store.
+
+func credentialOf(c store.IntrospectionCredential, now time.Time) opapi.Credential {
+	return opapi.Credential{ID: c.ID, HubID: c.HubID, Active: c.Active(now), CreatedAt: c.CreatedAt,
+		ExpiresAt: c.ExpiresAt, RevokedAt: c.RevokedAt, Operations: c.Operations}
+}
+
+func invitationOf(inv store.Invitation, now time.Time) opapi.Invitation {
+	open := inv.State == store.InvitationIssued || inv.State == store.InvitationLocked
+	return opapi.Invitation{ID: inv.ID, Purpose: string(inv.Purpose), TeamID: inv.TeamID, Role: string(inv.Role),
+		HubID: inv.HubID, AgentID: inv.AgentID, ExpectedUserID: inv.ExpectedUserID, Label: inv.Label,
+		IssuedBy: inv.IssuedBy, State: string(inv.State), Expired: open && !now.Before(inv.ExpiresAt),
+		Attempts: inv.Attempts, Revision: inv.Revision, ExpiresAt: inv.ExpiresAt, CreatedAt: inv.CreatedAt}
+}
+
+func teamOf(t store.Team) opapi.Team {
+	projects := make([]opapi.ProjectRef, 0, len(t.Projects))
+	for _, p := range t.Projects {
+		projects = append(projects, opapi.ProjectRef{HubID: p.HubID, ProjectID: p.ProjectID})
+	}
+	return opapi.Team{ID: t.ID, Name: t.Name, Projects: projects, Revision: t.Revision,
+		CoordinatorGeneration: t.CoordinatorGeneration, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt}
+}
+
+func projectsOf(refs []opapi.ProjectRef) []store.ProjectRef {
+	out := make([]store.ProjectRef, 0, len(refs))
+	for _, p := range refs {
+		out = append(out, store.ProjectRef{HubID: p.HubID, ProjectID: p.ProjectID})
+	}
+	return out
+}
+
 // commandKey is a fresh store key: every operator write is its own command.
 // A client never sends one: a replayed issue could not return its secret,
 // which exists only in the answer that issued it.
@@ -185,7 +220,7 @@ func (s *Server) listCredentials(w http.ResponseWriter, r *http.Request, op stor
 	out := []opapi.Credential{}
 	for _, c := range creds {
 		if hub == "" || c.HubID == hub {
-			out = append(out, opapi.CredentialOf(c, now))
+			out = append(out, credentialOf(c, now))
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -251,7 +286,7 @@ func (s *Server) issueOrRotate(w http.ResponseWriter, r *http.Request, op store.
 	if err != nil {
 		return adminFail(w, err), ""
 	}
-	v := opapi.CredentialOf(c, time.Now().UTC())
+	v := credentialOf(c, time.Now().UTC())
 	v.Bearer, v.Replaces = bearer, replaces
 	writeJSON(w, http.StatusCreated, v)
 	return "issued", c.ID
@@ -264,9 +299,9 @@ func (s *Server) revokeCredential(w http.ResponseWriter, r *http.Request, op sto
 	}
 	c, err := s.store.RevokeIntrospectionCredential(r.Context(), op, commandKey(), req.ID)
 	if err != nil {
-		return adminFail(w, err), req.ID
+		return adminFail(w, err), ""
 	}
-	writeJSON(w, http.StatusOK, opapi.CredentialOf(c, time.Now().UTC()))
+	writeJSON(w, http.StatusOK, credentialOf(c, time.Now().UTC()))
 	return "revoked", c.ID
 }
 
@@ -275,12 +310,17 @@ func (s *Server) listTeams(w http.ResponseWriter, r *http.Request, _ store.Calle
 	if err != nil {
 		return adminFail(w, err), ""
 	}
-	writeJSON(w, http.StatusOK, teams)
+	out := make([]opapi.TeamSummary, 0, len(teams))
+	for _, t := range teams {
+		out = append(out, opapi.TeamSummary{Team: teamOf(t.Team), Members: t.Members})
+	}
+	writeJSON(w, http.StatusOK, out)
 	return "ok", ""
 }
 
-// nameTaken refuses a name another team has. The caller holds names.
-func (s *Server) nameTaken(w http.ResponseWriter, r *http.Request, name, self string) (string, bool) {
+// nameTaken refuses a name another team has. The caller holds names, and op
+// is the operator's caller: only an authenticated handler has one.
+func (s *Server) nameTaken(w http.ResponseWriter, r *http.Request, _ store.Caller, name, self string) (string, bool) {
 	teams, err := s.store.ListTeams(r.Context())
 	if err != nil {
 		return adminFail(w, err), true
@@ -301,14 +341,14 @@ func (s *Server) createTeam(w http.ResponseWriter, r *http.Request, op store.Cal
 	}
 	s.admin.names.Lock()
 	defer s.admin.names.Unlock()
-	if code, taken := s.nameTaken(w, r, req.Name, ""); taken {
+	if code, taken := s.nameTaken(w, r, op, req.Name, ""); taken {
 		return code, ""
 	}
-	t, err := s.store.CreateTeam(r.Context(), op, commandKey(), store.NewTeam{Name: req.Name, Projects: req.Projects})
+	t, err := s.store.CreateTeam(r.Context(), op, commandKey(), store.NewTeam{Name: req.Name, Projects: projectsOf(req.Projects)})
 	if err != nil {
 		return adminFail(w, err), ""
 	}
-	writeJSON(w, http.StatusCreated, t)
+	writeJSON(w, http.StatusCreated, teamOf(t))
 	return "created", t.ID
 }
 
@@ -320,18 +360,18 @@ func (s *Server) showTeam(w http.ResponseWriter, r *http.Request, _ store.Caller
 	}
 	t, err := s.store.GetTeam(r.Context(), id)
 	if err != nil {
-		return adminFail(w, err), id
+		return adminFail(w, err), ""
 	}
 	ms, err := s.store.ListMembers(r.Context(), id)
 	if err != nil {
-		return adminFail(w, err), id
+		return adminFail(w, err), ""
 	}
-	d := opapi.TeamDetail{Team: t, Members: []opapi.Member{}}
+	d := opapi.TeamDetail{Team: teamOf(t), Members: []opapi.Member{}}
 	for _, m := range ms {
-		d.Members = append(d.Members, opapi.Member{AgentID: m.AgentID, Role: m.Role, Revision: m.Revision, CreatedAt: m.CreatedAt})
+		d.Members = append(d.Members, opapi.Member{AgentID: m.AgentID, Role: string(m.Role), Revision: m.Revision, CreatedAt: m.CreatedAt})
 	}
 	writeJSON(w, http.StatusOK, d)
-	return "ok", id
+	return "ok", t.ID
 }
 
 func (s *Server) setTeamProjects(w http.ResponseWriter, r *http.Request, op store.Caller) (string, string) {
@@ -339,14 +379,11 @@ func (s *Server) setTeamProjects(w http.ResponseWriter, r *http.Request, op stor
 	if !adminBody(w, r, &req) {
 		return opapi.CodeInvalid, ""
 	}
-	if req.Projects == nil {
-		req.Projects = []store.ProjectRef{}
-	}
-	t, err := s.store.SetTeamProjects(r.Context(), op, commandKey(), req.TeamID, req.ExpectedRevision, req.Projects)
+	t, err := s.store.SetTeamProjects(r.Context(), op, commandKey(), req.TeamID, req.ExpectedRevision, projectsOf(req.Projects))
 	if err != nil {
-		return adminFail(w, err), req.TeamID
+		return adminFail(w, err), ""
 	}
-	writeJSON(w, http.StatusOK, t)
+	writeJSON(w, http.StatusOK, teamOf(t))
 	return "updated", t.ID
 }
 
@@ -357,14 +394,14 @@ func (s *Server) renameTeam(w http.ResponseWriter, r *http.Request, op store.Cal
 	}
 	s.admin.names.Lock()
 	defer s.admin.names.Unlock()
-	if code, taken := s.nameTaken(w, r, req.Name, req.TeamID); taken {
-		return code, req.TeamID
+	if code, taken := s.nameTaken(w, r, op, req.Name, req.TeamID); taken {
+		return code, ""
 	}
 	t, err := s.store.RenameTeam(r.Context(), op, commandKey(), req.TeamID, req.ExpectedRevision, req.Name)
 	if err != nil {
-		return adminFail(w, err), req.TeamID
+		return adminFail(w, err), ""
 	}
-	writeJSON(w, http.StatusOK, t)
+	writeJSON(w, http.StatusOK, teamOf(t))
 	return "renamed", t.ID
 }
 
@@ -377,7 +414,7 @@ func (s *Server) listInvitations(w http.ResponseWriter, r *http.Request, op stor
 	out := []opapi.Invitation{}
 	for _, inv := range invs {
 		if team == "" || inv.TeamID == team {
-			out = append(out, opapi.InvitationOf(inv, now))
+			out = append(out, invitationOf(inv, now))
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -408,7 +445,7 @@ func (s *Server) issueInvitation(w http.ResponseWriter, r *http.Request, op stor
 	if err != nil {
 		return adminFail(w, err), ""
 	}
-	v := opapi.InvitationOf(inv, time.Now().UTC())
+	v := invitationOf(inv, time.Now().UTC())
 	v.Code = code.Reveal()
 	writeJSON(w, http.StatusCreated, v)
 	return "issued", inv.ID
@@ -424,8 +461,8 @@ func (s *Server) revokeInvitation(w http.ResponseWriter, r *http.Request, op sto
 		inv, err = s.store.RevokeInvitation(r.Context(), op, commandKey(), inv.ID, inv.Revision)
 	}
 	if err != nil {
-		return adminFail(w, err), req.ID
+		return adminFail(w, err), ""
 	}
-	writeJSON(w, http.StatusOK, opapi.InvitationOf(inv, time.Now().UTC()))
+	writeJSON(w, http.StatusOK, invitationOf(inv, time.Now().UTC()))
 	return "revoked", inv.ID
 }

@@ -71,15 +71,21 @@ func (l *limiter) allow(key string) (bool, time.Duration) {
 }
 
 // spent reports, without taking a token, whether key has none left, and how
-// long until it likely has one. A key without a bucket has its full budget.
+// long until it likely has one. A key without a bucket has its full budget,
+// unless the table is full and allow would refuse it: a key that cannot be
+// counted must not escape the limit.
 func (l *limiter) spent(key string) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	now := l.now()
 	b, ok := l.buckets[key]
 	if !ok {
+		if len(l.buckets) >= l.max && !l.makeRoom(now) {
+			return true, l.fullAt.Sub(now)
+		}
 		return false, 0
 	}
-	l.refill(b, l.now())
+	l.refill(b, now)
 	if b.tokens < 1 {
 		return true, l.untilTokens(b, 1)
 	}

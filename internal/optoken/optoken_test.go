@@ -29,6 +29,20 @@ func TestGenerateWriteRead(t *testing.T) {
 	if err := Write(path, a); err == nil {
 		t.Fatal("Write replaced an existing file")
 	}
+	// A token alone on its line is read whatever the line ending, as an
+	// editor or a copy on Windows may leave it.
+	for name, content := range map[string]string{"no newline": a, "lf": a + "\n", "crlf": a + "\r\n"} {
+		p := filepath.Join(t.TempDir(), "tok")
+		f, err := privatefile.Create(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.WriteString(content)
+		f.Close()
+		if got, err := Read(p); err != nil || got != a {
+			t.Fatalf("%s: read %q, %v", name, got, err)
+		}
+	}
 }
 
 // A file that is not one generated token is refused, and the error never
@@ -42,6 +56,7 @@ func TestReadRefusals(t *testing.T) {
 		"two lines": tok + "\n" + tok + "\n",
 		"spaces":    " " + tok + "\n",
 		"upper hex": "aop_" + strings.ToUpper(tok[4:]) + "\n",
+		"oversized": tok + "\n" + strings.Repeat("x", 300),
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(dir, strings.ReplaceAll(name, " ", "-"))
@@ -52,7 +67,7 @@ func TestReadRefusals(t *testing.T) {
 			f.WriteString(content)
 			f.Close()
 			_, err = Read(path)
-			if err == nil || (content != "" && strings.Contains(err.Error(), strings.TrimSpace(content))) {
+			if err == nil || strings.Contains(err.Error(), tok[4:]) || strings.Contains(err.Error(), "aop_") {
 				t.Fatalf("%q: %v", content, err)
 			}
 		})

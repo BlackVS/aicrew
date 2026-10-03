@@ -180,7 +180,8 @@ routes, and the member inbox, `GET /v1/crew/inbox` and
 
 ## The operator API
 
-`aicrewd` serves the operator's administration on its own listener, so the
+`aicrewd` serves the operator's administration on its HTTPS listener
+(`listen_addr`), beside the agents' routes, so the
 service keeps running while the operator manages teams, invitations and
 introspection credentials. The routes, under `/v1/admin/`, and their JSON
 are defined in `internal/opapi`:
@@ -189,7 +190,7 @@ are defined in `internal/opapi`:
 | --- | --- |
 | `GET /v1/admin/introspection-credentials?hub=HUB` | list credentials (metadata) |
 | `POST /v1/admin/introspection-credentials` | issue: `{"hub_id", "operations"}`; the answer carries the bearer, once |
-| `POST /v1/admin/introspection-credentials/rotate` | issue a replacement for the hub's one active credential; the answer names it in `replaces` |
+| `POST /v1/admin/introspection-credentials/rotate` | `{"hub_id", "operations"}`: needs exactly one active credential for the hub (otherwise `409 rotate_needs_one_active`) and issues a second, answered once with `replaces` naming the first, which stays active until it is revoked |
 | `POST /v1/admin/introspection-credentials/revoke` | revoke: `{"id"}` |
 | `GET /v1/admin/teams` | list teams |
 | `POST /v1/admin/teams` | create: `{"name", "projects"}` |
@@ -211,11 +212,14 @@ are defined in `internal/opapi`:
   and calls no service, and the token is never printed. Name that file as
   `operator_token_file`, and keep the operator's own copy owner-only.
 - **Rotation.** The service reads the file on every operator call, so
-  replacing it rotates the credential without a restart. A file that
-  becomes unreadable fails closed (`503 operator_unavailable`).
+  replacing it rotates the credential without a restart: write a new token
+  with `aicrew operator-token new -file NEW` beside the old file, then
+  rename `NEW` over `operator_token_file`. A file that is missing,
+  readable by another account or malformed fails closed: every operator
+  call answers `503 operator_unavailable` until it is fixed.
 - **Failed attempts.** Failed authentications are limited to 10 a minute per
   client address. Once that budget is spent, the address is refused with
-  `429` before its bearer is compared.
+  `429 rate_limited` and a `Retry-After` before its bearer is compared.
 
 **Secrets and errors.**
 - **Once-only secrets.** A credential's bearer and an invitation's code exist
@@ -224,9 +228,19 @@ are defined in `internal/opapi`:
 - **No client keys.** Every write is its own command: the service takes no
   client idempotency key, because a replayed issue could not answer its
   secret again.
-- **Error codes.** Team names are unique (`409 team_exists`), a stale
-  `expected_revision` is `409 revision_conflict`, and validation failures
-  are `400 invalid_request` with the store's message.
+- **Error codes.** Every refusal is `{"code", "message"}`; the message
+  never carries a secret.
+  - `400 invalid_request`: a validation failure, with the store's message.
+  - `404 not_found`: no such team, invitation or credential.
+  - `409 team_exists`: team names are unique.
+  - `409 revision_conflict`: a stale `expected_revision`.
+  - `409 credential_limit`: the hub already has two active credentials.
+  - `409 rotate_needs_one_active`: rotate found other than one.
+  - `409 invitation_final`: the invitation is already redeemed or revoked.
+  - `500 internal_error`: no message.
+- **Bodies** are `application/json` of at most 16 KiB, decoded strictly
+  (unknown fields are refused). Otherwise `415` or `413`, both
+  `invalid_request`.
 - **The log.** Each operator action is logged as `operator` with its action
   (`team.create`, `invitation.issue`, ...), its outcome and the ID it
   touched, besides the request line; never a body, a bearer or a code.

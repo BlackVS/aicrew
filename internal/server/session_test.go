@@ -603,8 +603,9 @@ func TestLimiterRefills(t *testing.T) {
 // The routes agents and aimem reach call only the store operations that
 // authenticate by proof, session token or peer credential: never one that
 // trusts a caller it is given. The operator API (admin.go) alone calls the
-// operator's store operations, and builds the operator's caller only inside
-// the wrapper that has compared the operator credential.
+// operator's store operations, only in functions handed the operator's caller,
+// and builds that caller only inside the wrapper that has compared the
+// operator credential.
 func TestExposureGuard(t *testing.T) {
 	operatorOps := map[string]bool{
 		"ListIntrospectionCredentials": true, "IssueIntrospectionCredential": true, "RevokeIntrospectionCredential": true,
@@ -651,6 +652,9 @@ func TestExposureGuard(t *testing.T) {
 		for _, decl := range f.Decls {
 			fn, _ := decl.(*ast.FuncDecl)
 			inOperator := admin && fn != nil && fn.Name.Name == "operator"
+			// Only the wrapper and the functions it hands the operator's
+			// caller to may reach the operator's store operations.
+			operatorFn := admin && fn != nil && (inOperator || takesCaller(fn))
 			ast.Inspect(decl, func(n ast.Node) bool {
 				sel, ok := n.(*ast.SelectorExpr)
 				if !ok {
@@ -658,7 +662,7 @@ func TestExposureGuard(t *testing.T) {
 				}
 				if inner, ok := sel.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "store" {
 					checked++
-					if !allowed[sel.Sel.Name] && !(admin && operatorOps[sel.Sel.Name]) {
+					if !allowed[sel.Sel.Name] && !(operatorFn && operatorOps[sel.Sel.Name]) {
 						t.Errorf("%s: the service calls store.%s", fset.Position(sel.Pos()), sel.Sel.Name)
 					}
 				}
@@ -679,6 +683,18 @@ func TestExposureGuard(t *testing.T) {
 	if checked < len(allowed) {
 		t.Fatalf("found only %d store calls; the guard is not looking at the service", checked)
 	}
+}
+
+// takesCaller reports whether fn has a store.Caller parameter.
+func takesCaller(fn *ast.FuncDecl) bool {
+	for _, f := range fn.Type.Params.List {
+		if sel, ok := f.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "Caller" {
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "store" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestRouteInventory(t *testing.T) {

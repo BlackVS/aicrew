@@ -270,7 +270,7 @@ func runOperatorToken(args []string, stdout, stderr io.Writer) int {
 		err = optoken.Write(*file, tok)
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "aicrew: write the operator token (the file must not exist):", err)
+		fmt.Fprintln(stderr, "aicrew: write the operator token to a new file:", err)
 		return 1
 	}
 	fmt.Fprintf(stdout, "Wrote a new operator token to %s. Name it as operator_token_file in aicrewd.json on the service's host, and keep the operator's copy owner-only.\n", *file)

@@ -129,3 +129,41 @@ func TestClientAddrKeys(t *testing.T) {
 		}
 	}
 }
+
+// spent takes no token, refills before it answers, and refuses an unknown key
+// only when allow could not admit it either.
+func TestLimiterSpent(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	l := newLimiter(2, time.Minute)
+	l.now = func() time.Time { return now }
+	l.max = 2
+	if spent, wait := l.spent("a"); spent || wait != 0 {
+		t.Fatalf("an unknown key: %v, %v", spent, wait)
+	}
+	l.allow("a")
+	for i := 0; i < 3; i++ {
+		if spent, _ := l.spent("a"); spent {
+			t.Fatal("spent took a token, or one token reads as none")
+		}
+	}
+	l.allow("a")
+	spent, wait := l.spent("a")
+	if !spent || wait <= 0 || wait > 30*time.Second {
+		t.Fatalf("an empty bucket: %v, %v", spent, wait)
+	}
+	now = now.Add(30 * time.Second)
+	if spent, _ := l.spent("a"); spent {
+		t.Fatal("no refill before answering")
+	}
+	// A full table of draining buckets: a new key can be neither admitted
+	// nor counted, so it is refused until one refills.
+	l.allow("a")
+	l.allow("b")
+	if spent, wait := l.spent("c"); !spent || wait <= 0 {
+		t.Fatalf("a new key on a full table: %v, %v", spent, wait)
+	}
+	now = now.Add(time.Minute)
+	if spent, _ := l.spent("c"); spent {
+		t.Fatal("still refused after the table refilled")
+	}
+}

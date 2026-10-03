@@ -36,14 +36,15 @@ yet: the harness skips there.
 ## The pin
 
 `aimemPin` in `e2e/realaimem/harness_test.go` is the aimem commit the
-harness builds. It is master after every prerequisite (C5b, C6, C5-w3 and
-`aimem hub credential`), the reservation fixture's corrected fences, and
-`hub add --ca-file` with token files, because no aimem release carries them
-yet.
+harness builds: the v0.7.4 release (79f713f), the tested aimem in
+`internal/agent/supported.json`. It carries every prerequisite (C5b, C6,
+C5-w3 and `aimem hub credential`), the reservation fixture's corrected
+fences, and `hub add --ca-file` with token files.
 
 The build stamps the commit's `git describe` as aimem's version, as aimem's
-release build stamps a tag, so `aicrew-agent`'s dependency check reads it as
-a development build. Moving the pin to the first release tag is a follow-up.
+release build stamps the tag, so the version is `v0.7.4` and
+`aicrew-agent`'s dependency check reads it as the supported release. The
+source clone must hold the tag's commit (`git fetch --tags`).
 
 ## What a run sets up
 

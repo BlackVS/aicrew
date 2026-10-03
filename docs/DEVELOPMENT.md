@@ -661,6 +661,16 @@ every pull request (`release-build`), publishing nothing.
    main's tip standing in, and publishes nothing. Use it before the first real
    tag.
 
+   Its sums are not the release's, by design. Go stamps the main module's
+   version from the VCS tag (`go version -m` shows
+   `mod github.com/BlackVS/aicrew v0.1.0` in a released binary), and a dry run
+   builds before the tag exists. So every binary differs while `LICENSE`
+   matches (v0.1.0: dry run 37019427980 and release run 37019971021, same
+   commit and Go version, all 15 binary digests different). A dry run proves
+   the build, the checks and the asset list, not the digests. The published
+   sums are reproduced by rebuilding from the tag with the same Go version and
+   the same flags (`-trimpath`, `-s -w`, `CGO_ENABLED=0`, an unmodified tree).
+
 **What is published:**
 - `aicrewd`, `aicrew` and `aicrew-agent` for linux/amd64, linux/arm64,
   darwin/amd64, darwin/arm64 and windows/amd64, as single binaries named

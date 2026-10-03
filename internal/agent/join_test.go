@@ -191,7 +191,8 @@ func setupJoin(t *testing.T) *joinEnv {
 	}
 	e.teamID = tm.ID
 	srv, err := server.New(server.Config{StorePath: e.path, ListenAddr: "127.0.0.1:0", TLSCertFile: certFile,
-		TLSKeyFile: keyFile, ServiceID: "aicrew-test", ShutdownTimeout: server.Duration(5 * time.Second)},
+		TLSKeyFile: keyFile, ServiceID: "aicrew-test", ShutdownTimeout: server.Duration(5 * time.Second),
+		OperatorTokenFile: operatorTokenFile(t)},
 		st, slog.New(slog.NewTextHandler(new(bytes.Buffer), nil)), server.WithVerifier(e.ver))
 	if err != nil {
 		t.Fatal(err)

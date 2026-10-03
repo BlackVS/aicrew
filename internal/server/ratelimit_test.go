@@ -129,3 +129,30 @@ func TestClientAddrKeys(t *testing.T) {
 		}
 	}
 }
+
+// refund gives back a token allow took, never beyond the full burst, and
+// does nothing for a key without a bucket.
+func TestLimiterRefund(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	l := newLimiter(2, time.Minute)
+	l.now = func() time.Time { return now }
+	l.refund("a")
+	if _, ok := l.buckets["a"]; ok {
+		t.Fatal("refund created a bucket")
+	}
+	l.allow("a")
+	l.allow("a")
+	if ok, _ := l.allow("a"); ok {
+		t.Fatal("a third token within the burst")
+	}
+	l.refund("a")
+	if ok, _ := l.allow("a"); !ok {
+		t.Fatal("the refunded token is not there")
+	}
+	l.refund("a")
+	l.refund("a")
+	l.refund("a")
+	if b := l.buckets["a"]; b.tokens != 2 {
+		t.Fatalf("refunds filled the bucket to %v, beyond the burst of 2", b.tokens)
+	}
+}

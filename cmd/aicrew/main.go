@@ -6,6 +6,7 @@
 //	aicrew introspection-credential revoke -store PATH -id ID
 //	aicrew invitation issue|list|revoke ... (see invitation.go)
 //	aicrew team create|list|show|projects|rename ... (see team.go)
+//	aicrew operator-token new -file PATH
 //	aicrew version [-json]
 //
 // -operations names what the new credential permits, comma-separated:
@@ -33,6 +34,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/optoken"
 	"github.com/BlackVS/aicrew/internal/privatefile"
 	"github.com/BlackVS/aicrew/internal/store"
 	"github.com/BlackVS/aicrew/internal/version"
@@ -49,6 +51,7 @@ const usage = `usage:
   aicrew introspection-credential revoke -store PATH -id ID
   aicrew invitation issue|list|revoke ...   (run "aicrew invitation" for its usage)
   aicrew team create|list|show|projects|rename ...   (run "aicrew team" for its usage)
+  aicrew operator-token new -file PATH
   aicrew version [-json]
 `
 
@@ -67,6 +70,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) >= 1 && args[0] == "team" {
 		return runTeam(ctx, args[1:], stdout, stderr)
+	}
+	if len(args) >= 1 && args[0] == "operator-token" {
+		return runOperatorToken(args[1:], stdout, stderr)
 	}
 	if len(args) >= 1 && args[0] == "version" {
 		fs := flag.NewFlagSet("aicrew version", flag.ContinueOnError)
@@ -245,6 +251,30 @@ func parseOps(flag string) []string {
 		}
 	}
 	return ops
+}
+
+// runOperatorToken is aicrew operator-token new: it writes a new operator
+// credential to a new owner-only file, for aicrewd.json's
+// operator_token_file and the operator's own copy. It opens no store and
+// calls no service; the token is never printed.
+func runOperatorToken(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("aicrew operator-token new", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	file := fs.String("file", "", "new private file that receives the token")
+	if len(args) < 1 || args[0] != "new" || fs.Parse(args[1:]) != nil || fs.NArg() != 0 || *file == "" {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	tok, err := optoken.Generate()
+	if err == nil {
+		err = optoken.Write(*file, tok)
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "aicrew: write the operator token to a new file:", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Wrote a new operator token to %s. Name it as operator_token_file in aicrewd.json on the service's host, and keep the operator's copy owner-only.\n", *file)
+	return 0
 }
 
 // newKey is a fresh command key: an operator's issue is never replayed.

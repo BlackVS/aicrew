@@ -138,7 +138,8 @@ func TestNewChecksReadCredential(t *testing.T) {
 	dir := t.TempDir()
 	redeem, read := filepath.Join(dir, "redemption.token"), filepath.Join(dir, "read.token")
 	writePrivate(t, redeem, "sample-redemption-credential")
-	cfg := Config{ListenAddr: "127.0.0.1:0", TLSCertFile: certFile, TLSKeyFile: keyFile, ServiceID: "aicrew-test",
+	opFile, _ := operatorToken(t)
+	cfg := Config{ListenAddr: "127.0.0.1:0", TLSCertFile: certFile, TLSKeyFile: keyFile, ServiceID: "aicrew-test", OperatorTokenFile: opFile,
 		ShutdownTimeout: Duration(time.Second), Aimem: &AimemConfig{BaseURL: "https://hub.example",
 			TLSTrustMode: "ca_dns", TLSTrustValue: "hub.example", RedemptionTokenFile: redeem, ReadTokenFile: read}}
 	log := slogDiscard()

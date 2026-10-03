@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/optoken"
 	"github.com/BlackVS/aicrew/internal/store"
 )
 
@@ -121,10 +122,19 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 		mems = append(mems, h.prepareMember(sp, aEnv))
 	}
 
-	// 9. aicrewd.
+	// 9. aicrewd, with the operator credential its operator API requires.
+	opToken, err := optoken.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opFile := filepath.Join(aDir, "operator.token")
+	if err := optoken.Write(opFile, opToken); err != nil {
+		t.Fatal(err)
+	}
+	h.knowSecretFile(opFile)
 	cfg := map[string]any{
 		"store_path": h.storePath, "listen_addr": fmt.Sprintf("127.0.0.1:%d", h.aicrewdPort),
-		"tls_cert_file": aCert, "tls_key_file": aKey, "service_id": serviceID,
+		"tls_cert_file": aCert, "tls_key_file": aKey, "service_id": serviceID, "operator_token_file": opFile,
 		// aicrewd reaches the hub through the fault proxy too (F6 holds its
 		// reads back); the proxy presents the hub's own run key.
 		"aimem": map[string]any{"base_url": h.hubProxy.url, "tls_trust_mode": "spki_sha256", "tls_trust_value": h.hubPin,

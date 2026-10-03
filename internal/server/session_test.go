@@ -602,8 +602,17 @@ func TestLimiterRefills(t *testing.T) {
 
 // The routes agents and aimem reach call only the store operations that
 // authenticate by proof, session token or peer credential: never one that
-// trusts a caller it is given.
+// trusts a caller it is given. The operator API (admin.go) alone calls the
+// operator's store operations, only in functions handed the operator's caller,
+// and builds that caller only inside the wrapper that has compared the
+// operator credential.
 func TestExposureGuard(t *testing.T) {
+	operatorOps := map[string]bool{
+		"ListIntrospectionCredentials": true, "IssueIntrospectionCredential": true, "RevokeIntrospectionCredential": true,
+		"ListTeams": true, "CreateTeam": true, "GetTeam": true, "ListMembers": true, "SetTeamProjects": true,
+		"RenameTeam": true, "ListInvitations": true, "IssueInvitation": true, "GetInvitation": true,
+		"RevokeInvitation": true,
+	}
 	allowed := map[string]bool{
 		"AuthenticateIntrospection": true, "Introspect": true,
 		"AuthenticateCoordination": true, "CoordinationFact": true,
@@ -626,7 +635,7 @@ func TestExposureGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	fset := token.NewFileSet()
-	checked := 0
+	checked, operatorCallers := 0, 0
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
@@ -639,26 +648,53 @@ func TestExposureGuard(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			sel, ok := n.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			if inner, ok := sel.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "store" {
-				checked++
-				if !allowed[sel.Sel.Name] {
-					t.Errorf("%s: the service calls store.%s", fset.Position(sel.Pos()), sel.Sel.Name)
+		admin := name == "admin.go"
+		for _, decl := range f.Decls {
+			fn, _ := decl.(*ast.FuncDecl)
+			inOperator := admin && fn != nil && fn.Name.Name == "operator"
+			// Only the wrapper and the functions it hands the operator's
+			// caller to may reach the operator's store operations.
+			operatorFn := admin && fn != nil && (inOperator || takesCaller(fn))
+			ast.Inspect(decl, func(n ast.Node) bool {
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok {
+					return true
 				}
-			}
-			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "store" && forbiddenPkg[sel.Sel.Name] {
-				t.Errorf("%s: the service constructs store.%s", fset.Position(sel.Pos()), sel.Sel.Name)
-			}
-			return true
-		})
+				if inner, ok := sel.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "store" {
+					checked++
+					if !allowed[sel.Sel.Name] && !(operatorFn && operatorOps[sel.Sel.Name]) {
+						t.Errorf("%s: the service calls store.%s", fset.Position(sel.Pos()), sel.Sel.Name)
+					}
+				}
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "store" && forbiddenPkg[sel.Sel.Name] {
+					if inOperator && sel.Sel.Name == "OperatorCaller" {
+						operatorCallers++
+					} else {
+						t.Errorf("%s: the service constructs store.%s", fset.Position(sel.Pos()), sel.Sel.Name)
+					}
+				}
+				return true
+			})
+		}
+	}
+	if operatorCallers != 1 {
+		t.Fatalf("the operator wrapper builds the operator's caller %d times, want 1", operatorCallers)
 	}
 	if checked < len(allowed) {
 		t.Fatalf("found only %d store calls; the guard is not looking at the service", checked)
 	}
+}
+
+// takesCaller reports whether fn has a store.Caller parameter.
+func takesCaller(fn *ast.FuncDecl) bool {
+	for _, f := range fn.Type.Params.List {
+		if sel, ok := f.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "Caller" {
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "store" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestRouteInventory(t *testing.T) {
@@ -670,7 +706,12 @@ func TestRouteInventory(t *testing.T) {
 		}
 	}
 	sort.Strings(got)
-	want := []string{"GET /healthz", "GET /v1/crew/inbox", "GET /v1/crew/session", "POST /v1/crew/attempts", "POST /v1/crew/attempts/claim",
+	want := []string{"GET /healthz", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations",
+		"GET /v1/admin/team", "GET /v1/admin/teams", "GET /v1/crew/inbox", "GET /v1/crew/session",
+		"POST /v1/admin/introspection-credentials", "POST /v1/admin/introspection-credentials/revoke",
+		"POST /v1/admin/introspection-credentials/rotate", "POST /v1/admin/invitations", "POST /v1/admin/invitations/revoke",
+		"POST /v1/admin/team/projects", "POST /v1/admin/team/rename", "POST /v1/admin/teams",
+		"POST /v1/crew/attempts", "POST /v1/crew/attempts/claim",
 		"POST /v1/crew/attempts/{id}/accept", "POST /v1/crew/attempts/{id}/confirm-delivery",
 		"POST /v1/crew/attempts/{id}/confirm-stop", "POST /v1/crew/attempts/{id}/decline", "POST /v1/crew/attempts/{id}/finalize",
 		"POST /v1/crew/attempts/{id}/release", "POST /v1/crew/attempts/{id}/review", "POST /v1/crew/attempts/{id}/settle",
@@ -692,7 +733,8 @@ func TestNewChecksRedemptionCredential(t *testing.T) {
 	}
 	defer st.Close()
 	tokenFile := filepath.Join(t.TempDir(), "redemption.token")
-	cfg := Config{ListenAddr: "127.0.0.1:0", TLSCertFile: certFile, TLSKeyFile: keyFile, ServiceID: "aicrew-test",
+	opFile, _ := operatorToken(t)
+	cfg := Config{ListenAddr: "127.0.0.1:0", TLSCertFile: certFile, TLSKeyFile: keyFile, ServiceID: "aicrew-test", OperatorTokenFile: opFile,
 		ShutdownTimeout: Duration(time.Second), Aimem: &AimemConfig{BaseURL: "https://hub.example",
 			TLSTrustMode: "ca_dns", TLSTrustValue: "hub.example", RedemptionTokenFile: tokenFile}}
 	log := slogDiscard()

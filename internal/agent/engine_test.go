@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/optoken"
 	"github.com/BlackVS/aicrew/internal/server"
 	"github.com/BlackVS/aicrew/internal/store"
 	"github.com/BlackVS/aicrew/internal/tlstrust"
@@ -111,7 +112,8 @@ func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
 		opts = append(opts, server.WithReader(fileReader{root: root}))
 	}
 	srv, err := server.New(server.Config{StorePath: storePath, ListenAddr: "127.0.0.1:0", TLSCertFile: certFile,
-		TLSKeyFile: keyFile, ServiceID: "aicrew-test", ShutdownTimeout: server.Duration(5 * time.Second)},
+		TLSKeyFile: keyFile, ServiceID: "aicrew-test", ShutdownTimeout: server.Duration(5 * time.Second),
+		OperatorTokenFile: operatorTokenFile(t)},
 		st, slog.New(slog.NewTextHandler(new(bytes.Buffer), nil)), opts...)
 	if err != nil {
 		t.Fatal(err)
@@ -675,4 +677,19 @@ func TestLeaveRecordedCloseFailsThenRetries(t *testing.T) {
 	if n := c.sessionsOf(t); n != 1 {
 		t.Fatalf("%d sessions: a leave entered the team", n)
 	}
+}
+
+// operatorTokenFile is a new operator credential file, which aicrewd
+// requires to start.
+func operatorTokenFile(t *testing.T) string {
+	t.Helper()
+	tok, err := optoken.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "operator.token")
+	if err := optoken.Write(path, tok); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

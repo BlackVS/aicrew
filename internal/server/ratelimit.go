@@ -70,6 +70,18 @@ func (l *limiter) allow(key string) (bool, time.Duration) {
 	return true, 0
 }
 
+// refund returns a token allow took for key, up to the full burst. A
+// caller that charges every attempt up front, atomically, gives back the
+// charge of an attempt that turned out not to count.
+func (l *limiter) refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b, ok := l.buckets[key]; ok {
+		l.refill(b, l.now())
+		b.tokens = math.Min(l.rate, b.tokens+1)
+	}
+}
+
 func (l *limiter) refill(b *bucket, now time.Time) {
 	if elapsed := now.Sub(b.last); elapsed > 0 {
 		b.tokens = math.Min(l.rate, b.tokens+elapsed.Seconds()*l.rate/l.window.Seconds())

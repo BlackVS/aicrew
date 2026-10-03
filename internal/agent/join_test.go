@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -39,6 +40,9 @@ func init() {
 	}
 	guardOrExit("aimem")
 	args := os.Args[1:]
+	if mode == "provision" {
+		os.Exit(fakeProvisioning(args))
+	}
 	if len(args) != 4 || args[0] != "hub" || args[1] != "credential" || args[3] != "--json" {
 		fmt.Fprintf(os.Stderr, "unexpected arguments %q\n", args)
 		os.Exit(3)
@@ -58,6 +62,57 @@ func init() {
 		fmt.Println("{}")
 	}
 	os.Exit(0)
+}
+
+// fakeProvisioning plays aimem's hub add, hub task-token and hub credential
+// against the state root the environment names, and records every call's
+// arguments, its two variables and its standard input in calls.log there.
+// AICREW_JOIN_FAKE_FAIL names a command (add or task-token) to fail.
+func fakeProvisioning(args []string) int {
+	root := os.Getenv(StateDirEnv)
+	stdin, _ := io.ReadAll(os.Stdin)
+	if f, err := os.OpenFile(filepath.Join(root, "calls.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+		b, _ := json.Marshal(map[string]any{"args": args, "state": root, "socket": os.Getenv(SocketEnv), "stdin": string(stdin)})
+		f.Write(append(b, '\n'))
+		f.Close()
+	}
+	if len(args) < 3 || args[0] != "hub" {
+		return 3
+	}
+	hubFile := filepath.Join(root, "hub-"+args[2])
+	switch args[1] {
+	case "credential":
+		raw, err := os.ReadFile(hubFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "hub %q is not configured on this machine\n", args[2])
+			return 1
+		}
+		cred := "none"
+		if strings.Contains(string(raw), "task") {
+			cred = "set"
+		}
+		fmt.Printf(`{"hub": %q, "credential": %q, "state": "active", "scope": "user", "user_id": "user-1", "token_id": "tok-1"}`+"\n", args[2], cred)
+		return 0
+	case "add", "task-token":
+		if os.Getenv("AICREW_JOIN_FAKE_FAIL") == args[1] {
+			fmt.Fprintln(os.Stderr, "aimem refused it")
+			return 1
+		}
+		if args[1] == "task-token" {
+			if _, err := os.Stat(hubFile); err != nil {
+				fmt.Fprintf(os.Stderr, "no hub named %q\n", args[2])
+				return 1
+			}
+		}
+		f, err := os.OpenFile(hubFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return 1
+		}
+		fmt.Fprintln(f, args[1])
+		f.Close()
+		return 0
+	}
+	return 3
 }
 
 // joinVerifier vouches for the fake receipt of a challenge as its user.
@@ -88,11 +143,22 @@ type fakeJoinAimem struct {
 	badProofs int // the first proofs give a receipt aimem's hub would refuse
 	proofs    int
 	onCheck   func() // runs during the credential check
+	// provisions counts Provision calls.
+	provisions int
 }
 
 func activeAimem() *fakeJoinAimem {
 	return &fakeJoinAimem{known: true, cred: CredentialStatus{Hub: "main", Credential: "set", State: "active",
 		Scope: "user", UserID: "user-1", TokenID: "tok-1"}}
+}
+
+func (f *fakeJoinAimem) Provision(context.Context, string, string, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.provisions++
+	f.known, f.credErr = true, nil
+	f.cred = CredentialStatus{Hub: "main", Credential: "set", State: "active", Scope: "user", UserID: "user-1", TokenID: "tok-1"}
+	return nil
 }
 
 func (f *fakeJoinAimem) Credential(context.Context) (CredentialStatus, bool, error) {

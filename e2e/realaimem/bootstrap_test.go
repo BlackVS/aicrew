@@ -272,13 +272,17 @@ func (h *harness) joinMember(mem *member) {
 	t := h.t
 	t.Helper()
 	name := mem.name
-	// The member's aimem knows the hub, with the run's CA, and holds the
-	// member's user token as its checkpoint and task credential. Both are
-	// read from standard input, never from an argument (aimem #165).
-	token := []byte(mem.token + "\n")
-	h.must(mem.env, token, h.aimem(), "hub", "add", hubName, h.hubProxy.url, "--token-file", "-", "--ca-file", h.caFile)
-	h.must(mem.env, token, h.aimem(), "hub", "task-token", hubName, "--token-file", "-")
+	// join provisions the member's aimem installation in its home itself:
+	// the hub, with the run's CA copied into the home, and the member's user
+	// token as its checkpoint and task credential, read from an owner-only
+	// file and given to aimem on its standard input, never as an argument.
+	tokenFile := filepath.Join(mem.dir, "member.token")
+	h.writePrivate(tokenFile, []byte(mem.token+"\n"))
+	h.knowSecretFile(tokenFile)
 	mem.token = ""
+	h.join(mem, mem.code, "-aimem-url", h.hubProxy.url, "-aimem-token-file", tokenFile, "-aimem-ca-file", h.caFile)
+	mem.code = ""
+	os.Remove(tokenFile)
 	var cred struct {
 		Credential string `json:"credential"`
 		State      string `json:"state"`
@@ -287,9 +291,6 @@ func (h *harness) joinMember(mem *member) {
 		cred.Credential != "set" || cred.State != "active" {
 		t.Fatalf("%s's aimem credential: %s", name, out)
 	}
-
-	h.join(mem, mem.code)
-	mem.code = ""
 
 	// The launcher's client is a stand-in that only keeps the session open:
 	// the scenarios drive the steps through its channel.
@@ -305,7 +306,7 @@ func (h *harness) joinMember(mem *member) {
 
 // join runs `aicrew-agent join` at a pseudo-terminal and types the code at
 // its hidden prompt.
-func (h *harness) join(mem *member, code string) {
+func (h *harness) join(mem *member, code string, extra ...string) {
 	t := h.t
 	t.Helper()
 	master, slave, err := openPTY()
@@ -313,9 +314,10 @@ func (h *harness) join(mem *member, code string) {
 		t.Fatalf("a terminal for join: %v", err)
 	}
 	defer master.Close()
-	cmd := exec.Command(filepath.Join(h.bin, "aicrew-agent"), "join", "-label", mem.name, "-home", mem.home,
+	args := append([]string{"join", "-label", mem.name, "-home", mem.home,
 		"-url", h.aicrewdProxy.url, "-tls-trust-mode", "spki_sha256", "-tls-trust-value", h.aicrewdPin,
-		"-aimem-hub", hubName, "-aimem-command", filepath.Join(h.bin, "aimem-timed"), "-client", "claude", "-json")
+		"-aimem-hub", hubName, "-aimem-command", filepath.Join(h.bin, "aimem-timed"), "-client", "claude", "-json"}, extra...)
+	cmd := exec.Command(filepath.Join(h.bin, "aicrew-agent"), args...)
 	cmd.Env = mem.env
 	cmd.Stdin = slave
 	var out, errb bytes.Buffer

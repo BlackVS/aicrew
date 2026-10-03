@@ -63,6 +63,11 @@ type JoinOptions struct {
 	// Clients are the clients the home is for (claude, opencode): required
 	// on the first run, kept in agent.json after.
 	Clients []string
+	// AimemURL, AimemTokenFile and AimemCAFile provision the home's aimem
+	// installation on the first run (provision.go): the hub's origin, the
+	// file holding the member's token (or "-" for the hidden prompt) and,
+	// for a hub on a private CA, its CA bundle.
+	AimemURL, AimemTokenFile, AimemCAFile string
 }
 
 // JoinDeps are the bootstrap's collaborators; tests replace them.
@@ -70,8 +75,11 @@ type JoinDeps struct {
 	Crew     func(Config) (InvitationAPI, error)
 	Aimem    func(command, hub, home string) JoinAimem // the home's installation
 	ReadCode func() (string, error)                    // the hidden prompt
-	Out      io.Writer                                 // the plan and progress, never a secret
-	Sleep    func(context.Context, time.Duration) error
+	// ReadToken reads the member's aimem token at a hidden prompt, for
+	// -aimem-token-file -.
+	ReadToken func() (string, error)
+	Out       io.Writer // the plan and progress, never a secret
+	Sleep     func(context.Context, time.Duration) error
 	// check runs the dependency and client check at the end of a run; nil
 	// means the real one (runCheck). Package tests replace it.
 	check func(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) (CheckReport, error)
@@ -84,6 +92,9 @@ type JoinAimem interface {
 	// command); the proof then decides.
 	Credential(ctx context.Context) (st CredentialStatus, known bool, err error)
 	Proof(ctx context.Context, serviceID, hubID, challengeID string) (string, error)
+	// Provision gives the home's installation the hub and the member's task
+	// credential, the token on aimem's standard input only.
+	Provision(ctx context.Context, hubURL, caFile, token string) error
 }
 
 // JoinReport is the bootstrap's result. It never carries a secret.
@@ -208,6 +219,9 @@ func (j *joiner) options() error {
 	if _, err := selectClients(o.Clients, j.doc); err != nil {
 		return err
 	}
+	if err := o.checkProvisionOptions(j.doc.linked()); err != nil {
+		return err
+	}
 	if j.doc.linked() {
 		return nil // refresh checks the flags against the recorded binding
 	}
@@ -261,6 +275,9 @@ func (j *joiner) precheck(ctx context.Context) (JoinReport, bool) {
 			"code is read only at its hidden prompt, never from an argument, a pipe, a file or the environment"), true
 	}
 	j.aimem = j.deps.Aimem(j.aimemCommand(), j.o.AimemHub, j.o.Home)
+	if r, stop := j.provision(ctx); stop {
+		return r, true
+	}
 	return j.checkCredential(ctx, j.aimem)
 }
 

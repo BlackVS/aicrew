@@ -468,10 +468,33 @@ bin/aicrew-agent join -label builder -url https://aicrew.example:8443 \
 bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh and check
 ```
 
-- **The operator provisions the home's aimem installation once, before
-  `join`** (`docs/WORKSPACE.md`, "The member's aimem installation"). With
-  the home's two variables set for these two commands only, it gives that
-  installation the hub and the member's individual credential:
+- **The first `join` provisions the home's aimem installation**
+  (`docs/WORKSPACE.md`, "The member's aimem installation"):
+
+  ```sh
+  bin/aicrew-agent join -label builder -url https://aicrew.example:8443 \
+    -tls-trust-mode ca_dns -tls-trust-value aicrew.example -aimem-hub main -client claude \
+    -aimem-url https://aimem.example -aimem-token-file member.token [-aimem-ca-file hub-ca.pem]
+  ```
+
+  - **The token.** `-aimem-token-file` names an owner-only file holding the
+    member's user-scoped token (`aimem_user_...`), or `-` to type it at a
+    hidden prompt. A token given as the flag's value is refused: a token is
+    never an argument.
+  - **The CA.** `-aimem-ca-file`, for a hub on a private CA, is copied to the
+    home's `creds/aimem.<hub>.ca.pem` (owner-only), so nothing in the
+    installation points outside the home.
+  - **What join runs.** It runs `aimem hub add` and `aimem hub task-token`
+    against the home's installation, with the token on aimem's standard input
+    only, then checks the credential as below.
+  - **Reruns.** A home whose credential is already active is not provisioned
+    again. A failed step stops the run with aimem's message; rerunning with
+    the same flags completes it.
+  - **On a linked home** the flags are refused.
+
+  The manual equivalent, for an operator who provisions a home before `join`,
+  runs the same two commands with the home's two variables set for them
+  only:
 
   ```sh
   export AIMEM_STATE_DIR=~/aicrew/agents/builder/aimem   # absolute paths
@@ -534,7 +557,8 @@ bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh and chec
   or failed, 2 on usage. A blocked check leaves the home linked: rerun
   after following its instructions. It opens no session: it prints the
   `session start` command.
-- It writes no secret. `creds/` is created empty and owner-only. `aimem/`
+- It writes no secret of its own. `creds/` is created owner-only and holds
+  only the hub's CA copy when `-aimem-ca-file` is given. `aimem/`
   is created owner-only, or restricted if the operator's provisioning created
   it; the individual aimem credential stays there, in aimem's own storage.
 - It writes the managed `.claude/settings.json` (`env`: the home's

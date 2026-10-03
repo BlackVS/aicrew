@@ -110,6 +110,11 @@ installation (`~/.local/state/aimem` by default) stays the human's. The
 survey, the options and the decision (D-STORE) are recorded in
 [proposals/STORAGE-MODEL.md](proposals/STORAGE-MODEL.md).
 
+- **Provisioning.** The first `join` provisions it from the member's token
+  file (or a hidden prompt) and, for a hub on a private CA, the hub's CA
+  bundle, which it copies to `creds/aimem.<hub>.ca.pem` so that nothing in
+  the installation points outside the home (DEVELOPMENT, "Joining a
+  team").
 - **`aimem/` is owner-only and secret**, like `creds/`. `join` creates it
   and restricts it, and never reads or changes its contents: aimem owns
   them. It is never backed up or synced with the home, and it is never

@@ -16,7 +16,10 @@ import (
 const joinUsage = `usage: aicrew-agent join -label LABEL [-home DIR] -url https://HOST[:PORT]
          -tls-trust-mode ca_dns|spki_sha256 -tls-trust-value VALUE -aimem-hub NAME
          -client claude|opencode[,…] [-aimem-command PATH] [-json]
-       The invitation code is read at a hidden prompt. On a linked home, only
+         [-aimem-url https://HUB -aimem-token-file PATH|- [-aimem-ca-file PATH]]
+       The invitation code is read at a hidden prompt. The -aimem flags
+       provision the home's aimem installation on the first run, the token
+       read from its owner-only file or, with -, at a hidden prompt. On a linked home, only
        -home (or -label) is needed: the run refreshes the home's files and
        checks its dependencies and clients.`
 
@@ -28,8 +31,9 @@ func joinDeps(stderr io.Writer) agent.JoinDeps {
 		Aimem: func(command, hub, home string) agent.JoinAimem {
 			return agent.ExecAimem{Command: command, Hub: hub, Home: home}.JoinAimem()
 		},
-		ReadCode: func() (string, error) { return agent.ReadHidden(os.Stdin, stderr, "Invitation code: ") },
-		Out:      stderr,
+		ReadCode:  func() (string, error) { return agent.ReadHidden(os.Stdin, stderr, "Invitation code: ") },
+		ReadToken: func() (string, error) { return agent.ReadHidden(os.Stdin, stderr, "The member's aimem token: ") },
+		Out:       stderr,
 	}
 }
 
@@ -46,6 +50,9 @@ func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.W
 	fs.StringVar(&o.Trust.Value, "tls-trust-value", "", "")
 	fs.StringVar(&o.AimemHub, "aimem-hub", "", "")
 	fs.StringVar(&o.AimemCommand, "aimem-command", "", "")
+	fs.StringVar(&o.AimemURL, "aimem-url", "", "")
+	fs.StringVar(&o.AimemTokenFile, "aimem-token-file", "", "")
+	fs.StringVar(&o.AimemCAFile, "aimem-ca-file", "", "")
 	clients := fs.String("client", "", "")
 	asJSON := fs.Bool("json", false, "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || (o.Home == "" && o.Label == "") {

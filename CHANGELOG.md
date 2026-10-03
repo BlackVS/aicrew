@@ -12,6 +12,65 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.2.0] - 2026-10-03
+
+The pilot's release. aicrewd is now the only process that opens the store:
+the operator administers a running service through its operator API, with
+`aicrew` as the console client, and each member's aimem installation lives
+in its agent home, provisioned by `aicrew-agent join`.
+
+### Breaking changes
+
+- `aicrewd.json` requires `operator_token_file`: the owner-only file holding
+  the operator credential. Create it with `aicrew operator-token new`;
+  aicrewd refuses to start without it (#81).
+- `aicrew` no longer opens the store: `-store` is removed. Every command
+  reaches aicrewd over TLS with `-url`, `-tls-trust-mode`,
+  `-tls-trust-value` and `-token-file`, or their `AICREW_*` environment
+  variables (#82).
+- A member's aimem installation is `<home>/aimem`. An agent home linked by
+  0.1.0 takes the new layout and carriers on a `join` rerun; its
+  installation is then provisioned with aimem's own commands under the
+  home's variables (DEVELOPMENT.md), since `join` provisions only a new
+  home (#76, #83).
+
+### Operator API
+
+- aicrewd serves team, invitation and introspection-credential
+  administration under `/v1/admin/` on its HTTPS listener, authenticated by
+  the operator credential, read from its file on every call so that
+  replacing the file rotates it with no restart. A member's session token
+  or aimem's introspection bearer is refused; failed authentications are
+  limited per address, charged before the bearer is compared; every action
+  is logged without a secret (#81).
+- `aicrew` is the console client of that API, from any machine: credential
+  bearers and invitation codes are still answered once and written only to
+  a new owner-only file or a terminal, and an issue whose secret cannot be
+  delivered is revoked (#82).
+
+### Agent homes and aimem
+
+- The member's aimem installation lives in its agent home: `join`, `check`
+  and `run` give every aimem process the home's `AIMEM_STATE_DIR` and
+  `AIMEM_SOCKET`, and the home's managed `.claude/settings.json` and
+  `.mcp.json` carry them to clients started there by hand. `check` reports
+  a carrier that disagrees with the home, foreign `AIMEM_*` values and
+  user-scope aimem servers, and checks the credential in the home's
+  installation (#76).
+- `aicrew-agent join` provisions the home's installation itself, from the
+  member's token file (or a hidden prompt) and the hub's CA, with the token
+  only on aimem's standard input (#83).
+- `aicrew-agent check` honors `CLAUDE_CONFIG_DIR` (#75); its tests ignore a
+  developer's own (#77).
+
+### Releases, tests and records
+
+- The real-aimem end-to-end harness builds the aimem v0.7.4 release (#78).
+- DEVELOPMENT.md explains why a dry run's sums differ from the release's
+  (#79).
+- The storage decision D-STORE is recorded in
+  `docs/proposals/STORAGE-MODEL.md` (#80).
+
 ## [0.1.0] - 2026-10-02
 
 The first release. aicrew runs a team of AI coding agents on top of aimem:

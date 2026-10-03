@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/BlackVS/aicrew/internal/opapi"
 	"github.com/BlackVS/aicrew/internal/optoken"
@@ -356,5 +357,44 @@ func TestAdminRotationRace(t *testing.T) {
 	}
 	if rotated != 1 {
 		t.Fatalf("%d rotations of one credential", rotated)
+	}
+}
+
+// A concurrent burst of wrong bearers compares no more of them than the
+// budget holds: admission and charging are one step, so the rest are refused
+// before any comparison. The limiter's clock is frozen, so nothing refills
+// during the burst.
+func TestAdminFailureLimitUnderConcurrency(t *testing.T) {
+	e := setupAPI(t)
+	frozen := time.Now()
+	e.srv.admin.failures.now = func() time.Time { return frozen }
+	wrong, _ := optoken.Generate()
+	const burst = 3 * AdminFailuresPerMinute
+	var wg sync.WaitGroup
+	statuses := make(chan int, burst)
+	for i := 0; i < burst; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			statuses <- e.admin(t, http.MethodGet, opapi.TeamsPath, wrong, nil, nil).status
+		}()
+	}
+	wg.Wait()
+	close(statuses)
+	counts := map[int]int{}
+	for s := range statuses {
+		counts[s]++
+	}
+	if counts[http.StatusUnauthorized] != AdminFailuresPerMinute || counts[http.StatusTooManyRequests] != burst-AdminFailuresPerMinute {
+		t.Fatalf("statuses %v: want exactly %d comparisons", counts, AdminFailuresPerMinute)
+	}
+	// The right credential is refused too until the budget refills, and
+	// successful calls do not spend it.
+	adminRefused(t, e.admin(t, http.MethodGet, opapi.TeamsPath, e.opToken, nil, nil), http.StatusTooManyRequests, opapi.CodeRateLimited)
+	frozen = frozen.Add(time.Minute)
+	for i := 0; i < 3*AdminFailuresPerMinute; i++ {
+		if got := e.admin(t, http.MethodGet, opapi.TeamsPath, e.opToken, nil, nil); got.status != http.StatusOK {
+			t.Fatalf("call %d with the right credential: %d %s", i, got.status, got.raw)
+		}
 	}
 }

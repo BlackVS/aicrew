@@ -218,8 +218,12 @@ are defined in `internal/opapi`:
   readable by another account or malformed fails closed: every operator
   call answers `503 operator_unavailable` until it is fixed.
 - **Failed attempts.** Failed authentications are limited to 10 a minute per
-  client address. Once that budget is spent, the address is refused with
-  `429 rate_limited` and a `Retry-After` before its bearer is compared.
+  client address. Every attempt takes one from the address's budget before
+  its bearer is compared, in one step, and a successful one gives it back.
+  Concurrent attempts therefore compare no more bearers than the budget
+  holds, and an address with none left is refused with `429 rate_limited`
+  and a `Retry-After` before any comparison. More than 10 operator calls
+  in flight at once from one address are refused the same way.
 
 **Secrets and errors.**
 - **Once-only secrets.** A credential's bearer and an invitation's code exist

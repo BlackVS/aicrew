@@ -23,8 +23,11 @@ import (
 // no restart. A member's session handle or aimem's introspection bearer is
 // never accepted here, and these routes are never consulted for them.
 //
-// Failed authentications are counted per client address; once an address
-// has spent its budget it is refused before its bearer is compared. Every
+// Failed authentications are counted per client address. Every attempt
+// takes a token from the address's budget before its bearer is compared, in
+// one atomic step, and a successful one gives it back: concurrent attempts
+// can never compare more bearers than the budget holds, and an address
+// without a token is refused before any comparison. Every
 // operator action is logged with its action, outcome and the ID it touched,
 // never a body, a bearer or a code.
 
@@ -80,7 +83,7 @@ type adminAction func(w http.ResponseWriter, r *http.Request, op store.Caller) (
 func (s *Server) operator(action string, h adminAction) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		addr := clientAddr(r)
-		if spent, wait := s.admin.failures.spent(addr); spent {
+		if ok, wait := s.admin.failures.allow(addr); !ok {
 			s.adminLog(action, opapi.CodeRateLimited, "")
 			w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 			adminRefuse(w, http.StatusTooManyRequests, opapi.CodeRateLimited, "too many failed operator authentications")
@@ -90,18 +93,20 @@ func (s *Server) operator(action string, h adminAction) http.HandlerFunc {
 		if err != nil {
 			// The file's error names the file, never its content.
 			s.log.Error("the operator token file cannot be read", "error", err.Error())
+			s.admin.failures.refund(addr) // the service's fault, not the client's
 			s.adminLog(action, opapi.CodeUnavailable, "")
 			adminRefuse(w, http.StatusServiceUnavailable, opapi.CodeUnavailable, "the operator credential is unavailable on the service")
 			return
 		}
 		got := bearer(r)
 		if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
-			s.admin.failures.allow(addr)
+			// The attempt's token stays taken: it counts as a failure.
 			s.adminLog(action, opapi.CodeUnauthorized, "")
 			w.Header().Set("WWW-Authenticate", `Bearer realm="aicrew-operator"`)
 			adminRefuse(w, http.StatusUnauthorized, opapi.CodeUnauthorized, "the operator credential is missing or wrong")
 			return
 		}
+		s.admin.failures.refund(addr)
 		op, err := store.OperatorCaller(operatorCallerID)
 		if err != nil {
 			s.adminLog(action, opapi.CodeInternal, "")

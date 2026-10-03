@@ -130,40 +130,29 @@ func TestClientAddrKeys(t *testing.T) {
 	}
 }
 
-// spent takes no token, refills before it answers, and refuses an unknown key
-// only when allow could not admit it either.
-func TestLimiterSpent(t *testing.T) {
+// refund gives back a token allow took, never beyond the full burst, and
+// does nothing for a key without a bucket.
+func TestLimiterRefund(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	l := newLimiter(2, time.Minute)
 	l.now = func() time.Time { return now }
-	l.max = 2
-	if spent, wait := l.spent("a"); spent || wait != 0 {
-		t.Fatalf("an unknown key: %v, %v", spent, wait)
+	l.refund("a")
+	if _, ok := l.buckets["a"]; ok {
+		t.Fatal("refund created a bucket")
 	}
 	l.allow("a")
-	for i := 0; i < 3; i++ {
-		if spent, _ := l.spent("a"); spent {
-			t.Fatal("spent took a token, or one token reads as none")
-		}
-	}
 	l.allow("a")
-	spent, wait := l.spent("a")
-	if !spent || wait <= 0 || wait > 30*time.Second {
-		t.Fatalf("an empty bucket: %v, %v", spent, wait)
+	if ok, _ := l.allow("a"); ok {
+		t.Fatal("a third token within the burst")
 	}
-	now = now.Add(30 * time.Second)
-	if spent, _ := l.spent("a"); spent {
-		t.Fatal("no refill before answering")
+	l.refund("a")
+	if ok, _ := l.allow("a"); !ok {
+		t.Fatal("the refunded token is not there")
 	}
-	// A full table of draining buckets: a new key can be neither admitted
-	// nor counted, so it is refused until one refills.
-	l.allow("a")
-	l.allow("b")
-	if spent, wait := l.spent("c"); !spent || wait <= 0 {
-		t.Fatalf("a new key on a full table: %v, %v", spent, wait)
-	}
-	now = now.Add(time.Minute)
-	if spent, _ := l.spent("c"); spent {
-		t.Fatal("still refused after the table refilled")
+	l.refund("a")
+	l.refund("a")
+	l.refund("a")
+	if b := l.buckets["a"]; b.tokens != 2 {
+		t.Fatalf("refunds filled the bucket to %v, beyond the burst of 2", b.tokens)
 	}
 }

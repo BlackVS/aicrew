@@ -70,26 +70,16 @@ func (l *limiter) allow(key string) (bool, time.Duration) {
 	return true, 0
 }
 
-// spent reports, without taking a token, whether key has none left, and how
-// long until it likely has one. A key without a bucket has its full budget,
-// unless the table is full and allow would refuse it: a key that cannot be
-// counted must not escape the limit.
-func (l *limiter) spent(key string) (bool, time.Duration) {
+// refund returns a token allow took for key, up to the full burst. A
+// caller that charges every attempt up front, atomically, gives back the
+// charge of an attempt that turned out not to count.
+func (l *limiter) refund(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	now := l.now()
-	b, ok := l.buckets[key]
-	if !ok {
-		if len(l.buckets) >= l.max && !l.makeRoom(now) {
-			return true, l.fullAt.Sub(now)
-		}
-		return false, 0
+	if b, ok := l.buckets[key]; ok {
+		l.refill(b, l.now())
+		b.tokens = math.Min(l.rate, b.tokens+1)
 	}
-	l.refill(b, now)
-	if b.tokens < 1 {
-		return true, l.untilTokens(b, 1)
-	}
-	return false, 0
 }
 
 func (l *limiter) refill(b *bucket, now time.Time) {

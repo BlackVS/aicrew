@@ -248,7 +248,17 @@ func TestAdminTokenRotation(t *testing.T) {
 		t.Fatalf("after the replacement: %d %s", got.status, got.raw)
 	}
 	os.Remove(e.opFile)
-	adminRefused(t, e.admin(t, http.MethodGet, opapi.TeamsPath, next, nil, nil), http.StatusServiceUnavailable, opapi.CodeUnavailable)
+	// The service's own fault never spends the client's budget: retries
+	// stay 503, never 429, and the restored file works at once.
+	for i := 0; i < 2*AdminFailuresPerMinute; i++ {
+		adminRefused(t, e.admin(t, http.MethodGet, opapi.TeamsPath, next, nil, nil), http.StatusServiceUnavailable, opapi.CodeUnavailable)
+	}
+	if err := optoken.Write(e.opFile, next); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.admin(t, http.MethodGet, opapi.TeamsPath, next, nil, nil); got.status != http.StatusOK {
+		t.Fatalf("after the file is restored: %d %s", got.status, got.raw)
+	}
 }
 
 // The service does not start without a usable operator token file, and

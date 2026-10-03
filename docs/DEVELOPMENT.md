@@ -219,11 +219,14 @@ are defined in `internal/opapi`:
   call answers `503 operator_unavailable` until it is fixed.
 - **Failed attempts.** Failed authentications are limited to 10 a minute per
   client address. Every attempt takes one from the address's budget before
-  its bearer is compared, in one step, and a successful one gives it back.
-  Concurrent attempts therefore compare no more bearers than the budget
-  holds, and an address with none left is refused with `429 rate_limited`
-  and a `Retry-After` before any comparison. More than 10 operator calls
-  in flight at once from one address are refused the same way.
+  its bearer is compared, in one step, and gives it back once it has
+  authenticated, or when the service cannot read its own token file
+  (`503`). Concurrent attempts therefore compare no more bearers than the
+  budget holds, and an address with none left is refused with
+  `429 rate_limited` and a `Retry-After` before any comparison. A token is
+  held only while a call authenticates, so successful calls are refused
+  only when more of them authenticate at the same moment than the address
+  has budget left.
 
 **Secrets and errors.**
 - **Once-only secrets.** A credential's bearer and an invitation's code exist

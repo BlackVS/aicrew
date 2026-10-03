@@ -70,6 +70,22 @@ func (l *limiter) allow(key string) (bool, time.Duration) {
 	return true, 0
 }
 
+// spent reports, without taking a token, whether key has none left, and how
+// long until it likely has one. A key without a bucket has its full budget.
+func (l *limiter) spent(key string) (bool, time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, ok := l.buckets[key]
+	if !ok {
+		return false, 0
+	}
+	l.refill(b, l.now())
+	if b.tokens < 1 {
+		return true, l.untilTokens(b, 1)
+	}
+	return false, 0
+}
+
 func (l *limiter) refill(b *bucket, now time.Time) {
 	if elapsed := now.Sub(b.last); elapsed > 0 {
 		b.tokens = math.Min(l.rate, b.tokens+elapsed.Seconds()*l.rate/l.window.Seconds())

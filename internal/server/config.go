@@ -28,6 +28,11 @@ type Config struct {
 	TLSKeyFile      string   `json:"tls_key_file"`
 	ServiceID       string   `json:"service_id"`
 	ShutdownTimeout Duration `json:"shutdown_timeout,omitempty"`
+	// OperatorTokenFile is the private file holding the operator
+	// credential, which authorizes the operator API (package optoken). It
+	// is read on every operator call, so replacing the file rotates the
+	// credential without a restart.
+	OperatorTokenFile string `json:"operator_token_file"`
 	// Aimem names the aimem hub that vouches for agents' proofs. Without it
 	// the service refuses session entry and resume; everything else works.
 	Aimem *AimemConfig `json:"aimem,omitempty"`
@@ -127,6 +132,7 @@ func (c Config) validate() error {
 	for _, f := range []struct{ name, value string }{
 		{"store_path", c.StorePath}, {"listen_addr", c.ListenAddr},
 		{"tls_cert_file", c.TLSCertFile}, {"tls_key_file", c.TLSKeyFile},
+		{"operator_token_file", c.OperatorTokenFile},
 	} {
 		if f.value == "" {
 			return fmt.Errorf("config: %s is required", f.name)

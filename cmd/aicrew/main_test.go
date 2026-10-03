@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BlackVS/aicrew/internal/optoken"
 	"github.com/BlackVS/aicrew/internal/store"
 	"github.com/BlackVS/aicrew/internal/version"
 )
@@ -238,5 +239,33 @@ func TestVersionCommand(t *testing.T) {
 	}
 	if code := run(context.Background(), []string{"version", "extra"}, &out, &errb); code != 2 {
 		t.Fatalf("extra argument: %d", code)
+	}
+}
+
+// operator-token new writes a new private file holding a token, prints only
+// where it went, and never replaces a file.
+func TestOperatorTokenNew(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "operator.token")
+	var out, errb bytes.Buffer
+	if code := run(context.Background(), []string{"operator-token", "new", "-file", path}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	tok, err := optoken.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String()+errb.String(), tok) || !strings.Contains(out.String(), path) {
+		t.Fatalf("output %q", out.String())
+	}
+	if code := run(context.Background(), []string{"operator-token", "new", "-file", path}, &out, &errb); code != 1 {
+		t.Fatalf("an existing file: exit %d", code)
+	}
+	if again, _ := optoken.Read(path); again != tok {
+		t.Fatal("the existing file was replaced")
+	}
+	for _, args := range [][]string{{"operator-token"}, {"operator-token", "new"}, {"operator-token", "show", "-file", path}} {
+		if code := run(context.Background(), args, &out, &errb); code != 2 {
+			t.Fatalf("%v: exit %d", args, code)
+		}
 	}
 }

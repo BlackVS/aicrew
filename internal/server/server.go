@@ -54,6 +54,7 @@ type Server struct {
 	// handle refresh.
 	challengeLimit, tokenLimit, refreshLimit *limiter
 	redemption                               redemptionState // redemption.go
+	admin                                    adminState      // admin.go
 }
 
 // Option adjusts a Server before it serves.
@@ -106,6 +107,9 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 			s.loop = reconcile.New(st, r, log)
 		}
 	}
+	if err := s.checkOperatorToken(); err != nil {
+		return nil, fmt.Errorf("operator_token_file: %w", err)
+	}
 	for _, o := range opts {
 		o(s)
 	}
@@ -122,6 +126,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 	s.registerAttempts()
 	s.registerInbox()
 	s.registerRedemption()
+	s.registerAdmin()
 	s.http = &http.Server{
 		Handler:           s.logged(s.limitBody(http.HandlerFunc(s.dispatch))),
 		ReadHeaderTimeout: readHeaderTimeout,

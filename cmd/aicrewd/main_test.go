@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/optoken"
 	"github.com/BlackVS/aicrew/internal/store"
 	"github.com/BlackVS/aicrew/internal/version"
 )
@@ -71,8 +72,14 @@ func setup(t *testing.T) (configPath, storePath string, pool *x509.CertPool) {
 	pool.AddCert(cert)
 
 	storePath = filepath.Join(dir, "aicrew.db")
+	opToken, _ := optoken.Generate()
+	opFile := filepath.Join(dir, "operator.token")
+	if err := optoken.Write(opFile, opToken); err != nil {
+		t.Fatal(err)
+	}
 	cfg, _ := json.Marshal(map[string]string{"store_path": storePath, "listen_addr": "127.0.0.1:0",
-		"tls_cert_file": certFile, "tls_key_file": keyFile, "service_id": "aicrew-test", "shutdown_timeout": "5s"})
+		"tls_cert_file": certFile, "tls_key_file": keyFile, "service_id": "aicrew-test", "shutdown_timeout": "5s",
+		"operator_token_file": opFile})
 	configPath = filepath.Join(dir, "aicrewd.json")
 	if err := os.WriteFile(configPath, cfg, 0o600); err != nil {
 		t.Fatal(err)

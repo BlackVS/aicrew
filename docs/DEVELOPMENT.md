@@ -118,12 +118,18 @@ an address; it holds no secret itself:
   "tls_cert_file": "/etc/aicrew/tls/cert.pem",
   "tls_key_file": "/etc/aicrew/tls/key.pem",
   "service_id": "aicrew-example",
+  "operator_token_file": "/etc/aicrew/operator.token",
   "shutdown_timeout": "15s"
 }
 ```
 
 - `service_id` is the ID aimem registers this service under (identity.v1:
   1 to 128 characters from `[A-Za-z0-9._:-]`).
+- `operator_token_file` is required. It holds the operator credential that
+  authorizes the operator API (below). It must be readable by the service's
+  account only, and hold one token alone on its line, as
+  `aicrew operator-token new` writes it; the service refuses to start
+  otherwise.
 - `shutdown_timeout` is optional (default 15 s, at most 5 min).
 - `aimem` is optional. Without it, session entry and resume are refused;
   with it, the service redeems agents' proofs with that aimem hub:
@@ -171,6 +177,62 @@ serves agents' clients: `POST /v1/crew/challenges`, `POST /v1/crew/token`,
 `GET /v1/crew/session`, `POST /v1/crew/session/leave`, the attempt step
 routes, and the member inbox, `GET /v1/crew/inbox` and
 `POST /v1/crew/inbox/ack` (`docs/CREW-CONTRACT.md`, "Client session API").
+
+## The operator API
+
+`aicrewd` serves the operator's administration on its own listener, so the
+service keeps running while the operator manages teams, invitations and
+introspection credentials. The routes, under `/v1/admin/`, and their JSON
+are defined in `internal/opapi`:
+
+| Route | Operation |
+| --- | --- |
+| `GET /v1/admin/introspection-credentials?hub=HUB` | list credentials (metadata) |
+| `POST /v1/admin/introspection-credentials` | issue: `{"hub_id", "operations"}`; the answer carries the bearer, once |
+| `POST /v1/admin/introspection-credentials/rotate` | issue a replacement for the hub's one active credential; the answer names it in `replaces` |
+| `POST /v1/admin/introspection-credentials/revoke` | revoke: `{"id"}` |
+| `GET /v1/admin/teams` | list teams |
+| `POST /v1/admin/teams` | create: `{"name", "projects"}` |
+| `GET /v1/admin/team?id=TEAM` | show a team and its members |
+| `POST /v1/admin/team/projects` | `{"team_id", "expected_revision", "projects"}` |
+| `POST /v1/admin/team/rename` | `{"team_id", "expected_revision", "name"}` |
+| `GET /v1/admin/invitations?team=TEAM` | list invitations (metadata) |
+| `POST /v1/admin/invitations` | issue: `{"purpose", "team_id", "role", "hub_id", "label", "agent_id", "expected_user_id", "ttl"}`; the answer carries the code, once |
+| `POST /v1/admin/invitations/revoke` | revoke: `{"id"}` |
+
+**The operator credential.**
+- **Required on every route.** Every route requires
+  `Authorization: Bearer <operator token>`. A missing or wrong bearer, a
+  member's session token and aimem's introspection bearer are all refused
+  with `401 unauthorized`, and the operator routes never consult the member
+  session API.
+- **Creating it.** `aicrew operator-token new -file PATH` writes a new token
+  (`aop_` and 64 lowercase hex) to a new owner-only file. It opens no store
+  and calls no service, and the token is never printed. Name that file as
+  `operator_token_file`, and keep the operator's own copy owner-only.
+- **Rotation.** The service reads the file on every operator call, so
+  replacing it rotates the credential without a restart. A file that
+  becomes unreadable fails closed (`503 operator_unavailable`).
+- **Failed attempts.** Failed authentications are limited to 10 a minute per
+  client address. Once that budget is spent, the address is refused with
+  `429` before its bearer is compared.
+
+**Secrets and errors.**
+- **Once-only secrets.** A credential's bearer and an invitation's code exist
+  only in the answer that issued them; the store keeps digests, and a list
+  never carries either.
+- **No client keys.** Every write is its own command: the service takes no
+  client idempotency key, because a replayed issue could not answer its
+  secret again.
+- **Error codes.** Team names are unique (`409 team_exists`), a stale
+  `expected_revision` is `409 revision_conflict`, and validation failures
+  are `400 invalid_request` with the store's message.
+- **The log.** Each operator action is logged as `operator` with its action
+  (`team.create`, `invitation.issue`, ...), its outcome and the ID it
+  touched, besides the request line; never a body, a bearer or a code.
+
+`aicrew` still administers through the store file, below, until its
+client moves onto this API.
 
 ## Introspection credentials
 

@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/optoken"
 	"github.com/BlackVS/aicrew/internal/store"
 )
 
@@ -97,6 +98,22 @@ type running struct {
 	// The service's store and its file, for tests that seed state.
 	store     *store.Store
 	storePath string
+	// The operator credential's file and token.
+	opFile, opToken string
+}
+
+// operatorToken writes a new operator token to a private file.
+func operatorToken(t *testing.T) (path, token string) {
+	t.Helper()
+	token, err := optoken.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path = filepath.Join(t.TempDir(), "operator.token")
+	if err := optoken.Write(path, token); err != nil {
+		t.Fatal(err)
+	}
+	return path, token
 }
 
 func start(t *testing.T, register func(*Server)) *running {
@@ -113,8 +130,9 @@ func startWith(t *testing.T, serviceID string, register func(*Server)) *running 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
+	opFile, opToken := operatorToken(t)
 	cfg := Config{StorePath: storePath, ListenAddr: "127.0.0.1:0", TLSCertFile: certFile, TLSKeyFile: keyFile,
-		ServiceID: serviceID, ShutdownTimeout: Duration(5 * time.Second)}
+		ServiceID: serviceID, ShutdownTimeout: Duration(5 * time.Second), OperatorTokenFile: opFile}
 	logs := &syncBuffer{}
 	srv, err := New(cfg, st, slog.New(slog.NewJSONHandler(logs, nil)))
 	if err != nil {
@@ -129,7 +147,7 @@ func startWith(t *testing.T, serviceID string, register func(*Server)) *running 
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &running{srv: srv, addr: ln.Addr().String(), logs: logs, pool: pool, cancel: cancel, done: make(chan error, 1),
-		store: st, storePath: storePath}
+		store: st, storePath: storePath, opFile: opFile, opToken: opToken}
 	go func() { r.done <- srv.Serve(ctx, ln) }()
 	r.client = &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: pool}, DisableKeepAlives: true}}
@@ -437,7 +455,8 @@ func TestNewRefusesBadKeyPair(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	cfg := Config{ListenAddr: "127.0.0.1:0", TLSCertFile: certFile, TLSKeyFile: certFile, ServiceID: "s"}
+	opFile, _ := operatorToken(t)
+	cfg := Config{ListenAddr: "127.0.0.1:0", TLSCertFile: certFile, TLSKeyFile: certFile, ServiceID: "s", OperatorTokenFile: opFile}
 	if _, err := New(cfg, st, slog.New(slog.NewJSONHandler(io.Discard, nil))); err == nil || !strings.Contains(err.Error(), "tls_key_file") {
 		t.Fatalf("New with a certificate as its key = %v", err)
 	}

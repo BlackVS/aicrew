@@ -9,7 +9,8 @@ import (
 )
 
 const validConfig = `{"store_path":"/var/lib/aicrew/aicrew.db","listen_addr":"127.0.0.1:8443",
-	"tls_cert_file":"/etc/aicrew/cert.pem","tls_key_file":"/etc/aicrew/key.pem","service_id":"aicrew-example"}`
+	"tls_cert_file":"/etc/aicrew/cert.pem","tls_key_file":"/etc/aicrew/key.pem","service_id":"aicrew-example",
+	"operator_token_file":"/etc/aicrew/operator.token"}`
 
 func TestParseConfig(t *testing.T) {
 	c, err := ParseConfig([]byte(validConfig))
@@ -35,6 +36,7 @@ func TestParseConfigRefusals(t *testing.T) {
 		{"listen bad port", strings.Replace(validConfig, `:8443"`, `:https"`, 1), "listen_addr"},
 		{"no cert", strings.Replace(validConfig, `"/etc/aicrew/cert.pem"`, `""`, 1), "tls_cert_file"},
 		{"no key", strings.Replace(validConfig, `"/etc/aicrew/key.pem"`, `""`, 1), "tls_key_file"},
+		{"no operator token", strings.Replace(validConfig, `"/etc/aicrew/operator.token"`, `""`, 1), "operator_token_file"},
 		{"no service", strings.Replace(validConfig, `"aicrew-example"`, `""`, 1), "service_id"},
 		{"bad service", strings.Replace(validConfig, `"aicrew-example"`, `"aicrew example"`, 1), "service_id"},
 		{"bad shutdown", strings.Replace(validConfig, "}", `,"shutdown_timeout":"-1s"}`, 1), "shutdown_timeout"},

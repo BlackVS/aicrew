@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/optoken"
-	"github.com/BlackVS/aicrew/internal/store"
 )
 
 // bootstrap brings up the hub and aicrewd and provisions the team, in the
@@ -89,19 +88,41 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	}
 	h.hubID = m[1]
 
-	// 5. The aicrew store (aicrewd is not running yet: one process holds a
-	// store). The operator creates the team with its project.
+	// 5. aicrewd starts without its aimem section, as the pilot runbook
+	// starts it: the operator's credential is all its operator API needs.
+	// The operator administers through that API, with `aicrew`, while it
+	// runs: the team with its project, then aimem's introspection credential.
 	aDir := h.mkdir(filepath.Join(h.root, "aicrewd"))
 	h.storePath = filepath.Join(aDir, "aicrew.db")
 	aEnv := h.isolatedEnv(aDir)
-	var team store.Team
-	if err := json.Unmarshal([]byte(h.must(aEnv, nil, filepath.Join(h.bin, "aicrew"), "team", "create",
-		"-store", h.storePath, "-name", "e2e", "-project", h.hubID+"/"+projectID)), &team); err != nil || team.ID == "" {
+	opToken, err := optoken.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opFile := filepath.Join(aDir, "operator.token")
+	if err := optoken.Write(opFile, opToken); err != nil {
+		t.Fatal(err)
+	}
+	h.knowSecretFile(opFile)
+	cfg := map[string]any{
+		"store_path": h.storePath, "listen_addr": fmt.Sprintf("127.0.0.1:%d", h.aicrewdPort),
+		"tls_cert_file": aCert, "tls_key_file": aKey, "service_id": serviceID, "operator_token_file": opFile,
+	}
+	cfgPath := filepath.Join(aDir, "aicrewd.json")
+	h.startAicrewd(aEnv, aDir, cfgPath, cfg)
+	opEnv := append(append([]string{}, aEnv...), "AICREW_URL="+h.aicrewdURL, "AICREW_TLS_TRUST_MODE=spki_sha256",
+		"AICREW_TLS_TRUST_VALUE="+h.aicrewdPin, "AICREW_OPERATOR_TOKEN_FILE="+opFile)
+	h.checkIsolated(opEnv)
+	var team struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(h.must(opEnv, nil, filepath.Join(h.bin, "aicrew"), "team", "create",
+		"-name", "e2e", "-project", h.hubID+"/"+projectID)), &team); err != nil || team.ID == "" {
 		t.Fatalf("aicrew team create printed no team: %v", err)
 	}
 	h.teamID = team.ID
-	h.must(aEnv, nil, filepath.Join(h.bin, "aicrew"), "introspection-credential", "issue",
-		"-store", h.storePath, "-hub", h.hubID, "-secret-file", introFile)
+	h.must(opEnv, nil, filepath.Join(h.bin, "aicrew"), "introspection-credential", "issue",
+		"-hub", h.hubID, "-secret-file", introFile)
 	h.knowSecretFile(introFile)
 
 	// 6. aicrew's aimem credentials.
@@ -119,40 +140,18 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	// 8. The members' users, tokens and invitations.
 	var mems []*member
 	for _, sp := range specs {
-		mems = append(mems, h.prepareMember(sp, aEnv))
+		mems = append(mems, h.prepareMember(sp, opEnv))
 	}
 
-	// 9. aicrewd, with the operator credential its operator API requires.
-	opToken, err := optoken.Generate()
-	if err != nil {
-		t.Fatal(err)
+	// 9. aicrewd restarts with its aimem section: aicrewd reaches the hub
+	// through the fault proxy too (F6 holds its reads back); the proxy
+	// presents the hub's own run key.
+	if err := h.aicrewdProc.stop(15 * time.Second); err != nil {
+		t.Fatalf("stop aicrewd: %v", err)
 	}
-	opFile := filepath.Join(aDir, "operator.token")
-	if err := optoken.Write(opFile, opToken); err != nil {
-		t.Fatal(err)
-	}
-	h.knowSecretFile(opFile)
-	cfg := map[string]any{
-		"store_path": h.storePath, "listen_addr": fmt.Sprintf("127.0.0.1:%d", h.aicrewdPort),
-		"tls_cert_file": aCert, "tls_key_file": aKey, "service_id": serviceID, "operator_token_file": opFile,
-		// aicrewd reaches the hub through the fault proxy too (F6 holds its
-		// reads back); the proxy presents the hub's own run key.
-		"aimem": map[string]any{"base_url": h.hubProxy.url, "tls_trust_mode": "spki_sha256", "tls_trust_value": h.hubPin,
-			"redemption_token_file": redeem, "read_token_file": read},
-	}
-	raw, _ := json.MarshalIndent(cfg, "", "  ")
-	cfgPath := filepath.Join(aDir, "aicrewd.json")
-	h.writePrivate(cfgPath, raw)
-	h.aicrewdProc = h.start("aicrewd", aEnv, aDir, filepath.Join(h.bin, "aicrewd"), "-config", cfgPath)
-	h.aicrewdLog = h.aicrewdProc.log
-	h.waitFor("aicrewd's listener", 30*time.Second, func() bool {
-		resp, err := h.httpClient.Get(h.aicrewdURL + "/healthz")
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	})
+	cfg["aimem"] = map[string]any{"base_url": h.hubProxy.url, "tls_trust_mode": "spki_sha256", "tls_trust_value": h.hubPin,
+		"redemption_token_file": redeem, "read_token_file": read}
+	h.startAicrewd(aEnv, aDir, cfgPath, cfg)
 	h.waitFor("aicrewd's reconciliation loop", 10*time.Second, func() bool {
 		b, _ := os.ReadFile(h.aicrewdLog)
 		return bytes.Contains(b, []byte("reconcile: started"))
@@ -166,6 +165,25 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	for _, mem := range mems {
 		h.joinMember(mem)
 	}
+}
+
+// startAicrewd writes aicrewd's configuration and starts it, waiting for its
+// listener.
+func (h *harness) startAicrewd(env []string, dir, cfgPath string, cfg map[string]any) {
+	h.t.Helper()
+	raw, _ := json.MarshalIndent(cfg, "", "  ")
+	os.Remove(cfgPath)
+	h.writePrivate(cfgPath, raw)
+	h.aicrewdProc = h.start("aicrewd", env, dir, filepath.Join(h.bin, "aicrewd"), "-config", cfgPath)
+	h.aicrewdLog = h.aicrewdProc.log
+	h.waitFor("aicrewd's listener", 30*time.Second, func() bool {
+		resp, err := h.httpClient.Get(h.aicrewdURL + "/healthz")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	})
 }
 
 // memberSpec names a member and its team role.
@@ -232,7 +250,7 @@ func (h *harness) prepareMember(sp memberSpec, aEnv []string) *member {
 	h.checkIsolated(mem.env)
 	codeFile := filepath.Join(h.mkdir(filepath.Join(h.root, "codes")), name+".code")
 	h.must(aEnv, nil, filepath.Join(h.bin, "aicrew"), "invitation", "issue",
-		"-store", h.storePath, "-team", h.teamID, "-role", role, "-hub", h.hubID, "-label", name,
+		"-team", h.teamID, "-role", role, "-hub", h.hubID, "-label", name,
 		"-expect-user", user.ID, "-code-file", codeFile)
 	code, err := os.ReadFile(codeFile)
 	if err != nil {

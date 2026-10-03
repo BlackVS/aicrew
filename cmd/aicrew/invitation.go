@@ -7,28 +7,27 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
-	"time"
 
+	"github.com/BlackVS/aicrew/internal/opapi"
 	"github.com/BlackVS/aicrew/internal/privatefile"
-	"github.com/BlackVS/aicrew/internal/store"
 )
 
 // aicrew invitation: the operator's invitations (docs/ONBOARDING-CONTRACT.md,
-// "Invitations"). Like introspection-credential it opens the store file
-// directly, so aicrewd is stopped while it runs.
+// "Invitations"), through aicrewd's operator API.
 //
-// The invitation code is a bearer capability. It is generated here, shown
-// once and never kept: only its digest is stored. It is printed only to a
-// terminal, or written to a new private -code-file; it is never taken from or
-// put into an argument, and a refused issue never shows it.
+// The invitation code is a bearer capability. aicrewd generates it, answers
+// it once and keeps only its digest. This command prints it only to a
+// terminal, or writes it to a new private -code-file; it is never taken from
+// or put into an argument, and a refused issue never has one.
 
 const invitationUsage = `usage:
-  aicrew invitation issue  -store PATH -team TEAM -role ROLE -hub HUB [-purpose join|link|rebind]
+  aicrew invitation issue  -team TEAM -role ROLE -hub HUB [-purpose join|link|rebind]
                            [-label LABEL] [-agent AGENT] [-expect-user USER] [-expires DURATION] [-code-file PATH]
-  aicrew invitation list   -store PATH [-team TEAM]
-  aicrew invitation revoke -store PATH -id INVITATION
-`
+  aicrew invitation list   [-team TEAM]
+  aicrew invitation revoke -id INVITATION
+` + connUsage
 
 // isTerminal reports whether w is an interactive terminal: the only place
 // the invitation code is printed. Tests replace it.
@@ -49,33 +48,10 @@ var writeCode = func(f *os.File, code string) error {
 	return f.Sync()
 }
 
-// invitationView is what the command prints: metadata, never the code or its
-// digest.
+// invitationView is what issue prints: metadata, never the code.
 type invitationView struct {
-	ID             string    `json:"id"`
-	Purpose        string    `json:"purpose"`
-	TeamID         string    `json:"team_id"`
-	Role           string    `json:"role"`
-	HubID          string    `json:"hub_id"`
-	AgentID        string    `json:"agent_id,omitempty"`
-	ExpectedUserID string    `json:"expected_user_id,omitempty"`
-	Label          string    `json:"label,omitempty"`
-	IssuedBy       string    `json:"issued_by"`
-	State          string    `json:"state"`
-	Expired        bool      `json:"expired"`
-	Attempts       int       `json:"attempts"`
-	Revision       int64     `json:"revision"`
-	ExpiresAt      time.Time `json:"expires_at"`
-	CreatedAt      time.Time `json:"created_at"`
-	CodeFile       string    `json:"code_file,omitempty"`
-}
-
-func invitationOf(inv store.Invitation, now time.Time) invitationView {
-	open := inv.State == store.InvitationIssued || inv.State == store.InvitationLocked
-	return invitationView{ID: inv.ID, Purpose: string(inv.Purpose), TeamID: inv.TeamID, Role: string(inv.Role),
-		HubID: inv.HubID, AgentID: inv.AgentID, ExpectedUserID: inv.ExpectedUserID, Label: inv.Label,
-		IssuedBy: inv.IssuedBy, State: string(inv.State), Expired: open && !now.Before(inv.ExpiresAt),
-		Attempts: inv.Attempts, Revision: inv.Revision, ExpiresAt: inv.ExpiresAt, CreatedAt: inv.CreatedAt}
+	opapi.Invitation
+	CodeFile string `json:"code_file,omitempty"`
 }
 
 // runInvitation is aicrew invitation: 0 on success, 1 on a failure, 2 on a
@@ -88,60 +64,51 @@ func runInvitation(ctx context.Context, args []string, stdout, stderr io.Writer)
 	verb := args[0]
 	fs := flag.NewFlagSet("aicrew invitation "+verb, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	storePath := fs.String("store", "", "path to the aicrew store")
+	cn := addConn(fs)
 	team := fs.String("team", "", "team ID")
 	role := fs.String("role", "", "coordinator, worker or independent")
 	hub := fs.String("hub", "", "the aimem hub ID the invitation is for")
-	purpose := fs.String("purpose", string(store.PurposeJoin), "join, link or rebind")
+	purpose := fs.String("purpose", "join", "join, link or rebind")
 	label := fs.String("label", "", "label of the agent a join creates")
 	agent := fs.String("agent", "", "the agent a link or rebind is for")
 	expectUser := fs.String("expect-user", "", "the aimem user ID the proof must name")
 	expires := fs.Duration("expires", 0, "lifetime (default 24h, at most 72h)")
 	codeFile := fs.String("code-file", "", "new private file that receives the code, instead of the terminal")
 	id := fs.String("id", "", "invitation ID")
-	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 || *storePath == "" {
+	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
 		fmt.Fprint(stderr, invitationUsage)
 		return 2
 	}
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	only := func(allowed ...string) bool {
-		ok := map[string]bool{"store": true}
-		for _, a := range allowed {
-			ok[a] = true
-		}
-		for name := range set {
-			if !ok[name] {
-				return false
-			}
-		}
-		return true
-	}
 	usage := func() int { fmt.Fprint(stderr, invitationUsage); return 2 }
-	var req store.InvitationRequest
+	var req opapi.InvitationRequest
 	switch verb {
 	case "issue":
-		if !only("team", "role", "hub", "purpose", "label", "agent", "expect-user", "expires", "code-file") ||
+		if !allowedFlags(set, "team", "role", "hub", "purpose", "label", "agent", "expect-user", "expires", "code-file") ||
 			*team == "" || *role == "" || *hub == "" {
 			return usage()
 		}
-		req = store.InvitationRequest{Purpose: store.InvitationPurpose(*purpose), TeamID: *team, Role: store.Role(*role),
-			HubID: *hub, AgentID: *agent, ExpectedUserID: *expectUser, Label: *label, TTL: *expires}
-		switch req.Purpose {
-		case store.PurposeJoin:
+		req = opapi.InvitationRequest{Purpose: *purpose, TeamID: *team, Role: *role, HubID: *hub, AgentID: *agent,
+			ExpectedUserID: *expectUser, Label: *label}
+		if *expires != 0 {
+			req.TTL = expires.String()
+		}
+		switch *purpose {
+		case "join":
 			if *label == "" || *agent != "" {
 				fmt.Fprintln(stderr, "aicrew: a join invitation names -label for the agent it creates, and no -agent")
 				return 2
 			}
-		case store.PurposeLink, store.PurposeRebind:
+		case "link", "rebind":
 			if *agent == "" {
-				fmt.Fprintf(stderr, "aicrew: a %s invitation names the -agent it is for\n", req.Purpose)
+				fmt.Fprintf(stderr, "aicrew: a %s invitation names the -agent it is for\n", *purpose)
 				return 2
 			}
 		default:
 			return usage()
 		}
-		if req.Purpose == store.PurposeRebind && *expectUser == "" {
+		if *purpose == "rebind" && *expectUser == "" {
 			fmt.Fprintln(stderr, "aicrew: a rebind invitation requires -expect-user: it moves the agent to that aimem user")
 			return 2
 		}
@@ -150,94 +117,72 @@ func runInvitation(ctx context.Context, args []string, stdout, stderr io.Writer)
 			return 2
 		}
 	case "list":
-		if !only("team") {
+		if !allowedFlags(set, "team") {
 			return usage()
 		}
 	case "revoke":
-		if !only("id") || *id == "" {
+		if !allowedFlags(set, "id") || *id == "" {
 			return usage()
 		}
 	default:
 		return usage()
 	}
-
-	st, err := store.Open(ctx, *storePath)
-	if err != nil {
-		if errors.Is(err, store.ErrStoreInUse) {
-			fmt.Fprintln(stderr, "aicrew: the store is in use; stop aicrewd, then run this again")
-		} else {
-			fmt.Fprintln(stderr, "aicrew: open the store:", err)
-		}
-		return 1
-	}
-	defer st.Close()
-	op, err := store.OperatorCaller("aicrew-cli")
-	if err != nil {
-		fmt.Fprintln(stderr, "aicrew:", err)
+	cl, ok := cn.connect(stderr)
+	if !ok {
 		return 1
 	}
 	out := json.NewEncoder(stdout)
 	out.SetIndent("", "  ")
-	now := time.Now().UTC()
 
 	switch verb {
 	case "list":
-		invs, err := st.ListInvitations(ctx, op)
-		if err != nil {
-			fmt.Fprintln(stderr, "aicrew:", err)
-			return 1
+		q := url.Values{}
+		if *team != "" {
+			q.Set("team", *team)
 		}
-		shown := []invitationView{}
-		for _, inv := range invs {
-			if *team == "" || inv.TeamID == *team {
-				shown = append(shown, invitationOf(inv, now))
-			}
+		var invs []opapi.Invitation
+		if err := cl.Get(ctx, opapi.InvitationsPath, q, &invs); err != nil {
+			return failed(stderr, err)
 		}
-		_ = out.Encode(shown)
+		_ = out.Encode(invs)
 		return 0
 	case "revoke":
-		inv, err := st.GetInvitation(ctx, *id)
-		if err == nil {
-			inv, err = st.RevokeInvitation(ctx, op, fmt.Sprintf("revoke-%s-%d", inv.ID, inv.Revision), inv.ID, inv.Revision)
+		var inv opapi.Invitation
+		if err := cl.Post(ctx, opapi.InvitationRevokePath, opapi.IDRequest{ID: *id}, &inv); err != nil {
+			return failed(stderr, err)
 		}
-		if err != nil {
-			fmt.Fprintln(stderr, "aicrew:", err)
-			return 1
-		}
-		_ = out.Encode(invitationOf(inv, now))
+		_ = out.Encode(inv)
 		return 0
 	}
 
 	// issue.
-	if (req.Purpose == store.PurposeJoin || req.Purpose == store.PurposeLink) && *expectUser == "" {
+	if (req.Purpose == "join" || req.Purpose == "link") && *expectUser == "" {
 		fmt.Fprintln(stderr, "aicrew: warning: no -expect-user; anyone who holds the code and an aimem credential for this hub can redeem it")
 	}
 	var f *os.File
 	if *codeFile != "" {
+		var err error
 		if f, err = privatefile.Create(*codeFile); err != nil {
 			fmt.Fprintln(stderr, "aicrew: create the code file (it must not exist):", err)
 			return 1
 		}
 	}
-	code, err := store.GenerateInvitationCode()
-	var inv store.Invitation
-	if err == nil {
-		inv, err = st.IssueInvitation(ctx, op, newKey(), req, code)
-	}
-	if err != nil {
+	var inv opapi.Invitation
+	if err := cl.Post(ctx, opapi.InvitationsPath, req, &inv); err != nil {
 		if f != nil {
 			f.Close()
 			os.Remove(*codeFile)
 		}
-		fmt.Fprintln(stderr, "aicrew:", err)
-		return 1
+		return failed(stderr, err)
 	}
-	v := invitationOf(inv, now)
+	code := inv.Code
+	inv.Code = ""
+	v := invitationView{Invitation: inv}
 	if f != nil {
-		if werr := errors.Join(writeCode(f, code.Reveal()), f.Close()); werr != nil {
+		if werr := errors.Join(writeCode(f, code), f.Close()); werr != nil {
 			os.Remove(*codeFile)
 			// The code is lost: revoke the invitation just issued.
-			if _, rerr := st.RevokeInvitation(ctx, op, "revoke-"+inv.ID, inv.ID, inv.Revision); rerr != nil {
+			if rerr := cl.Post(ctx, opapi.InvitationRevokePath, opapi.IDRequest{ID: inv.ID}, nil); rerr != nil {
 				fmt.Fprintf(stderr, "aicrew: writing the code file failed (%v), and revoking invitation %s failed too (%v); revoke it before anything else\n", werr, inv.ID, rerr)
 				return 1
 			}
@@ -249,6 +194,6 @@ func runInvitation(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return 0
 	}
 	_ = out.Encode(v)
-	fmt.Fprintf(stdout, "\nInvitation code, shown once. Give it privately to the person running the agent:\n\n    %s\n\n", code.Reveal())
+	fmt.Fprintf(stdout, "\nInvitation code, shown once. Give it privately to the person running the agent:\n\n    %s\n\n", code)
 	return 0
 }

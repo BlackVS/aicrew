@@ -1,42 +1,42 @@
-// Command aicrew is aicrew's operator command line.
+// Command aicrew is the operator's console client of aicrewd's operator API
+// (docs/DEVELOPMENT.md, "The operator API"). It never opens the store:
+// aicrewd keeps running while the operator administers, from any machine
+// that reaches it over TLS with the operator credential.
 //
-//	aicrew introspection-credential issue  -store PATH -hub HUB -secret-file PATH [-operations LIST]
-//	aicrew introspection-credential rotate -store PATH -hub HUB -secret-file PATH [-operations LIST]
-//	aicrew introspection-credential list   -store PATH [-hub HUB]
-//	aicrew introspection-credential revoke -store PATH -id ID
+//	aicrew introspection-credential issue  -hub HUB -secret-file PATH [-operations LIST]
+//	aicrew introspection-credential rotate -hub HUB -secret-file PATH [-operations LIST]
+//	aicrew introspection-credential list   [-hub HUB]
+//	aicrew introspection-credential revoke -id ID
 //	aicrew invitation issue|list|revoke ... (see invitation.go)
 //	aicrew team create|list|show|projects|rename ... (see team.go)
 //	aicrew operator-token new -file PATH
 //	aicrew version [-json]
 //
-// -operations names what the new credential permits, comma-separated:
-// introspection (identity.v1 session introspection), coordination
-// (coordination.v1 facts), or both, which is the default. A credential issued
-// before coordination existed permits introspection only; rotating it gives
-// aimem one that permits both.
+// Every command but operator-token and version takes the connection flags
+// (conn.go). -operations names what the new credential permits,
+// comma-separated: introspection (identity.v1 session introspection),
+// coordination (coordination.v1 facts), or both, which is the default.
 //
-// It opens the store file directly. Only one process may hold a store, so run
-// it while aicrewd is stopped. A credential's bearer is written only to the
-// new private file named by -secret-file and never printed; the output is the
-// credential's metadata as JSON.
+// A credential's bearer is written only to the new private file named by
+// -secret-file and never printed; the output is the credential's metadata as
+// JSON. If the file cannot be written, the credential just issued is revoked.
 package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
-	"time"
 
+	"github.com/BlackVS/aicrew/internal/opapi"
+	"github.com/BlackVS/aicrew/internal/opclient"
 	"github.com/BlackVS/aicrew/internal/optoken"
 	"github.com/BlackVS/aicrew/internal/privatefile"
-	"github.com/BlackVS/aicrew/internal/store"
 	"github.com/BlackVS/aicrew/internal/version"
 )
 
@@ -45,15 +45,15 @@ func main() {
 }
 
 const usage = `usage:
-  aicrew introspection-credential issue  -store PATH -hub HUB -secret-file PATH [-operations LIST]
-  aicrew introspection-credential rotate -store PATH -hub HUB -secret-file PATH [-operations LIST]
-  aicrew introspection-credential list   -store PATH [-hub HUB]
-  aicrew introspection-credential revoke -store PATH -id ID
+  aicrew introspection-credential issue  -hub HUB -secret-file PATH [-operations LIST]
+  aicrew introspection-credential rotate -hub HUB -secret-file PATH [-operations LIST]
+  aicrew introspection-credential list   [-hub HUB]
+  aicrew introspection-credential revoke -id ID
   aicrew invitation issue|list|revoke ...   (run "aicrew invitation" for its usage)
   aicrew team create|list|show|projects|rename ...   (run "aicrew team" for its usage)
   aicrew operator-token new -file PATH
   aicrew version [-json]
-`
+` + connUsage
 
 // writeSecret writes the bearer to its file; tests replace it to fail.
 var writeSecret = func(f *os.File, bearer string) error {
@@ -92,18 +92,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	verb := args[1]
 	fs := flag.NewFlagSet("aicrew introspection-credential "+verb, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	storePath := fs.String("store", "", "path to the aicrew store")
+	cn := addConn(fs)
 	hub := fs.String("hub", "", "the aimem hub the credential is bound to")
 	secretFile := fs.String("secret-file", "", "new private file that receives the bearer")
 	id := fs.String("id", "", "credential ID")
 	opsFlag := fs.String("operations", "", "what the credential permits: introspection, coordination, or both (default)")
-	if err := fs.Parse(args[2:]); err != nil || fs.NArg() != 0 || *storePath == "" {
+	if err := fs.Parse(args[2:]); err != nil || fs.NArg() != 0 {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	ops, opsOK := parseOps(*opsFlag)
 	switch verb {
 	case "issue", "rotate":
-		if *hub == "" || *secretFile == "" || *id != "" || parseOps(*opsFlag) == nil {
+		if *hub == "" || *secretFile == "" || *id != "" || !opsOK {
 			fmt.Fprint(stderr, usage)
 			return 2
 		}
@@ -121,142 +122,99 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-
-	st, err := store.Open(ctx, *storePath)
-	if err != nil {
-		if errors.Is(err, store.ErrStoreInUse) {
-			fmt.Fprintln(stderr, "aicrew: the store is in use; stop aicrewd, then run this again")
-		} else {
-			fmt.Fprintln(stderr, "aicrew: open the store:", err)
-		}
-		return 1
-	}
-	defer st.Close()
-	op, err := store.OperatorCaller("aicrew-cli")
-	if err != nil {
-		fmt.Fprintln(stderr, "aicrew:", err)
+	cl, ok := cn.connect(stderr)
+	if !ok {
 		return 1
 	}
 	out := json.NewEncoder(stdout)
 	out.SetIndent("", "  ")
-	now := time.Now().UTC()
 
 	switch verb {
 	case "list":
-		creds, err := st.ListIntrospectionCredentials(ctx, op)
-		if err != nil {
-			fmt.Fprintln(stderr, "aicrew:", err)
-			return 1
+		q := url.Values{}
+		if *hub != "" {
+			q.Set("hub", *hub)
 		}
-		shown := []credentialView{}
-		for _, c := range creds {
-			if *hub == "" || c.HubID == *hub {
-				shown = append(shown, view(c, now))
-			}
+		var creds []opapi.Credential
+		if err := cl.Get(ctx, opapi.CredentialsPath, q, &creds); err != nil {
+			return failed(stderr, err)
 		}
-		_ = out.Encode(shown)
+		_ = out.Encode(creds)
 		return 0
 	case "revoke":
-		c, err := st.RevokeIntrospectionCredential(ctx, op, "revoke-"+*id, *id)
-		if err != nil {
-			fmt.Fprintln(stderr, "aicrew:", err)
-			return 1
+		var c opapi.Credential
+		if err := cl.Post(ctx, opapi.CredentialRevokePath, opapi.IDRequest{ID: *id}, &c); err != nil {
+			return failed(stderr, err)
 		}
-		_ = out.Encode(view(c, now))
+		_ = out.Encode(c)
 		return 0
 	}
 
-	// issue or rotate.
-	creds, err := st.ListIntrospectionCredentials(ctx, op)
-	if err != nil {
-		fmt.Fprintln(stderr, "aicrew:", err)
-		return 1
-	}
-	var active []store.IntrospectionCredential
-	for _, c := range creds {
-		if c.HubID == *hub && c.Active(now) {
-			active = append(active, c)
-		}
-	}
-	if verb == "rotate" && len(active) != 1 {
-		fmt.Fprintf(stderr, "aicrew: rotate needs exactly one active credential for the hub; it has %d\n", len(active))
-		return 1
-	}
+	// issue or rotate: the secret file exists before anything is issued.
 	f, err := privatefile.Create(*secretFile)
 	if err != nil {
 		fmt.Fprintln(stderr, "aicrew: create the secret file (it must not exist):", err)
 		return 1
 	}
-	c, bearer, err := st.IssueIntrospectionCredential(ctx, op, newKey(), *hub, parseOps(*opsFlag)...)
-	if err != nil {
+	path := opapi.CredentialsPath
+	if verb == "rotate" {
+		path = opapi.CredentialRotatePath
+	}
+	var c opapi.Credential
+	if err := cl.Post(ctx, path, opapi.CredentialRequest{HubID: *hub, Operations: ops}, &c); err != nil {
 		f.Close()
 		os.Remove(*secretFile)
-		fmt.Fprintln(stderr, "aicrew:", err)
-		return 1
+		return failed(stderr, err)
 	}
+	bearer := c.Bearer
+	c.Bearer = ""
 	if werr := errors.Join(writeSecret(f, bearer), f.Close()); werr != nil {
 		os.Remove(*secretFile)
 		// The bearer is lost: revoke only the credential just issued.
-		if _, rerr := st.RevokeIntrospectionCredential(ctx, op, "revoke-"+c.ID, c.ID); rerr != nil {
+		if rerr := cl.Post(ctx, opapi.CredentialRevokePath, opapi.IDRequest{ID: c.ID}, nil); rerr != nil {
 			fmt.Fprintf(stderr, "aicrew: writing the secret file failed (%v), and revoking credential %s failed too (%v); revoke it before anything else\n", werr, c.ID, rerr)
 			return 1
 		}
 		fmt.Fprintf(stderr, "aicrew: writing the secret file failed (%v); credential %s was revoked\n", werr, c.ID)
 		return 1
 	}
-	v := view(c, now)
-	v.SecretFile = *secretFile
+	v := credentialView{Credential: c, SecretFile: *secretFile}
 	if verb == "rotate" {
-		v.Replaces = active[0].ID
-		v.Next = "Give aimem the new credential, then revoke " + active[0].ID + "."
+		v.Next = "Give aimem the new credential, then revoke " + c.Replaces + "."
 	}
 	_ = out.Encode(v)
 	return 0
 }
 
-// credentialView is what the command prints: metadata, never a bearer.
+// credentialView is what issue and rotate print: metadata, never a bearer.
 type credentialView struct {
-	ID         string    `json:"id"`
-	HubID      string    `json:"hub_id"`
-	Active     bool      `json:"active"`
-	CreatedAt  time.Time `json:"created_at"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	RevokedAt  time.Time `json:"revoked_at,omitzero"`
-	Operations []string  `json:"operations"`
-	SecretFile string    `json:"secret_file,omitempty"`
-	Replaces   string    `json:"replaces,omitempty"`
-	Next       string    `json:"next,omitempty"`
+	opapi.Credential
+	SecretFile string `json:"secret_file,omitempty"`
+	Next       string `json:"next,omitempty"`
 }
 
-func view(c store.IntrospectionCredential, now time.Time) credentialView {
-	return credentialView{ID: c.ID, HubID: c.HubID, Active: c.Active(now), CreatedAt: c.CreatedAt,
-		ExpiresAt: c.ExpiresAt, RevokedAt: c.RevokedAt, Operations: c.Operations}
-}
-
-// parseOps reads -operations: the store's operation names, or nil for a
-// malformed list. An empty flag is an empty list: the store's default.
-func parseOps(flag string) []string {
+// parseOps reads -operations: the API's operation names. An empty flag is
+// an empty list: the service's default, both.
+func parseOps(flag string) ([]string, bool) {
 	ops := []string{}
 	if flag == "" {
-		return ops
+		return ops, true
 	}
 	for _, name := range strings.Split(flag, ",") {
-		switch strings.TrimSpace(name) {
-		case "introspection":
-			ops = append(ops, store.OpIntrospection)
-		case "coordination":
-			ops = append(ops, store.OpCoordination)
+		switch n := strings.TrimSpace(name); n {
+		case "introspection", "coordination":
+			ops = append(ops, n)
 		default:
-			return nil
+			return nil, false
 		}
 	}
-	return ops
+	return ops, true
 }
 
 // runOperatorToken is aicrew operator-token new: it writes a new operator
 // credential to a new owner-only file, for aicrewd.json's
-// operator_token_file and the operator's own copy. It opens no store and
-// calls no service; the token is never printed.
+// operator_token_file and the operator's own copy. It calls no service; the
+// token is never printed.
 func runOperatorToken(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("aicrew operator-token new", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -277,9 +235,11 @@ func runOperatorToken(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// newKey is a fresh command key: an operator's issue is never replayed.
-func newKey() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	return "cli-" + hex.EncodeToString(b[:])
+// revisionHint explains a revision conflict.
+func revisionHint(stderr io.Writer, err error, expect int64) int {
+	if opclient.Code(err) == opapi.CodeRevisionConflict {
+		fmt.Fprintf(stderr, "aicrew: %v; the team changed since revision %d: run aicrew team show, then try again with its revision\n", err, expect)
+		return 1
+	}
+	return failed(stderr, err)
 }

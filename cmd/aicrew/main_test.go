@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -30,33 +31,28 @@ func cli(t *testing.T, args ...string) result {
 	return result{code, out.String(), errOut.String()}
 }
 
-func authenticate(t *testing.T, storePath, bearer string) (string, error) {
+func authenticate(t *testing.T, s *svc, bearer string) (string, error) {
 	t.Helper()
-	st, err := store.Open(context.Background(), storePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	return st.AuthenticateIntrospection(context.Background(), strings.TrimSpace(bearer))
+	return s.store.AuthenticateIntrospection(context.Background(), strings.TrimSpace(bearer))
 }
 
 // Issue writes the bearer only to its new private file and prints metadata;
 // the credential then authenticates for its hub.
 func TestIssueListRotateRevoke(t *testing.T) {
 	dir := t.TempDir()
-	storePath := filepath.Join(dir, "aicrew.db")
+	s := serve(t)
 	first := filepath.Join(dir, "first.secret")
 
 	// Rotate needs one active credential to replace.
 	none := filepath.Join(dir, "none.secret")
-	if r := cli(t, "introspection-credential", "rotate", "-store", storePath, "-hub", "hub-a", "-secret-file", none); r.code != 1 {
+	if r := cli(t, "introspection-credential", "rotate", "-hub", "hub-a", "-secret-file", none); r.code != 1 {
 		t.Fatalf("rotate with no active credential: %d", r.code)
 	}
 	if _, err := os.Stat(none); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("a refused rotate created its secret file")
 	}
 
-	r := cli(t, "introspection-credential", "issue", "-store", storePath, "-hub", "hub-a", "-secret-file", first)
+	r := cli(t, "introspection-credential", "issue", "-hub", "hub-a", "-secret-file", first)
 	if r.code != 0 {
 		t.Fatalf("issue: %d %s", r.code, r.stderr)
 	}
@@ -71,12 +67,12 @@ func TestIssueListRotateRevoke(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.stdout), &issued); err != nil || issued.HubID != "hub-a" || !issued.Active || issued.SecretFile != first {
 		t.Fatalf("issue printed %s (%v)", r.stdout, err)
 	}
-	if hub, err := authenticate(t, storePath, string(bearer)); err != nil || hub != "hub-a" {
+	if hub, err := authenticate(t, s, string(bearer)); err != nil || hub != "hub-a" {
 		t.Fatalf("authenticate = %q, %v", hub, err)
 	}
 
 	// An existing secret file is never reused, and nothing is issued.
-	if r := cli(t, "introspection-credential", "issue", "-store", storePath, "-hub", "hub-a", "-secret-file", first); r.code != 1 {
+	if r := cli(t, "introspection-credential", "issue", "-hub", "hub-a", "-secret-file", first); r.code != 1 {
 		t.Fatalf("issue into an existing file: %d", r.code)
 	}
 	if again, _ := os.ReadFile(first); !bytes.Equal(again, bearer) {
@@ -84,31 +80,31 @@ func TestIssueListRotateRevoke(t *testing.T) {
 	}
 
 	second := filepath.Join(dir, "second.secret")
-	r = cli(t, "introspection-credential", "rotate", "-store", storePath, "-hub", "hub-a", "-secret-file", second)
+	r = cli(t, "introspection-credential", "rotate", "-hub", "hub-a", "-secret-file", second)
 	var rotated credentialView
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &rotated) != nil || rotated.Replaces != issued.ID {
 		t.Fatalf("rotate: %d %s %s", r.code, r.stdout, r.stderr)
 	}
 	third := filepath.Join(dir, "third.secret")
-	if r := cli(t, "introspection-credential", "rotate", "-store", storePath, "-hub", "hub-a", "-secret-file", third); r.code != 1 {
+	if r := cli(t, "introspection-credential", "rotate", "-hub", "hub-a", "-secret-file", third); r.code != 1 {
 		t.Fatalf("rotate with two active credentials: %d", r.code)
 	}
-	if r := cli(t, "introspection-credential", "issue", "-store", storePath, "-hub", "hub-a", "-secret-file", third); r.code != 1 || !strings.Contains(r.stderr, "credential_limit") {
+	if r := cli(t, "introspection-credential", "issue", "-hub", "hub-a", "-secret-file", third); r.code != 1 || !strings.Contains(r.stderr, "credential_limit") {
 		t.Fatalf("a third active credential: %d %s", r.code, r.stderr)
 	}
 	if _, err := os.Stat(third); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("a refused issue left its secret file behind")
 	}
 
-	r = cli(t, "introspection-credential", "revoke", "-store", storePath, "-id", issued.ID)
+	r = cli(t, "introspection-credential", "revoke", "-id", issued.ID)
 	var revoked credentialView
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &revoked) != nil || revoked.Active || revoked.RevokedAt.IsZero() {
 		t.Fatalf("revoke: %d %s %s", r.code, r.stdout, r.stderr)
 	}
-	if _, err := authenticate(t, storePath, string(bearer)); !errors.Is(err, store.ErrUnauthenticated) {
+	if _, err := authenticate(t, s, string(bearer)); !errors.Is(err, store.ErrUnauthenticated) {
 		t.Fatalf("a revoked credential authenticated: %v", err)
 	}
-	r = cli(t, "introspection-credential", "list", "-store", storePath, "-hub", "hub-a")
+	r = cli(t, "introspection-credential", "list", "-hub", "hub-a")
 	var listed []credentialView
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &listed) != nil || len(listed) != 2 {
 		t.Fatalf("list: %d %s", r.code, r.stdout)
@@ -118,7 +114,7 @@ func TestIssueListRotateRevoke(t *testing.T) {
 			t.Fatalf("list shows %+v", c)
 		}
 	}
-	if r := cli(t, "introspection-credential", "revoke", "-store", storePath, "-id", "no-such-id"); r.code != 1 {
+	if r := cli(t, "introspection-credential", "revoke", "-id", "no-such-id"); r.code != 1 {
 		t.Fatalf("revoke an unknown credential: %d", r.code)
 	}
 }
@@ -127,12 +123,12 @@ func TestIssueListRotateRevoke(t *testing.T) {
 // no secret file is left.
 func TestIssueRevokesWhenTheSecretCannotBeWritten(t *testing.T) {
 	dir := t.TempDir()
-	storePath := filepath.Join(dir, "aicrew.db")
+	serve(t)
 	secret := filepath.Join(dir, "x.secret")
 	orig := writeSecret
 	writeSecret = func(*os.File, string) error { return errors.New("disk full") }
 	defer func() { writeSecret = orig }()
-	r := cli(t, "introspection-credential", "issue", "-store", storePath, "-hub", "hub-a", "-secret-file", secret)
+	r := cli(t, "introspection-credential", "issue", "-hub", "hub-a", "-secret-file", secret)
 	if r.code != 1 || !strings.Contains(r.stderr, "was revoked") {
 		t.Fatalf("issue with a failed write: %d %s", r.code, r.stderr)
 	}
@@ -140,54 +136,85 @@ func TestIssueRevokesWhenTheSecretCannotBeWritten(t *testing.T) {
 		t.Fatal("the secret file was left behind")
 	}
 	writeSecret = orig
-	r = cli(t, "introspection-credential", "list", "-store", storePath)
+	r = cli(t, "introspection-credential", "list")
 	var listed []credentialView
 	if json.Unmarshal([]byte(r.stdout), &listed) != nil || len(listed) != 1 || listed[0].Active {
 		t.Fatalf("after a failed write the credential should be revoked: %s", r.stdout)
 	}
 }
 
-// Usage errors exit 2; a store held by aicrewd exits 1 and creates nothing.
-func TestUsageAndStoreInUse(t *testing.T) {
+// Usage errors exit 2; a missing connection, an unreachable service or a
+// wrong operator credential exits 1 and creates nothing.
+func TestUsageAndConnection(t *testing.T) {
 	dir := t.TempDir()
-	storePath := filepath.Join(dir, "aicrew.db")
 	for _, args := range [][]string{
 		nil,
 		{"introspection-credential"},
 		{"other", "issue"},
-		{"introspection-credential", "burn", "-store", storePath},
-		{"introspection-credential", "issue", "-store", storePath, "-hub", "hub-a"},
-		{"introspection-credential", "issue", "-hub", "hub-a", "-secret-file", "x"},
-		{"introspection-credential", "revoke", "-store", storePath},
-		{"introspection-credential", "list", "-store", storePath, "-id", "x"},
-		{"introspection-credential", "issue", "-store", storePath, "-hub", "hub-a", "-secret-file", "x", "-operations", "everything"},
-		{"introspection-credential", "issue", "-store", storePath, "-hub", "hub-a", "-secret-file", "x", "-operations", "introspection,"},
-		{"introspection-credential", "list", "-store", storePath, "-operations", "coordination"},
+		{"introspection-credential", "burn"},
+		{"introspection-credential", "issue", "-hub", "hub-a"},
+		{"introspection-credential", "revoke"},
+		{"introspection-credential", "list", "-id", "x"},
+		{"introspection-credential", "issue", "-hub", "hub-a", "-secret-file", "x", "-operations", "everything"},
+		{"introspection-credential", "issue", "-hub", "hub-a", "-secret-file", "x", "-operations", "introspection,"},
+		{"introspection-credential", "list", "-operations", "coordination"},
 	} {
 		if r := cli(t, args...); r.code != 2 {
 			t.Fatalf("%v: exit %d, want 2", args, r.code)
 		}
 	}
-	held, err := store.Open(context.Background(), storePath)
+	secret := filepath.Join(dir, "held.secret")
+	issue := []string{"introspection-credential", "issue", "-hub", "hub-a", "-secret-file", secret}
+	for _, k := range []string{"AICREW_URL", "AICREW_TLS_TRUST_MODE", "AICREW_TLS_TRUST_VALUE", "AICREW_OPERATOR_TOKEN_FILE"} {
+		t.Setenv(k, "")
+	}
+	if r := cli(t, issue...); r.code != 1 || !strings.Contains(r.stderr, "-url") {
+		t.Fatalf("no connection: %d %s", r.code, r.stderr)
+	}
+	s := serve(t)
+	other, _ := optoken.Generate()
+	wrong := filepath.Join(dir, "wrong.token")
+	if err := optoken.Write(wrong, other); err != nil {
+		t.Fatal(err)
+	}
+	if r := cli(t, append(issue, "-token-file", wrong)...); r.code != 1 || !strings.Contains(r.stderr, "unauthorized") {
+		t.Fatalf("a wrong operator token: %d %s", r.code, r.stderr)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer held.Close()
-	secret := filepath.Join(dir, "held.secret")
-	r := cli(t, "introspection-credential", "issue", "-store", storePath, "-hub", "hub-a", "-secret-file", secret)
-	if r.code != 1 || !strings.Contains(r.stderr, "stop aicrewd") {
-		t.Fatalf("store in use: %d %s", r.code, r.stderr)
+	closed := "https://" + ln.Addr().String()
+	ln.Close()
+	if r := cli(t, append(issue, "-url", closed)...); r.code != 1 || !strings.Contains(r.stderr, "could not be reached") {
+		t.Fatalf("an unreachable service: %d %s", r.code, r.stderr)
+	}
+	if r := cli(t, append(issue, "-tls-trust-value", "sha256-"+strings.Repeat("A", 43)+"=")...); r.code != 1 {
+		t.Fatalf("a wrong pin: %d %s", r.code, r.stderr)
 	}
 	if _, err := os.Stat(secret); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("a secret file was created while the store was in use")
+		t.Fatal("a refused issue left its secret file behind")
 	}
+	if creds, _ := s.store.ListIntrospectionCredentials(context.Background(), operator(t)); len(creds) != 0 {
+		t.Fatalf("a refused issue issued %d credentials", len(creds))
+	}
+}
+
+// operator is a store caller for the tests' own checks.
+func operator(t *testing.T) store.Caller {
+	t.Helper()
+	op, err := store.OperatorCaller("op-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return op
 }
 
 // -operations sets what a new credential permits: both by default, or only
 // the named ones. The listing shows them.
 func TestIssueOperations(t *testing.T) {
 	dir := t.TempDir()
-	storePath := filepath.Join(dir, "aicrew.db")
+	s := serve(t)
 	for _, tc := range []struct {
 		flag              string
 		want              string
@@ -200,7 +227,7 @@ func TestIssueOperations(t *testing.T) {
 	} {
 		secret := filepath.Join(dir, "cred-"+strings.NewReplacer(",", "-", " ", "").Replace(tc.flag)+".secret")
 		hub := "hub-" + strings.NewReplacer(",", "-", " ", "").Replace(tc.flag)
-		args := []string{"introspection-credential", "issue", "-store", storePath, "-hub", hub, "-secret-file", secret}
+		args := []string{"introspection-credential", "issue", "-hub", hub, "-secret-file", secret}
 		if tc.flag != "" {
 			args = append(args, "-operations", tc.flag)
 		}
@@ -213,13 +240,8 @@ func TestIssueOperations(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		st, err := store.Open(context.Background(), storePath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, ierr := st.AuthenticateIntrospection(context.Background(), strings.TrimSpace(string(bearer)))
-		_, cerr := st.AuthenticateCoordination(context.Background(), strings.TrimSpace(string(bearer)))
-		st.Close()
+		_, ierr := s.store.AuthenticateIntrospection(context.Background(), strings.TrimSpace(string(bearer)))
+		_, cerr := s.store.AuthenticateCoordination(context.Background(), strings.TrimSpace(string(bearer)))
 		if (ierr == nil) != tc.introspect || (cerr == nil) != tc.facts {
 			t.Fatalf("-operations %q: introspection %v, coordination %v", tc.flag, ierr, cerr)
 		}

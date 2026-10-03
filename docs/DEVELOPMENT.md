@@ -252,23 +252,43 @@ are defined in `internal/opapi`:
   (`team.create`, `invitation.issue`, ...), its outcome and the ID it
   touched, besides the request line; never a body, a bearer or a code.
 
-`aicrew` still administers through the store file, below, until its
-client moves onto this API.
+### The console client: `aicrew`
+
+`aicrew` is the operator's client of this API, the console alternative to a
+web console; it never opens the store and links no store code. It runs from
+any machine that reaches `aicrewd` over TLS, while the service keeps
+running. Every administrative command takes the connection, as flags or,
+once per shell, as environment variables:
+
+| Flag | Variable | Value |
+| --- | --- | --- |
+| `-url` | `AICREW_URL` | `aicrewd`'s https origin |
+| `-tls-trust-mode` | `AICREW_TLS_TRUST_MODE` | `ca_dns` or `spki_sha256`, as for `aicrew-agent join` |
+| `-tls-trust-value` | `AICREW_TLS_TRUST_VALUE` | the host name, or `sha256-` and the pin |
+| `-token-file` | `AICREW_OPERATOR_TOKEN_FILE` | the operator credential's owner-only file |
+
+```sh
+CGO_ENABLED=0 go build -o bin/aicrew ./cmd/aicrew
+export AICREW_URL=https://aicrew.example:8443 AICREW_TLS_TRUST_MODE=ca_dns AICREW_TLS_TRUST_VALUE=aicrew.example
+export AICREW_OPERATOR_TOKEN_FILE=~/.config/aicrew/operator.token
+```
+
+A refusal prints the service's code and message and exits 1; a usage error
+exits 2. `aicrew operator-token new` and `aicrew version` take no
+connection.
 
 ## Introspection credentials
 
 Aimem authenticates its introspection and coordination-fact calls with a
-credential that aicrew issues for one aimem hub. The operator manages them with `aicrew`, which
-opens the store file directly: only one process may hold a store, so stop
-`aicrewd` first.
+credential that aicrew issues for one aimem hub. The operator manages them
+with `aicrew` (the connection as above), while `aicrewd` runs.
 
 ```sh
-CGO_ENABLED=0 go build -o bin/aicrew ./cmd/aicrew
-bin/aicrew introspection-credential issue  -store aicrew.db -hub HUB -secret-file introspection.secret
-bin/aicrew introspection-credential list   -store aicrew.db
-bin/aicrew introspection-credential rotate -store aicrew.db -hub HUB -secret-file introspection-2.secret
-bin/aicrew introspection-credential issue  -store aicrew.db -hub HUB -secret-file intro-only.secret -operations introspection
-bin/aicrew introspection-credential revoke -store aicrew.db -id ID
+bin/aicrew introspection-credential issue  -hub HUB -secret-file introspection.secret
+bin/aicrew introspection-credential list
+bin/aicrew introspection-credential rotate -hub HUB -secret-file introspection-2.secret
+bin/aicrew introspection-credential issue  -hub HUB -secret-file intro-only.secret -operations introspection
+bin/aicrew introspection-credential revoke -id ID
 ```
 
 - The bearer is written only to the `-secret-file`, which must not exist;
@@ -301,16 +321,16 @@ read credential the loop does not run.
 
 A team has a name and its intended projects (`HUB_ID/PROJECT_ID`; the list
 grants no aimem access, and aicrewd refuses an offer outside it). The
-operator manages teams with `aicrew`, which opens the store file directly:
-stop `aicrewd` first. Each command prints the team as JSON; `list` adds each
-team's member count and `show` its current members.
+operator manages teams with `aicrew`, while `aicrewd` runs. Each command
+prints the team as JSON; `list` adds each team's member count and `show` its
+current members.
 
 ```sh
-bin/aicrew team create   -store aicrew.db -name crew -project HUB_ID/PROJECT_ID
-bin/aicrew team list     -store aicrew.db
-bin/aicrew team show     -store aicrew.db -team TEAM
-bin/aicrew team projects -store aicrew.db -team TEAM -expect-revision N -project HUB_ID/PROJECT_ID
-bin/aicrew team rename   -store aicrew.db -team TEAM -expect-revision N -name crew-2
+bin/aicrew team create   -name crew -project HUB_ID/PROJECT_ID
+bin/aicrew team list
+bin/aicrew team show     -team TEAM
+bin/aicrew team projects -team TEAM -expect-revision N -project HUB_ID/PROJECT_ID
+bin/aicrew team rename   -team TEAM -expect-revision N -name crew-2
 ```
 
 - `create` and `rename` refuse a name another team already has
@@ -325,18 +345,18 @@ bin/aicrew team rename   -store aicrew.db -team TEAM -expect-revision N -name cr
 
 An invitation lets one agent join a team, or link or rebind an agent record
 (`docs/ONBOARDING-CONTRACT.md`). The operator manages them with `aicrew`,
-which opens the store file directly, like the credentials above: stop
-`aicrewd` first.
+while `aicrewd` runs.
 
 ```sh
-bin/aicrew invitation issue  -store aicrew.db -team TEAM -role worker -hub HUB_ID -label builder -expect-user AIMEM_USER_ID
-bin/aicrew invitation issue  -store aicrew.db -team TEAM -role worker -hub HUB_ID -purpose link -agent AGENT -code-file invite.code
-bin/aicrew invitation issue  -store aicrew.db -team TEAM -role worker -hub HUB_ID -purpose rebind -agent AGENT -expect-user AIMEM_USER_ID
-bin/aicrew invitation list   -store aicrew.db [-team TEAM]
-bin/aicrew invitation revoke -store aicrew.db -id INVITATION
+bin/aicrew invitation issue  -team TEAM -role worker -hub HUB_ID -label builder -expect-user AIMEM_USER_ID
+bin/aicrew invitation issue  -team TEAM -role worker -hub HUB_ID -purpose link -agent AGENT -code-file invite.code
+bin/aicrew invitation issue  -team TEAM -role worker -hub HUB_ID -purpose rebind -agent AGENT -expect-user AIMEM_USER_ID
+bin/aicrew invitation list   [-team TEAM]
+bin/aicrew invitation revoke -id INVITATION
 ```
 
-- The code is shown once and never kept: the store holds only its digest.
+- The code is generated by `aicrewd`, answered once and never kept: the
+  store holds only its digest.
   `issue` prints it only to a terminal, after the invitation's metadata. Off
   a terminal it refuses, before issuing anything, unless `-code-file` names
   a new file. That file must not exist, and is created readable by its owner

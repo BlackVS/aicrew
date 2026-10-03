@@ -62,10 +62,15 @@ Every listener is on 127.0.0.1.
    - the identity.redeem and reservation.read credentials;
    - the team profile, with its grant.
 3. **aicrew.**
+   - aicrewd starts with its operator credential and without its aimem
+     section, as the pilot runbook starts it. The operator administers it
+     with `aicrew` through the operator API while it runs.
    - The team with its project, created with `aicrew team create`.
    - The hub's outbound credential, issued with `aicrew
      introspection-credential issue`.
    - One invitation per member, issued with `aicrew invitation issue`.
+   - aicrewd then restarts with its aimem section, pointing at the hub
+     through the fault proxy.
 4. **Members:** a coordinator, a worker and an independent member.
    - Each is an aimem user with an admin-issued `aimem_user_` token. Its
      aimem client state is the installation in its agent home, `<home>/aimem`,

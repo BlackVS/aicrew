@@ -168,12 +168,17 @@ func runInvitation(ctx context.Context, args []string, stdout, stderr io.Writer)
 		}
 	}
 	var inv opapi.Invitation
-	if err := cl.Post(ctx, opapi.InvitationsPath, req, &inv); err != nil {
+	err := cl.Post(ctx, opapi.InvitationsPath, req, &inv)
+	if err == nil && (inv.ID == "" || inv.Code == "") {
+		err = errors.New("aicrewd's answer lacks the invitation's ID or code")
+	}
+	if err != nil {
 		if f != nil {
 			f.Close()
 			os.Remove(*codeFile)
 		}
-		return failed(stderr, err)
+		return issueFailed(ctx, stderr, cl, err, "invitation", inv.ID, opapi.InvitationRevokePath,
+			"aicrew invitation list -team "+*team)
 	}
 	code := inv.Code
 	inv.Code = ""

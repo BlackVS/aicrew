@@ -63,8 +63,8 @@ Every listener is on 127.0.0.1.
    - the team profile, with its grant.
 3. **aicrew.**
    - aicrewd starts with its operator credential and without its aimem
-     section, as the pilot runbook starts it. The operator administers it
-     with `aicrew` through the operator API while it runs.
+     section, the order the pilot's deployment follows. The operator
+     administers it with `aicrew` through the operator API while it runs.
    - The team with its project, created with `aicrew team create`.
    - The hub's outbound credential, issued with `aicrew
      introspection-credential issue`.

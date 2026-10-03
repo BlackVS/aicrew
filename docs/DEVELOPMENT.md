@@ -214,7 +214,9 @@ are defined in `internal/opapi`:
 - **Rotation.** The service reads the file on every operator call, so
   replacing it rotates the credential without a restart: write a new token
   with `aicrew operator-token new -file NEW` beside the old file, then
-  rename `NEW` over `operator_token_file`. A file that is missing,
+  rename `NEW` over `operator_token_file`, and replace the operator's own
+  copy (`AICREW_OPERATOR_TOKEN_FILE`) on each machine `aicrew` runs from: a
+  client with the old copy is refused `401`. A file that is missing,
   readable by another account or malformed fails closed: every operator
   call answers `503 operator_unavailable` until it is fixed.
 - **Failed attempts.** Failed authentications are limited to 10 a minute per
@@ -270,7 +272,7 @@ once per shell, as environment variables:
 ```sh
 CGO_ENABLED=0 go build -o bin/aicrew ./cmd/aicrew
 export AICREW_URL=https://aicrew.example:8443 AICREW_TLS_TRUST_MODE=ca_dns AICREW_TLS_TRUST_VALUE=aicrew.example
-export AICREW_OPERATOR_TOKEN_FILE=~/.config/aicrew/operator.token
+export AICREW_OPERATOR_TOKEN_FILE="$HOME/.config/aicrew/operator.token"
 ```
 
 A refusal prints the service's code and message and exits 1; a usage error

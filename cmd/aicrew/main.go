@@ -161,10 +161,15 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		path = opapi.CredentialRotatePath
 	}
 	var c opapi.Credential
-	if err := cl.Post(ctx, path, opapi.CredentialRequest{HubID: *hub, Operations: ops}, &c); err != nil {
+	err = cl.Post(ctx, path, opapi.CredentialRequest{HubID: *hub, Operations: ops}, &c)
+	if err == nil && (c.ID == "" || c.Bearer == "" || (verb == "rotate" && c.Replaces == "")) {
+		err = errors.New("aicrewd's answer lacks the credential's ID, bearer or the credential it replaces")
+	}
+	if err != nil {
 		f.Close()
 		os.Remove(*secretFile)
-		return failed(stderr, err)
+		return issueFailed(ctx, stderr, cl, err, "credential", c.ID, opapi.CredentialRevokePath,
+			"aicrew introspection-credential list -hub "+*hub)
 	}
 	bearer := c.Bearer
 	c.Bearer = ""

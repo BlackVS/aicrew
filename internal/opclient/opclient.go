@@ -46,8 +46,8 @@ type Client struct {
 // New checks the configuration and reads the operator credential.
 func New(cfg Config) (*Client, error) {
 	u, err := url.Parse(cfg.URL)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" ||
-		u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || strings.ContainsAny(cfg.URL, "?#") ||
+		(u.Path != "" && u.Path != "/") {
 		return nil, errors.New("the URL must be aicrewd's https origin, without credentials, path, query or fragment")
 	}
 	if err := cfg.Trust.Check(u.Hostname()); err != nil {

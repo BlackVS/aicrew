@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 
+	"github.com/BlackVS/aicrew/internal/opapi"
 	"github.com/BlackVS/aicrew/internal/opclient"
 	"github.com/BlackVS/aicrew/internal/tlstrust"
 )
@@ -69,6 +71,26 @@ func (c *conn) connect(stderr io.Writer) (*opclient.Client, bool) {
 // failed reports a refused or failed call and returns exit 1.
 func failed(stderr io.Writer, err error) int {
 	fmt.Fprintln(stderr, "aicrew:", err)
+	return 1
+}
+
+// issueFailed handles an issue whose answer did not arrive whole. A
+// refusal created nothing. Otherwise aicrewd may have issued it: one whose ID
+// is known is revoked, as its secret is lost; with no ID, the operator is
+// told how to find and revoke it.
+func issueFailed(ctx context.Context, stderr io.Writer, cl *opclient.Client, err error, what, id, revokePath, list string) int {
+	if opclient.Code(err) != "" {
+		return failed(stderr, err)
+	}
+	if id != "" {
+		if rerr := cl.Post(ctx, revokePath, opapi.IDRequest{ID: id}, nil); rerr != nil {
+			fmt.Fprintf(stderr, "aicrew: %v; %s %s may exist without its secret, and revoking it failed (%v): revoke it before anything else\n", err, what, id, rerr)
+			return 1
+		}
+		fmt.Fprintf(stderr, "aicrew: %v; %s %s was revoked, as its secret did not arrive\n", err, what, id)
+		return 1
+	}
+	fmt.Fprintf(stderr, "aicrew: %v; the outcome is unknown: a %s may have been issued without its secret reaching you. Run `%s` and revoke any you do not recognise\n", err, what, list)
 	return 1
 }
 

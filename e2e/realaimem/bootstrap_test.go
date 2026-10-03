@@ -25,12 +25,14 @@ import (
 //  2. the hub, terminating TLS itself;
 //  3. the project (tasks on, process selected);
 //  4. aicrew registered as the identity peer, with the hub's ID read back;
-//  5. the aicrew store: the team on that hub's project, and the hub's
+//  5. aicrewd, started without its aimem section, and through its operator
+//     API with `aicrew`: the team on that hub's project, and the hub's
 //     outbound credential (introspection and coordination);
 //  6. aicrew's two aimem credentials (identity.redeem, reservation.read);
 //  7. the team's access profile and its grant;
 //  8. the members' aimem users and tokens, and their aicrew invitations;
-//  9. aicrewd, and the peer check end to end;
+//  9. aicrewd restarted with its aimem section, and the peer check end to
+//     end;
 //  10. each member's aimem client, `aicrew-agent join`, and its launcher.
 func (h *harness) bootstrap(specs ...memberSpec) {
 	t := h.t
@@ -205,8 +207,9 @@ func (h *harness) identity(args ...string) []string {
 }
 
 // prepareMember provisions one member as the runbook's step 6 and aicrew's
-// onboarding do, while aicrewd does not hold the store: an aimem user with
-// an admin-issued user token, and an aicrew invitation pinned to that user.
+// onboarding do: an aimem user with an admin-issued user token, and an
+// aicrew invitation pinned to that user, issued through aicrewd's operator
+// API while it runs.
 // The token and the code stay in memory.
 func (h *harness) prepareMember(sp memberSpec, aEnv []string) *member {
 	t := h.t

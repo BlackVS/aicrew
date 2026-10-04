@@ -56,7 +56,7 @@ func ParseForgeCred(v string) (ForgeCred, error) {
 	return ForgeCred{Host: h, Source: src}, nil
 }
 
-// checkForgeCreds refuses two --cred values for one host, or two reading
+// checkForgeCreds refuses two credentials for one host, or two that read
 // standard input.
 func checkForgeCreds(creds []ForgeCred) error {
 	hosts, stdin := map[string]bool{}, 0

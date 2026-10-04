@@ -61,9 +61,10 @@ func readLine(r io.Reader) (string, error) {
 	return line, nil
 }
 
-// credFlags collects repeated --cred HOST=PATH|- values. A refused value
-// is reported through refused, never through the flag package's message,
-// which would quote the value: a token passed by mistake.
+// credFlags collects the repeated credential flags, a host and its file or
+// standard input each. A refused value is reported through refused, never
+// through the flag package's message, which would quote the value: a token
+// passed by mistake.
 type credFlags struct {
 	creds   *[]agent.ForgeCred
 	refused *error

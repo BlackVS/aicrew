@@ -330,6 +330,9 @@ func (c *Client) get(ctx context.Context, host string, k Kind, token, path strin
 	}
 	defer resp.Body.Close()
 	switch {
+	case resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0":
+		// A rate limit is not a verdict on the token: try again later.
+		return fmt.Errorf("%w: rate limited", ErrUnreachable)
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return ErrRejected
 	case resp.StatusCode == http.StatusNotFound:

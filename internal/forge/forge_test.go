@@ -207,3 +207,17 @@ func TestRepositoryAndEncoding(t *testing.T) {
 		t.Fatal("service")
 	}
 }
+
+// A rate-limited 403 is not a rejected token: it is retried later.
+func TestRateLimitIsNotRejection(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client()}
+	_, err := c.WhoAmI(context.Background(), strings.TrimPrefix(srv.URL, "https://"), GitHub, testToken)
+	if !errors.Is(err, ErrUnreachable) || errors.Is(err, ErrRejected) {
+		t.Fatalf("a rate limit: %v", err)
+	}
+}

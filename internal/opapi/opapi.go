@@ -158,6 +158,7 @@ type Invitation struct {
 	ID             string    `json:"id"`
 	Purpose        string    `json:"purpose"`
 	TeamID         string    `json:"team_id"`
+	TeamName       string    `json:"team_name,omitempty"` // the team's current name, beside its ID
 	Role           string    `json:"role"`
 	HubID          string    `json:"hub_id"`
 	AgentID        string    `json:"agent_id,omitempty"`

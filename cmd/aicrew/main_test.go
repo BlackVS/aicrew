@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -45,14 +46,14 @@ func TestIssueListRotateRevoke(t *testing.T) {
 
 	// Rotate needs one active credential to replace.
 	none := filepath.Join(dir, "none.secret")
-	if r := cli(t, "hub-credential", "rotate", "-hub", "hub-a", "-secret-file", none); r.code != 1 {
+	if r := cli(t, "hub-credential", "rotate", "-hub", "hub-a", "--output", none); r.code != 1 {
 		t.Fatalf("rotate with no active credential: %d", r.code)
 	}
 	if _, err := os.Stat(none); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("a refused rotate created its secret file")
 	}
 
-	r := cli(t, "hub-credential", "issue", "-hub", "hub-a", "-secret-file", first)
+	r := cli(t, "hub-credential", "issue", "-hub", "hub-a", "--output", first)
 	if r.code != 0 {
 		t.Fatalf("issue: %d %s", r.code, r.stderr)
 	}
@@ -64,7 +65,7 @@ func TestIssueListRotateRevoke(t *testing.T) {
 		t.Fatal("the bearer was printed")
 	}
 	var issued credentialView
-	if err := json.Unmarshal([]byte(r.stdout), &issued); err != nil || issued.HubID != "hub-a" || !issued.Active || issued.SecretFile != first {
+	if err := json.Unmarshal([]byte(r.stdout), &issued); err != nil || issued.HubID != "hub-a" || !issued.Active || issued.Output != first {
 		t.Fatalf("issue printed %s (%v)", r.stdout, err)
 	}
 	if hub, err := authenticate(t, s, string(bearer)); err != nil || hub != "hub-a" {
@@ -72,7 +73,7 @@ func TestIssueListRotateRevoke(t *testing.T) {
 	}
 
 	// An existing secret file is never reused, and nothing is issued.
-	if r := cli(t, "hub-credential", "issue", "-hub", "hub-a", "-secret-file", first); r.code != 1 {
+	if r := cli(t, "hub-credential", "issue", "-hub", "hub-a", "--output", first); r.code != 1 {
 		t.Fatalf("issue into an existing file: %d", r.code)
 	}
 	if again, _ := os.ReadFile(first); !bytes.Equal(again, bearer) {
@@ -80,16 +81,16 @@ func TestIssueListRotateRevoke(t *testing.T) {
 	}
 
 	second := filepath.Join(dir, "second.secret")
-	r = cli(t, "hub-credential", "rotate", "-hub", "hub-a", "-secret-file", second)
+	r = cli(t, "hub-credential", "rotate", "-hub", "hub-a", "--output", second)
 	var rotated credentialView
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &rotated) != nil || rotated.Replaces != issued.ID {
 		t.Fatalf("rotate: %d %s %s", r.code, r.stdout, r.stderr)
 	}
 	third := filepath.Join(dir, "third.secret")
-	if r := cli(t, "hub-credential", "rotate", "-hub", "hub-a", "-secret-file", third); r.code != 1 {
+	if r := cli(t, "hub-credential", "rotate", "-hub", "hub-a", "--output", third); r.code != 1 {
 		t.Fatalf("rotate with two active credentials: %d", r.code)
 	}
-	if r := cli(t, "hub-credential", "issue", "-hub", "hub-a", "-secret-file", third); r.code != 1 || !strings.Contains(r.stderr, "credential_limit") {
+	if r := cli(t, "hub-credential", "issue", "-hub", "hub-a", "--output", third); r.code != 1 || !strings.Contains(r.stderr, "credential_limit") {
 		t.Fatalf("a third active credential: %d %s", r.code, r.stderr)
 	}
 	if _, err := os.Stat(third); !errors.Is(err, os.ErrNotExist) {
@@ -142,9 +143,9 @@ func TestIssueRevokesWhenTheSecretCannotBeWritten(t *testing.T) {
 	serve(t)
 	secret := filepath.Join(dir, "x.secret")
 	orig := writeSecret
-	writeSecret = func(*os.File, string) error { return errors.New("disk full") }
+	writeSecret = func(io.Writer, string) error { return errors.New("disk full") }
 	defer func() { writeSecret = orig }()
-	r := cli(t, "hub-credential", "issue", "-hub", "hub-a", "-secret-file", secret)
+	r := cli(t, "hub-credential", "issue", "-hub", "hub-a", "--output", secret)
 	if r.code != 1 || !strings.Contains(r.stderr, "was revoked") {
 		t.Fatalf("issue with a failed write: %d %s", r.code, r.stderr)
 	}
@@ -171,8 +172,8 @@ func TestUsageAndConnection(t *testing.T) {
 		{"hub-credential", "issue", "-hub", "hub-a"},
 		{"hub-credential", "revoke"},
 		{"hub-credential", "list", "-id", "x"},
-		{"hub-credential", "issue", "-hub", "hub-a", "-secret-file", "x", "-operations", "everything"},
-		{"hub-credential", "issue", "-hub", "hub-a", "-secret-file", "x", "-operations", "introspection,"},
+		{"hub-credential", "issue", "-hub", "hub-a", "--output", "x", "-operations", "everything"},
+		{"hub-credential", "issue", "-hub", "hub-a", "--output", "x", "-operations", "introspection,"},
 		{"hub-credential", "list", "-operations", "coordination"},
 	} {
 		if r := cli(t, args...); r.code != 2 {
@@ -180,7 +181,7 @@ func TestUsageAndConnection(t *testing.T) {
 		}
 	}
 	secret := filepath.Join(dir, "held.secret")
-	issue := []string{"hub-credential", "issue", "-hub", "hub-a", "-secret-file", secret}
+	issue := []string{"hub-credential", "issue", "-hub", "hub-a", "--output", secret}
 	for _, k := range []string{"AICREW_URL", "AICREW_TLS_TRUST_MODE", "AICREW_TLS_TRUST_VALUE", "AICREW_OPERATOR_TOKEN_FILE"} {
 		t.Setenv(k, "")
 	}
@@ -243,7 +244,7 @@ func TestIssueOperations(t *testing.T) {
 	} {
 		secret := filepath.Join(dir, "cred-"+strings.NewReplacer(",", "-", " ", "").Replace(tc.flag)+".secret")
 		hub := "hub-" + strings.NewReplacer(",", "-", " ", "").Replace(tc.flag)
-		args := []string{"hub-credential", "issue", "-hub", hub, "-secret-file", secret}
+		args := []string{"hub-credential", "issue", "-hub", hub, "--output", secret}
 		if tc.flag != "" {
 			args = append(args, "-operations", tc.flag)
 		}
@@ -285,7 +286,7 @@ func TestVersionCommand(t *testing.T) {
 func TestOperatorTokenNew(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "operator.token")
 	var out, errb bytes.Buffer
-	if code := run(context.Background(), []string{"operator-token", "new", "-file", path}, &out, &errb); code != 0 {
+	if code := run(context.Background(), []string{"operator-token", "new", "--output", path}, &out, &errb); code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
 	tok, err := optoken.Read(path)
@@ -295,7 +296,7 @@ func TestOperatorTokenNew(t *testing.T) {
 	if strings.Contains(out.String()+errb.String(), tok) || !strings.Contains(out.String(), path) {
 		t.Fatalf("output %q", out.String())
 	}
-	if code := run(context.Background(), []string{"operator-token", "new", "-file", path}, &out, &errb); code != 1 {
+	if code := run(context.Background(), []string{"operator-token", "new", "--output", path}, &out, &errb); code != 1 {
 		t.Fatalf("an existing file: exit %d", code)
 	}
 	if again, _ := optoken.Read(path); again != tok {

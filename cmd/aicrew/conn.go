@@ -108,3 +108,42 @@ func allowedFlags(set map[string]bool, allowed ...string) bool {
 	}
 	return true
 }
+
+// teamFlags is --team, a team's ID, and --team-name, its name (merged
+// proposal section 6.2): a command that takes a team takes either.
+type teamFlags struct{ id, name *string }
+
+func addTeamFlags(fs *flag.FlagSet) teamFlags {
+	return teamFlags{
+		id:   fs.String("team", "", "team ID"),
+		name: fs.String("team-name", "", "team name, instead of --team"),
+	}
+}
+
+// given reports whether either flag was given, and false for both: the
+// usage error.
+func (t teamFlags) given(stderr io.Writer) (given, ok bool) {
+	if *t.id != "" && *t.name != "" {
+		fmt.Fprintln(stderr, "aicrew: give --team or --team-name, not both")
+		return false, false
+	}
+	return *t.id != "" || *t.name != "", true
+}
+
+// resolve is the team's ID: --team as given, or the one team named by
+// --team-name. Team names are unique, so a name names one team or none.
+func (t teamFlags) resolve(ctx context.Context, cl *opclient.Client) (string, error) {
+	if *t.name == "" {
+		return *t.id, nil
+	}
+	var teams []opapi.TeamSummary
+	if err := cl.Get(ctx, opapi.TeamsPath, nil, &teams); err != nil {
+		return "", err
+	}
+	for _, tm := range teams {
+		if tm.Name == *t.name {
+			return tm.ID, nil
+		}
+	}
+	return "", fmt.Errorf("no team is named %q; aicrew team list shows the teams", *t.name)
+}

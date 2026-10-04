@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -188,9 +189,9 @@ func credentialOf(c store.IntrospectionCredential, now time.Time) opapi.Credenti
 		ExpiresAt: c.ExpiresAt, RevokedAt: c.RevokedAt, Operations: c.Operations}
 }
 
-func invitationOf(inv store.Invitation, now time.Time) opapi.Invitation {
+func invitationOf(inv store.Invitation, now time.Time, names map[string]string) opapi.Invitation {
 	open := inv.State == store.InvitationIssued || inv.State == store.InvitationLocked
-	return opapi.Invitation{ID: inv.ID, Purpose: string(inv.Purpose), TeamID: inv.TeamID, Role: string(inv.Role),
+	return opapi.Invitation{ID: inv.ID, Purpose: string(inv.Purpose), TeamID: inv.TeamID, TeamName: names[inv.TeamID], Role: string(inv.Role),
 		HubID: inv.HubID, AgentID: inv.AgentID, ExpectedUserID: inv.ExpectedUserID, Label: inv.Label,
 		IssuedBy: inv.IssuedBy, State: string(inv.State), Expired: open && !now.Before(inv.ExpiresAt),
 		Attempts: inv.Attempts, Revision: inv.Revision, ExpiresAt: inv.ExpiresAt, CreatedAt: inv.CreatedAt}
@@ -421,11 +422,15 @@ func (s *Server) listInvitations(w http.ResponseWriter, r *http.Request, op stor
 	if err != nil {
 		return adminFail(w, err), ""
 	}
+	names, err := s.teamNames(r.Context(), op)
+	if err != nil {
+		return adminFail(w, err), ""
+	}
 	team, now := r.URL.Query().Get("team"), time.Now().UTC()
 	out := []opapi.Invitation{}
 	for _, inv := range invs {
 		if team == "" || inv.TeamID == team {
-			out = append(out, invitationOf(inv, now))
+			out = append(out, invitationOf(inv, now, names))
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -456,7 +461,7 @@ func (s *Server) issueInvitation(w http.ResponseWriter, r *http.Request, op stor
 	if err != nil {
 		return adminFail(w, err), ""
 	}
-	v := invitationOf(inv, time.Now().UTC())
+	v := invitationOf(inv, time.Now().UTC(), s.teamNamesOrNone(r.Context(), op))
 	v.Code = code.Reveal()
 	writeJSON(w, http.StatusCreated, v)
 	return "issued", inv.ID
@@ -474,6 +479,28 @@ func (s *Server) revokeInvitation(w http.ResponseWriter, r *http.Request, op sto
 	if err != nil {
 		return adminFail(w, err), ""
 	}
-	writeJSON(w, http.StatusOK, invitationOf(inv, time.Now().UTC()))
+	writeJSON(w, http.StatusOK, invitationOf(inv, time.Now().UTC(), s.teamNamesOrNone(r.Context(), op)))
 	return "revoked", inv.ID
+}
+
+// teamNames maps every team's ID to its current name, for answers that name
+// a team by both. op is the operator's caller: only an authenticated handler
+// has one.
+func (s *Server) teamNames(ctx context.Context, _ store.Caller) (map[string]string, error) {
+	teams, err := s.store.ListTeams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[string]string, len(teams))
+	for _, t := range teams {
+		names[t.ID] = t.Name
+	}
+	return names, nil
+}
+
+// teamNamesOrNone is teamNames for the answer of a write that has already
+// committed: a failed read leaves the names out rather than failing it.
+func (s *Server) teamNamesOrNone(ctx context.Context, op store.Caller) map[string]string {
+	names, _ := s.teamNames(ctx, op)
+	return names
 }

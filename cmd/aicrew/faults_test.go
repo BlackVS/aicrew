@@ -87,15 +87,15 @@ func TestIssueAnswerFaults(t *testing.T) {
 		says    string
 	}{
 		{"credential without bearer", answer(`{"id":"cred-1","hub_id":"hub-a","active":true}`),
-			[]string{"hub-credential", "issue", "-hub", "hub-a", "-secret-file"}, "cred-1", "was revoked"},
+			[]string{"hub-credential", "issue", "-hub", "hub-a", "--output"}, "cred-1", "was revoked"},
 		{"rotation without replaces", answer(`{"id":"cred-2","hub_id":"hub-a","bearer":"aicrew_introspect_x"}`),
-			[]string{"hub-credential", "rotate", "-hub", "hub-a", "-secret-file"}, "cred-2", "was revoked"},
+			[]string{"hub-credential", "rotate", "-hub", "hub-a", "--output"}, "cred-2", "was revoked"},
 		{"invitation without code", answer(`{"id":"inv-1","team_id":"t","state":"issued"}`),
-			[]string{"invitation", "issue", "-team", "t", "-role", "worker", "-hub", "hub-a", "-label", "b", "-code-file"}, "inv-1", "was revoked"},
+			[]string{"invitation", "issue", "-team", "t", "-role", "worker", "-hub", "hub-a", "-label", "b", "--output"}, "inv-1", "was revoked"},
 		{"credential answer lost", hangUp,
-			[]string{"hub-credential", "issue", "-hub", "hub-a", "-secret-file"}, "", "hub-credential list -hub hub-a"},
+			[]string{"hub-credential", "issue", "-hub", "hub-a", "--output"}, "", "hub-credential list --hub hub-a"},
 		{"invitation answer lost", hangUp,
-			[]string{"invitation", "issue", "-team", "t", "-role", "worker", "-hub", "hub-a", "-label", "b", "-code-file"}, "", "invitation list -team t"},
+			[]string{"invitation", "issue", "-team", "t", "-role", "worker", "-hub", "hub-a", "-label", "b", "--output"}, "", "invitation list --team t"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &stub{}
@@ -137,7 +137,7 @@ func TestInvitationExpiresAndRefusal(t *testing.T) {
 	onTerminal(t, false)
 	file := filepath.Join(t.TempDir(), "code")
 	r := cli(t, "invitation", "issue", "-team", team, "-role", "worker", "-hub", "hub-a", "-label", "b",
-		"-expires", "1h", "-code-file", file)
+		"-expires", "1h", "--output", file)
 	var v invitationView
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &v) != nil {
 		t.Fatalf("issue: %d %s %s", r.code, r.stdout, r.stderr)
@@ -151,7 +151,7 @@ func TestInvitationExpiresAndRefusal(t *testing.T) {
 		{"-team", team, "-role", "admin", "-hub", "hub-a", "-label", "c"},
 	} {
 		f := filepath.Join(t.TempDir(), "code")
-		if r := cli(t, append(append([]string{"invitation", "issue"}, args...), "-code-file", f)...); r.code != 1 {
+		if r := cli(t, append(append([]string{"invitation", "issue"}, args...), "--output", f)...); r.code != 1 {
 			t.Fatalf("%v: exit %d %s", args, r.code, r.stderr)
 		}
 		if _, err := os.Stat(f); !errors.Is(err, os.ErrNotExist) {

@@ -17,11 +17,11 @@ import (
 // invitations; this command only reads it.
 
 const teamUsage = `usage:
-  aicrew team create   -name NAME [-project HUB/PROJECT ...]
+  aicrew team create   --name NAME [--project HUB/PROJECT ...]
   aicrew team list
-  aicrew team show     -team TEAM
-  aicrew team projects -team TEAM -expect-revision N [-project HUB/PROJECT ...]
-  aicrew team rename   -team TEAM -expect-revision N -name NAME
+  aicrew team show     --team TEAM | --team-name NAME
+  aicrew team projects --team TEAM | --team-name NAME --expect-revision N [--project HUB/PROJECT ...]
+  aicrew team rename   --team TEAM | --team-name NAME --expect-revision N --name NAME
 ` + connUsage
 
 // projectFlags collects repeated -project HUB/PROJECT values. A value
@@ -48,7 +48,7 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	cn := addConn(fs)
 	name := fs.String("name", "", "team name: 1-32 lowercase letters, digits or '-'")
-	team := fs.String("team", "", "team ID")
+	tf := addTeamFlags(fs)
 	expect := fs.Int64("expect-revision", 0, "the team revision the change applies to, as show or list printed it")
 	var projects projectFlags
 	fs.Var(&projects, "project", "an intended project, HUB/PROJECT (repeatable)")
@@ -59,6 +59,10 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	usage := func() int { fmt.Fprint(stderr, teamUsage); return 2 }
+	teamGiven, teamOK := tf.given(stderr)
+	if !teamOK {
+		return 2
+	}
 	switch verb {
 	case "create":
 		if !allowedFlags(set, "name", "project") || *name == "" {
@@ -69,15 +73,15 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return usage()
 		}
 	case "show":
-		if !allowedFlags(set, "team") || *team == "" {
+		if !allowedFlags(set, "team", "team-name") || !teamGiven {
 			return usage()
 		}
 	case "projects":
-		if !allowedFlags(set, "team", "expect-revision", "project") || *team == "" || !set["expect-revision"] {
+		if !allowedFlags(set, "team", "team-name", "expect-revision", "project") || !teamGiven || !set["expect-revision"] {
 			return usage()
 		}
 	case "rename":
-		if !allowedFlags(set, "team", "expect-revision", "name") || *team == "" || !set["expect-revision"] || *name == "" {
+		if !allowedFlags(set, "team", "team-name", "expect-revision", "name") || !teamGiven || !set["expect-revision"] || *name == "" {
 			return usage()
 		}
 	default:
@@ -86,6 +90,10 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	cl, ok := cn.connect(stderr)
 	if !ok {
 		return 1
+	}
+	team, err := tf.resolve(ctx, cl)
+	if err != nil {
+		return failed(stderr, err)
 	}
 	out := json.NewEncoder(stdout)
 	out.SetIndent("", "  ")
@@ -105,7 +113,7 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_ = out.Encode(teams)
 	case "show":
 		var d opapi.TeamDetail
-		if err := cl.Get(ctx, opapi.TeamPath, url.Values{"id": {*team}}, &d); err != nil {
+		if err := cl.Get(ctx, opapi.TeamPath, url.Values{"id": {team}}, &d); err != nil {
 			return failed(stderr, err)
 		}
 		_ = out.Encode(d)
@@ -114,14 +122,14 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			projects = projectFlags{}
 		}
 		var t opapi.Team
-		if err := cl.Post(ctx, opapi.TeamProjectsPath, opapi.TeamProjectsRequest{TeamID: *team, ExpectedRevision: *expect,
+		if err := cl.Post(ctx, opapi.TeamProjectsPath, opapi.TeamProjectsRequest{TeamID: team, ExpectedRevision: *expect,
 			Projects: projects}, &t); err != nil {
 			return revisionHint(stderr, err, *expect)
 		}
 		_ = out.Encode(t)
 	case "rename":
 		var t opapi.Team
-		if err := cl.Post(ctx, opapi.TeamRenamePath, opapi.TeamRenameRequest{TeamID: *team, ExpectedRevision: *expect,
+		if err := cl.Post(ctx, opapi.TeamRenamePath, opapi.TeamRenameRequest{TeamID: team, ExpectedRevision: *expect,
 			Name: *name}, &t); err != nil {
 			return revisionHint(stderr, err, *expect)
 		}

@@ -24,6 +24,7 @@ const (
 	TeamPath             = "/v1/admin/team"                   // GET show (?id=)
 	TeamProjectsPath     = "/v1/admin/team/projects"          // POST
 	TeamRenamePath       = "/v1/admin/team/rename"            // POST
+	TeamRegisterPath     = "/v1/admin/team/register"          // POST
 	InvitationsPath      = "/v1/admin/invitations"            // GET list (?team=), POST issue
 	InvitationRevokePath = "/v1/admin/invitations/revoke"     // POST
 
@@ -97,6 +98,21 @@ type Team struct {
 	CoordinatorGeneration int64        `json:"coordinator_generation"`
 	CreatedAt             time.Time    `json:"created_at"`
 	UpdatedAt             time.Time    `json:"updated_at"`
+	// Hub is the alias of the team's aimem block, or "" for a team created
+	// before teams named their hub.
+	Hub string `json:"hub,omitempty"`
+	// Registration is the outcome of the team's last registration on its
+	// hub (team.register), or absent when none was attempted.
+	Registration *TeamRegistration `json:"registration,omitempty"`
+}
+
+// TeamRegistration is the outcome of a team's registration on its hub:
+// state "registered", or the hub's refusal code, or "hub_unavailable".
+type TeamRegistration struct {
+	State  string    `json:"state"`
+	Detail string    `json:"detail,omitempty"`
+	Name   string    `json:"name,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 // TeamSummary is a team in a list, with its current member count.
@@ -109,6 +125,8 @@ type TeamSummary struct {
 type TeamRequest struct {
 	Name     string       `json:"name"`
 	Projects []ProjectRef `json:"projects,omitempty"`
+	// Hub is the alias of an aimem block of aicrewd.json.
+	Hub string `json:"hub,omitempty"`
 }
 
 // TeamProjectsRequest replaces a team's intended projects.

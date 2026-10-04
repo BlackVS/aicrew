@@ -115,6 +115,8 @@ func TestTeamRefusals(t *testing.T) {
 		{"invalid input", []string{"create", "-name", "beta", "-project", "hub-a"}},
 		{"invalid input", []string{"create", "-name", "beta", "-project", "/docs"}},
 		{"invalid input", []string{"projects", "-team", crew.ID, "-expect-revision", rev, "-project", "hub a/docs"}},
+		{"not an aimem block", []string{"create", "-name", "beta", "-hub", "main"}},
+		{"names no hub", []string{"register", "-team", crew.ID}},
 	}
 	for _, f := range failures {
 		r := teamCLI(t, 1, f.args...)
@@ -135,6 +137,9 @@ func TestTeamRefusals(t *testing.T) {
 		{"rename", "-team", crew.ID, "-name", "beta"},
 		{"rename", "-team", crew.ID, "-expect-revision", "1"},
 		{"show", "-team", crew.ID, "extra"},
+		{"create", "-name", "beta", "-hub", ""},
+		{"register"},
+		{"register", "-team", crew.ID, "-name", "beta"},
 	}
 	for _, args := range usages {
 		if r := teamCLI(t, 2, args...); !strings.Contains(r.stderr, "usage:") {

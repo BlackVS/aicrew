@@ -658,3 +658,24 @@ func TestStepWritesRecheckTheToken(t *testing.T) {
 		t.Fatalf("a replay of a settled step with a dead token: %v", err)
 	}
 }
+
+// A read scope bound to another hub never reads a step: the step of a
+// hub-a task stays pending against hub-b's scope, whatever it would answer,
+// and settles from hub-a's.
+func TestSettleReadsOnlyTheTasksHub(t *testing.T) {
+	ctx := context.Background()
+	e := newStepEnv(t)
+	a, st := e.begin(t, "offer", "task-1")
+	e.reader.commit(st.CoordinationProof, receiptFor(a, st, "res-1", "1", 4))
+	e.advance(time.Hour + NoneFinalAfter)
+	other := HubReader{ReservationReader: e.reader, HubID: "hub-b"}
+	got, set, err := e.s.SettleStep(ctx, e.lead.caller, other, a.ID, st.RequestKey, report(HintCommitted))
+	if err != nil || set.Settled || got.State != AttemptOffering || e.reader.reads != 0 {
+		t.Fatalf("another hub's scope settled the step: %+v %+v %v, %d reads", got, set, err, e.reader.reads)
+	}
+	own := HubReader{ReservationReader: e.reader, HubID: a.Task.HubID}
+	if got, set, err := e.s.SettleStep(ctx, e.lead.caller, own, a.ID, st.RequestKey, report(HintCommitted)); err != nil ||
+		!set.Settled || got.State != AttemptOffered {
+		t.Fatalf("the task's hub: %+v %+v %v", got, set, err)
+	}
+}

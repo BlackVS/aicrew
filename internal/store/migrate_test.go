@@ -116,6 +116,9 @@ func downgradeToV10(t *testing.T, path string) {
 		// Tables and columns added after v10.
 		`DROP TABLE session_tokens`, `DROP TABLE session_handles`, `DROP TABLE introspection_credentials`,
 		`ALTER TABLE messages DROP COLUMN offer`, `ALTER TABLE messages DROP COLUMN attempt_id`,
+		`ALTER TABLE teams DROP COLUMN hub`, `ALTER TABLE teams DROP COLUMN registration_state`,
+		`ALTER TABLE teams DROP COLUMN registration_detail`, `ALTER TABLE teams DROP COLUMN registered_name`,
+		`ALTER TABLE teams DROP COLUMN registered_at`,
 		`UPDATE schema_version SET version = 10`)
 	tx, err := db.Begin()
 	if err != nil {
@@ -478,8 +481,51 @@ func dropRecoveredColumns(t *testing.T, raw *sql.DB) {
 // dropMessageOffer takes a store back to v20.
 func dropMessageOffer(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropTeamHub(t, raw)
 	if _, err := raw.Exec(`ALTER TABLE messages DROP COLUMN offer`); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// dropTeamHub takes a store back to v21.
+func dropTeamHub(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	for _, col := range []string{"hub", "registration_state", "registration_detail", "registered_name", "registered_at"} {
+		if _, err := raw.Exec(`ALTER TABLE teams DROP COLUMN ` + col); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Schema v22 adds a team's hub and its registration outcome to a populated
+// v21 store: every team is kept, naming no hub and no registration.
+func TestMigrationV22AddsTheTeamHub(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM teams`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropTeamHub(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 21`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v21 store: %v", err)
+	}
+	defer s2.Close()
+	var after, named int
+	if err := s2.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(hub, '')) + COUNT(NULLIF(registration_state, '')) FROM teams`).
+		Scan(&after, &named); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || before == 0 || named != 0 {
+		t.Fatalf("after v22: %d teams (was %d), %d naming a hub or a registration", after, before, named)
 	}
 }
 

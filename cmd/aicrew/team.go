@@ -17,11 +17,12 @@ import (
 // invitations; this command only reads it.
 
 const teamUsage = `usage:
-  aicrew team create   --name NAME [--project HUB/PROJECT ...]
+  aicrew team create   --name NAME [--hub ALIAS] [--project HUB/PROJECT ...]
   aicrew team list
   aicrew team show     (--team TEAM | --team-name NAME)
   aicrew team projects (--team TEAM | --team-name NAME) --expect-revision N [--project HUB/PROJECT ...]
   aicrew team rename   (--team TEAM | --team-name NAME) --expect-revision N --name NAME
+  aicrew team register (--team TEAM | --team-name NAME)
 ` + connUsage
 
 // projectFlags collects repeated --project HUB/PROJECT values. A value
@@ -37,6 +38,18 @@ func (p *projectFlags) Set(v string) error {
 	return nil
 }
 
+// registrationNote says on stderr why the team's registration on its hub
+// did not complete, and reports whether it did (or none was attempted). The
+// team exists either way; aicrew team register retries.
+func registrationNote(stderr io.Writer, t opapi.Team) bool {
+	r := t.Registration
+	if r == nil || r.State == "registered" {
+		return true
+	}
+	fmt.Fprintf(stderr, "aicrew: team %s is not registered on hub %s (%s): %s\n", t.Name, t.Hub, r.State, r.Detail)
+	return false
+}
+
 // runTeam is aicrew team: 0 on success, 1 on a failure, 2 on a usage error.
 func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) < 1 {
@@ -50,6 +63,7 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	name := fs.String("name", "", "team name: 1-32 lowercase letters, digits or '-'")
 	tf := addTeamFlags(fs)
 	expect := fs.Int64("expect-revision", 0, "the team revision the change applies to, as show or list printed it")
+	hub := fs.String("hub", "", "the alias of the team's aimem block (aicrewd.json aimem_hubs[].name)")
 	var projects projectFlags
 	fs.Var(&projects, "project", "an intended project, HUB/PROJECT (repeatable)")
 	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
@@ -65,7 +79,7 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	switch verb {
 	case "create":
-		if !allowedFlags(set, "name", "project") || *name == "" {
+		if !allowedFlags(set, "name", "hub", "project") || *name == "" || (set["hub"] && *hub == "") {
 			return usage()
 		}
 	case "list":
@@ -82,6 +96,10 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	case "rename":
 		if !allowedFlags(set, "team", "team-name", "expect-revision", "name") || !teamGiven || !set["expect-revision"] || *name == "" {
+			return usage()
+		}
+	case "register":
+		if !allowedFlags(set, "team", "team-name") || !teamGiven {
 			return usage()
 		}
 	default:
@@ -101,10 +119,11 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	switch verb {
 	case "create":
 		var t opapi.Team
-		if err := cl.Post(ctx, opapi.TeamsPath, opapi.TeamRequest{Name: *name, Projects: projects}, &t); err != nil {
+		if err := cl.Post(ctx, opapi.TeamsPath, opapi.TeamRequest{Name: *name, Hub: *hub, Projects: projects}, &t); err != nil {
 			return failed(stderr, err)
 		}
 		_ = out.Encode(t)
+		registrationNote(stderr, t)
 	case "list":
 		var teams []opapi.TeamSummary
 		if err := cl.Get(ctx, opapi.TeamsPath, nil, &teams); err != nil {
@@ -134,6 +153,16 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return revisionHint(stderr, err, *expect)
 		}
 		_ = out.Encode(t)
+		registrationNote(stderr, t)
+	case "register":
+		var t opapi.Team
+		if err := cl.Post(ctx, opapi.TeamRegisterPath, opapi.IDRequest{ID: team}, &t); err != nil {
+			return failed(stderr, err)
+		}
+		_ = out.Encode(t)
+		if !registrationNote(stderr, t) {
+			return 1
+		}
 	}
 	return 0
 }

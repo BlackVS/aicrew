@@ -367,3 +367,27 @@ func TestRefusedStepsKeepTheirPlace(t *testing.T) {
 		}
 	}
 }
+
+// A read scope bound to one hub reads only that hub's tasks: another hub's
+// pending step and hold are never read through it, so its answers neither
+// settle the step nor close the attempt.
+func TestReadsOnlyItsHub(t *testing.T) {
+	c := &clock{t: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+	var cands []store.ReconcileCandidate
+	for _, hub := range []string{"hub-a", "hub-b"} {
+		cands = append(cands,
+			store.ReconcileCandidate{AttemptID: "step-" + hub, Pending: true, Task: store.TaskRef{HubID: hub, TaskID: "s-" + hub}},
+			store.ReconcileCandidate{AttemptID: "hold-" + hub, Task: store.TaskRef{HubID: hub, TaskID: "h-" + hub}})
+	}
+	st := newFakeStore(cands)
+	r := &fakeReader{commit: true, hold: store.ScopeHold{State: store.ScopeClosed, ReservationID: "r", ClosingFence: "3", ClosedBy: "recovery_release"}}
+	l := New(st, store.HubReader{ReservationReader: r, HubID: "hub-a"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	l.Now = c.now
+	settled, closed := l.Round(context.Background())
+	if settled != 1 || closed != 1 || !st.settled["step-hub-a"] || st.settled["step-hub-b"] {
+		t.Fatalf("settled %d %v, closed %d %v", settled, st.settled, closed, st.closed)
+	}
+	if _, ok := st.closed["hold-hub-b"]; ok || r.reads != 2 {
+		t.Fatalf("read another hub's tasks: %d reads, closed %v", r.reads, st.closed)
+	}
+}

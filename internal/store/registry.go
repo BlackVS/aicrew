@@ -63,6 +63,12 @@ type Team struct {
 	Name     string       `json:"name"`
 	Projects []ProjectRef `json:"projects"`
 	Revision int64        `json:"revision"`
+	// Hub is the alias of the aimem block the team belongs to, or "" for a
+	// team created before teams named their hub.
+	Hub string `json:"hub"`
+	// Registration is the outcome of the team's last registration on its
+	// hub, or nil when none was attempted.
+	Registration *TeamRegistration `json:"registration,omitempty"`
 	// CoordinatorGeneration advances whenever a coordinator session starts,
 	// resumes or ends. It is separate from Revision, which versions the
 	// team record itself.
@@ -85,6 +91,7 @@ const (
 	opRenameAgent     = "agent.rename"
 	opSetAgentProfile = "agent.set_profile"
 	opCreateTeam      = "team.create"
+	opRecordRegister  = "team.record_registration"
 	opRenameTeam      = "team.rename"
 	opSetTeamProjects = "team.set_projects"
 	opAddMember       = "member.add"
@@ -359,7 +366,25 @@ func resolveLabel(ctx context.Context, q querier, query, what, label string) (st
 type NewTeam struct {
 	Name     string       `json:"name"`
 	Projects []ProjectRef `json:"projects"`
+	// Hub is the alias of the team's aimem block; the service checks that
+	// it names a configured hub.
+	Hub string `json:"hub,omitempty"`
 }
+
+// TeamRegistration is the outcome of a team's registration on its hub.
+type TeamRegistration struct {
+	// State is "registered", or the hub's refusal code (team_name_taken,
+	// profile_disabled, ...), or "hub_unavailable" when the hub did not answer.
+	State string `json:"state"`
+	// Detail says what to do next; never a secret.
+	Detail string `json:"detail,omitempty"`
+	// Name is the name the hub holds for the team after a registration.
+	Name string    `json:"name,omitempty"`
+	At   time.Time `json:"at"`
+}
+
+// hubAliasShape is an aimem block's alias (aicrewd.json aimem_hubs[].name).
+var hubAliasShape = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
 // CreateTeam registers a team with its intended project scope. Operator only.
 func (s *Store) CreateTeam(ctx context.Context, c Caller, key string, in NewTeam) (Team, error) {
@@ -369,6 +394,9 @@ func (s *Store) CreateTeam(ctx context.Context, c Caller, key string, in NewTeam
 		validate: func() error {
 			if err := validateLabel("team name", in.Name); err != nil {
 				return err
+			}
+			if in.Hub != "" && !hubAliasShape.MatchString(in.Hub) {
+				return fmt.Errorf("%w: a hub alias is 1 to 32 lowercase letters, digits or '-'", ErrInvalid)
 			}
 			var err error
 			in.Projects, err = normalizeProjects(in.Projects)
@@ -381,8 +409,8 @@ func (s *Store) CreateTeam(ctx context.Context, c Caller, key string, in NewTeam
 			}
 			at := formatTime(now)
 			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO teams (id, name, revision, created_at, updated_at) VALUES (?, ?, 1, ?, ?)`,
-				id, in.Name, at, at); err != nil {
+				`INSERT INTO teams (id, name, revision, created_at, updated_at, hub) VALUES (?, ?, 1, ?, ?, ?)`,
+				id, in.Name, at, at, in.Hub); err != nil {
 				return nil, fmt.Errorf("insert team: %w", err)
 			}
 			if err := insertProjects(ctx, tx, id, in.Projects); err != nil {
@@ -422,6 +450,45 @@ func (s *Store) RenameTeam(ctx context.Context, c Caller, key, teamID string, ex
 	}, &out)
 	return out, err
 }
+
+type teamRegistrationRecord struct {
+	TeamID string `json:"team_id"`
+	State  string `json:"state"`
+	Detail string `json:"detail"`
+	Name   string `json:"name"`
+}
+
+// RecordTeamRegistration keeps the outcome of a team's registration on its
+// hub. It changes neither the team's name nor its revision: the outcome is
+// the hub's, recorded beside the team. Operator only.
+func (s *Store) RecordTeamRegistration(ctx context.Context, c Caller, key, teamID string, reg TeamRegistration) (Team, error) {
+	in := teamRegistrationRecord{TeamID: teamID, State: reg.State, Detail: reg.Detail, Name: reg.Name}
+	var out Team
+	err := s.run(ctx, c, command{
+		op: opRecordRegister, scope: teamID, key: key, input: in, authorize: requireOperator,
+		validate: func() error {
+			if !registrationStateShape.MatchString(in.State) || len(in.Detail) > 512 || len(in.Name) > 256 {
+				return fmt.Errorf("%w: a registration outcome is a short code, a detail and a name", ErrInvalid)
+			}
+			return nil
+		},
+		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
+			res, err := tx.ExecContext(ctx,
+				`UPDATE teams SET registration_state = ?, registration_detail = ?, registered_name = ?, registered_at = ?
+				   WHERE id = ?`, in.State, in.Detail, in.Name, formatTime(now), teamID)
+			if err != nil {
+				return nil, fmt.Errorf("record registration: %w", err)
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				return nil, fmt.Errorf("team %s: %w", teamID, ErrNotFound)
+			}
+			return getTeam(ctx, tx, teamID)
+		},
+	}, &out)
+	return out, err
+}
+
+var registrationStateShape = regexp.MustCompile(`^[a-z_]{1,64}$`)
 
 type teamProjectsUpdate struct {
 	TeamID           string       `json:"team_id"`
@@ -547,12 +614,15 @@ func (s *Store) ResolveTeam(ctx context.Context, name string) (Team, error) {
 
 func getTeam(ctx context.Context, q querier, id string) (Team, error) {
 	var (
-		t                  Team
-		createdAt, updated string
+		t                                   Team
+		createdAt, updated                  string
+		regState, regDetail, regName, regAt string
 	)
 	err := q.QueryRowContext(ctx,
-		`SELECT id, name, revision, coordinator_generation, created_at, updated_at FROM teams WHERE id = ?`, id).
-		Scan(&t.ID, &t.Name, &t.Revision, &t.CoordinatorGeneration, &createdAt, &updated)
+		`SELECT id, name, revision, coordinator_generation, created_at, updated_at, hub,
+		        registration_state, registration_detail, registered_name, registered_at FROM teams WHERE id = ?`, id).
+		Scan(&t.ID, &t.Name, &t.Revision, &t.CoordinatorGeneration, &createdAt, &updated, &t.Hub,
+			&regState, &regDetail, &regName, &regAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Team{}, fmt.Errorf("team %s: %w", id, ErrNotFound)
 	}
@@ -564,6 +634,13 @@ func getTeam(ctx context.Context, q querier, id string) (Team, error) {
 	}
 	if t.UpdatedAt, err = parseTime(updated); err != nil {
 		return Team{}, err
+	}
+	if regState != "" {
+		r := &TeamRegistration{State: regState, Detail: regDetail, Name: regName}
+		if r.At, err = parseTime(regAt); err != nil {
+			return Team{}, err
+		}
+		t.Registration = r
 	}
 	rows, err := q.QueryContext(ctx,
 		`SELECT hub_id, project_id FROM team_projects WHERE team_id = ? ORDER BY hub_id, project_id`, id)

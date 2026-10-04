@@ -300,10 +300,11 @@ Repository instructions live in each repository, not here.
    terminal by ` + "`aicrew-agent run -client <client> -home <this directory>`" + `,
    which enters the team session and keeps it while the client runs. Inside
    the client, act through ` + "`aicrew-agent inbox`" + ` and ` + "`aicrew-agent step`" + `
-   (` + "`check`" + ` and ` + "`session status`" + ` only read). Never run ` + "`aicrew-agent session start`" + `, ` + "`session leave`" + ` or ` + "`run`" + ` from
-   inside it: a new proof would fence the launcher's session and cut you off
-   from your inbox, so they are refused there. To restart the session, exit
-   the client and ` + "`run`" + ` again.
+   (` + "`check`" + ` and ` + "`session status`" + ` only read). Never run
+   ` + "`aicrew-agent session start`" + `, ` + "`session leave`" + ` or ` + "`run`" + ` from inside it:
+   a new proof would fence the launcher's session and cut you off from your
+   inbox, so they are refused there. To restart the session, exit the client
+   and ` + "`run`" + ` again.
 7. **Your role.** ` + "`docs/ROLES.md`" + ` teaches your role's steps, the inbox rule and
    how to write for others. Read it at the start of every session.
 

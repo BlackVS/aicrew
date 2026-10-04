@@ -180,7 +180,7 @@ func runCheck(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) 
 
 	c.checkAimem(ctx)
 	if len(sel) == 0 {
-		c.block("no_client", "select the client this home is for: rerun with `-client claude` or `-client opencode`")
+		c.block("no_client", "select the client this home is for: rerun with `--client claude` or `--client opencode`")
 	} else {
 		doc.set(doc.top, "clients", sel)
 	}
@@ -361,7 +361,7 @@ func (c *checker) checkClient(ctx context.Context, name string, single bool) {
 	}
 	if d.ApprovalPending {
 		c.notice(fmt.Sprintf("Claude Code will ask at the first interactive start in this home to trust the folder and to "+
-			"approve the project MCP server aimem: accept both (`aicrew-agent run -client claude -home %s`)", quoteArg(c.o.Home)))
+			"approve the project MCP server aimem: accept both (`aicrew-agent run --client claude --home %s`)", quoteArg(c.o.Home)))
 	}
 }
 

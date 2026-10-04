@@ -383,7 +383,7 @@ func TestJoinEndToEnd(t *testing.T) {
 	if rep.Status != JoinReady || !rep.Redeemed || rep.Role != "worker" || rep.TeamID != e.teamID || reads != 1 {
 		t.Fatalf("report %+v, %d reads", rep, reads)
 	}
-	if !strings.Contains(rep.Next, "aicrew-agent session start -home ") {
+	if !strings.Contains(rep.Next, "aicrew-agent session start --home ") {
 		t.Fatalf("next command %q", rep.Next)
 	}
 	a, err := e.store.GetAgent(context.Background(), rep.AgentID)

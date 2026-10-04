@@ -19,11 +19,11 @@ const (
 	stepPending = 4 // recorded, not settled: `step recover` later
 )
 
-const stepUsage = `usage: aicrew-agent step OP [-home DIR] [-attempt ID] [-task ID] [-body JSON|-]
+const stepUsage = `usage: aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
   OP: offer claim accept withdraw work release finalize
       decline review stop confirm-stop confirm-delivery
       recover pending
-  -home defaults to $` + agent.HomeEnv + `, which the launcher gives its client.`
+  --home defaults to $` + agent.HomeEnv + `, which the launcher gives its client.`
 
 // step asks the agent home's launcher for one step and prints its answer.
 func step(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {

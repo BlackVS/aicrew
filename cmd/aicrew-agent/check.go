@@ -12,7 +12,7 @@ import (
 	"github.com/BlackVS/aicrew/internal/version"
 )
 
-const checkUsage = `usage: aicrew-agent check (-home DIR | -label LABEL) [-client claude|opencode[,…]] [-json]
+const checkUsage = `usage: aicrew-agent check (--home DIR | --label LABEL) [--client claude|opencode[,…]] [--json]
        Checks aimem, ai-skills and the clients against the supported set, keeps the
        home's client wiring, and asks each selected client what it sees (no model call).`
 
@@ -99,13 +99,13 @@ func orNone(s string) string {
 	return s
 }
 
-// versionCmd is `aicrew-agent version [-json]`.
+// versionCmd is `aicrew-agent version [--json]`.
 func versionCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("aicrew-agent version", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	asJSON := fs.Bool("json", false, "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: aicrew-agent version [-json]")
+		fmt.Fprintln(stderr, "usage: aicrew-agent version [--json]")
 		return exitUsage
 	}
 	version.Print(stdout, "aicrew-agent", *asJSON)

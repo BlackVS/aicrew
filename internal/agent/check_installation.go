@@ -64,7 +64,7 @@ func (c *checker) checkInstallation(sel []string) {
 	home := c.o.Home
 	if n := len(AimemSocket(home)); n > unixSocketMax {
 		c.notice(fmt.Sprintf("the home's aimem socket path is %d bytes, over the %d-byte Unix socket limit: aimem's "+
-			"local service cannot listen there (a home runs none); a shorter -home avoids it", n, unixSocketMax))
+			"local service cannot listen there (a home runs none); a shorter --home avoids it", n, unixSocketMax))
 	}
 	if slices.Contains(sel, "claude") {
 		c.checkCarrier(".claude/settings.json", func(doc map[string]json.RawMessage) json.RawMessage { return doc["env"] })
@@ -93,7 +93,7 @@ func (c *checker) checkCarrier(label string, env func(map[string]json.RawMessage
 	for _, v := range aimemVars(c.o.Home) {
 		if !samePath(vars[v[0]], v[1]) {
 			c.block("carrier_mismatch", fmt.Sprintf("%s does not set %s=%s, so a client started in this home "+
-				"would not use the home's aimem installation: rerun `aicrew-agent join -home %s`, and merge any "+
+				"would not use the home's aimem installation: rerun `aicrew-agent join --home %s`, and merge any "+
 				"%s.aicrew-new it writes", label, v[0], v[1], quoteArg(c.o.Home), file))
 			return
 		}

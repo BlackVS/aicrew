@@ -183,23 +183,27 @@ routes, and the member inbox, `GET /v1/crew/inbox` and
 `aicrewd` serves the operator's administration on its HTTPS listener
 (`listen_addr`), beside the agents' routes, so the
 service keeps running while the operator manages teams, invitations and
-introspection credentials. The routes, under `/v1/admin/`, and their JSON
-are defined in `internal/opapi`:
+hub credentials. The routes, under `/v1/admin/`, and their JSON are defined
+in `internal/opapi`:
 
 | Route | Operation |
 | --- | --- |
-| `GET /v1/admin/introspection-credentials?hub=HUB` | list credentials (metadata) |
-| `POST /v1/admin/introspection-credentials` | issue: `{"hub_id", "operations"}`; the answer carries the bearer, once |
-| `POST /v1/admin/introspection-credentials/rotate` | `{"hub_id", "operations"}`: needs exactly one active credential for the hub (otherwise `409 rotate_needs_one_active`) and issues a second, answered once with `replaces` naming the first, which stays active until it is revoked |
-| `POST /v1/admin/introspection-credentials/revoke` | revoke: `{"id"}` |
+| `GET /v1/admin/hub-credentials?hub=HUB` | list credentials (metadata) |
+| `POST /v1/admin/hub-credentials` | issue: `{"hub_id", "operations"}`; the answer carries the bearer, once |
+| `POST /v1/admin/hub-credentials/rotate` | `{"hub_id", "operations"}`: needs exactly one active credential for the hub (otherwise `409 rotate_needs_one_active`) and issues a second, answered once with `replaces` naming the first, which stays active until it is revoked |
+| `POST /v1/admin/hub-credentials/revoke` | revoke: `{"id"}` |
 | `GET /v1/admin/teams` | list teams |
 | `POST /v1/admin/teams` | create: `{"name", "projects"}` |
 | `GET /v1/admin/team?id=TEAM` | show a team and its members |
 | `POST /v1/admin/team/projects` | `{"team_id", "expected_revision", "projects"}` |
 | `POST /v1/admin/team/rename` | `{"team_id", "expected_revision", "name"}` |
-| `GET /v1/admin/invitations?team=TEAM` | list invitations (metadata) |
+| `GET /v1/admin/invitations?team=TEAM` | list invitations (metadata, with each team's ID and name) |
 | `POST /v1/admin/invitations` | issue: `{"purpose", "team_id", "role", "hub_id", "label", "agent_id", "expected_user_id", "ttl"}`; the answer carries the code, once |
 | `POST /v1/admin/invitations/revoke` | revoke: `{"id"}` |
+
+The credential routes are also served under their names before 0.3.0,
+`/v1/admin/introspection-credentials` (and `/rotate`, `/revoke`), for one
+release; they are removed in 0.4.0.
 
 **The operator credential.**
 - **Required on every route.** Every route requires
@@ -207,13 +211,15 @@ are defined in `internal/opapi`:
   member's session token and aimem's introspection bearer are all refused
   with `401 unauthorized`, and the operator routes never consult the member
   session API.
-- **Creating it.** `aicrew operator-token new -file PATH` writes a new token
-  (`aop_` and 64 lowercase hex) to a new owner-only file. It opens no store
-  and calls no service, and the token is never printed. Name that file as
+- **Creating it.** `aicrew operator-token new --output PATH` writes a new
+  token (`aop_` and 64 lowercase hex) to a new owner-only file, or with
+  `--output -` to standard output for a pipe ("Secrets the client writes",
+  below). It opens no store and calls no service, and the token never
+  reaches a terminal. Name that file as
   `operator_token_file`, and keep the operator's own copy owner-only.
 - **Rotation.** The service reads the file on every operator call, so
   replacing it rotates the credential without a restart: write a new token
-  with `aicrew operator-token new -file NEW` beside the old file, then
+  with `aicrew operator-token new --output NEW` beside the old file, then
   rename `NEW` over `operator_token_file`, and replace the operator's own
   copy (`AICREW_OPERATOR_TOKEN_FILE`) on each machine `aicrew` runs from: a
   client with the old copy is refused `401`. A file that is missing,
@@ -264,10 +270,10 @@ once per shell, as environment variables:
 
 | Flag | Variable | Value |
 | --- | --- | --- |
-| `-url` | `AICREW_URL` | `aicrewd`'s https origin |
-| `-tls-trust-mode` | `AICREW_TLS_TRUST_MODE` | `ca_dns` or `spki_sha256`, as for `aicrew-agent join` |
-| `-tls-trust-value` | `AICREW_TLS_TRUST_VALUE` | the host name, or `sha256-` and the pin |
-| `-token-file` | `AICREW_OPERATOR_TOKEN_FILE` | the operator credential's owner-only file |
+| `--url` | `AICREW_URL` | `aicrewd`'s https origin |
+| `--tls-trust-mode` | `AICREW_TLS_TRUST_MODE` | `ca_dns` or `spki_sha256`, as for `aicrew-agent join` |
+| `--tls-trust-value` | `AICREW_TLS_TRUST_VALUE` | the host name, or `sha256-` and the pin |
+| `--token-file` | `AICREW_OPERATOR_TOKEN_FILE` | the operator credential's owner-only file |
 
 ```sh
 CGO_ENABLED=0 go build -o bin/aicrew ./cmd/aicrew
@@ -279,30 +285,51 @@ A refusal prints the service's code and message and exits 1; a usage error
 exits 2. `aicrew operator-token new` and `aicrew version` take no
 connection.
 
-## Introspection credentials
+Both tools read a flag as `--name` or `-name` (Go's flag package); the
+documentation writes `--`.
+
+**Secrets the client writes.** A command that reveals a secret (a hub
+credential's bearer, an invitation's code, an operator token) writes it only
+where `--output` names, and never to a terminal:
+
+- `--output PATH`: a new file, which must not exist, created readable by
+  its owner only (mode 0600, or an owner-only protected DACL on Windows).
+- `--output -`: standard output, for a pipe. It is refused when standard
+  output is a terminal. Standard output then carries the secret alone and
+  the command's metadata goes to stderr.
+
+The output is checked before anything is issued, so a refused output issues
+nothing; if the secret cannot be written, what was just issued is revoked.
+
+**Names before 0.3.0.** These keep working for one release, each with a
+one-line notice, and are removed in 0.4.0: the command
+`introspection-credential` (now `hub-credential`), its API routes (above),
+and the flags `-secret-file`, `-code-file` and `-file` (now `--output`).
+
+## Hub credentials
 
 Aimem authenticates its introspection and coordination-fact calls with a
-credential that aicrew issues for one aimem hub. The operator manages them
-with `aicrew` (the connection as above), while `aicrewd` runs.
+credential that aicrew issues for one aimem hub: the hub credential. The
+operator manages them with `aicrew` (the connection as above), while
+`aicrewd` runs.
 
 ```sh
-bin/aicrew introspection-credential issue  -hub HUB -secret-file introspection.secret
-bin/aicrew introspection-credential list
-bin/aicrew introspection-credential rotate -hub HUB -secret-file introspection-2.secret
-bin/aicrew introspection-credential issue  -hub HUB -secret-file intro-only.secret -operations introspection
-bin/aicrew introspection-credential revoke -id ID
+bin/aicrew hub-credential issue  --hub HUB --output hub.secret
+bin/aicrew hub-credential list
+bin/aicrew hub-credential rotate --hub HUB --output hub-2.secret
+bin/aicrew hub-credential issue  --hub HUB --output intro-only.secret --operations introspection
+bin/aicrew hub-credential revoke --id ID
 ```
 
-- The bearer is written only to the `-secret-file`, which must not exist;
-  it is created readable by its owner only (mode 0600, or an owner-only
-  protected DACL on Windows). The command prints the credential's metadata,
-  never the bearer. If the file cannot be written, the credential just
-  issued is revoked.
+- The bearer is written only where `--output` names ("Secrets the client
+  writes", above). The command prints the credential's metadata, never the
+  bearer. If the bearer cannot be written, the credential just issued is
+  revoked.
 - Hand the file to aimem's operator through a private channel; aimem reads
   it from `AIMEM_INTROSPECTION_TOKEN_FILE`. Delete aicrew's copy afterwards.
 - A hub has at most two active credentials. To rotate: `rotate` issues the
   second, aimem moves to it, then `revoke` the first.
-- `-operations` names what a new credential permits: `introspection`,
+- `--operations` names what a new credential permits: `introspection`,
   `coordination`, or both, which is the default. `list` shows each
   credential's operations.
 - A credential issued before coordination facts existed permits
@@ -328,16 +355,20 @@ prints the team as JSON; `list` adds each team's member count and `show` its
 current members.
 
 ```sh
-bin/aicrew team create   -name crew -project HUB_ID/PROJECT_ID
+bin/aicrew team create   --name crew --project HUB_ID/PROJECT_ID
 bin/aicrew team list
-bin/aicrew team show     -team TEAM
-bin/aicrew team projects -team TEAM -expect-revision N -project HUB_ID/PROJECT_ID
-bin/aicrew team rename   -team TEAM -expect-revision N -name crew-2
+bin/aicrew team show     --team-name crew
+bin/aicrew team projects --team TEAM --expect-revision N --project HUB_ID/PROJECT_ID
+bin/aicrew team rename   --team-name crew --expect-revision N --name crew-2
 ```
+
+- Wherever a command takes `--team`, the team's ID, it takes `--team-name`
+  instead: one or the other, never both. A name that no team has fails
+  before anything changes. Team names are unique.
 
 - `create` and `rename` refuse a name another team already has
   (`team_exists`).
-- `projects` replaces the whole set; with no `-project` it clears it.
+- `projects` replaces the whole set; with no `--project` it clears it.
   `projects` and `rename` apply only to the revision `show` or `list`
   printed, and refuse a team that changed since (`revision_conflict`).
 - Members join through invitations (below); `aicrew team` does not change
@@ -350,28 +381,29 @@ An invitation lets one agent join a team, or link or rebind an agent record
 while `aicrewd` runs.
 
 ```sh
-bin/aicrew invitation issue  -team TEAM -role worker -hub HUB_ID -label builder -expect-user AIMEM_USER_ID
-bin/aicrew invitation issue  -team TEAM -role worker -hub HUB_ID -purpose link -agent AGENT -code-file invite.code
-bin/aicrew invitation issue  -team TEAM -role worker -hub HUB_ID -purpose rebind -agent AGENT -expect-user AIMEM_USER_ID
-bin/aicrew invitation list   [-team TEAM]
-bin/aicrew invitation revoke -id INVITATION
+bin/aicrew invitation issue  --team-name crew --role worker --hub HUB_ID --label builder --expect-user AIMEM_USER_ID --output invite.code
+bin/aicrew invitation issue  --team TEAM --role worker --hub HUB_ID --purpose link --agent AGENT --output invite.code
+bin/aicrew invitation issue  --team TEAM --role worker --hub HUB_ID --purpose rebind --agent AGENT --expect-user AIMEM_USER_ID --output invite.code
+bin/aicrew invitation list   [--team TEAM | --team-name NAME]
+bin/aicrew invitation revoke --id INVITATION
 ```
 
 - The code is generated by `aicrewd`, answered once and never kept: the
   store holds only its digest.
-  `issue` prints it only to a terminal, after the invitation's metadata. Off
-  a terminal it refuses, before issuing anything, unless `-code-file` names
-  a new file. That file must not exist, and is created readable by its owner
-  only. If it cannot be written, the invitation just issued is revoked.
+  `issue` writes it only where `--output` names ("Secrets the client
+  writes", above), never to a terminal, and refuses without `--output`
+  before issuing anything. If it cannot be written, the invitation just
+  issued is revoked. The invitation's metadata names its team by ID and
+  name.
 - The code is never an argument. Give it privately to the person running
   the agent, who enters it at the client's hidden prompt.
-- `-purpose` is `join` (the default; names the new agent's `-label`),
-  `link` or `rebind` (each names the `-agent`).
-  - `-expect-user` pins the aimem user the proof must name. It is required
+- `--purpose` is `join` (the default; names the new agent's `--label`),
+  `link` or `rebind` (each names the `--agent`).
+  - `--expect-user` pins the aimem user the proof must name. It is required
     for `rebind`. For `join` and `link` it is optional, and `issue` warns
     without it: anyone holding the code and an aimem credential for the hub
     could redeem it.
-- `-expires` sets the lifetime: 24 hours by default, at most 72.
+- `--expires` sets the lifetime: 24 hours by default, at most 72.
 - `list` shows metadata only (state, attempts, expiry), never a code.
   `revoke` ends an invitation that is not yet redeemed. Undoing a redeemed
   one means removing the membership.
@@ -385,10 +417,10 @@ session through `aicrewd`'s client session API (`docs/CREW-CONTRACT.md`,
 
 ```sh
 CGO_ENABLED=0 go build -o bin/aicrew-agent ./cmd/aicrew-agent
-bin/aicrew-agent run -client claude -home ~/aicrew/agents/builder
-bin/aicrew-agent session start  -home ~/aicrew/agents/builder
-bin/aicrew-agent session status -home ~/aicrew/agents/builder
-bin/aicrew-agent session leave  -home ~/aicrew/agents/builder
+bin/aicrew-agent run --client claude --home ~/aicrew/agents/builder
+bin/aicrew-agent session start  --home ~/aicrew/agents/builder
+bin/aicrew-agent session status --home ~/aicrew/agents/builder
+bin/aicrew-agent session leave  --home ~/aicrew/agents/builder
 bin/aicrew-agent step pending   # from the client run started ("Driving steps")
 bin/aicrew-agent inbox          # likewise ("Reading the inbox")
 ```
@@ -409,7 +441,7 @@ no secret; other sections belong to onboarding:
 }
 ```
 
-- `run -client claude|opencode` does what `session start` does, then
+- `run --client claude|opencode` does what `session start` does, then
   starts the client (from `PATH`, or `client_command` in the `aicrew`
   section) as its child in the agent home, with `AIMEM_TEAM_SESSION` set in
   that child's environment only; arguments after `--` go to the client.
@@ -471,25 +503,25 @@ The client bootstrap (`docs/ONBOARDING-CONTRACT.md`, "The client's view")
 redeems an invitation and prepares the agent home (`docs/WORKSPACE.md`):
 
 ```sh
-bin/aicrew-agent join -label builder -url https://aicrew.example:8443 \
-  -tls-trust-mode ca_dns -tls-trust-value aicrew.example -aimem-hub main -client claude
-bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh and check
+bin/aicrew-agent join --label builder --url https://aicrew.example:8443 \
+  --tls-trust-mode ca_dns --tls-trust-value aicrew.example --aimem-hub main --client claude
+bin/aicrew-agent join --home ~/aicrew/agents/builder    # rerun: refresh and check
 ```
 
 - **The first `join` provisions the home's aimem installation**
   (`docs/WORKSPACE.md`, "The member's aimem installation"):
 
   ```sh
-  bin/aicrew-agent join -label builder -url https://aicrew.example:8443 \
-    -tls-trust-mode ca_dns -tls-trust-value aicrew.example -aimem-hub main -client claude \
-    -aimem-url https://aimem.example -aimem-token-file member.token [-aimem-ca-file hub-ca.pem]
+  bin/aicrew-agent join --label builder --url https://aicrew.example:8443 \
+    --tls-trust-mode ca_dns --tls-trust-value aicrew.example --aimem-hub main --client claude \
+    --aimem-url https://aimem.example --aimem-token-file member.token [--aimem-ca-file hub-ca.pem]
   ```
 
-  - **The token.** `-aimem-token-file` names an owner-only file holding the
+  - **The token.** `--aimem-token-file` names an owner-only file holding the
     member's user-scoped token (`aimem_user_...`), or `-` to type it at a
     hidden prompt. A token given as the flag's value is refused: a token is
     never an argument.
-  - **The CA.** `-aimem-ca-file`, for a hub on a private CA, is copied to the
+  - **The CA.** `--aimem-ca-file`, for a hub on a private CA, is copied to the
     home's `creds/aimem.<hub>.ca.pem` (owner-only), so nothing in the
     installation points outside the home.
   - **What join runs.** It runs `aimem hub add` and `aimem hub task-token`
@@ -524,12 +556,12 @@ bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh and chec
   two variables into the home's `.claude/settings.json` and `.mcp.json`
   for clients started there by hand. `CLAUDE_CONFIG_DIR` stays an optional
   override of the member's Claude Code directory.
-- `-home` defaults to `~/aicrew/agents/<label>` (`%USERPROFILE%\aicrew\agents\<label>`
-  on Windows). `-aimem-hub` is aimem's name for the hub whose identity the
-  invitation names; `-aimem-command` overrides the `aimem` executable.
-  `-client claude|opencode` (or both, comma-separated) names the clients
+- `--home` defaults to `~/aicrew/agents/<label>` (`%USERPROFILE%\aicrew\agents\<label>`
+  on Windows). `--aimem-hub` is aimem's name for the hub whose identity the
+  invitation names; `--aimem-command` overrides the `aimem` executable.
+  `--client claude|opencode` (or both, comma-separated) names the clients
   the home is for: required on the first run, recorded in `agent.json`
-  after. `-json` prints the report as JSON.
+  after. `--json` prints the report as JSON.
 - The invitation code is read only at a hidden prompt on a terminal, never
   from an argument, a pipe, a file or the environment; off a terminal the
   command refuses. A code with a typing error (its checksum) is caught
@@ -566,7 +598,7 @@ bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh and chec
   after following its instructions. It opens no session: it prints the
   `session start` command.
 - It writes no secret of its own. `creds/` is created owner-only and holds
-  only the hub's CA copy when `-aimem-ca-file` is given. `aimem/`
+  only the hub's CA copy when `--aimem-ca-file` is given. `aimem/`
   is created owner-only, or restricted if the operator's provisioning created
   it; the individual aimem credential stays there, in aimem's own storage.
 - It writes the managed `.claude/settings.json` (`env`: the home's
@@ -576,8 +608,8 @@ bin/aicrew-agent join -home ~/aicrew/agents/builder    # rerun: refresh and chec
 ### Checking dependencies and clients: `aicrew-agent check`
 
 ```sh
-bin/aicrew-agent check -home ~/aicrew/agents/builder [-client claude|opencode] [-json]
-bin/aicrew-agent version [-json]
+bin/aicrew-agent check --home ~/aicrew/agents/builder [--client claude|opencode] [--json]
+bin/aicrew-agent version [--json]
 ```
 
 The check (`join` runs it at its end) installs nothing. It runs every aimem
@@ -659,10 +691,10 @@ session token or a coordination proof. The client (the model, or a script in
 its conversation) asks the launcher for one step at a time:
 
 ```sh
-aicrew-agent step claim   -body - < claim.json
-aicrew-agent step work    -attempt A1 -task T1 -body '{"intent":"submit","detail":"https://forge.example/pr/12"}'
-aicrew-agent step release -attempt A1 -task T1 -body '{"target":"BLOCKED","blocker":"waiting on design"}'
-aicrew-agent step confirm-stop -attempt A1
+aicrew-agent step claim   --body - < claim.json
+aicrew-agent step work    --attempt A1 --task T1 --body '{"intent":"submit","detail":"https://forge.example/pr/12"}'
+aicrew-agent step release --attempt A1 --task T1 --body '{"target":"BLOCKED","blocker":"waiting on design"}'
+aicrew-agent step confirm-stop --attempt A1
 aicrew-agent step pending
 aicrew-agent step recover
 ```
@@ -670,11 +702,11 @@ aicrew-agent step recover
 - **Operations.** The reservation steps `offer`, `claim`, `accept`,
   `withdraw`, `work`, `release` and `finalize` take the begin route's body
   (`docs/CREW-CONTRACT.md`, "Attempt steps"). `offer` and `claim` create
-  their attempt and name the task in the body. The others need `-attempt`
-  and the aimem task's `-task`. The local steps `decline`, `review`, `stop`,
-  `confirm-stop` and `confirm-delivery` need only `-attempt` and their body.
+  their attempt and name the task in the body. The others need `--attempt`
+  and the aimem task's `--task`. The local steps `decline`, `review`, `stop`,
+  `confirm-stop` and `confirm-delivery` need only `--attempt` and their body.
   `pending` lists the recorded steps, and `recover` finishes them.
-- **Finding the launcher.** `-home` defaults to `AICREW_AGENT_HOME`, which
+- **Finding the launcher.** `--home` defaults to `AICREW_AGENT_HOME`, which
   `run` sets in its client's environment only, to the agent home's absolute
   path. The launcher listens on the Unix socket `state/step.sock` of that
   home. The socket exists only while `run` runs. Without it, `step` exits 1
@@ -740,14 +772,14 @@ which holds the session, like a step:
 
 ```sh
 aicrew-agent inbox                 # the oldest unacknowledged messages, 20 at most
-aicrew-agent inbox -limit 50 -json
-aicrew-agent inbox -ack ID,ID      # acknowledge what was handled
+aicrew-agent inbox --limit 50 --json
+aicrew-agent inbox --ack ID,ID      # acknowledge what was handled
 ```
 
 - A message stays in every later read until it is acknowledged, so a
   crash between reading and acting loses nothing; the next page comes once
   the current one is acknowledged.
-- A page holds at most `-limit` messages and at most 128 KiB of JSON, and
+- A page holds at most `--limit` messages and at most 128 KiB of JSON, and
   always at least one message; only the messages returned are recorded as
   delivered.
 - Only messages the inbox delivered can be acknowledged
@@ -819,7 +851,7 @@ The notes end with the license URL and its `Required Notice:` lines. Each
 binary is stamped with the tag through
 `-ldflags "-X github.com/BlackVS/aicrew/internal/version.Override=vX.Y.Z"`,
 and reports it with `aicrewd -version`, `aicrew version` and
-`aicrew-agent version` (`-json` for the build as JSON).
+`aicrew-agent version` (`--json` for the build as JSON).
 
 **Verifying a download.** In the directory holding the downloaded assets and
 `SHA256SUMS`:

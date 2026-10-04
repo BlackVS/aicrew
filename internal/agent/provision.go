@@ -39,24 +39,24 @@ func (o *JoinOptions) checkProvisionOptions(linked bool) error {
 		return nil
 	}
 	if linked {
-		return errors.New("-aimem-url, -aimem-token-file and -aimem-ca-file provision a new home; this home is already linked")
+		return errors.New("--aimem-url, --aimem-token-file and --aimem-ca-file provision a new home; this home is already linked")
 	}
 	if o.AimemURL == "" || o.AimemTokenFile == "" {
-		return errors.New("-aimem-url and -aimem-token-file go together: the hub's origin and the member's token")
+		return errors.New("--aimem-url and --aimem-token-file go together: the hub's origin and the member's token")
 	}
 	if tokenLike(o.AimemTokenFile) {
-		return errors.New("-aimem-token-file names a file holding the token, or - for the hidden prompt: a token is never an argument")
+		return errors.New("--aimem-token-file names a file holding the token, or - for the hidden prompt: a token is never an argument")
 	}
 	u, err := url.Parse(o.AimemURL)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || strings.ContainsAny(o.AimemURL, "?#") ||
 		(u.Path != "" && u.Path != "/") {
-		return errors.New("-aimem-url must be the hub's https origin, without credentials, path, query or fragment")
+		return errors.New("--aimem-url must be the hub's https origin, without credentials, path, query or fragment")
 	}
 	o.AimemURL = strings.TrimSuffix(o.AimemURL, "/")
 	return nil
 }
 
-// tokenLike reports whether a -aimem-token-file value is a token rather
+// tokenLike reports whether a --aimem-token-file value is a token rather
 // than a file: it has aimem's token prefix and names no existing file.
 func tokenLike(v string) bool {
 	if !strings.HasPrefix(v, tokenPrefix) {
@@ -147,10 +147,10 @@ func (j *joiner) readToken() (string, error) {
 func copyCA(src, dst string) (string, error) {
 	data, err := os.ReadFile(src)
 	if err != nil {
-		return "", fmt.Errorf("read -aimem-ca-file: %w", err)
+		return "", fmt.Errorf("read --aimem-ca-file: %w", err)
 	}
 	if !bytes.Contains(data, []byte("-----BEGIN CERTIFICATE-----")) {
-		return "", errors.New("-aimem-ca-file holds no PEM certificate")
+		return "", errors.New("--aimem-ca-file holds no PEM certificate")
 	}
 	abs, err := filepath.Abs(dst)
 	if err != nil {

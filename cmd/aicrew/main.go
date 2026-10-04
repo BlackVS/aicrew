@@ -203,7 +203,7 @@ type credentialView struct {
 	Next   string `json:"next,omitempty"`
 }
 
-// parseOps reads -operations: the API's operation names. An empty flag is
+// parseOps reads --operations: the API's operation names. An empty flag is
 // an empty list: the service's default, both.
 func parseOps(flag string) ([]string, bool) {
 	ops := []string{}

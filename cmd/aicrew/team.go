@@ -24,7 +24,7 @@ const teamUsage = `usage:
   aicrew team rename   --team TEAM | --team-name NAME --expect-revision N --name NAME
 ` + connUsage
 
-// projectFlags collects repeated -project HUB/PROJECT values. A value
+// projectFlags collects repeated --project HUB/PROJECT values. A value
 // without a '/' keeps its text as the hub and an empty project, which the
 // service refuses as invalid.
 type projectFlags []opapi.ProjectRef

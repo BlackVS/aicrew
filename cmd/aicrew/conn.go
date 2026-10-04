@@ -16,10 +16,10 @@ import (
 // Every administrative command reaches aicrewd's operator API. Its flags
 // fall back to the environment, so an operator sets them once per shell.
 const connUsage = `connection (each flag falls back to its environment variable):
-  -url https://HOST[:PORT]        AICREW_URL             aicrewd's origin
-  -tls-trust-mode ca_dns|spki_sha256  AICREW_TLS_TRUST_MODE
-  -tls-trust-value VALUE          AICREW_TLS_TRUST_VALUE  the host name, or sha256- and the pin
-  -token-file PATH                AICREW_OPERATOR_TOKEN_FILE  the operator credential's owner-only file
+  --url https://HOST[:PORT]        AICREW_URL             aicrewd's origin
+  --tls-trust-mode ca_dns|spki_sha256  AICREW_TLS_TRUST_MODE
+  --tls-trust-value VALUE          AICREW_TLS_TRUST_VALUE  the host name, or sha256- and the pin
+  --token-file PATH                AICREW_OPERATOR_TOKEN_FILE  the operator credential's owner-only file
 `
 
 // connFlags are the connection's flags.
@@ -53,7 +53,7 @@ func (c *conn) client() (*opclient.Client, error) {
 		TokenFile: orEnv(c.tokenFile, "AICREW_OPERATOR_TOKEN_FILE"),
 	}
 	if cfg.URL == "" || cfg.Trust.Mode == "" || cfg.Trust.Value == "" || cfg.TokenFile == "" {
-		return nil, errors.New("name aicrewd and the operator credential: -url, -tls-trust-mode, -tls-trust-value and -token-file, or their environment variables")
+		return nil, errors.New("name aicrewd and the operator credential: --url, --tls-trust-mode, --tls-trust-value and --token-file, or their environment variables")
 	}
 	return opclient.New(cfg)
 }

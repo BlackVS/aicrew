@@ -44,9 +44,9 @@ func TestRoleGuidanceTeachesEveryOperation(t *testing.T) {
 func TestRoleGuidanceContent(t *testing.T) {
 	md := rolesMD()
 	for _, s := range []string{"## Coordinator", "## Worker", "## Independent", "## Every member",
-		"aicrew-agent session status", "aicrew-agent inbox", "inbox -ack", "at session start and after each step",
+		"aicrew-agent session status", "aicrew-agent inbox", "inbox --ack", "at session start and after each step",
 		"lowercase hex SHA-256 of the manifest's exact bytes at the pinned commit", "01a0d996-616b",
-		"aicrew-agent step offer -body '{", "aicrew-agent step accept -attempt ATTEMPT_ID -task TASK_ID",
+		"aicrew-agent step offer --body '{", "aicrew-agent step accept --attempt ATTEMPT_ID --task TASK_ID",
 		"never use another\ncredential", "The launcher holds your session.", "are refused inside the client",
 		managedNote} {
 		if !strings.Contains(md, s) {

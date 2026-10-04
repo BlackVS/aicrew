@@ -440,6 +440,14 @@ no secret; other sections belong to onboarding:
   fences any client still holding it, then leaves. It never enters the
   team: if the recorded session has already ended, it only closes aimem's
   binding of it and clears the record.
+- Inside a client that `run` started (both `AIMEM_TEAM_SESSION` and
+  `AICREW_AGENT_HOME` are set), `session start`, `session leave` and `run`
+  refuse with exit 2 before reading the home, and name `aicrew-agent inbox`
+  as the next action. The launcher holds that session, and a new proof would
+  resume it under a new generation and fence the launcher's token, cutting
+  the client off from its inbox and steps. `session status`, `inbox`, `step`
+  and `check` work there. To restart the session, exit the client and `run`
+  again from a terminal.
 - A proof that aicrewd refuses while its challenge is still valid (the
   receipt lives only 60 s) is renewed for the same challenge, at most three
   times, under a new request key.

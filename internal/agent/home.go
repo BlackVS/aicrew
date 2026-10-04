@@ -293,11 +293,18 @@ Repository instructions live in each repository, not here.
 4. **Handoff.** ` + "`docs/HANDOFF.md`" + ` is yours. It is never managed or overwritten.
 5. **Readiness.** Before work, run ` + "`aicrew-agent check -home <this directory>`" + `:
    it checks the versions of ` + "`aimem`" + `, ai-skills and your client, and that
-   your client sees aimem's MCP server and the required skills. Then start
-   the session: ` + "`aicrew-agent session start -home <this directory>`" + `. When
+   your client sees aimem's MCP server and the required skills. When
    something is missing or refused, stop and ask the operator instead of
    improvising.
-6. **Your role.** ` + "`docs/ROLES.md`" + ` teaches your role's steps, the inbox rule and
+6. **The launcher holds the session.** Your client is started from a
+   terminal by ` + "`aicrew-agent run -client <client> -home <this directory>`" + `,
+   which enters the team session and keeps it while the client runs. Inside
+   the client, act through ` + "`aicrew-agent inbox`" + ` and ` + "`aicrew-agent step`" + `
+   (` + "`check`" + ` and ` + "`session status`" + ` only read). Never run ` + "`aicrew-agent session start`" + `, ` + "`session leave`" + ` or ` + "`run`" + ` from
+   inside it: a new proof would fence the launcher's session and cut you off
+   from your inbox, so they are refused there. To restart the session, exit
+   the client and ` + "`run`" + ` again.
+7. **Your role.** ` + "`docs/ROLES.md`" + ` teaches your role's steps, the inbox rule and
    how to write for others. Read it at the start of every session.
 
 ` + managedNote

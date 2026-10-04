@@ -40,6 +40,13 @@ type Stdio struct {
 // added.
 func ScopedEnv(env []string, path string) []string { return withEnv(env, SessionEnv, path) }
 
+// InsideLauncher reports whether getenv is the environment of a client that
+// `aicrew-agent run` started: the launcher sets both SessionEnv and HomeEnv
+// there, and holds that home's team session itself.
+func InsideLauncher(getenv func(string) string) bool {
+	return getenv(SessionEnv) != "" && getenv(HomeEnv) != ""
+}
+
 // withEnv returns env with name set to value, replacing any value it had.
 func withEnv(env []string, name, value string) []string {
 	return append(withoutEnv(env, name), name+"="+value)

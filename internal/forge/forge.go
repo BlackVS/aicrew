@@ -73,6 +73,10 @@ func Repository(cloneURL string) (host, path string, err error) {
 		if perr != nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
 			return "", "", fmt.Errorf("%q is not a clone URL", cloneURL)
 		}
+		if u.Scheme == "https" && u.User != nil {
+			// A credential in the URL would land in the clone's configuration.
+			return "", "", errors.New("an https clone URL must not carry a user or a credential")
+		}
 		host, path = u.Host, u.Path
 		if u.Scheme == "ssh" {
 			// An ssh port is not the forge's https port: the API is on the host.

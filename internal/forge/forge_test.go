@@ -192,7 +192,7 @@ func TestRepositoryAndEncoding(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"", "github.com/team/app", "https://github.com/app", "https://github.com/../x",
-		"file:///tmp/repo", "https://user@ho st/a/b"} {
+		"file:///tmp/repo", "https://user@ho st/a/b", "https://x-token@github.com/team/app", "https://u:p@github.com/team/app"} {
 		if _, _, err := Repository(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}

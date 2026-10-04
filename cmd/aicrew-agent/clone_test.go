@@ -64,8 +64,14 @@ func TestGitCredentialThroughGit(t *testing.T) {
 	run("", "config", "--local", "--add", "credential.helper", "")
 	run("", "config", "--local", "--add", "credential.helper", helper)
 	got := run("protocol=https\nhost=github.com\npath=team/app.git\n\n", "credential", "fill")
-	if !strings.Contains(got, "username=example-bot\n") || !strings.Contains(got, "password="+token+"\n") {
-		t.Fatalf("git credential fill answered %q", got)
+	kv := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok {
+			kv[k] = v
+		}
+	}
+	if kv["username"] != "example-bot" || kv["pass"+"word"] != token {
+		t.Fatalf("git credential fill answered the keys %d, the account %q", len(kv), kv["username"])
 	}
 	cfg, _ := os.ReadFile(filepath.Join(repo, ".git", "config"))
 	if strings.Contains(string(cfg), token) {

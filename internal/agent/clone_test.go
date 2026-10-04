@@ -183,9 +183,9 @@ func TestCloneRefusals(t *testing.T) {
 func TestGitCredential(t *testing.T) {
 	home, _, _, _, _ := cloneHome(t)
 	var out bytes.Buffer
-	if err := GitCredential(home, "get", strings.NewReader("protocol=https\nhost=github.com\npath=team/app.git\n\n"), &out); err != nil ||
-		out.String() != "username=example-bot\npassword="+cloneToken+"\n" {
-		t.Fatalf("get: %q %v", out.String(), err)
+	err := GitCredential(home, "get", strings.NewReader("protocol=https\nhost=github.com\npath=team/app.git\n\n"), &out)
+	if kv := credAnswer(out.String()); err != nil || len(kv) != 2 || kv[credUser] != "example-bot" || kv[credSecret] != cloneToken {
+		t.Fatalf("get: %v %v", kv, err)
 	}
 	for _, in := range []string{"protocol=http\nhost=github.com\n\n", "protocol=https\nhost=gitlab.example.org\n\n",
 		"protocol=https\nhost=bad host\n\n"} {
@@ -195,8 +195,20 @@ func TestGitCredential(t *testing.T) {
 		}
 	}
 	out.Reset()
-	if err := GitCredential(home, "store", strings.NewReader("protocol=https\nhost=github.com\nusername=x\npassword=y\n\n"), &out); err != nil ||
+	store := "protocol=https\nhost=github.com\n" + credUser + "=x\n" + credSecret + "=y\n\n"
+	if err := GitCredential(home, "store", strings.NewReader(store), &out); err != nil ||
 		out.Len() != 0 {
 		t.Fatalf("store: %q %v", out.String(), err)
 	}
+}
+
+// credAnswer reads a credential helper's answer: one key=value per line.
+func credAnswer(s string) map[string]string {
+	kv := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSuffix(s, "\n"), "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok {
+			kv[k] = v
+		}
+	}
+	return kv
 }

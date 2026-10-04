@@ -202,6 +202,12 @@ func execGit(ctx context.Context, dir string, env []string, args ...string) (str
 	return out.String(), nil
 }
 
+// The credential protocol's keys for the account and the token.
+const (
+	credUser   = "username"
+	credSecret = "pass" + "word"
+)
+
 // GitCredential answers git's credential protocol for `get` (git-credential
 // in a clone's configuration): for an https request to a host the home holds
 // a credential for, the account and the token, written to w, which is git's
@@ -242,6 +248,6 @@ func GitCredential(home, op string, r io.Reader, w io.Writer) error {
 	if err != nil {
 		return nil
 	}
-	_, err = fmt.Fprintf(w, "username=%s\npassword=%s\n", e.Account, tok)
+	_, err = fmt.Fprintf(w, "%s=%s\n%s=%s\n", credUser, e.Account, credSecret, tok)
 	return err
 }

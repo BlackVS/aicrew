@@ -212,3 +212,25 @@ func credAnswer(s string) map[string]string {
 	}
 	return kv
 }
+
+// A relative home works from its parent: the clone, its configuration and
+// the worktree land under the home, and the helper names the absolute home.
+func TestCloneRelativeHome(t *testing.T) {
+	home, _, base, runner, _ := cloneHome(t)
+	t.Chdir(filepath.Dir(home))
+	rep, err := Clone(context.Background(), CloneOptions{Home: filepath.Base(home), Repository: "https://github.com/team/app",
+		Attempt: "att-r", Base: base, Branch: "attempt/att-r", Self: "/opt/aicrew/aicrew-agent", Git: runner})
+	if err != nil {
+		t.Fatalf("clone with a relative home: %v", err)
+	}
+	if rep.Clone != filepath.Join(home, "repos", "github-com", "team", "app") || rep.Worktree != filepath.Join(home, "worktrees", "att-r") {
+		t.Fatalf("report %+v", rep)
+	}
+	if head := git(t, rep.Worktree, "rev-parse", "HEAD"); head != base {
+		t.Fatalf("the worktree is at %s", head)
+	}
+	helpers, _ := exec.Command("git", "-C", rep.Clone, "config", "--local", "--get-all", "credential.helper").Output()
+	if !strings.Contains(string(helpers), filepath.ToSlash(home)) {
+		t.Fatalf("the helper does not name the absolute home: %q", helpers)
+	}
+}

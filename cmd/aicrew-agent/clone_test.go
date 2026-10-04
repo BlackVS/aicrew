@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -91,5 +92,16 @@ func TestGitCredentialRefusals(t *testing.T) {
 		if code := gitCredential(args, strings.NewReader(""), &out, &errb, false); code != exitUsage {
 			t.Errorf("%v: exit %d", args, code)
 		}
+	}
+}
+
+// A refused repository URL carrying a credential is never echoed.
+func TestCloneNeverEchoesTheURL(t *testing.T) {
+	var out, errb bytes.Buffer
+	args := []string{"--home", t.TempDir(), "--repository", "https://user:secret-in-url@github.com/team/app?x=1",
+		"--attempt", "a1", "--base", strings.Repeat("a", 40), "--branch", "b"}
+	if code := clone(context.Background(), args, &out, &errb, func(string) string { return "" }); code != exitFailed ||
+		strings.Contains(out.String()+errb.String(), "secret-in-url") {
+		t.Fatalf("exit %d: %q", code, errb.String())
 	}
 }

@@ -221,3 +221,19 @@ func TestRateLimitIsNotRejection(t *testing.T) {
 		t.Fatalf("a rate limit: %v", err)
 	}
 }
+
+// A refused clone URL never quotes its input, which may carry a credential.
+func TestRepositoryErrorsNeverQuoteTheInput(t *testing.T) {
+	for _, in := range []string{
+		"https://user:secret-in-url@github.com/team/app?x=1",
+		"https://user:secret-in-url@github.com/team/app#f",
+		"https://user:secret-in-url@[bad/team/app",
+		"https://user:secret-in-url@github.com/app",
+		"secret-in-url",
+		"x@secret-in-url:team",
+	} {
+		if _, _, err := Repository(in); err == nil || strings.Contains(err.Error(), "secret-in-url") {
+			t.Errorf("%q: %v", in, err)
+		}
+	}
+}

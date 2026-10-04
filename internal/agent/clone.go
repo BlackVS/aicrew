@@ -78,6 +78,10 @@ func Clone(ctx context.Context, o CloneOptions) (CloneReport, error) {
 	if o.Git == nil {
 		o.Git = execGit
 	}
+	// git runs inside the clone, so every path it receives is absolute.
+	if abs, err := filepath.Abs(o.Home); err == nil {
+		o.Home = abs
+	}
 	if !strings.HasPrefix(o.Repository, "https://") {
 		return CloneReport{}, errors.New("--repository must be an https clone URL: the member's credential is an https token")
 	}

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -91,11 +92,24 @@ type forgeEntry struct {
 	CommitEmail string `json:"commit_email"`
 }
 
-// forgeEntries reads agent.json's "forge" section.
+// refShape is a credential reference in WORKSPACE's grammar: three parts of
+// lowercase letters, digits and '-'. A recorded file of any other shape is
+// never opened or removed, so an edited agent.json cannot point outside
+// creds/.
+var refShape = regexp.MustCompile(`^[a-z0-9-]+\.[a-z0-9-]+\.[a-z0-9-]+$`)
+
+// forgeEntries reads agent.json's "forge" section. An entry whose file is
+// not a credential reference keeps its host but loses its file.
 func (d agentDoc) forgeEntries() map[string]forgeEntry {
 	out := map[string]forgeEntry{}
 	if raw, ok := d.top["forge"]; ok {
 		_ = json.Unmarshal(raw, &out)
+	}
+	for h, e := range out {
+		if !refShape.MatchString(e.File) {
+			e.File = ""
+			out[h] = e
+		}
 	}
 	return out
 }
@@ -269,7 +283,10 @@ func checkForge(ctx context.Context, home string, doc *agentDoc, api ForgeAPI) [
 	for _, h := range hosts {
 		e := entries[h]
 		fc := ForgeCheck{Host: h, Kind: e.Kind, Account: e.Account, Purpose: e.Purpose, File: e.File}
-		raw, err := readOwnerOnly(filepath.Join(home, "creds", e.File))
+		raw, err := []byte(nil), errors.New("agent.json records no credential file for it")
+		if e.File != "" {
+			raw, err = readOwnerOnly(filepath.Join(home, "creds", e.File))
+		}
 		var tok string
 		if err == nil {
 			tok, err = tokenLine(raw)
@@ -303,7 +320,7 @@ func checkForge(ctx context.Context, home string, doc *agentDoc, api ForgeAPI) [
 // that reads the forge as the member (base resolution, clones).
 func forgeTokenFor(home string, doc agentDoc, host string) (forgeEntry, string, error) {
 	e, ok := doc.forgeEntries()[host]
-	if !ok {
+	if !ok || e.File == "" {
 		return forgeEntry{}, "", fmt.Errorf("this home holds no forge credential for %s: provision one with "+
 			"aicrew-agent join --home %s --cred %s=FILE", host, quoteArg(home), host)
 	}

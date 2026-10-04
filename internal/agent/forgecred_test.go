@@ -349,3 +349,33 @@ func TestJoinTakesForgeCreds(t *testing.T) {
 		t.Fatalf("a bad --cred file: %+v %v", rep, err)
 	}
 }
+
+// A recorded file that is not a credential reference is never opened or
+// removed: an edited agent.json cannot point outside creds/.
+func TestForgeEntryFileShape(t *testing.T) {
+	home := t.TempDir()
+	outside := filepath.Join(home, "outside.secret")
+	tokenFile(t, home, "outside.secret", "not-for-the-forge")
+	doc := agentDoc{top: map[string]json.RawMessage{}, aicrew: map[string]json.RawMessage{}}
+	doc.set(doc.top, "forge", map[string]forgeEntry{"evil.example": {Kind: "gitlab", Account: "x", Purpose: "repo-write",
+		File: "../outside.secret"}})
+	f := newFakeForge()
+	f.ids["not-for-the-forge"] = forge.Identity{Account: "x"}
+	checks := checkForge(context.Background(), home, &doc, f)
+	if len(checks) != 1 || checks[0].State != ForgeMissing || f.whoami != 0 {
+		t.Fatalf("a planted path was followed: %+v, %d calls", checks, f.whoami)
+	}
+	if _, _, err := forgeTokenFor(home, doc, "evil.example"); err == nil {
+		t.Fatal("forgeTokenFor followed a planted path")
+	}
+	// A rotation never removes a planted path either.
+	f.kinds["evil.example"] = forge.GitLab
+	f.ids["new"] = forge.Identity{Account: "y", Name: "y", CommitEmail: "y@x"}
+	toks, _ := readForgeTokens([]ForgeCred{{"evil.example", tokenFile(t, t.TempDir(), "n", "new")}}, nil)
+	if _, err := provisionForge(context.Background(), home, &doc, toks, f, new(strings.Builder)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("the planted path was removed: %v", err)
+	}
+}

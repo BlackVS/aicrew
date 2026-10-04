@@ -371,9 +371,10 @@ func tokenLine(raw []byte) (string, error) {
 }
 
 // writeSecretFile writes data to path atomically and owner-only, and reports
-// whether the content changed. An identical file is kept.
+// whether the file changed. An identical file is kept only while it is
+// owner-only; one that others can read is replaced, so a rerun repairs it.
 func writeSecretFile(path string, data []byte) (bool, error) {
-	if cur, err := os.ReadFile(path); err == nil && bytes.Equal(cur, data) {
+	if cur, err := os.ReadFile(path); err == nil && bytes.Equal(cur, data) && privatefile.Check(path) == nil {
 		return false, nil
 	}
 	tmp := path + ".new"

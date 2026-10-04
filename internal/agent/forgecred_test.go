@@ -379,3 +379,38 @@ func TestForgeEntryFileShape(t *testing.T) {
 		t.Fatalf("the planted path was removed: %v", err)
 	}
 }
+
+// A destination with the same bytes but a mode others can read is not
+// "unchanged": the rerun replaces it owner-only, so check and base
+// resolution can use it.
+func TestProvisionRepairsAnOpenFile(t *testing.T) {
+	home, dir := t.TempDir(), t.TempDir()
+	f := newFakeForge()
+	f.kinds["github.com"] = forge.GitHub
+	f.ids["gh"] = forge.Identity{Account: "bot", Name: "bot", CommitEmail: "x"}
+	doc := agentDoc{top: map[string]json.RawMessage{}, aicrew: map[string]json.RawMessage{}}
+	creds := []ForgeCred{{"github.com", tokenFile(t, dir, "gh", "gh")}}
+	toks, _ := readForgeTokens(creds, nil)
+	if _, err := provisionForge(context.Background(), home, &doc, toks, f, new(strings.Builder)); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "creds", "github-com.bot.repo-write")
+	// Replace the file with the same bytes, readable by others.
+	os.Remove(path)
+	if err := os.WriteFile(path, []byte("gh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if privatefile.Check(path) == nil {
+		t.Skip("this platform's default file mode is owner-only; the open file cannot be made here")
+	}
+	reps, err := provisionForge(context.Background(), home, &doc, toks, f, new(strings.Builder))
+	if err != nil || reps[0].State != ForgeProvisioned {
+		t.Fatalf("rerun over an open file: %+v %v", reps, err)
+	}
+	if err := privatefile.Check(path); err != nil {
+		t.Fatalf("the rerun left the file open: %v", err)
+	}
+	if c := checkForge(context.Background(), home, &doc, f); c[0].State != ForgeVerified {
+		t.Fatalf("check after the repair: %+v", c)
+	}
+}

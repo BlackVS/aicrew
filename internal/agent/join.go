@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/filelock"
+	"github.com/BlackVS/aicrew/internal/forge"
 	"github.com/BlackVS/aicrew/internal/invitecode"
 	"github.com/BlackVS/aicrew/internal/tlstrust"
 )
@@ -68,6 +69,9 @@ type JoinOptions struct {
 	// file holding the member's token (or "-" for the hidden prompt) and,
 	// for a hub on a private CA, its CA bundle.
 	AimemURL, AimemTokenFile, AimemCAFile string
+	// Creds are the member's own forge credentials, one per host
+	// (forgecred.go); allowed on a first join and on a linked home's rerun.
+	Creds []ForgeCred
 }
 
 // JoinDeps are the bootstrap's collaborators; tests replace them.
@@ -78,8 +82,12 @@ type JoinDeps struct {
 	// ReadToken reads the member's aimem token at a hidden prompt, for
 	// --aimem-token-file -.
 	ReadToken func() (string, error)
-	Out       io.Writer // the plan and progress, never a secret
-	Sleep     func(context.Context, time.Duration) error
+	// ReadCred reads one forge token from standard input, for --cred HOST=-.
+	ReadCred func(host string) (string, error)
+	// Forge verifies forge credentials; nil means the real forges.
+	Forge ForgeAPI
+	Out   io.Writer // the plan and progress, never a secret
+	Sleep func(context.Context, time.Duration) error
 	// check runs the dependency and client check at the end of a run; nil
 	// means the real one (runCheck). Package tests replace it.
 	check func(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) (CheckReport, error)
@@ -108,7 +116,9 @@ type JoinReport struct {
 	Role        string       `json:"role,omitempty"`
 	Redeemed    bool         `json:"redeemed"` // this run redeemed an invitation
 	Changes     []FileChange `json:"changes,omitempty"`
-	Next        string       `json:"next,omitempty"`
+	// Forge is each --cred host's outcome (forgecred.go).
+	Forge []ForgeCredReport `json:"forge,omitempty"`
+	Next  string            `json:"next,omitempty"`
 	// Check is the dependency and client check of the home (1a81-5a).
 	Check *CheckReport `json:"check,omitempty"`
 }
@@ -129,7 +139,8 @@ type joiner struct {
 	o     JoinOptions
 	deps  JoinDeps
 	doc   agentDoc
-	aimem JoinAimem // set by precheck for an unlinked home
+	aimem JoinAimem    // set by precheck for an unlinked home
+	toks  []forgeToken // the --cred tokens, read before anything changes
 }
 
 func blocked(o JoinOptions, reason, instruction string) JoinReport {
@@ -149,6 +160,9 @@ func Join(ctx context.Context, o JoinOptions, deps JoinDeps) (JoinReport, error)
 	if deps.Out == nil {
 		deps.Out = io.Discard
 	}
+	if deps.Forge == nil {
+		deps.Forge = forge.NewClient()
+	}
 	if o.Home == "" {
 		return blocked(o, "usage", "--home or --label is required"), ErrJoinUsage
 	}
@@ -167,6 +181,9 @@ func Join(ctx context.Context, o JoinOptions, deps JoinDeps) (JoinReport, error)
 	j := &joiner{o: o, deps: deps, doc: doc}
 	if err := j.options(); err != nil {
 		return blocked(o, "usage", err.Error()), ErrJoinUsage
+	}
+	if j.toks, err = readForgeTokens(o.Creds, deps.ReadCred); err != nil {
+		return blocked(o, "forge_credential", err.Error()), nil
 	}
 	// The checks without side effects come first: a refused run creates
 	// nothing.
@@ -219,6 +236,9 @@ func (j *joiner) options() error {
 	if _, err := selectClients(o.Clients, j.doc); err != nil {
 		return err
 	}
+	if err := checkForgeCreds(o.Creds); err != nil {
+		return err
+	}
 	if err := o.checkProvisionOptions(j.doc.linked()); err != nil {
 		return err
 	}
@@ -249,10 +269,10 @@ func (j *joiner) options() error {
 func (j *joiner) otherBinding() (JoinReport, bool) {
 	o, a := j.o, j.doc.aicrew
 	for _, c := range []struct{ flag, given, recorded string }{
-		{"-url", strings.TrimSuffix(o.URL, "/"), str(a, "url")},
-		{"-tls-trust-mode", o.Trust.Mode, str(a, "tls_trust_mode")},
-		{"-tls-trust-value", o.Trust.Value, str(a, "tls_trust_value")},
-		{"-aimem-hub", o.AimemHub, str(a, "aimem_hub")},
+		{"--url", strings.TrimSuffix(o.URL, "/"), str(a, "url")},
+		{"--tls-trust-mode", o.Trust.Mode, str(a, "tls_trust_mode")},
+		{"--tls-trust-value", o.Trust.Value, str(a, "tls_trust_value")},
+		{"--aimem-hub", o.AimemHub, str(a, "aimem_hub")},
 	} {
 		if c.given != "" && c.given != c.recorded {
 			return blocked(o, "home_linked", fmt.Sprintf("this home is already linked to agent %s in team %s "+
@@ -582,9 +602,19 @@ func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error)
 			break
 		}
 	}
+	if len(j.toks) > 0 {
+		fmt.Fprintln(j.deps.Out, "Forge credentials:")
+		if rep.Forge, err = provisionForge(ctx, o.Home, &j.doc, j.toks, j.deps.Forge, j.deps.Out); err != nil {
+			return JoinReport{}, err
+		}
+		if err := j.doc.write(o.Home); err != nil {
+			return JoinReport{}, err
+		}
+	}
 	// The home is ready only when its dependencies and clients are (K7).
 	fmt.Fprintln(j.deps.Out, "Client wiring:")
-	crep, err := j.deps.check(ctx, CheckOptions{Home: o.Home, Clients: o.Clients, Out: j.deps.Out}, &j.doc, redeemed)
+	crep, err := j.deps.check(ctx, CheckOptions{Home: o.Home, Clients: o.Clients, Out: j.deps.Out, Forge: j.deps.Forge},
+		&j.doc, redeemed)
 	if err != nil {
 		return JoinReport{}, err
 	}

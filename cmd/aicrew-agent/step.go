@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/BlackVS/aicrew/internal/agent"
+	"github.com/BlackVS/aicrew/internal/forge"
 )
 
 // The step command's exit codes (its own; run's exitWorkKept does not apply).
@@ -20,10 +21,17 @@ const (
 )
 
 const stepUsage = `usage: aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
+                         [--repository CLONE_URL]
   OP: offer claim accept withdraw work release finalize
       decline review stop confirm-stop confirm-delivery
       recover pending
-  --home defaults to $` + agent.HomeEnv + `, which the launcher gives its client.`
+  --home defaults to $` + agent.HomeEnv + `, which the launcher gives its client.
+  --repository (offer and claim): fill the body's base_commit, when it has
+  none, with the head of the repository's default branch, read through the
+  forge with this home's own credential for its host.`
+
+// newForge is the forge client step reads with; tests replace it.
+var newForge = func() agent.BaseAPI { return forge.NewClient() }
 
 // step asks the agent home's launcher for one step and prints its answer.
 func step(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
@@ -38,6 +46,7 @@ func step(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	attempt := fs.String("attempt", "", "the attempt's ID")
 	task := fs.String("task", "", "the aimem task's ID")
 	body := fs.String("body", "", "the step's JSON body, or - to read it from stdin")
+	repository := fs.String("repository", "", "offer and claim: resolve base_commit from this repository's default branch")
 	if err := fs.Parse(args[1:]); err != nil || *home == "" || fs.NArg() != 0 {
 		fmt.Fprintln(stderr, stepUsage)
 		return exitUsage
@@ -53,6 +62,23 @@ func step(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if len(raw) > 0 && !json.Valid(raw) {
 		fmt.Fprintln(stderr, "the body is not JSON")
 		return exitUsage
+	}
+	if *repository != "" {
+		if op != "offer" && op != "claim" {
+			fmt.Fprintln(stderr, "--repository resolves the base of an offer or a claim only")
+			return exitUsage
+		}
+		resolved, res, err := agent.ResolveBase(ctx, *home, newForge(), *repository, raw)
+		if err != nil {
+			fmt.Fprintln(stderr, "resolve the base commit:", err)
+			return stepFailed
+		}
+		raw = resolved
+		if res.Kept {
+			fmt.Fprintf(stderr, "base_commit %s kept from the body\n", res.BaseCommit)
+		} else {
+			fmt.Fprintf(stderr, "base_commit %s: the head of %s on %s/%s\n", res.BaseCommit, res.DefaultBranch, res.Host, res.Repository)
+		}
 	}
 	ans, err := agent.CallStep(ctx, *home, agent.StepCall{Op: op, AttemptID: *attempt, TaskID: *task, Body: raw})
 	if err != nil {

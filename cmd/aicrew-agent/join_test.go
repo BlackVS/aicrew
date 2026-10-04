@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BlackVS/aicrew/internal/agent"
@@ -92,5 +93,17 @@ func TestJoinCommand(t *testing.T) {
 		noJoinDeps(t))
 	if code != exitFailed || !bytes.Contains(out.Bytes(), []byte("home_linked")) {
 		t.Fatalf("another binding: exit %d, %s", code, out.String())
+	}
+}
+
+// A --cred value that names no file is refused as a usage error that never
+// quotes it: it may be a token passed by mistake.
+func TestJoinCredNeverEchoed(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "h")
+	var out, errb bytes.Buffer
+	args := append([]string{"--home", home, "--cred", "github.com=ghp_notafile_secret"}, joinFlags...)
+	if code := join(context.Background(), args, true, &out, &errb, noJoinDeps(t)); code != exitUsage ||
+		strings.Contains(errb.String()+out.String(), "ghp_notafile_secret") || !strings.Contains(errb.String(), "never a token") {
+		t.Fatalf("exit %d: %q", code, errb.String())
 	}
 }

@@ -84,6 +84,12 @@ func printCheck(w io.Writer, rep agent.CheckReport) {
 		}
 		fmt.Fprintln(w, line)
 	}
+	if len(rep.Forge) > 0 {
+		fmt.Fprintf(w, "%-28s %-24s %-11s %s\n", "forge host", "account", "purpose", "state")
+		for _, f := range rep.Forge {
+			fmt.Fprintf(w, "%-28s %-24s %-11s %s\n", f.Host, f.Account, f.Purpose, f.State)
+		}
+	}
 	for _, n := range rep.Notices {
 		fmt.Fprintf(w, "notice: %s\n", n)
 	}

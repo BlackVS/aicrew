@@ -51,10 +51,16 @@ type adminState struct {
 
 func (s *Server) registerAdmin() {
 	s.admin.failures = newLimiter(AdminFailuresPerMinute, time.Minute)
-	s.handle(http.MethodGet, opapi.CredentialsPath, s.operator("credential.list", s.listCredentials))
-	s.handle(http.MethodPost, opapi.CredentialsPath, s.operator("credential.issue", s.issueCredential))
-	s.handle(http.MethodPost, opapi.CredentialRotatePath, s.operator("credential.rotate", s.rotateCredential))
-	s.handle(http.MethodPost, opapi.CredentialRevokePath, s.operator("credential.revoke", s.revokeCredential))
+	// The credential routes are served under both names for one release.
+	for _, p := range []struct{ list, rotate, revoke string }{
+		{opapi.CredentialsPath, opapi.CredentialRotatePath, opapi.CredentialRevokePath},
+		{opapi.LegacyCredentialsPath, opapi.LegacyCredentialRotatePath, opapi.LegacyCredentialRevokePath},
+	} {
+		s.handle(http.MethodGet, p.list, s.operator("credential.list", s.listCredentials))
+		s.handle(http.MethodPost, p.list, s.operator("credential.issue", s.issueCredential))
+		s.handle(http.MethodPost, p.rotate, s.operator("credential.rotate", s.rotateCredential))
+		s.handle(http.MethodPost, p.revoke, s.operator("credential.revoke", s.revokeCredential))
+	}
 	s.handle(http.MethodGet, opapi.TeamsPath, s.operator("team.list", s.listTeams))
 	s.handle(http.MethodPost, opapi.TeamsPath, s.operator("team.create", s.createTeam))
 	s.handle(http.MethodGet, opapi.TeamPath, s.operator("team.show", s.showTeam))

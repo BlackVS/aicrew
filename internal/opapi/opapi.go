@@ -15,15 +15,23 @@ import "time"
 const (
 	Prefix = "/v1/admin/"
 
-	CredentialsPath      = "/v1/admin/introspection-credentials"        // GET list (?hub=), POST issue
-	CredentialRotatePath = "/v1/admin/introspection-credentials/rotate" // POST
-	CredentialRevokePath = "/v1/admin/introspection-credentials/revoke" // POST
-	TeamsPath            = "/v1/admin/teams"                            // GET list, POST create
-	TeamPath             = "/v1/admin/team"                             // GET show (?id=)
-	TeamProjectsPath     = "/v1/admin/team/projects"                    // POST
-	TeamRenamePath       = "/v1/admin/team/rename"                      // POST
-	InvitationsPath      = "/v1/admin/invitations"                      // GET list (?team=), POST issue
-	InvitationRevokePath = "/v1/admin/invitations/revoke"               // POST
+	// The credential a hub uses to call this service (introspection and
+	// coordination facts).
+	CredentialsPath      = "/v1/admin/hub-credentials"        // GET list (?hub=), POST issue
+	CredentialRotatePath = "/v1/admin/hub-credentials/rotate" // POST
+	CredentialRevokePath = "/v1/admin/hub-credentials/revoke" // POST
+	TeamsPath            = "/v1/admin/teams"                  // GET list, POST create
+	TeamPath             = "/v1/admin/team"                   // GET show (?id=)
+	TeamProjectsPath     = "/v1/admin/team/projects"          // POST
+	TeamRenamePath       = "/v1/admin/team/rename"            // POST
+	InvitationsPath      = "/v1/admin/invitations"            // GET list (?team=), POST issue
+	InvitationRevokePath = "/v1/admin/invitations/revoke"     // POST
+
+	// The credential routes' names before 0.3.0, served the same for one
+	// release and removed in 0.4.0.
+	LegacyCredentialsPath      = "/v1/admin/introspection-credentials"
+	LegacyCredentialRotatePath = "/v1/admin/introspection-credentials/rotate"
+	LegacyCredentialRevokePath = "/v1/admin/introspection-credentials/revoke"
 )
 
 // Error is every refusal: a stable code and a message that never carries a

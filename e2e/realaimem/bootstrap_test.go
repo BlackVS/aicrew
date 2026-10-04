@@ -123,7 +123,7 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 		t.Fatalf("aicrew team create printed no team: %v", err)
 	}
 	h.teamID = team.ID
-	h.must(opEnv, nil, filepath.Join(h.bin, "aicrew"), "introspection-credential", "issue",
+	h.must(opEnv, nil, filepath.Join(h.bin, "aicrew"), "hub-credential", "issue",
 		"-hub", h.hubID, "-secret-file", introFile)
 	h.knowSecretFile(introFile)
 

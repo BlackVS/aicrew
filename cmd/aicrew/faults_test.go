@@ -87,13 +87,13 @@ func TestIssueAnswerFaults(t *testing.T) {
 		says    string
 	}{
 		{"credential without bearer", answer(`{"id":"cred-1","hub_id":"hub-a","active":true}`),
-			[]string{"introspection-credential", "issue", "-hub", "hub-a", "-secret-file"}, "cred-1", "was revoked"},
+			[]string{"hub-credential", "issue", "-hub", "hub-a", "-secret-file"}, "cred-1", "was revoked"},
 		{"rotation without replaces", answer(`{"id":"cred-2","hub_id":"hub-a","bearer":"aicrew_introspect_x"}`),
-			[]string{"introspection-credential", "rotate", "-hub", "hub-a", "-secret-file"}, "cred-2", "was revoked"},
+			[]string{"hub-credential", "rotate", "-hub", "hub-a", "-secret-file"}, "cred-2", "was revoked"},
 		{"invitation without code", answer(`{"id":"inv-1","team_id":"t","state":"issued"}`),
 			[]string{"invitation", "issue", "-team", "t", "-role", "worker", "-hub", "hub-a", "-label", "b", "-code-file"}, "inv-1", "was revoked"},
 		{"credential answer lost", hangUp,
-			[]string{"introspection-credential", "issue", "-hub", "hub-a", "-secret-file"}, "", "introspection-credential list -hub hub-a"},
+			[]string{"hub-credential", "issue", "-hub", "hub-a", "-secret-file"}, "", "hub-credential list -hub hub-a"},
 		{"invitation answer lost", hangUp,
 			[]string{"invitation", "issue", "-team", "t", "-role", "worker", "-hub", "hub-a", "-label", "b", "-code-file"}, "", "invitation list -team t"},
 	} {

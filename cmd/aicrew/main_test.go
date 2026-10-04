@@ -45,14 +45,14 @@ func TestIssueListRotateRevoke(t *testing.T) {
 
 	// Rotate needs one active credential to replace.
 	none := filepath.Join(dir, "none.secret")
-	if r := cli(t, "introspection-credential", "rotate", "-hub", "hub-a", "-secret-file", none); r.code != 1 {
+	if r := cli(t, "hub-credential", "rotate", "-hub", "hub-a", "-secret-file", none); r.code != 1 {
 		t.Fatalf("rotate with no active credential: %d", r.code)
 	}
 	if _, err := os.Stat(none); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("a refused rotate created its secret file")
 	}
 
-	r := cli(t, "introspection-credential", "issue", "-hub", "hub-a", "-secret-file", first)
+	r := cli(t, "hub-credential", "issue", "-hub", "hub-a", "-secret-file", first)
 	if r.code != 0 {
 		t.Fatalf("issue: %d %s", r.code, r.stderr)
 	}
@@ -72,7 +72,7 @@ func TestIssueListRotateRevoke(t *testing.T) {
 	}
 
 	// An existing secret file is never reused, and nothing is issued.
-	if r := cli(t, "introspection-credential", "issue", "-hub", "hub-a", "-secret-file", first); r.code != 1 {
+	if r := cli(t, "hub-credential", "issue", "-hub", "hub-a", "-secret-file", first); r.code != 1 {
 		t.Fatalf("issue into an existing file: %d", r.code)
 	}
 	if again, _ := os.ReadFile(first); !bytes.Equal(again, bearer) {
@@ -80,23 +80,23 @@ func TestIssueListRotateRevoke(t *testing.T) {
 	}
 
 	second := filepath.Join(dir, "second.secret")
-	r = cli(t, "introspection-credential", "rotate", "-hub", "hub-a", "-secret-file", second)
+	r = cli(t, "hub-credential", "rotate", "-hub", "hub-a", "-secret-file", second)
 	var rotated credentialView
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &rotated) != nil || rotated.Replaces != issued.ID {
 		t.Fatalf("rotate: %d %s %s", r.code, r.stdout, r.stderr)
 	}
 	third := filepath.Join(dir, "third.secret")
-	if r := cli(t, "introspection-credential", "rotate", "-hub", "hub-a", "-secret-file", third); r.code != 1 {
+	if r := cli(t, "hub-credential", "rotate", "-hub", "hub-a", "-secret-file", third); r.code != 1 {
 		t.Fatalf("rotate with two active credentials: %d", r.code)
 	}
-	if r := cli(t, "introspection-credential", "issue", "-hub", "hub-a", "-secret-file", third); r.code != 1 || !strings.Contains(r.stderr, "credential_limit") {
+	if r := cli(t, "hub-credential", "issue", "-hub", "hub-a", "-secret-file", third); r.code != 1 || !strings.Contains(r.stderr, "credential_limit") {
 		t.Fatalf("a third active credential: %d %s", r.code, r.stderr)
 	}
 	if _, err := os.Stat(third); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("a refused issue left its secret file behind")
 	}
 
-	r = cli(t, "introspection-credential", "revoke", "-id", issued.ID)
+	r = cli(t, "hub-credential", "revoke", "-id", issued.ID)
 	var revoked credentialView
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &revoked) != nil || revoked.Active || revoked.RevokedAt.IsZero() {
 		t.Fatalf("revoke: %d %s %s", r.code, r.stdout, r.stderr)
@@ -104,7 +104,7 @@ func TestIssueListRotateRevoke(t *testing.T) {
 	if _, err := authenticate(t, s, string(bearer)); !errors.Is(err, store.ErrUnauthenticated) {
 		t.Fatalf("a revoked credential authenticated: %v", err)
 	}
-	r = cli(t, "introspection-credential", "list", "-hub", "hub-a")
+	r = cli(t, "hub-credential", "list", "-hub", "hub-a")
 	var listed []credentialView
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &listed) != nil || len(listed) != 2 {
 		t.Fatalf("list: %d %s", r.code, r.stdout)
@@ -114,8 +114,24 @@ func TestIssueListRotateRevoke(t *testing.T) {
 			t.Fatalf("list shows %+v", c)
 		}
 	}
-	if r := cli(t, "introspection-credential", "revoke", "-id", "no-such-id"); r.code != 1 {
+	if r := cli(t, "hub-credential", "revoke", "-id", "no-such-id"); r.code != 1 {
 		t.Fatalf("revoke an unknown credential: %d", r.code)
+	}
+}
+
+// The command's name before 0.3.0 still works for one release and says so.
+func TestLegacyCredentialCommand(t *testing.T) {
+	dir := t.TempDir()
+	serve(t)
+	r := cli(t, "introspection-credential", "issue", "-hub", "hub-a", "-secret-file", filepath.Join(dir, "legacy.secret"))
+	if r.code != 0 || !strings.Contains(r.stderr, "introspection-credential is now hub-credential") {
+		t.Fatalf("legacy issue: %d %s", r.code, r.stderr)
+	}
+	r = cli(t, "introspection-credential", "list", "-hub", "hub-a")
+	var listed []credentialView
+	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &listed) != nil || len(listed) != 1 ||
+		!strings.Contains(r.stderr, "removed in 0.4.0") {
+		t.Fatalf("legacy list: %d %s %s", r.code, r.stdout, r.stderr)
 	}
 }
 
@@ -128,7 +144,7 @@ func TestIssueRevokesWhenTheSecretCannotBeWritten(t *testing.T) {
 	orig := writeSecret
 	writeSecret = func(*os.File, string) error { return errors.New("disk full") }
 	defer func() { writeSecret = orig }()
-	r := cli(t, "introspection-credential", "issue", "-hub", "hub-a", "-secret-file", secret)
+	r := cli(t, "hub-credential", "issue", "-hub", "hub-a", "-secret-file", secret)
 	if r.code != 1 || !strings.Contains(r.stderr, "was revoked") {
 		t.Fatalf("issue with a failed write: %d %s", r.code, r.stderr)
 	}
@@ -136,7 +152,7 @@ func TestIssueRevokesWhenTheSecretCannotBeWritten(t *testing.T) {
 		t.Fatal("the secret file was left behind")
 	}
 	writeSecret = orig
-	r = cli(t, "introspection-credential", "list")
+	r = cli(t, "hub-credential", "list")
 	var listed []credentialView
 	if json.Unmarshal([]byte(r.stdout), &listed) != nil || len(listed) != 1 || listed[0].Active {
 		t.Fatalf("after a failed write the credential should be revoked: %s", r.stdout)
@@ -149,22 +165,22 @@ func TestUsageAndConnection(t *testing.T) {
 	dir := t.TempDir()
 	for _, args := range [][]string{
 		nil,
-		{"introspection-credential"},
+		{"hub-credential"},
 		{"other", "issue"},
-		{"introspection-credential", "burn"},
-		{"introspection-credential", "issue", "-hub", "hub-a"},
-		{"introspection-credential", "revoke"},
-		{"introspection-credential", "list", "-id", "x"},
-		{"introspection-credential", "issue", "-hub", "hub-a", "-secret-file", "x", "-operations", "everything"},
-		{"introspection-credential", "issue", "-hub", "hub-a", "-secret-file", "x", "-operations", "introspection,"},
-		{"introspection-credential", "list", "-operations", "coordination"},
+		{"hub-credential", "burn"},
+		{"hub-credential", "issue", "-hub", "hub-a"},
+		{"hub-credential", "revoke"},
+		{"hub-credential", "list", "-id", "x"},
+		{"hub-credential", "issue", "-hub", "hub-a", "-secret-file", "x", "-operations", "everything"},
+		{"hub-credential", "issue", "-hub", "hub-a", "-secret-file", "x", "-operations", "introspection,"},
+		{"hub-credential", "list", "-operations", "coordination"},
 	} {
 		if r := cli(t, args...); r.code != 2 {
 			t.Fatalf("%v: exit %d, want 2", args, r.code)
 		}
 	}
 	secret := filepath.Join(dir, "held.secret")
-	issue := []string{"introspection-credential", "issue", "-hub", "hub-a", "-secret-file", secret}
+	issue := []string{"hub-credential", "issue", "-hub", "hub-a", "-secret-file", secret}
 	for _, k := range []string{"AICREW_URL", "AICREW_TLS_TRUST_MODE", "AICREW_TLS_TRUST_VALUE", "AICREW_OPERATOR_TOKEN_FILE"} {
 		t.Setenv(k, "")
 	}
@@ -227,7 +243,7 @@ func TestIssueOperations(t *testing.T) {
 	} {
 		secret := filepath.Join(dir, "cred-"+strings.NewReplacer(",", "-", " ", "").Replace(tc.flag)+".secret")
 		hub := "hub-" + strings.NewReplacer(",", "-", " ", "").Replace(tc.flag)
-		args := []string{"introspection-credential", "issue", "-hub", hub, "-secret-file", secret}
+		args := []string{"hub-credential", "issue", "-hub", hub, "-secret-file", secret}
 		if tc.flag != "" {
 			args = append(args, "-operations", tc.flag)
 		}

@@ -3,14 +3,18 @@
 // aicrewd keeps running while the operator administers, from any machine
 // that reaches it over TLS with the operator credential.
 //
-//	aicrew introspection-credential issue  -hub HUB -secret-file PATH [-operations LIST]
-//	aicrew introspection-credential rotate -hub HUB -secret-file PATH [-operations LIST]
-//	aicrew introspection-credential list   [-hub HUB]
-//	aicrew introspection-credential revoke -id ID
+//	aicrew hub-credential issue  -hub HUB -secret-file PATH [-operations LIST]
+//	aicrew hub-credential rotate -hub HUB -secret-file PATH [-operations LIST]
+//	aicrew hub-credential list   [-hub HUB]
+//	aicrew hub-credential revoke -id ID
 //	aicrew invitation issue|list|revoke ... (see invitation.go)
 //	aicrew team create|list|show|projects|rename ... (see team.go)
 //	aicrew operator-token new -file PATH
 //	aicrew version [-json]
+//
+// hub-credential is the credential an aimem hub uses to call this service.
+// Its name before 0.3.0, introspection-credential, still works for one
+// release, with a notice, and is removed in 0.4.0.
 //
 // Every command but operator-token and version takes the connection flags
 // (conn.go). -operations names what the new credential permits,
@@ -45,10 +49,10 @@ func main() {
 }
 
 const usage = `usage:
-  aicrew introspection-credential issue  -hub HUB -secret-file PATH [-operations LIST]
-  aicrew introspection-credential rotate -hub HUB -secret-file PATH [-operations LIST]
-  aicrew introspection-credential list   [-hub HUB]
-  aicrew introspection-credential revoke -id ID
+  aicrew hub-credential issue  -hub HUB -secret-file PATH [-operations LIST]
+  aicrew hub-credential rotate -hub HUB -secret-file PATH [-operations LIST]
+  aicrew hub-credential list   [-hub HUB]
+  aicrew hub-credential revoke -id ID
   aicrew invitation issue|list|revoke ...   (run "aicrew invitation" for its usage)
   aicrew team create|list|show|projects|rename ...   (run "aicrew team" for its usage)
   aicrew operator-token new -file PATH
@@ -85,12 +89,15 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		version.Print(stdout, "aicrew", *asJSON)
 		return 0
 	}
-	if len(args) < 2 || args[0] != "introspection-credential" {
+	if len(args) < 2 || (args[0] != "hub-credential" && args[0] != "introspection-credential") {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	if args[0] == "introspection-credential" {
+		fmt.Fprintln(stderr, "aicrew: introspection-credential is now hub-credential; the old name is removed in 0.4.0")
+	}
 	verb := args[1]
-	fs := flag.NewFlagSet("aicrew introspection-credential "+verb, flag.ContinueOnError)
+	fs := flag.NewFlagSet("aicrew hub-credential "+verb, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cn := addConn(fs)
 	hub := fs.String("hub", "", "the aimem hub the credential is bound to")
@@ -169,7 +176,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		f.Close()
 		os.Remove(*secretFile)
 		return issueFailed(ctx, stderr, cl, err, "credential", c.ID, opapi.CredentialRevokePath,
-			"aicrew introspection-credential list -hub "+*hub)
+			"aicrew hub-credential list -hub "+*hub)
 	}
 	bearer := c.Bearer
 	c.Bearer = ""

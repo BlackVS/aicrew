@@ -45,9 +45,10 @@ const (
 // adminState is the operator API's own state.
 type adminState struct {
 	failures *limiter
-	// names serializes team creation and renaming, so two concurrent
-	// requests can never both take one name: the store does not enforce
-	// names' uniqueness, the operator commands always have.
+	// names serializes team creation, renaming and registration, so two
+	// concurrent requests can never both take one name (the store does not
+	// enforce names' uniqueness, the operator commands always have), and a
+	// registration never sends a name a rename has since replaced.
 	names sync.Mutex
 }
 
@@ -439,6 +440,8 @@ func (s *Server) registerTeamRoute(w http.ResponseWriter, r *http.Request, op st
 	if !adminBody(w, r, &req) {
 		return opapi.CodeInvalid, ""
 	}
+	s.admin.names.Lock()
+	defer s.admin.names.Unlock()
 	t, err := s.store.GetTeam(r.Context(), req.ID)
 	if err != nil {
 		return adminFail(w, err), ""

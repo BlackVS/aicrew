@@ -2,10 +2,16 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/BlackVS/aicrew/internal/hubteams"
 	"github.com/BlackVS/aicrew/internal/opapi"
@@ -140,4 +146,103 @@ func TestTeamRegistration(t *testing.T) {
 	}
 	// A team without a hub cannot be registered.
 	adminRefused(t, e.admin(t, http.MethodPost, opapi.TeamRegisterPath, tok, opapi.IDRequest{ID: e.teamID}, nil), http.StatusConflict, opapi.CodeInvalid)
+}
+
+// One named hub still routes by hub ID: a challenge naming another hub is
+// peer_unknown and its receipt never reaches the configured hub.
+func TestOneNamedHubRoutesByHubID(t *testing.T) {
+	var hits atomic.Int32
+	hub := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(hub.Close)
+	sum := sha256.Sum256(hub.Certificate().RawSubjectPublicKeyInfo)
+	certFile, keyFile, _ := testCert(t)
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "aicrew.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	redeem := filepath.Join(t.TempDir(), "redemption.token")
+	writePrivate(t, redeem, "sample-redemption-credential")
+	opFile, _ := operatorToken(t)
+	cfg := Config{ListenAddr: "127.0.0.1:0", TLSCertFile: certFile, TLSKeyFile: keyFile, ServiceID: "aicrew-test",
+		OperatorTokenFile: opFile, ShutdownTimeout: Duration(time.Second),
+		AimemHubs: []AimemHub{{Name: "main", HubID: "hub-a", AimemConfig: AimemConfig{BaseURL: hub.URL,
+			TLSTrustMode: "spki_sha256", TLSTrustValue: "sha256-" + base64.StdEncoding.EncodeToString(sum[:]),
+			RedemptionTokenFile: redeem}}}}
+	srv, err := New(cfg, st, slogDiscard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := store.NewSecret("amr1_" + strings.Repeat("A", 43))
+	_, err = srv.verifier.Redeem(context.Background(), store.RedeemRequest{ChallengeID: "ch-1", HubID: "hub-x",
+		Receipt: receipt, RequestKey: "key-1"})
+	if err == nil || !strings.Contains(err.Error(), "peer_unknown") || hits.Load() != 0 {
+		t.Fatalf("another hub's challenge: %v, %d calls to the configured hub", err, hits.Load())
+	}
+	// The configured hub's own challenge reaches it.
+	srv.verifier.Redeem(context.Background(), store.RedeemRequest{ChallengeID: "ch-2", HubID: "hub-a",
+		Receipt: receipt, RequestKey: "key-2"})
+	if hits.Load() != 1 {
+		t.Fatalf("the hub's own challenge made %d calls", hits.Load())
+	}
+}
+
+// A registration retry and a rename are serialized: the retry reads the
+// team's name only once the rename, and its registration, are done, so it
+// never sends the replaced name.
+func TestRegisterRetryWaitsForRename(t *testing.T) {
+	hub := &slowHubTeams{fakeHubTeams: fakeHubTeams{registered: map[string]string{}}, entered: make(chan string, 4),
+		release: make(chan struct{})}
+	e := setupAPI(t, WithHub("main", "hub-a", hub))
+	tok := e.opToken
+	var team opapi.Team
+	close(hub.release)
+	e.admin(t, http.MethodPost, opapi.TeamsPath, tok, opapi.TeamRequest{Name: "alpha", Hub: "main"}, &team)
+	<-hub.entered
+	hub.release = make(chan struct{})
+	renamed := make(chan struct{})
+	go func() {
+		defer close(renamed)
+		e.admin(t, http.MethodPost, opapi.TeamRenamePath, tok,
+			opapi.TeamRenameRequest{TeamID: team.ID, ExpectedRevision: team.Revision, Name: "beta"}, nil)
+	}()
+	if got := <-hub.entered; got != "beta" {
+		t.Fatalf("the rename registered %q", got)
+	}
+	retried := make(chan struct{})
+	go func() {
+		defer close(retried)
+		e.admin(t, http.MethodPost, opapi.TeamRegisterPath, tok, opapi.IDRequest{ID: team.ID}, nil)
+	}()
+	select {
+	case got := <-hub.entered:
+		t.Fatalf("the retry registered %q while the rename was registering", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(hub.release)
+	<-renamed
+	if got := <-hub.entered; got != "beta" {
+		t.Fatalf("the retry registered %q after the rename", got)
+	}
+	<-retried
+	if hub.registered[team.ID] != "beta" {
+		t.Fatalf("the hub holds %q", hub.registered[team.ID])
+	}
+}
+
+// slowHubTeams reports each registration's name, then holds it until
+// release is closed.
+type slowHubTeams struct {
+	fakeHubTeams
+	entered chan string
+	release chan struct{}
+}
+
+func (f *slowHubTeams) Register(ctx context.Context, teamID, name string) (hubteams.Registration, error) {
+	f.entered <- name
+	<-f.release
+	return f.fakeHubTeams.Register(ctx, teamID, name)
 }

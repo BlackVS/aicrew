@@ -398,10 +398,10 @@ func (s *Server) bindHubs() error {
 		}
 		s.hubs[h.Name] = b
 	}
-	if len(verifiers) == 1 {
-		for _, v := range verifiers {
-			s.verifier = v
-		}
+	if cfg.Aimem != nil {
+		// The legacy block names no hub ID: its one verifier redeems every
+		// challenge, as before named hubs.
+		s.verifier = verifiers[""]
 	} else {
 		s.verifier = verifiers
 	}

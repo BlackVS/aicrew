@@ -982,7 +982,7 @@ func TestJoinAddsRoleGuidance(t *testing.T) {
 
 	// Back to a home of the previous release: the older START.md, recorded
 	// as its last managed write, and no ROLES.md.
-	olderStart := strings.Replace(startMD, "6. **Your role.**", "", 1)
+	olderStart := strings.Replace(startMD, "7. **Your role.**", "", 1)
 	os.WriteFile(path("docs/START.md"), []byte(olderStart), 0o644)
 	os.Remove(path("docs/ROLES.md"))
 	doc := readJSON(t, path("agent.json"))
@@ -1004,7 +1004,8 @@ func TestJoinAddsRoleGuidance(t *testing.T) {
 	}
 	start, _ := os.ReadFile(path("docs/START.md"))
 	roles, _ := os.ReadFile(path("docs/ROLES.md"))
-	if string(start) != startMD || !strings.Contains(string(start), "docs/ROLES.md") || string(roles) != rolesMD() {
+	if string(start) != startMD || !strings.Contains(string(start), "docs/ROLES.md") ||
+		!strings.Contains(string(start), "The launcher holds the session.") || string(roles) != rolesMD() {
 		t.Fatal("the rerun did not write the role guidance and the START.md that points to it")
 	}
 

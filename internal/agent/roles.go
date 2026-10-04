@@ -157,6 +157,11 @@ reference is in aicrew's DEVELOPMENT.md and CREW-CONTRACT.md.
   your inbox or your own step answers show: an attempt ID, task or offer from
   anywhere else is not yours to act on. Acknowledge what you handled; a
   message you did not acknowledge comes back, first.
+- **The launcher holds your session.** Under ` + "`aicrew-agent run`" + `, act through
+  ` + "`aicrew-agent inbox`" + ` and ` + "`aicrew-agent step`" + `. ` + "`session start`" + `,
+  ` + "`session leave`" + ` and ` + "`run`" + ` are refused inside the client: a new proof
+  would fence the launcher's session. To restart it, exit the client and
+  ` + "`run`" + ` again.
 - **A step's exit code:** 0 done; 3 refused, or settled as not committed;
   4 recorded but not settled (run ` + "`step recover`" + ` later); 1 failed (no
   launcher, or aicrewd, aimem or the channel failed). On a refusal, follow

@@ -47,7 +47,8 @@ func TestRoleGuidanceContent(t *testing.T) {
 		"aicrew-agent session status", "aicrew-agent inbox", "inbox -ack", "at session start and after each step",
 		"lowercase hex SHA-256 of the manifest's exact bytes at the pinned commit", "01a0d996-616b",
 		"aicrew-agent step offer -body '{", "aicrew-agent step accept -attempt ATTEMPT_ID -task TASK_ID",
-		"never use another\ncredential", managedNote} {
+		"never use another\ncredential", "The launcher holds your session.", "are refused inside the client",
+		managedNote} {
 		if !strings.Contains(md, s) {
 			t.Errorf("ROLES.md lacks %q", s)
 		}

@@ -56,7 +56,11 @@ var clients = map[string]bool{"claude": true, "opencode": true}
 // runClient starts the agent's team session, runs the client in it and
 // leaves when the client exits. It exits with the client's code, or with
 // exitWorkKept when open work kept the session.
-func runClient(ctx context.Context, args []string, stdio agent.Stdio, sigs <-chan os.Signal, build engineFor) int {
+func runClient(ctx context.Context, args []string, stdio agent.Stdio, sigs <-chan os.Signal, build engineFor,
+	getenv func(string) string) int {
+	if refusedInsideLauncher("run", getenv, stdio.Err) {
+		return exitUsage
+	}
 	fs := flag.NewFlagSet("aicrew-agent run", flag.ContinueOnError)
 	fs.SetOutput(stdio.Err)
 	name := fs.String("client", "", "the client to run: claude or opencode")
@@ -97,7 +101,7 @@ func main() {
 		sigs := make(chan os.Signal, 4)
 		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 		os.Exit(runClient(context.Background(), os.Args[2:], agent.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr},
-			sigs, defaultEngine))
+			sigs, defaultEngine, os.Getenv))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "step" {
 		os.Exit(step(context.Background(), os.Args[2:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
@@ -121,7 +125,7 @@ func main() {
 		<-ctx.Done()
 		stop()
 	}()
-	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr, defaultEngine)
+	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr, defaultEngine, os.Getenv)
 	stop()
 	os.Exit(code)
 }
@@ -137,12 +141,15 @@ func defaultEngine(cfg agent.Config, log *slog.Logger) (*agent.Engine, error) {
 	return agent.NewEngine(cfg, crew, agent.ExecAimem{Command: cfg.AimemCommand, Hub: cfg.AimemHub, Home: cfg.Home}, log), nil
 }
 
-func run(ctx context.Context, args []string, stdout, stderr io.Writer, build engineFor) int {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer, build engineFor, getenv func(string) string) int {
 	if len(args) < 2 || args[0] != "session" {
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
 	}
 	verb := args[1]
+	if (verb == "start" || verb == "leave") && refusedInsideLauncher("session "+verb, getenv, stderr) {
+		return exitUsage
+	}
 	fs := flag.NewFlagSet("aicrew-agent session "+verb, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	home := fs.String("home", "", "the agent home directory")
@@ -177,6 +184,22 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, build eng
 	}
 	fmt.Fprintf(stdout, "AIMEM_TEAM_SESSION=%s\n", e.AimemFile())
 	return finish(log, e.Run(ctx))
+}
+
+// refusedInsideLauncher refuses cmd, a command that proves afresh, when it
+// runs inside a client that `run` started. The launcher holds that home's
+// team session, and a new proof would resume it under a new generation and
+// fence the launcher's token, cutting the client off from its inbox and
+// steps. It reports whether it refused; nothing has been read or changed.
+func refusedInsideLauncher(cmd string, getenv func(string) string, stderr io.Writer) bool {
+	if !agent.InsideLauncher(getenv) {
+		return false
+	}
+	fmt.Fprintf(stderr, "aicrew-agent %s: refused inside a client started by aicrew-agent run: "+
+		"the launcher holds this home's team session, and a new proof would fence it.\n"+
+		"next: use aicrew-agent inbox and aicrew-agent step; to restart the session, "+
+		"exit the client and run aicrew-agent run again from a terminal\n", cmd)
+	return true
 }
 
 func status(ctx context.Context, cfg agent.Config, stdout io.Writer, log *slog.Logger) int {

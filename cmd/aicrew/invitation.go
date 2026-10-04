@@ -21,7 +21,7 @@ import (
 // or put into an argument, and a refused issue never has one.
 
 const invitationUsage = `usage:
-  aicrew invitation issue  --team TEAM | --team-name NAME --role ROLE --hub HUB --output PATH|-
+  aicrew invitation issue  (--team TEAM | --team-name NAME) --role ROLE --hub HUB --output PATH|-
                            [--purpose join|link|rebind] [--label LABEL] [--agent AGENT]
                            [--expect-user USER] [--expires DURATION]
   aicrew invitation list   [--team TEAM | --team-name NAME]

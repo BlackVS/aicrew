@@ -19,9 +19,9 @@ import (
 const teamUsage = `usage:
   aicrew team create   --name NAME [--project HUB/PROJECT ...]
   aicrew team list
-  aicrew team show     --team TEAM | --team-name NAME
-  aicrew team projects --team TEAM | --team-name NAME --expect-revision N [--project HUB/PROJECT ...]
-  aicrew team rename   --team TEAM | --team-name NAME --expect-revision N --name NAME
+  aicrew team show     (--team TEAM | --team-name NAME)
+  aicrew team projects (--team TEAM | --team-name NAME) --expect-revision N [--project HUB/PROJECT ...]
+  aicrew team rename   (--team TEAM | --team-name NAME) --expect-revision N --name NAME
 ` + connUsage
 
 // projectFlags collects repeated --project HUB/PROJECT values. A value

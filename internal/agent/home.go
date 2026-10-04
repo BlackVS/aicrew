@@ -290,6 +290,8 @@ Repository instructions live in each repository, not here.
 3. **Worktrees.** Every change happens in its own worktree under
    ` + "`worktrees/`" + `, created from an explicitly chosen base commit, one per
    attempt. The clones under ` + "`repos/`" + ` stay clean.
+   ` + "`aicrew-agent clone --repository URL --attempt ID --base COMMIT --branch NAME`" + `
+   makes both with your own forge credential and commit identity.
 4. **Handoff.** ` + "`docs/HANDOFF.md`" + ` is yours. It is never managed or overwritten.
 5. **Readiness.** Before work, run ` + "`aicrew-agent check --home <this directory>`" + `:
    it checks the versions of ` + "`aimem`" + `, ai-skills and your client, and that

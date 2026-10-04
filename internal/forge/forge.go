@@ -64,14 +64,19 @@ func NormalizeHost(host string) (string, error) {
 
 // Repository splits a clone URL into its forge host and repository path
 // (owner/name, without .git). It reads https://host[:port]/path,
-// ssh://[user@]host[:port]/path and the scp form user@host:path.
+// ssh://[user@]host[:port]/path and the scp form user@host:path. Its errors
+// never quote the input, which may carry a credential.
 func Repository(cloneURL string) (host, path string, err error) {
 	raw := strings.TrimSpace(cloneURL)
 	switch {
 	case strings.HasPrefix(raw, "https://"), strings.HasPrefix(raw, "ssh://"):
 		u, perr := url.Parse(raw)
 		if perr != nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
-			return "", "", fmt.Errorf("%q is not a clone URL", cloneURL)
+			return "", "", errors.New("the repository is not a clone URL: a host, a path, no query or fragment")
+		}
+		if u.Scheme == "https" && u.User != nil {
+			// A credential in the URL would land in the clone's configuration.
+			return "", "", errors.New("an https clone URL must not carry a user or a credential")
 		}
 		host, path = u.Host, u.Path
 		if u.Scheme == "ssh" {
@@ -83,19 +88,19 @@ func Repository(cloneURL string) (host, path string, err error) {
 		colon := strings.Index(raw[at:], ":") + at
 		host, path = raw[at+1:colon], raw[colon+1:]
 	default:
-		return "", "", fmt.Errorf("%q is not a clone URL: https://, ssh:// or user@host:path", cloneURL)
+		return "", "", errors.New("the repository is not a clone URL: https://, ssh:// or user@host:path")
 	}
 	if host, err = NormalizeHost(host); err != nil {
-		return "", "", err
+		return "", "", errors.New("the repository's host is not a forge host: a host name with an optional port")
 	}
 	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
 	parts := strings.Split(path, "/")
 	if len(parts) < 2 {
-		return "", "", fmt.Errorf("%q names no owner/repository", cloneURL)
+		return "", "", errors.New("the repository names no owner/repository")
 	}
 	for _, p := range parts {
 		if p == "" || p == "." || p == ".." {
-			return "", "", fmt.Errorf("%q names no owner/repository", cloneURL)
+			return "", "", errors.New("the repository names no owner/repository")
 		}
 	}
 	return host, path, nil

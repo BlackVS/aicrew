@@ -192,7 +192,7 @@ func TestRepositoryAndEncoding(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"", "github.com/team/app", "https://github.com/app", "https://github.com/../x",
-		"file:///tmp/repo", "https://user@ho st/a/b"} {
+		"file:///tmp/repo", "https://user@ho st/a/b", "https://x-token@github.com/team/app", "https://u:p@github.com/team/app"} {
 		if _, _, err := Repository(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
@@ -219,5 +219,21 @@ func TestRateLimitIsNotRejection(t *testing.T) {
 	_, err := c.WhoAmI(context.Background(), strings.TrimPrefix(srv.URL, "https://"), GitHub, testToken)
 	if !errors.Is(err, ErrUnreachable) || errors.Is(err, ErrRejected) {
 		t.Fatalf("a rate limit: %v", err)
+	}
+}
+
+// A refused clone URL never quotes its input, which may carry a credential.
+func TestRepositoryErrorsNeverQuoteTheInput(t *testing.T) {
+	for _, in := range []string{
+		"https://user:secret-in-url@github.com/team/app?x=1",
+		"https://user:secret-in-url@github.com/team/app#f",
+		"https://user:secret-in-url@[bad/team/app",
+		"https://user:secret-in-url@github.com/app",
+		"secret-in-url",
+		"x@secret-in-url:team",
+	} {
+		if _, _, err := Repository(in); err == nil || strings.Contains(err.Error(), "secret-in-url") {
+			t.Errorf("%q: %v", in, err)
+		}
 	}
 }

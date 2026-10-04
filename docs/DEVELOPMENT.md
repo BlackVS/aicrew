@@ -814,6 +814,35 @@ command that fixes it.
     failed;
   - 2: usage.
 
+### Cloning with the member's credential: `aicrew-agent clone`
+
+```sh
+aicrew-agent clone --repository https://github.com/team/app --attempt A1   --base 0123456789abcdef0123456789abcdef01234567 --branch attempt/A1
+```
+
+It works with the member's own credential for the repository's host, which
+`join --cred` provisioned (`docs/proposals/PILOT-1-FOLLOWUPS.md`, 3.4):
+
+- **The clone** is `repos/<service>/<owner>/<name>` (the host encoded as in
+  the credential reference), made once and reused by later attempts. A
+  directory there that clones another repository is refused.
+- **The credential helper.** The clone's own git configuration resets any
+  inherited credential helper and names `aicrew-agent git-credential --home
+  <home>`, which git runs when it needs a credential for the host. The
+  helper answers on git's pipe only, with the account and the token read
+  from `creds/` through `agent.json`; on a terminal it refuses. The token
+  never appears in a URL, a git configuration, a process argument or the
+  output.
+- **The commit identity** of the clone is the member's account on that host,
+  with the address the forge reported: commits and pushes from the attempt's
+  worktree are the member's.
+- **The worktree** is `worktrees/<attempt>`, a new branch at the base commit,
+  after a fetch. An existing worktree for the attempt, a base the repository
+  lacks, or a branch git refuses stops the command.
+- Only https clone URLs are taken: the member's credential is an https
+  token. Until the attempt carries its repository (354c-1b), the repository,
+  base and branch are given as flags.
+
 ### Reading the inbox: `aicrew-agent inbox`
 
 Offers, acceptances, submissions, stops and other lifecycle messages reach

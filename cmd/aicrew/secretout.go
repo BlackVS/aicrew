@@ -86,16 +86,17 @@ func openSecretOutput(path string, stdout io.Writer) (*secretOutput, error) {
 }
 
 // write writes the secret, and syncs and closes the file. A file that could
-// not be written is removed. Standard output is never synced: on Linux,
-// fsync of a pipe fails with EINVAL after the write has succeeded, which
-// would revoke a secret that was delivered.
+// not be written is removed. Only a regular file is synced, never standard
+// output: on Linux, fsync of a pipe fails with EINVAL after the write has
+// succeeded, which would revoke a secret that was delivered, and on Windows
+// it blocks until the reader has drained the pipe.
 func (o *secretOutput) write(secret string) error {
 	if o.file == nil {
 		return writeSecret(o.stdout, secret)
 	}
 	err := writeSecret(o.file, secret)
 	if err == nil {
-		err = o.file.Sync()
+		err = syncRegular(o.file)
 	}
 	if err := errors.Join(err, o.file.Close()); err != nil {
 		os.Remove(o.path)
@@ -119,4 +120,17 @@ func (o *secretOutput) info(stderr io.Writer) io.Writer {
 		return stderr
 	}
 	return o.stdout
+}
+
+// syncRegular syncs f when it is a regular file, and does nothing for a
+// pipe, a terminal or a device.
+func syncRegular(f *os.File) error {
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil
+	}
+	return f.Sync()
 }

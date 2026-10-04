@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -146,5 +148,34 @@ func TestCredentialOutputRealPipe(t *testing.T) {
 	}
 	if hub, err := authenticate(t, s, string(out)); err != nil || hub != "hub-a" {
 		t.Fatalf("the piped bearer authenticates as %q, %v", hub, err)
+	}
+}
+
+// The built client delivers --output - through a real pipe to another
+// process: the value arrives whole, the exit code is 0 and nothing is
+// revoked.
+func TestCredentialOutputPipedProcess(t *testing.T) {
+	s := serve(t)
+	bin := filepath.Join(t.TempDir(), "aicrew")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build the client: %v\n%s", err, out)
+	}
+	cmd := exec.Command(bin, "hub-credential", "issue", "--hub", "hub-a", "--output", "-")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil || strings.Contains(stderr.String(), "revoked") || strings.Count(string(out), "\n") != 1 {
+		t.Fatalf("the client into a pipe: %v %q %s", err, out, stderr.String())
+	}
+	if hub, err := authenticate(t, s, string(out)); err != nil || hub != "hub-a" {
+		t.Fatalf("the piped bearer authenticates as %q, %v", hub, err)
+	}
+	var v credentialView
+	if err := json.Unmarshal(stderr.Bytes(), &v); err != nil || v.HubID != "hub-a" || !v.Active {
+		t.Fatalf("metadata on stderr: %s (%v)", stderr.String(), err)
 	}
 }

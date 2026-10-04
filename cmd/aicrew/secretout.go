@@ -58,13 +58,8 @@ var isTerminal = func(w io.Writer) bool {
 
 // writeSecret writes a secret and its newline; tests replace it to fail.
 var writeSecret = func(w io.Writer, secret string) error {
-	if _, err := io.WriteString(w, secret+"\n"); err != nil {
-		return err
-	}
-	if f, ok := w.(*os.File); ok {
-		return f.Sync()
-	}
-	return nil
+	_, err := io.WriteString(w, secret+"\n")
+	return err
 }
 
 // secretOutput is where one command writes the one secret it reveals.
@@ -90,13 +85,19 @@ func openSecretOutput(path string, stdout io.Writer) (*secretOutput, error) {
 	return &secretOutput{path: path, file: f, stdout: stdout}, nil
 }
 
-// write writes the secret and closes the file. A file that could not be
-// written is removed.
+// write writes the secret, and syncs and closes the file. A file that could
+// not be written is removed. Standard output is never synced: on Linux,
+// fsync of a pipe fails with EINVAL after the write has succeeded, which
+// would revoke a secret that was delivered.
 func (o *secretOutput) write(secret string) error {
 	if o.file == nil {
 		return writeSecret(o.stdout, secret)
 	}
-	if err := errors.Join(writeSecret(o.file, secret), o.file.Close()); err != nil {
+	err := writeSecret(o.file, secret)
+	if err == nil {
+		err = o.file.Sync()
+	}
+	if err := errors.Join(err, o.file.Close()); err != nil {
 		os.Remove(o.path)
 		return err
 	}

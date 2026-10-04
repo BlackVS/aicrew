@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,5 +118,33 @@ func TestTeamName(t *testing.T) {
 	}
 	if _, err := os.Stat(code + "2"); err == nil {
 		t.Fatal("an issue for an unknown team created its output file")
+	}
+}
+
+// --output - delivers through a real pipe of the operating system, not only
+// a buffer: on Linux, syncing a pipe fails after a successful write, and a
+// sync there would revoke a delivered secret.
+func TestCredentialOutputRealPipe(t *testing.T) {
+	s := serve(t)
+	onTerminal(t, false)
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan []byte, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		got <- b
+	}()
+	var stderr bytes.Buffer
+	code := run(context.Background(), []string{"hub-credential", "issue", "--hub", "hub-a", "--output", "-"}, w, &stderr)
+	w.Close()
+	out := <-got
+	r.Close()
+	if code != 0 || strings.Contains(stderr.String(), "revoked") {
+		t.Fatalf("issue into a pipe: %d %s", code, stderr.String())
+	}
+	if hub, err := authenticate(t, s, string(out)); err != nil || hub != "hub-a" {
+		t.Fatalf("the piped bearer authenticates as %q, %v", hub, err)
 	}
 }

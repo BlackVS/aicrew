@@ -2,18 +2,18 @@
 // needs no operator authority: it proves the agent's aimem identity and
 // keeps the agent's team session through aicrewd's client session API.
 //
-//	aicrew-agent run -client claude|opencode -home DIR [-- ARGS]
+//	aicrew-agent run --client claude|opencode --home DIR [-- ARGS]
 //	                                        run the client in the team session, then leave
-//	aicrew-agent session start  -home DIR   enter or resume, then keep the session until interrupted
-//	aicrew-agent session status -home DIR   show the recorded session, without secrets
-//	aicrew-agent session leave  -home DIR   prove afresh, resume and leave
-//	aicrew-agent step OP [-home DIR] [-attempt ID] [-task ID] [-body JSON|-]
+//	aicrew-agent session start  --home DIR   enter or resume, then keep the session until interrupted
+//	aicrew-agent session status --home DIR   show the recorded session, without secrets
+//	aicrew-agent session leave  --home DIR   prove afresh, resume and leave
+//	aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
 //	                                        ask the running launcher for a step
-//	aicrew-agent join -label LABEL [-home DIR] -url URL -tls-trust-mode M -tls-trust-value V -aimem-hub NAME -client C
+//	aicrew-agent join --label LABEL [--home DIR] --url URL --tls-trust-mode M --tls-trust-value V --aimem-hub NAME --client C
 //	                                        redeem an invitation and prepare the agent home
-//	aicrew-agent check (-home DIR | -label LABEL) [-client C]
+//	aicrew-agent check (--home DIR | --label LABEL) [--client C]
 //	                                        check dependencies and the client wiring
-//	aicrew-agent version [-json]            report this build
+//	aicrew-agent version [--json]            report this build
 //
 // The configuration is the "aicrew" section of <DIR>/agent.json.
 package main
@@ -42,15 +42,15 @@ const (
 	exitWorkKept = 3 // the session was kept: the member has open work
 )
 
-const usage = `usage: aicrew-agent session start|status|leave -home DIR
-       aicrew-agent run -client claude|opencode -home DIR [-- CLIENT ARGS]
-       aicrew-agent step OP [-home DIR] [-attempt ID] [-task ID] [-body JSON|-]
-       aicrew-agent inbox [-home DIR] [-limit N] [-ack ID,ID...] [-json]
-       aicrew-agent join -label LABEL [-home DIR] -url URL -tls-trust-mode M -tls-trust-value V -aimem-hub NAME -client C
-       aicrew-agent check (-home DIR | -label LABEL) [-client C] [-json]
-       aicrew-agent version [-json]`
+const usage = `usage: aicrew-agent session start|status|leave --home DIR
+       aicrew-agent run --client claude|opencode --home DIR [-- CLIENT ARGS]
+       aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
+       aicrew-agent inbox [--home DIR] [--limit N] [--ack ID,ID...] [--json]
+       aicrew-agent join --label LABEL [--home DIR] --url URL --tls-trust-mode M --tls-trust-value V --aimem-hub NAME --client C
+       aicrew-agent check (--home DIR | --label LABEL) [--client C] [--json]
+       aicrew-agent version [--json]`
 
-// clients are the agent clients run can start, by the name -client takes.
+// clients are the agent clients run can start, by the name --client takes.
 var clients = map[string]bool{"claude": true, "opencode": true}
 
 // runClient starts the agent's team session, runs the client in it and

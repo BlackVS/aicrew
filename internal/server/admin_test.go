@@ -72,8 +72,8 @@ func TestAdminRefusesEveryOtherCredential(t *testing.T) {
 	}
 	wrong, _ := optoken.Generate()
 	routes := adminRoutes(e.srv)
-	if len(routes) != 12 {
-		t.Fatalf("%d operator routes, want 12", len(routes))
+	if len(routes) != 16 { // 12, and the four credential routes under their names before 0.3.0
+		t.Fatalf("%d operator routes, want 16", len(routes))
 	}
 	before, _ := e.store.ListTeams(context.Background())
 	for _, cred := range []struct{ name, token string }{{"none", ""}, {"wrong", wrong},
@@ -185,6 +185,26 @@ func TestAdminOperations(t *testing.T) {
 		t.Fatalf("credential revoke: %d %s", got.status, got.raw)
 	}
 	alive("the credential operations")
+
+	// The routes' names before 0.3.0 serve the same operations for one release.
+	var legacy opapi.Credential
+	if got := e.admin(t, http.MethodPost, opapi.LegacyCredentialsPath, tok, opapi.CredentialRequest{HubID: "hub-l"}, &legacy); got.status != http.StatusCreated ||
+		legacy.Bearer == "" || !legacy.Active {
+		t.Fatalf("legacy credential issue: %d %s", got.status, got.raw)
+	}
+	var legacyRotated opapi.Credential
+	if got := e.admin(t, http.MethodPost, opapi.LegacyCredentialRotatePath, tok, opapi.CredentialRequest{HubID: "hub-l"}, &legacyRotated); got.status != http.StatusCreated ||
+		legacyRotated.Replaces != legacy.ID {
+		t.Fatalf("legacy credential rotate: %d %s", got.status, got.raw)
+	}
+	var legacyList []opapi.Credential
+	if got := e.admin(t, http.MethodGet, opapi.LegacyCredentialsPath+"?hub=hub-l", tok, nil, &legacyList); got.status != http.StatusOK || len(legacyList) != 2 {
+		t.Fatalf("legacy credential list: %d %s", got.status, got.raw)
+	}
+	if got := e.admin(t, http.MethodPost, opapi.LegacyCredentialRevokePath, tok, opapi.IDRequest{ID: legacy.ID}, &revoked); got.status != http.StatusOK || revoked.Active {
+		t.Fatalf("legacy credential revoke: %d %s", got.status, got.raw)
+	}
+	alive("the legacy credential routes")
 
 	// Invitations: the code is answered once and redeemable.
 	var inv opapi.Invitation

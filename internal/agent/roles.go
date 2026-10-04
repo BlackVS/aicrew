@@ -47,35 +47,35 @@ var guideRoles = []guideRole{
 				"revision in aimem; `process` is the project's selected process (`aimem process show`), and " +
 				"`instruction_digest` its digest (see \"The instruction digest\" above). The launcher reads the task's dependencies itself and " +
 				"refuses an offer while any is not DONE."},
-			{"withdraw", "-attempt ATTEMPT_ID -task TASK_ID", "", "Release an offer that was declined, expired or is no " +
+			{"withdraw", "--attempt ATTEMPT_ID --task TASK_ID", "", "Release an offer that was declined, expired or is no " +
 				"longer wanted, before it was accepted."},
-			{"review", "-attempt ATTEMPT_ID", `{"result_seq": 1, "decision": "accept"}`, "Decide on the worker's latest " +
+			{"review", "--attempt ATTEMPT_ID", `{"result_seq": 1, "decision": "accept"}`, "Decide on the worker's latest " +
 				"submitted result: `accept`, or `rework` to send it back."},
-			{"confirm-delivery", "-attempt ATTEMPT_ID", `{"result_seq": 1, "evidence": [` +
+			{"confirm-delivery", "--attempt ATTEMPT_ID", `{"result_seq": 1, "evidence": [` +
 				`{"kind": "reviewed_head", "ref": "REVIEW_URL"}, {"kind": "human_merge", "ref": "MERGE_COMMIT_URL"}, ` +
 				`{"kind": "post_merge_ci", "ref": "CI_RUN_URL"}]}`, "After a person merged the accepted result, " +
 				"record the evidence the project's process requires, each kind with its link."},
-			{"finalize", "-attempt ATTEMPT_ID -task TASK_ID", `{"result_seq": 1}`, "Finalize the accepted, delivered " +
+			{"finalize", "--attempt ATTEMPT_ID --task TASK_ID", `{"result_seq": 1}`, "Finalize the accepted, delivered " +
 				"result as DONE, if the worker has not."},
-			{"stop", "-attempt ATTEMPT_ID", `{"reason": "Priorities changed; the parser work waits."}`, "Ask the " +
+			{"stop", "--attempt ATTEMPT_ID", `{"reason": "Priorities changed; the parser work waits."}`, "Ask the " +
 				"worker to stop a running attempt. The worker confirms and releases the task."},
 		}},
 	{Role: "worker", Intro: "You take the tasks offered to you: you accept or decline them, do the work in your own " +
 		"worktree, submit the result, and finalize it once its delivery is confirmed.",
 		Steps: []guideStep{
-			{"accept", "-attempt ATTEMPT_ID -task TASK_ID", `{"instruction_digest": "sha256:DIGEST"}`, "Accept an " +
+			{"accept", "--attempt ATTEMPT_ID --task TASK_ID", `{"instruction_digest": "sha256:DIGEST"}`, "Accept an " +
 				"offer from your inbox. Compute the digest yourself from the pin the offer names (see " +
 				"\"The instruction digest\" above); it must " +
 				"equal the offer's. Then start your worktree from the offer's `base_commit` on its `branch`."},
-			{"decline", "-attempt ATTEMPT_ID", "", "Decline an offer you cannot take, for example when the pinned " +
+			{"decline", "--attempt ATTEMPT_ID", "", "Decline an offer you cannot take, for example when the pinned " +
 				"process or its required skills are not available to you."},
-			{"work", "-attempt ATTEMPT_ID -task TASK_ID", `{"intent": "submit", "detail": "RESULT_URL"}`, "Report " +
+			{"work", "--attempt ATTEMPT_ID --task TASK_ID", `{"intent": "submit", "detail": "RESULT_URL"}`, "Report " +
 				"progress: `submit` with the result's link (a pull request), `block` with the reason as `detail`, " +
 				"or `resume` after a block."},
-			{"finalize", "-attempt ATTEMPT_ID -task TASK_ID", `{"result_seq": 1}`, "Finalize your accepted result " +
+			{"finalize", "--attempt ATTEMPT_ID --task TASK_ID", `{"result_seq": 1}`, "Finalize your accepted result " +
 				"as DONE once the coordinator confirmed its delivery."},
-			{"confirm-stop", "-attempt ATTEMPT_ID", "", "Confirm that you stopped, after the coordinator asked."},
-			{"release", "-attempt ATTEMPT_ID -task TASK_ID", `{"target": "BLOCKED", "blocker": "Waiting on the schema decision."}`,
+			{"confirm-stop", "--attempt ATTEMPT_ID", "", "Confirm that you stopped, after the coordinator asked."},
+			{"release", "--attempt ATTEMPT_ID --task TASK_ID", `{"target": "BLOCKED", "blocker": "Waiting on the schema decision."}`,
 				"After confirming a stop, release the task: `READY`, or `BLOCKED` with a blocker."},
 		}},
 	{Role: "independent", Intro: "You choose your own tasks in the team's projects: you claim one, then work and " +
@@ -89,7 +89,7 @@ var guideRoles = []guideRole{
 
 // commonSteps are every member's.
 var commonSteps = []guideStep{
-	{"inbox", "", "", "Read your oldest unacknowledged messages. `aicrew-agent inbox -ack ID,ID` acknowledges " +
+	{"inbox", "", "", "Read your oldest unacknowledged messages. `aicrew-agent inbox --ack ID,ID` acknowledges " +
 		"the ones you handled."},
 	{"pending", "", "", "List the steps your launcher recorded and has not settled."},
 	{"recover", "", "", "Finish the recorded steps after a failure or a restart."},
@@ -135,7 +135,7 @@ func stepLine(s guideStep) string {
 	if s.Body == "" {
 		return fmt.Sprintf("- **%s**: %s\n\n  ```sh\n  %s\n  ```\n", s.Op, s.What, cmd)
 	}
-	return fmt.Sprintf("- **%s**: %s\n\n  ```sh\n  %s -body '%s'\n  ```\n", s.Op, s.What, cmd,
+	return fmt.Sprintf("- **%s**: %s\n\n  ```sh\n  %s --body '%s'\n  ```\n", s.Op, s.What, cmd,
 		strings.ReplaceAll(s.Body, "\n", ""))
 }
 

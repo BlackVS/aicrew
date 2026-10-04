@@ -181,7 +181,7 @@ func TestCheckCarrierMismatch(t *testing.T) {
 		e := setupCheck(t, readyTools, "aimem", "claude")
 		e.installSkills(t, "1.26.1", "oh-code-review")
 		os.Remove(filepath.Join(e.home, ".claude", "settings.json"))
-		if rep := e.check(t, "claude"); rep.Reason != "carrier_mismatch" || !hasInstruction(rep, "aicrew-agent join -home") {
+		if rep := e.check(t, "claude"); rep.Reason != "carrier_mismatch" || !hasInstruction(rep, "aicrew-agent join --home") {
 			t.Fatalf("%+v", rep)
 		}
 	})

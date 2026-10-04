@@ -291,13 +291,13 @@ Repository instructions live in each repository, not here.
    ` + "`worktrees/`" + `, created from an explicitly chosen base commit, one per
    attempt. The clones under ` + "`repos/`" + ` stay clean.
 4. **Handoff.** ` + "`docs/HANDOFF.md`" + ` is yours. It is never managed or overwritten.
-5. **Readiness.** Before work, run ` + "`aicrew-agent check -home <this directory>`" + `:
+5. **Readiness.** Before work, run ` + "`aicrew-agent check --home <this directory>`" + `:
    it checks the versions of ` + "`aimem`" + `, ai-skills and your client, and that
    your client sees aimem's MCP server and the required skills. When
    something is missing or refused, stop and ask the operator instead of
    improvising.
 6. **The launcher holds the session.** Your client is started from a
-   terminal by ` + "`aicrew-agent run -client <client> -home <this directory>`" + `,
+   terminal by ` + "`aicrew-agent run --client <client> --home <this directory>`" + `,
    which enters the team session and keeps it while the client runs. Inside
    the client, act through ` + "`aicrew-agent inbox`" + ` and ` + "`aicrew-agent step`" + `
    (` + "`check`" + ` and ` + "`session status`" + ` only read). Never run

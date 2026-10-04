@@ -72,7 +72,7 @@ func TestInboxCommand(t *testing.T) {
 
 	code, stdout, _ := runInbox(home)
 	if code != stepDone || !strings.Contains(stdout, "#4 m-1 lifecycle from agent-lead, task hub-a/pilot/task-7, attempt att-9") ||
-		!strings.Contains(stdout, "lead offered task hub-a/pilot/task-7 to builder.") || !strings.Contains(stdout, "inbox -ack") {
+		!strings.Contains(stdout, "lead offered task hub-a/pilot/task-7 to builder.") || !strings.Contains(stdout, "inbox --ack") {
 		t.Fatalf("inbox: %d %s", code, stdout)
 	}
 	code, stdout, _ = runInbox(home, "-json")

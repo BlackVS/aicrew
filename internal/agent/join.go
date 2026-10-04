@@ -76,7 +76,7 @@ type JoinDeps struct {
 	Aimem    func(command, hub, home string) JoinAimem // the home's installation
 	ReadCode func() (string, error)                    // the hidden prompt
 	// ReadToken reads the member's aimem token at a hidden prompt, for
-	// -aimem-token-file -.
+	// --aimem-token-file -.
 	ReadToken func() (string, error)
 	Out       io.Writer // the plan and progress, never a secret
 	Sleep     func(context.Context, time.Duration) error
@@ -150,7 +150,7 @@ func Join(ctx context.Context, o JoinOptions, deps JoinDeps) (JoinReport, error)
 		deps.Out = io.Discard
 	}
 	if o.Home == "" {
-		return blocked(o, "usage", "-home or -label is required"), ErrJoinUsage
+		return blocked(o, "usage", "--home or --label is required"), ErrJoinUsage
 	}
 	if abs, err := filepath.Abs(o.Home); err == nil {
 		o.Home = abs
@@ -161,7 +161,7 @@ func Join(ctx context.Context, o JoinOptions, deps JoinDeps) (JoinReport, error)
 	}
 	if v, ok := doc.layout(); ok && v != LayoutVersion {
 		return blocked(o, "layout_unsupported", fmt.Sprintf("agent.json has layout version %v; this aicrew-agent "+
-			"creates and understands version %d and migrates nothing. Use a matching aicrew-agent or a new -home.",
+			"creates and understands version %d and migrates nothing. Use a matching aicrew-agent or a new --home.",
 			string(doc.top["layout"]), LayoutVersion)), nil
 	}
 	j := &joiner{o: o, deps: deps, doc: doc}
@@ -211,10 +211,10 @@ func (j *joiner) options() error {
 		o.Label = str(j.doc.top, "label")
 	}
 	if !labelShape.MatchString(o.Label) {
-		return errors.New("-label must be 1 to 32 lowercase letters, digits and '-'")
+		return errors.New("--label must be 1 to 32 lowercase letters, digits and '-'")
 	}
 	if o.AimemHub != "" && !aimemHubShape.MatchString(o.AimemHub) {
-		return errors.New("-aimem-hub must be an aimem hub name: lowercase letters, digits and '-'")
+		return errors.New("--aimem-hub must be an aimem hub name: lowercase letters, digits and '-'")
 	}
 	if _, err := selectClients(o.Clients, j.doc); err != nil {
 		return err
@@ -226,15 +226,15 @@ func (j *joiner) options() error {
 		return nil // refresh checks the flags against the recorded binding
 	}
 	if len(o.Clients) == 0 && len(j.doc.clients()) == 0 {
-		return errors.New("-client claude or -client opencode is required to join: the client this home is for")
+		return errors.New("--client claude or --client opencode is required to join: the client this home is for")
 	}
 	if o.URL == "" || o.Trust.Mode == "" || o.AimemHub == "" {
-		return errors.New("-url, -tls-trust-mode, -tls-trust-value and -aimem-hub are required to join")
+		return errors.New("--url, --tls-trust-mode, --tls-trust-value and --aimem-hub are required to join")
 	}
 	u, err := url.Parse(o.URL)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
 		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return errors.New("-url must be an https origin without credentials, path, query or fragment")
+		return errors.New("--url must be an https origin without credentials, path, query or fragment")
 	}
 	o.URL = strings.TrimSuffix(o.URL, "/")
 	if err := o.Trust.Check(u.Hostname()); err != nil {
@@ -256,7 +256,7 @@ func (j *joiner) otherBinding() (JoinReport, bool) {
 	} {
 		if c.given != "" && c.given != c.recorded {
 			return blocked(o, "home_linked", fmt.Sprintf("this home is already linked to agent %s in team %s "+
-				"with a different %s; one home serves one team: use a new -home to join another",
+				"with a different %s; one home serves one team: use a new --home to join another",
 				str(a, "agent_id"), str(a, "team_id"), c.flag)), true
 		}
 	}
@@ -405,7 +405,7 @@ var stops = map[string]string{
 	"role_conflict": "the agent is already a member of this team with another role; role changes are " +
 		"operator operations: ask the operator",
 	"identity_mismatch": "the proven aimem identity is not the one the invitation is for (another hub or " +
-		"user, or the agent is linked to another user): check -aimem-hub, then ask the operator",
+		"user, or the agent is linked to another user): check --aimem-hub, then ask the operator",
 	"work_outstanding": "the agent has outstanding work, so it cannot be rebound yet: finish or release " +
 		"it, then rerun",
 	"credential_inactive": "the aimem hub no longer accepts this installation's credential: ask your aimem " +
@@ -570,7 +570,7 @@ func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error)
 	}
 	rep := JoinReport{Status: JoinReady, Home: o.Home, AgentID: str(j.doc.aicrew, "agent_id"),
 		TeamID: str(j.doc.aicrew, "team_id"), Redeemed: redeemed, Changes: plan,
-		Next: fmt.Sprintf("aicrew-agent session start -home %s", quoteArg(o.Home))}
+		Next: fmt.Sprintf("aicrew-agent session start --home %s", quoteArg(o.Home))}
 	if replaced {
 		rep.Status = JoinRestartRequired
 		rep.Instruction = "managed guidance changed: restart any client already open in this home"

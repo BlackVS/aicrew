@@ -66,8 +66,8 @@ Every listener is on 127.0.0.1.
      section, the order the pilot's deployment follows. The operator
      administers it with `aicrew` through the operator API while it runs.
    - The team with its project, created with `aicrew team create`.
-   - The hub's outbound credential, issued with `aicrew
-     introspection-credential issue`.
+   - The hub's outbound credential, issued with `aicrew hub-credential
+     issue`.
    - One invitation per member, issued with `aicrew invitation issue`.
    - aicrewd then restarts with its aimem section, pointing at the hub
      through the fault proxy.

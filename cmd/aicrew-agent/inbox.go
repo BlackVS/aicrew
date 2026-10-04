@@ -12,11 +12,11 @@ import (
 	"github.com/BlackVS/aicrew/internal/agent"
 )
 
-const inboxUsage = `usage: aicrew-agent inbox [-home DIR] [-limit N] [-ack ID,ID...] [-json]
+const inboxUsage = `usage: aicrew-agent inbox [--home DIR] [--limit N] [--ack ID,ID...] [--json]
   Reads the member's oldest unacknowledged messages through the launcher, or
-  with -ack acknowledges the messages it delivered. A message stays in every
+  with --ack acknowledges the messages it delivered. A message stays in every
   later read until it is acknowledged.
-  -home defaults to $` + agent.HomeEnv + `, which the launcher gives its client.`
+  --home defaults to $` + agent.HomeEnv + `, which the launcher gives its client.`
 
 // inboxMessage is what the command prints of one delivered message.
 type inboxMessage struct {
@@ -96,6 +96,6 @@ func inbox(ctx context.Context, args []string, stdout, stderr io.Writer, getenv 
 		}
 		fmt.Fprintf(stdout, " (delivered %d times)\n  %s\n", m.Deliveries, m.Text)
 	}
-	fmt.Fprintln(stdout, "Acknowledge what you handled: aicrew-agent inbox -ack ID,ID")
+	fmt.Fprintln(stdout, "Acknowledge what you handled: aicrew-agent inbox --ack ID,ID")
 	return stepDone
 }

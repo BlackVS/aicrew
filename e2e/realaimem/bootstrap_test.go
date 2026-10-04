@@ -123,8 +123,8 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 		t.Fatalf("aicrew team create printed no team: %v", err)
 	}
 	h.teamID = team.ID
-	h.must(opEnv, nil, filepath.Join(h.bin, "aicrew"), "introspection-credential", "issue",
-		"-hub", h.hubID, "-secret-file", introFile)
+	h.must(opEnv, nil, filepath.Join(h.bin, "aicrew"), "hub-credential", "issue",
+		"-hub", h.hubID, "--output", introFile)
 	h.knowSecretFile(introFile)
 
 	// 6. aicrew's aimem credentials.
@@ -254,7 +254,7 @@ func (h *harness) prepareMember(sp memberSpec, aEnv []string) *member {
 	codeFile := filepath.Join(h.mkdir(filepath.Join(h.root, "codes")), name+".code")
 	h.must(aEnv, nil, filepath.Join(h.bin, "aicrew"), "invitation", "issue",
 		"-team", h.teamID, "-role", role, "-hub", h.hubID, "-label", name,
-		"-expect-user", user.ID, "-code-file", codeFile)
+		"-expect-user", user.ID, "--output", codeFile)
 	code, err := os.ReadFile(codeFile)
 	if err != nil {
 		t.Fatal(err)

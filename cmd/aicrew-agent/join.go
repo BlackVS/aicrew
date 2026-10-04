@@ -13,14 +13,14 @@ import (
 	"github.com/BlackVS/aicrew/internal/agent"
 )
 
-const joinUsage = `usage: aicrew-agent join -label LABEL [-home DIR] -url https://HOST[:PORT]
-         -tls-trust-mode ca_dns|spki_sha256 -tls-trust-value VALUE -aimem-hub NAME
-         -client claude|opencode[,…] [-aimem-command PATH] [-json]
-         [-aimem-url https://HUB -aimem-token-file PATH|- [-aimem-ca-file PATH]]
+const joinUsage = `usage: aicrew-agent join --label LABEL [--home DIR] --url https://HOST[:PORT]
+         --tls-trust-mode ca_dns|spki_sha256 --tls-trust-value VALUE --aimem-hub NAME
+         --client claude|opencode[,…] [--aimem-command PATH] [--json]
+         [--aimem-url https://HUB --aimem-token-file PATH|- [--aimem-ca-file PATH]]
        The invitation code is read at a hidden prompt. The -aimem flags
        provision the home's aimem installation on the first run, the token
        read from its owner-only file or, with -, at a hidden prompt. On a linked home, only
-       -home (or -label) is needed: the run refreshes the home's files and
+       --home (or --label) is needed: the run refreshes the home's files and
        checks its dependencies and clients.`
 
 // joinDeps builds the bootstrap's collaborators on the real terminal,

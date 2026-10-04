@@ -597,10 +597,46 @@ bin/aicrew-agent join --home ~/aicrew/agents/builder    # rerun: refresh and che
   or failed, 2 on usage. A blocked check leaves the home linked: rerun
   after following its instructions. It opens no session: it prints the
   `session start` command.
-- It writes no secret of its own. `creds/` is created owner-only and holds
-  only the hub's CA copy when `--aimem-ca-file` is given. `aimem/`
-  is created owner-only, or restricted if the operator's provisioning created
-  it; the individual aimem credential stays there, in aimem's own storage.
+- **The member's own forge credentials** (`docs/proposals/PILOT-1-FOLLOWUPS.md`,
+  3.1 to 3.4): each `--cred HOST=PATH` gives the member's token for one forge
+  host, from an owner-only file, or with `--cred HOST=-` from standard input
+  (a hidden prompt on a terminal; at most one `-`). It is taken on the first
+  join and on a linked home's rerun:
+
+  ```sh
+  bin/aicrew-agent join --home ~/aicrew/agents/builder --cred github.com=github.token
+  ```
+
+  - **Verified first.** `join` asks the forge who the token authenticates as
+    (a read-only call) before writing anything. GitHub, Gitea and GitLab are
+    known: github.com is GitHub and gitlab.com is GitLab; another host is
+    told apart by public endpoints that need no token (Gitea's
+    `/api/v1/version`, then GitHub Enterprise's `/api/v3/meta`), otherwise
+    GitLab. A token is never sent to another host, and a redirect to one is
+    refused.
+  - **Where it goes.** The token is written owner-only to
+    `creds/<service>.<account>.<purpose>`, the WORKSPACE credential
+    reference: the host with `.` and `:` written `-`
+    (`gitea.example.org:3000` is `gitea-example-org-3000`), the account the
+    forge reported, encoded the same way, and the purpose `repo-write`. Two
+    hosts are two files, and two hosts whose encoded names collide are
+    refused by name.
+  - **What `agent.json` records.** Its `forge` section names, per host, the
+    dialect, account, purpose, file and the commit name and address the
+    forge reports. It never holds a token; the file is found through this
+    record, never by parsing its name.
+  - **What the report says.** Each host is `provisioned`, `unchanged`,
+    `unreachable` (not written; rerun when the host answers) or `refused`
+    (the forge rejected the token, or the name collides; not written). The
+    other hosts proceed either way. A rotated token rewrites the same file; a
+    token for another account moves to a new file and removes the old one.
+  - A `--cred` value that names no file is refused without being quoted: it
+    takes a file or `-`, never a token.
+- It writes no other secret of its own. `creds/` is created owner-only and
+  holds the forge credentials and the hub's CA copy when `--aimem-ca-file`
+  is given. `aimem/` is created owner-only, or restricted if the operator's
+  provisioning created it; the individual aimem credential stays there, in
+  aimem's own storage.
 - It writes the managed `.claude/settings.json` (`env`: the home's
   `AIMEM_STATE_DIR` and `AIMEM_SOCKET`, absolute), under the same digest
   rule as the guidance files.
@@ -679,6 +715,14 @@ member's user-level skills under it. It reports:
 
   OpenCode 1.x refusing data that OpenCode 2 wrote is reported, not
   resolved.
+- **Forge credentials.** Every credential `agent.json` records is checked
+  with the forge's read-only "who am I" and listed as a table: host,
+  account, purpose and state, which is `verified`, `missing` (the file is
+  gone or unreadable), `refused` (revoked, expired, or now another account)
+  or `unreachable`. A credential that is not verified is a notice with the
+  `join --cred` command that fixes it, never a blocker: it narrows the work
+  the member can take on that host, while the home stays usable. Only the
+  aimem credential blocks.
 
 `version` reports the build: a release build stamps
 `github.com/BlackVS/aicrew/internal/version.Override` with `-ldflags -X`;
@@ -697,7 +741,16 @@ aicrew-agent step release --attempt A1 --task T1 --body '{"target":"BLOCKED","bl
 aicrew-agent step confirm-stop --attempt A1
 aicrew-agent step pending
 aicrew-agent step recover
+aicrew-agent step offer --repository https://github.com/team/app --body - < offer.json
 ```
+
+`--repository CLONE_URL`, on `offer` and `claim` only, fills the body's
+`base_commit` when it has none: the head of the repository's default
+branch, read through the forge with the home's own credential for that host
+(`join --cred`). It prints what it resolved on stderr. A body that names
+its own `base_commit` keeps it, and the `branch` is always the body's. A
+host the home holds no credential for is refused with the `join --cred`
+command that fixes it.
 
 - **Operations.** The reservation steps `offer`, `claim`, `accept`,
   `withdraw`, `work`, `release` and `finalize` take the begin route's body

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,11 +18,16 @@ const joinUsage = `usage: aicrew-agent join --label LABEL [--home DIR] --url htt
          --tls-trust-mode ca_dns|spki_sha256 --tls-trust-value VALUE --aimem-hub NAME
          --client claude|opencode[,…] [--aimem-command PATH] [--json]
          [--aimem-url https://HUB --aimem-token-file PATH|- [--aimem-ca-file PATH]]
-       The invitation code is read at a hidden prompt. The -aimem flags
+         [--cred HOST=PATH|- ...]
+       The invitation code is read at a hidden prompt. The --aimem flags
        provision the home's aimem installation on the first run, the token
-       read from its owner-only file or, with -, at a hidden prompt. On a linked home, only
-       --home (or --label) is needed: the run refreshes the home's files and
-       checks its dependencies and clients.`
+       read from its owner-only file or, with -, at a hidden prompt. Each
+       --cred gives the member's own token for one forge host, from its
+       owner-only file or, with -, from standard input (a hidden prompt on a
+       terminal); join verifies it with the forge and writes it to creds/.
+       On a linked home, only --home (or --label) is needed: the run
+       refreshes the home's files, takes any --cred, and checks its
+       dependencies and clients.`
 
 // joinDeps builds the bootstrap's collaborators on the real terminal,
 // aicrewd and aimem.
@@ -33,8 +39,46 @@ func joinDeps(stderr io.Writer) agent.JoinDeps {
 		},
 		ReadCode:  func() (string, error) { return agent.ReadHidden(os.Stdin, stderr, "Invitation code: ") },
 		ReadToken: func() (string, error) { return agent.ReadHidden(os.Stdin, stderr, "The member's aimem token: ") },
-		Out:       stderr,
+		ReadCred: func(host string) (string, error) {
+			if agent.IsTerminal(os.Stdin) {
+				return agent.ReadHidden(os.Stdin, stderr, "The member's token for "+host+": ")
+			}
+			return readLine(os.Stdin)
+		},
+		Out: stderr,
 	}
+}
+
+// readLine reads one line of standard input, bounded: a token piped in.
+func readLine(r io.Reader) (string, error) {
+	line, err := bufio.NewReader(io.LimitReader(r, 4096)).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	if line == "" {
+		return "", errors.New("standard input is empty")
+	}
+	return line, nil
+}
+
+// credFlags collects repeated --cred HOST=PATH|- values. A refused value
+// is reported through refused, never through the flag package's message,
+// which would quote the value: a token passed by mistake.
+type credFlags struct {
+	creds   *[]agent.ForgeCred
+	refused *error
+}
+
+func (c credFlags) String() string { return "" }
+
+func (c credFlags) Set(v string) error {
+	cred, err := agent.ParseForgeCred(v)
+	if err != nil {
+		*c.refused = err
+		return err
+	}
+	*c.creds = append(*c.creds, cred)
+	return nil
 }
 
 // join is `aicrew-agent join`. It exits 0 when the home is ready (or ready
@@ -53,9 +97,14 @@ func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.W
 	fs.StringVar(&o.AimemURL, "aimem-url", "", "")
 	fs.StringVar(&o.AimemTokenFile, "aimem-token-file", "", "")
 	fs.StringVar(&o.AimemCAFile, "aimem-ca-file", "", "")
+	var credRefused error
+	fs.Var(credFlags{&o.Creds, &credRefused}, "cred", "")
 	clients := fs.String("client", "", "")
 	asJSON := fs.Bool("json", false, "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || (o.Home == "" && o.Label == "") {
+		if credRefused != nil {
+			fmt.Fprintln(stderr, credRefused)
+		}
 		fmt.Fprintln(stderr, joinUsage)
 		return exitUsage
 	}
@@ -101,6 +150,19 @@ func printJoinReport(w io.Writer, rep agent.JoinReport) {
 	}
 	if rep.Instruction != "" {
 		fmt.Fprintf(w, "next: %s\n", rep.Instruction)
+	}
+	for _, f := range rep.Forge {
+		line := fmt.Sprintf("forge %s: %s", f.Host, f.State)
+		if f.Account != "" {
+			line += ", account " + f.Account
+		}
+		if f.File != "" {
+			line += ", creds/" + f.File
+		}
+		if f.Detail != "" {
+			line += " (" + f.Detail + ")"
+		}
+		fmt.Fprintln(w, line)
 	}
 	if rep.Check != nil {
 		printCheck(w, *rep.Check)

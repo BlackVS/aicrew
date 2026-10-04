@@ -169,12 +169,16 @@ Each credential has a stable readable reference:
 ```
 
 Each part uses lowercase letters, digits and `-`. `service` is the system
-that accepts the credential (`aimem`, `aicrew`, `github`), `account` is the
-account or hub alias at that service, and `purpose` says what it is for.
-Examples: `aimem.main-hub.agent` for the one individual aimem credential this
-installation holds per hub, and `github.example-org.repo-write` for a scoped
-forge token. The name does not change on rotation and never contains the
-model, client, secret or expiry.
+that accepts the credential (`aimem`, `aicrew`, or a forge's host with `.`
+and `:` written `-`, such as `github-com`), `account` is the account or hub
+alias at that service, encoded the same way, and `purpose` says what it is
+for. Examples: `aimem.main-hub.agent` for the one individual aimem
+credential this installation holds per hub, and
+`github-com.example-bot.repo-write` for a member's forge token on github.com
+(`docs/proposals/PILOT-1-FOLLOWUPS.md`, 3.2). A forge credential is found
+through the home's `agent.json`, never by parsing its name. The name does
+not change on rotation and never contains the model, client, secret or
+expiry.
 
 Rules:
 

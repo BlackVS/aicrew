@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/filelock"
+	"github.com/BlackVS/aicrew/internal/forge"
 	"github.com/BlackVS/aicrew/internal/version"
 )
 
@@ -36,6 +37,9 @@ type CheckOptions struct {
 	Out     io.Writer
 	// Timeout bounds each client command; zero means 90 s.
 	Timeout time.Duration
+	// Forge verifies the recorded forge credentials; nil means the real
+	// forges.
+	Forge ForgeAPI
 }
 
 // ComponentReport is one dependency's detected version against the set.
@@ -64,6 +68,7 @@ type CheckReport struct {
 	Components   []ComponentReport `json:"components"`
 	Clients      []ClientReport    `json:"clients"`
 	Wiring       []FileChange      `json:"wiring,omitempty"`
+	Forge        []ForgeCheck      `json:"forge,omitempty"`
 	Notices      []string          `json:"notices,omitempty"`
 	Instructions []string          `json:"instructions,omitempty"`
 }
@@ -195,6 +200,7 @@ func runCheck(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) 
 	doc.set(doc.top, "managed", rec)
 	c.checkInstallation(sel)
 	c.checkSkills(sel)
+	c.checkForgeCreds(ctx)
 
 	c.rep.Instructions = c.blockers
 	switch {
@@ -207,6 +213,22 @@ func runCheck(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) 
 		c.rep.Status = JoinReady
 	}
 	return c.rep, nil
+}
+
+// checkForgeCreds adds the forge table; a credential that is not verified
+// is a notice, never a blocker.
+func (c *checker) checkForgeCreds(ctx context.Context) {
+	api := c.o.Forge
+	if api == nil {
+		api = forge.NewClient()
+	}
+	c.rep.Forge = checkForge(ctx, c.o.Home, c.doc, api)
+	for _, f := range c.rep.Forge {
+		if f.State != ForgeVerified {
+			c.notice(fmt.Sprintf("forge credential for %s (%s): %s: %s; work on that host is refused "+
+				"until it is fixed, and the home stays usable", f.Host, f.Account, f.State, f.Detail))
+		}
+	}
 }
 
 func (c *checker) aimemCommand() string {

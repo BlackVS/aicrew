@@ -83,3 +83,17 @@ func TestStepExit(t *testing.T) {
 		}
 	}
 }
+
+// --repository resolves the base of an offer or a claim only, and names a
+// host the home holds no credential for before any launcher is asked.
+func TestStepRepository(t *testing.T) {
+	home := shortHome(t)
+	if code, _, stderr := runStep(home, "", "accept", "--repository", "https://github.com/team/app"); code != exitUsage ||
+		!strings.Contains(stderr, "offer or a claim only") {
+		t.Fatalf("accept with --repository: %d %q", code, stderr)
+	}
+	if code, _, stderr := runStep(home, "", "offer", "--repository", "https://github.com/team/app", "--body", "{}"); code != stepFailed ||
+		!strings.Contains(stderr, "--cred github.com=FILE") {
+		t.Fatalf("offer without a credential: %d %q", code, stderr)
+	}
+}

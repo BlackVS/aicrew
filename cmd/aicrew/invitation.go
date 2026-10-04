@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 
 	"github.com/BlackVS/aicrew/internal/opapi"
 )
@@ -28,17 +27,6 @@ const invitationUsage = `usage:
   aicrew invitation list   [--team TEAM | --team-name NAME]
   aicrew invitation revoke --id INVITATION
 ` + connUsage
-
-// isTerminal reports whether w is an interactive terminal, where no secret
-// is ever written. Tests replace it.
-var isTerminal = func(w io.Writer) bool {
-	f, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
-}
 
 // invitationView is what issue prints: metadata, never the code.
 type invitationView struct {

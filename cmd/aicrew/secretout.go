@@ -45,6 +45,17 @@ func (o *outputFlags) value(set map[string]bool, stderr io.Writer) (string, bool
 	return *o.output, true
 }
 
+// isTerminal reports whether w is an interactive terminal, where no secret
+// is ever written. Tests replace it.
+var isTerminal = func(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
 // writeSecret writes a secret and its newline; tests replace it to fail.
 var writeSecret = func(w io.Writer, secret string) error {
 	if _, err := io.WriteString(w, secret+"\n"); err != nil {

@@ -427,7 +427,7 @@ func TestInvalidUTF8Rejected(t *testing.T) {
 			return err
 		},
 		"team id argument": func() error {
-			_, err := s.SetTeamProjects(ctx, op, "p1", tm.ID+"\xfe", tm.Revision, nil)
+			_, err := s.SetTeamHub(ctx, op, "p1", tm.ID+"\xfe", "main")
 			return err
 		},
 		"operator caller id": func() error {
@@ -449,28 +449,28 @@ func TestInvalidUTF8Rejected(t *testing.T) {
 	}
 }
 
-// Multi-statement reads must see one snapshot: a team's revision and its
-// project list always belong together, even while a writer replaces them.
+// Multi-statement reads must see one snapshot: a team's grants and the
+// time of the read that recorded them always belong together, even while a
+// writer replaces them.
 func TestTeamReadsAreConsistentSnapshots(t *testing.T) {
 	s, _ := openTemp(t)
 	ctx := context.Background()
 	op := operator(t)
-	tm := mustTeam(t, s, "t0", "crew", ProjectRef{HubID: "hub-a", ProjectID: "rev-1"})
+	tm := mustTeam(t, s, "t0", "crew")
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	_ = op
 
 	done := make(chan struct{})
 	var writerErr error
 	go func() {
 		defer close(done)
-		rev := tm.Revision
 		for i := range 300 {
-			next := rev + 1
-			team, err := s.SetTeamProjects(ctx, op, fmt.Sprintf("w%d", i), tm.ID, rev,
-				[]ProjectRef{{HubID: "hub-a", ProjectID: fmt.Sprintf("rev-%d", next)}})
-			if err != nil {
+			read := TeamGrantsRead{State: GrantsEnabled, At: base.Add(time.Duration(i) * time.Second),
+				Grants: []TeamGrant{{HubID: "hub-a", ProjectID: fmt.Sprintf("rev-%d", i)}}}
+			if _, err := s.RecordTeamGrants(ctx, ReconcilerCaller(), tm.ID, read); err != nil {
 				writerErr = err
 				return
 			}
-			rev = team.Revision
 		}
 	}()
 
@@ -492,8 +492,11 @@ func TestTeamReadsAreConsistentSnapshots(t *testing.T) {
 					t.Errorf("read: %v", err)
 					return
 				}
-				want := fmt.Sprintf("rev-%d", team.Revision)
-				if len(team.Projects) != 1 || team.Projects[0].ProjectID != want {
+				if team.GrantsReadAt == nil {
+					continue
+				}
+				want := fmt.Sprintf("rev-%d", int(team.GrantsReadAt.Sub(base)/time.Second))
+				if len(team.Grants) != 1 || team.Grants[0].ProjectID != want {
 					mu.Lock()
 					mismatches++
 					mu.Unlock()
@@ -581,13 +584,13 @@ func TestListTeams(t *testing.T) {
 	if len(teams) != 2 || teams[0].ID != crewA.ID || teams[1].ID != crewB.ID {
 		t.Fatalf("teams = %+v, want crew-a then crew-b", teams)
 	}
-	if teams[0].Members != 0 || len(teams[0].Projects) != 0 {
-		t.Errorf("crew-a = %+v, want no members and no projects", teams[0])
+	if teams[0].Members != 0 || len(teams[0].Grants) != 0 {
+		t.Errorf("crew-a = %+v, want no members and no grants", teams[0])
 	}
 	if teams[1].Members != 2 {
 		t.Errorf("crew-b counts %d members, want the 2 current ones", teams[1].Members)
 	}
-	if len(teams[1].Projects) != 1 || teams[1].Projects[0] != (ProjectRef{HubID: "hub-a", ProjectID: "docs"}) {
-		t.Errorf("crew-b projects = %v", teams[1].Projects)
+	if len(teams[1].Grants) != 1 || teams[1].Grants[0].ProjectID != "docs" || teams[1].Grants[0].HubID != "hub-a" {
+		t.Errorf("crew-b grants = %v", teams[1].Grants)
 	}
 }

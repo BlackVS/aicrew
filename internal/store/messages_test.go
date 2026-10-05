@@ -402,7 +402,6 @@ func TestRecipientsAndVisibility(t *testing.T) {
 	for name, in := range map[string]NewMessage{
 		"to self":         {To: lead.agent.ID, Text: sentence(1)},
 		"to a non-member": {To: "agent-unknown", Text: sentence(1)},
-		"foreign project": {Project: &ProjectRef{HubID: "hub-a", ProjectID: "other"}, Text: sentence(1)},
 		"blank text":      {Text: " \n\t "},
 		"oversized text":  {Text: strings.Repeat("A long sentence. ", maxMessageText)},
 		"invalid UTF-8":   {Text: "The build \xff failed."},
@@ -413,28 +412,24 @@ func TestRecipientsAndVisibility(t *testing.T) {
 			t.Errorf("%s: got %v, want ErrInvalid", name, err)
 		}
 	}
+	foreign := NewMessage{SessionID: lead.sess.ID, Generation: lead.sess.Generation,
+		Project: &ProjectRef{HubID: "hub-a", ProjectID: "other"}, Text: sentence(1)}
+	if _, err := s.SendMessage(ctx, lead.caller, "bad-foreign", foreign); !errors.Is(err, ErrProjectNotGranted) {
+		t.Errorf("a project the hub does not grant: got %v", err)
+	}
 
-	// A project-scoped message disappears from reads while its project is
-	// out of the team's set, and comes back with it.
+	// A project-scoped message disappears from reads while the hub does not
+	// grant the team its project, and comes back with the grant.
 	docs := ProjectRef{HubID: "hub-a", ProjectID: "docs"}
 	scoped := send(t, s, lead, "scoped", NewMessage{Project: &docs, Text: "The documentation freeze begins tomorrow."})
 	if got := ids(read(t, s, tester, 10)); !reflect.DeepEqual(got, []string{team.ID, scoped.ID}) {
 		t.Fatalf("tester reads %v before the project leaves", got)
 	}
-	cur, err := s.GetTeam(ctx, tm.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cur, err = s.SetTeamProjects(ctx, operator(t), "projects-1", tm.ID, cur.Revision, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	grant(t, s, tm.ID)
 	if got := ids(read(t, s, tester, 10)); !reflect.DeepEqual(got, []string{team.ID}) {
-		t.Errorf("tester reads %v after the project left, want the team message only", got)
+		t.Errorf("tester reads %v after the grant was revoked, want the team message only", got)
 	}
-	if _, err := s.SetTeamProjects(ctx, operator(t), "projects-2", tm.ID, cur.Revision, []ProjectRef{docs}); err != nil {
-		t.Fatal(err)
-	}
+	grant(t, s, tm.ID, docs)
 	if got := ids(read(t, s, tester, 10)); !reflect.DeepEqual(got, []string{team.ID, scoped.ID}) {
 		t.Errorf("tester reads %v after the project returned", got)
 	}

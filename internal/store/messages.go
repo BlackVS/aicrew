@@ -205,7 +205,7 @@ func (s *Store) SendMessage(ctx context.Context, c Caller, key string, in NewMes
 				return nil, err
 			}
 			if in.Project != nil {
-				if err := requireTeamProject(ctx, tx, sess.TeamID, *in.Project); err != nil {
+				if err := requireTeamGrant(ctx, tx, sess.TeamID, *in.Project); err != nil {
 					return nil, err
 				}
 			}
@@ -292,17 +292,6 @@ func activeMembersExcept(ctx context.Context, tx *sql.Tx, teamID, agentID string
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
-}
-
-func requireTeamProject(ctx context.Context, q querier, teamID string, p ProjectRef) error {
-	var one int
-	err := q.QueryRowContext(ctx,
-		`SELECT 1 FROM team_projects WHERE team_id = ? AND hub_id = ? AND project_id = ?`,
-		teamID, p.HubID, p.ProjectID).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("%w: project %s/%s is not in the team's project set", ErrInvalid, p.HubID, p.ProjectID)
-	}
-	return err
 }
 
 // insertMessage appends m to its team's log with the next sequence number.
@@ -446,8 +435,8 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 		        m.text, m.created_at, r.deliveries, r.first_delivered_at
 		 FROM message_recipients r JOIN messages m ON m.id = r.message_id
 		 WHERE r.agent_id = ? AND m.team_id = ? AND r.acknowledged_at IS NULL
-		   AND (m.project_id = '' OR EXISTS (SELECT 1 FROM team_projects p
-		        WHERE p.team_id = m.team_id AND p.hub_id = m.project_hub_id AND p.project_id = m.project_id))
+		   AND (m.project_id = '' OR EXISTS (SELECT 1 FROM team_grants g
+		        WHERE g.team_id = m.team_id AND g.hub_id = m.project_hub_id AND g.project_id = m.project_id))
 		 ORDER BY m.seq LIMIT ?`, agentID, teamID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("read inbox: %w", err)

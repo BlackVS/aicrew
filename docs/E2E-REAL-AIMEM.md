@@ -62,17 +62,19 @@ Every listener is on 127.0.0.1.
 2. **The hub, following aimem's pilot runbook:**
    - `tasks on` and `process select`;
    - aicrew registered as the identity peer, with the hub ID read back;
-   - the identity.redeem, reservation.read and team.register credentials.
+   - the identity.redeem, reservation.read, team.register and team.read
+     credentials.
 3. **aicrew.**
    - aicrewd starts with its operator credential and the hub as a named
      block of `aimem_hubs`, pointing at the hub through the fault proxy.
      The operator administers it with `aicrew` through the operator API
      while it runs.
-   - The team with its project, created with `aicrew team create --hub`:
-     aicrewd registers it on the hub (team.register), and the run fails
-     unless the team comes back `registered`.
+   - The team, created with `aicrew team create --hub`: aicrewd registers
+     it on the hub (team.register), and the run fails unless the team comes
+     back `registered`.
    - The team's grant on the hub, by the name aicrewd registered
-     (`aimem identity team grant --team-name`).
+     (`aimem identity team grant --team-name`): the team's only project
+     set, which aicrewd reads live at every offer and claim (team.read).
    - The hub's outbound credential, issued with `aicrew hub-credential
      issue`.
    - One invitation per member, issued with `aicrew invitation issue`.
@@ -120,6 +122,14 @@ no fault armed.
   - A dependency reopened between the driver's read and the claim: the
     harness's timed aimem holds the claim on a gate. aimem then refuses it,
     and aicrewd settles the offer not committed.
+- **G1. Grants.** The hub's operator revokes the team's grant
+  (`aimem identity team revoke --team-name`).
+  - The next claim is refused `project_not_granted` by aicrewd's live
+    team read.
+  - The next offer is refused before it begins: the coordinator's client
+    already cannot read the task through aimem.
+  - Nothing reaches aimem's reservation.
+  - Granted again, the offer commits.
 
 Each scenario asserts both stores: aicrew's attempts, audit and capacity,
 read-only; and aimem's tasks, holds and receipts, through admin reads.

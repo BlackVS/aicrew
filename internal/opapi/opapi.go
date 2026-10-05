@@ -22,7 +22,6 @@ const (
 	CredentialRevokePath = "/v1/admin/hub-credentials/revoke" // POST
 	TeamsPath            = "/v1/admin/teams"                  // GET list, POST create
 	TeamPath             = "/v1/admin/team"                   // GET show (?id=)
-	TeamProjectsPath     = "/v1/admin/team/projects"          // POST
 	TeamRenamePath       = "/v1/admin/team/rename"            // POST
 	TeamRegisterPath     = "/v1/admin/team/register"          // POST
 	InvitationsPath      = "/v1/admin/invitations"            // GET list (?team=), POST issue
@@ -83,21 +82,45 @@ type Credential struct {
 	Replaces   string    `json:"replaces,omitempty"`
 }
 
-// ProjectRef is a project on an aimem hub.
-type ProjectRef struct {
-	HubID     string `json:"hub_id"`
-	ProjectID string `json:"project_id"`
+// Grant is a project the team's hub grants it, with the project's
+// repository and selected process as the hub holds them.
+type Grant struct {
+	HubID      string           `json:"hub_id"`
+	ProjectID  string           `json:"project_id"`
+	Repository *GrantRepository `json:"repository,omitempty"`
+	Process    *GrantProcess    `json:"process,omitempty"`
+}
+
+// GrantRepository is a granted project's repository binding.
+type GrantRepository struct {
+	Kind   string `json:"kind"`
+	URL    string `json:"url"`
+	Host   string `json:"host,omitempty"`
+	Access string `json:"access,omitempty"`
+}
+
+// GrantProcess is a granted project's selected process pin.
+type GrantProcess struct {
+	Repo     string `json:"repo"`
+	Commit   string `json:"commit"`
+	Manifest string `json:"manifest"`
 }
 
 // Team is a team record.
 type Team struct {
-	ID                    string       `json:"id"`
-	Name                  string       `json:"name"`
-	Projects              []ProjectRef `json:"projects"`
-	Revision              int64        `json:"revision"`
-	CoordinatorGeneration int64        `json:"coordinator_generation"`
-	CreatedAt             time.Time    `json:"created_at"`
-	UpdatedAt             time.Time    `json:"updated_at"`
+	ID                    string    `json:"id"`
+	Name                  string    `json:"name"`
+	Revision              int64     `json:"revision"`
+	CoordinatorGeneration int64     `json:"coordinator_generation"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+	// Grants are the projects the team's hub grants it, as aicrewd last
+	// read them (GrantsState "enabled", "disabled" or "not_registered", at
+	// GrantsReadAt); empty before any read. Offers and claims never use
+	// this copy: each reads the hub live.
+	Grants       []Grant    `json:"grants"`
+	GrantsState  string     `json:"grants_state,omitempty"`
+	GrantsReadAt *time.Time `json:"grants_read_at,omitempty"`
 	// Hub is the alias of the team's aimem block, or "" for a team created
 	// before teams named their hub.
 	Hub string `json:"hub,omitempty"`
@@ -123,17 +146,16 @@ type TeamSummary struct {
 
 // TeamRequest creates a team.
 type TeamRequest struct {
-	Name     string       `json:"name"`
-	Projects []ProjectRef `json:"projects,omitempty"`
+	Name string `json:"name"`
 	// Hub is the alias of an aimem block of aicrewd.json.
 	Hub string `json:"hub,omitempty"`
 }
 
-// TeamProjectsRequest replaces a team's intended projects.
-type TeamProjectsRequest struct {
-	TeamID           string       `json:"team_id"`
-	ExpectedRevision int64        `json:"expected_revision"`
-	Projects         []ProjectRef `json:"projects"`
+// TeamRegisterRequest registers a team on its hub again. Hub names the hub
+// of a team created before teams named one; a team keeps its hub.
+type TeamRegisterRequest struct {
+	ID  string `json:"id"`
+	Hub string `json:"hub,omitempty"`
 }
 
 // TeamRenameRequest renames a team.

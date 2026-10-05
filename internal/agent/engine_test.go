@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/hubteams"
 	"github.com/BlackVS/aicrew/internal/optoken"
 	"github.com/BlackVS/aicrew/internal/server"
 	"github.com/BlackVS/aicrew/internal/store"
@@ -70,6 +71,19 @@ type crewOptions struct {
 	shortHome bool
 }
 
+// grantingHub is the team's hub: it grants every team project-t.
+type grantingHub struct{}
+
+func (grantingHub) CanRegister() bool { return false }
+func (grantingHub) CanRead() bool     { return true }
+func (grantingHub) Register(context.Context, string, string) (hubteams.Registration, error) {
+	return hubteams.Registration{}, errors.New("not used")
+}
+func (grantingHub) ReadTeam(_ context.Context, id string) (hubteams.Team, error) {
+	return hubteams.Team{TeamID: id, TeamName: "crew", Enabled: true, Projects: []hubteams.Project{{Project: "project-t"}}}, nil
+}
+func (grantingHub) ReadTeams(context.Context) ([]hubteams.Team, error) { return nil, nil }
+
 func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
 	t.Helper()
 	ctx := context.Background()
@@ -88,7 +102,7 @@ func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
 	}
 	nt := store.NewTeam{Name: "crew"}
 	if o.steps {
-		nt.Projects = []store.ProjectRef{{HubID: "hub-test", ProjectID: "project-t"}}
+		nt.Hub = "main"
 	}
 	tm, err := st.CreateTeam(ctx, op, "team", nt)
 	if err != nil {
@@ -96,6 +110,13 @@ func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
 	}
 	if _, err := st.AddMember(ctx, op, "member", tm.ID, a.ID, o.role); err != nil {
 		t.Fatal(err)
+	}
+	if o.steps {
+		read := store.TeamGrantsRead{State: store.GrantsEnabled, At: time.Now(),
+			Grants: []store.TeamGrant{{HubID: "hub-test", ProjectID: "project-t"}}}
+		if _, err := st.RecordTeamGrants(ctx, store.ReconcilerCaller(), tm.ID, read); err != nil {
+			t.Fatal(err)
+		}
 	}
 	db, err := sql.Open("sqlite", storePath)
 	if err != nil {
@@ -109,7 +130,7 @@ func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
 	root := filepath.Join(dir, "aimem")
 	opts := []server.Option{server.WithVerifier(testVerifier{})}
 	if o.steps {
-		opts = append(opts, server.WithReader(fileReader{root: root}))
+		opts = append(opts, server.WithReader(fileReader{root: root}), server.WithHub("main", "hub-test", grantingHub{}))
 	}
 	srv, err := server.New(server.Config{StorePath: storePath, ListenAddr: "127.0.0.1:0", TLSCertFile: certFile,
 		TLSKeyFile: keyFile, ServiceID: "aicrew-test", ShutdownTimeout: server.Duration(5 * time.Second),

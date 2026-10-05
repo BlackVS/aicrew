@@ -1004,8 +1004,8 @@ func TestOfferNeedsATeamProject(t *testing.T) {
 	refused := func(what string, ex execTeam, req OfferRequest) {
 		t.Helper()
 		before, calls := count(t, s, "attempts"), len(e.port.callLog())
-		if _, err := s.OfferTask(ctx, e.lead.caller, e.port, "o-"+what, req); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("%s: got %v, want ErrInvalid", what, err)
+		if _, err := s.OfferTask(ctx, e.lead.caller, e.port, "o-"+what, req); !errors.Is(err, ErrProjectNotGranted) {
+			t.Fatalf("%s: got %v, want ErrProjectNotGranted", what, err)
 		}
 		if count(t, s, "attempts") != before || len(e.port.callLog()) != calls || busy(t, s, ex.builder.agent.ID) {
 			t.Fatalf("%s: recorded or sent something", what)
@@ -1013,22 +1013,15 @@ func TestOfferNeedsATeamProject(t *testing.T) {
 	}
 	outside := e.offerReq("task-1")
 	outside.Task.ProjectID = "project-b"
-	refused("project outside the set", e, outside)
+	refused("project the hub does not grant", e, outside)
 
 	running := e.accept(t, "a1", e.offer(t, "o1", "task-1"))
-	tm, err := s.GetTeam(ctx, e.tm.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.SetTeamProjects(ctx, operator(t), "remove-project-a", tm.ID, tm.Revision,
-		[]ProjectRef{{HubID: "hub-a", ProjectID: "project-b"}}); err != nil {
-		t.Fatal(err)
-	}
+	grant(t, s, e.tm.ID, ProjectRef{HubID: "hub-a", ProjectID: "project-b"})
 	other := e
 	other.builder = joinCrew(t, s, e.tm.ID, "other", RoleWorker)
-	refused("project removed from the team", other, other.offerReq("task-2"))
+	refused("project whose grant the hub revoked", other, other.offerReq("task-2"))
 
-	// The running attempt in the removed project is finished as usual.
+	// The running attempt in the revoked project is finished as usual.
 	e.mustWork(t, "submit", running, IntentSubmit, "https://example.invalid/pull/1")
 	if _, err := e.review(t, "accept", running, e.lead, 1, ReviewAccept); err != nil {
 		t.Fatal(err)

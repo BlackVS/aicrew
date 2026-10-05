@@ -223,6 +223,8 @@ type coordEnv struct {
 	team                store.Team
 	lead, worker, indep member
 	aimem               *fakeAimem
+	// hub answers the team's live team reads at offer and claim.
+	hub *grantingHub
 }
 
 type member struct {
@@ -235,6 +237,20 @@ type member struct {
 }
 
 const coordHub, coordService = "hub-example", "aicrew-example"
+
+// seedGrants records the hub's grant of project-example to the team, as a
+// team read would, for the tests that step through the store directly.
+func seedGrants(t *testing.T, st *store.Store, teamID string) {
+	t.Helper()
+	read := store.TeamGrantsRead{State: store.GrantsEnabled, At: time.Now(),
+		Grants: []store.TeamGrant{{HubID: coordHub, ProjectID: "project-example"}}}
+	if _, err := st.RecordTeamGrants(context.Background(), store.ReconcilerCaller(), teamID, read); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// coordHubAlias is the hub's alias in the test service's configuration.
+const coordHubAlias = "main"
 
 var coordPin = store.TrustedProcess{
 	Identity: store.ProcessIdentity{Repository: "https://git.example/team/process.git",
@@ -255,7 +271,9 @@ func setupCoordinationWith(t *testing.T, withReader bool) *coordEnv {
 	aimem := &fakeAimem{t: t, current: coordPin.Identity, holds: map[string]*fakeHold{}, revision: 3,
 		kinds: loadCoordFixture(t).FactKinds, receipts: map[string]store.ScopeReceiptLookup{},
 		byKey: map[string]store.ScopeReceiptLookup{}}
+	hub := &grantingHub{grants: []string{"project-example"}}
 	r := startWith(t, coordService, func(s *Server) {
+		WithHub(coordHubAlias, coordHub, hub)(s)
 		switch {
 		case withReader && readOverHTTPS:
 			s.reader = httpsReadScope(t, aimem)
@@ -267,11 +285,11 @@ func setupCoordinationWith(t *testing.T, withReader bool) *coordEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	team, err := r.store.CreateTeam(ctx, op, "team", store.NewTeam{Name: "crew",
-		Projects: []store.ProjectRef{{HubID: coordHub, ProjectID: "project-example"}}})
+	team, err := r.store.CreateTeam(ctx, op, "team", store.NewTeam{Name: "crew", Hub: coordHubAlias})
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedGrants(t, r.store, team.ID)
 	db, err := sql.Open("sqlite", r.storePath)
 	if err != nil {
 		t.Fatal(err)
@@ -296,7 +314,7 @@ func setupCoordinationWith(t *testing.T, withReader bool) *coordEnv {
 		entry, secrets := enterAs(t, r, a, label, team.ID)
 		return member{agent: a, caller: c, sess: entry.Session, token: secrets.Token.Reveal()}
 	}
-	e := &coordEnv{running: r, op: op, team: team,
+	e := &coordEnv{running: r, op: op, team: team, hub: hub,
 		lead: join("lead", store.RoleCoordinator), worker: join("worker", store.RoleWorker),
 		indep: join("indep", store.RoleIndependent)}
 	_, e.bearer, err = r.store.IssueIntrospectionCredential(ctx, op, "cred", coordHub)

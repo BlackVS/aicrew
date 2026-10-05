@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -49,11 +50,37 @@ func mustAgent(t *testing.T, s *Store, key, label string) Agent {
 	return a
 }
 
+// mustTeam creates a team; its hub grants it projects, as a team.read of
+// the hub would record them.
 func mustTeam(t *testing.T, s *Store, key, name string, projects ...ProjectRef) Team {
 	t.Helper()
-	tm, err := s.CreateTeam(context.Background(), operator(t), key, NewTeam{Name: name, Projects: projects})
+	tm, err := s.CreateTeam(context.Background(), operator(t), key, NewTeam{Name: name})
 	if err != nil {
 		t.Fatalf("create team %s: %v", name, err)
+	}
+	if len(projects) == 0 {
+		return tm
+	}
+	return grant(t, s, tm.ID, projects...)
+}
+
+// grantClock orders the tests' team reads: each is sent after the last.
+var grantClock atomic.Int64
+
+// grant records a team.read of the team's hub that grants exactly projects.
+func grant(t *testing.T, s *Store, teamID string, projects ...ProjectRef) Team {
+	t.Helper()
+	read := TeamGrantsRead{State: GrantsEnabled, Grants: []TeamGrant{},
+		At: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(grantClock.Add(1)) * time.Second)}
+	for _, p := range projects {
+		read.Grants = append(read.Grants, TeamGrant{HubID: p.HubID, ProjectID: p.ProjectID})
+	}
+	if ok, err := s.RecordTeamGrants(context.Background(), ReconcilerCaller(), teamID, read); err != nil || !ok {
+		t.Fatalf("grant %v to team %s: %v, %v", projects, teamID, ok, err)
+	}
+	tm, err := s.GetTeam(context.Background(), teamID)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return tm
 }
@@ -67,12 +94,16 @@ func TestZeroCallerHasNoAuthority(t *testing.T) {
 
 	var zero Caller
 	checks := map[string]error{
-		"create agent":  func() error { _, err := s.CreateAgent(ctx, zero, "k", NewAgent{Label: "x"}); return err }(),
-		"rename agent":  func() error { _, err := s.RenameAgent(ctx, zero, "k", a.ID, a.Revision, "y"); return err }(),
-		"set profile":   func() error { _, err := s.SetAgentProfile(ctx, zero, "k", a.ID, a.Revision, Profile{}); return err }(),
-		"create team":   func() error { _, err := s.CreateTeam(ctx, zero, "k", NewTeam{Name: "z"}); return err }(),
-		"rename team":   func() error { _, err := s.RenameTeam(ctx, zero, "k", tm.ID, tm.Revision, "z"); return err }(),
-		"set projects":  func() error { _, err := s.SetTeamProjects(ctx, zero, "k", tm.ID, tm.Revision, nil); return err }(),
+		"create agent": func() error { _, err := s.CreateAgent(ctx, zero, "k", NewAgent{Label: "x"}); return err }(),
+		"rename agent": func() error { _, err := s.RenameAgent(ctx, zero, "k", a.ID, a.Revision, "y"); return err }(),
+		"set profile":  func() error { _, err := s.SetAgentProfile(ctx, zero, "k", a.ID, a.Revision, Profile{}); return err }(),
+		"create team":  func() error { _, err := s.CreateTeam(ctx, zero, "k", NewTeam{Name: "z"}); return err }(),
+		"rename team":  func() error { _, err := s.RenameTeam(ctx, zero, "k", tm.ID, tm.Revision, "z"); return err }(),
+		"set hub":      func() error { _, err := s.SetTeamHub(ctx, zero, "k", tm.ID, "main"); return err }(),
+		"record grants": func() error {
+			_, err := s.RecordTeamGrants(ctx, zero, tm.ID, TeamGrantsRead{State: GrantsDisabled, At: time.Now()})
+			return err
+		}(),
 		"add member":    func() error { _, err := s.AddMember(ctx, zero, "k", tm.ID, a.ID, RoleWorker); return err }(),
 		"set role":      func() error { _, err := s.SetMemberRole(ctx, zero, "k", tm.ID, a.ID, 1, RoleWorker); return err }(),
 		"remove member": s.RemoveMember(ctx, zero, "k", tm.ID, a.ID, 1),
@@ -161,18 +192,81 @@ func TestChangedInputUnderSameKeyConflicts(t *testing.T) {
 	}
 }
 
-// Equal project sets in a different order are the same input.
-func TestProjectOrderDoesNotChangeDigest(t *testing.T) {
+// A team's grants are the last team.read sent, ordered by project: a read
+// sent earlier but answered later never replaces a newer one, and a read
+// that is not a valid answer records nothing.
+func TestTeamGrantsFollowTheNewestRead(t *testing.T) {
 	s, _ := openTemp(t)
+	ctx := context.Background()
+	tm := mustTeam(t, s, "t1", "crew")
 	p1 := ProjectRef{HubID: "hub-a", ProjectID: "p1"}
 	p2 := ProjectRef{HubID: "hub-a", ProjectID: "p2"}
-	first := mustTeam(t, s, "k1", "crew", p2, p1, p1)
-	again := mustTeam(t, s, "k1", "crew", p1, p2)
-	if again.ID != first.ID {
-		t.Fatalf("replay created a second team")
+	if len(tm.Grants) != 0 || tm.GrantsState != "" || tm.GrantsReadAt != nil {
+		t.Fatalf("a new team has grants: %+v", tm)
 	}
-	if len(first.Projects) != 2 || first.Projects[0] != p1 || first.Projects[1] != p2 {
-		t.Errorf("projects = %+v, want sorted and de-duplicated", first.Projects)
+	got := grant(t, s, tm.ID, p2, p1)
+	if len(got.Grants) != 2 || got.Grants[0].ProjectID != "p1" || got.Grants[1].ProjectID != "p2" ||
+		got.GrantsState != GrantsEnabled || got.GrantsReadAt == nil {
+		t.Fatalf("granted = %+v", got)
+	}
+	stale := TeamGrantsRead{State: GrantsDisabled, At: got.GrantsReadAt.Add(-time.Second)}
+	if ok, err := s.RecordTeamGrants(ctx, ReconcilerCaller(), tm.ID, stale); err != nil || ok {
+		t.Fatalf("a stale read was recorded: %v, %v", ok, err)
+	}
+	full := &GrantRepository{Kind: "git", URL: "https://git.example.test/crew/p1.git", Host: "git.example.test", Access: "write"}
+	pin := &GrantProcess{Repo: "https://git.example.test/process.git", Commit: strings.Repeat("a", 40), Manifest: "m.json"}
+	newer := TeamGrantsRead{State: GrantsEnabled, At: got.GrantsReadAt.Add(time.Second),
+		Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p1", Repository: full, Process: pin}}}
+	if ok, err := s.RecordTeamGrants(ctx, ReconcilerCaller(), tm.ID, newer); err != nil || !ok {
+		t.Fatalf("a newer read: %v, %v", ok, err)
+	}
+	got, err := s.GetTeam(ctx, tm.ID)
+	if err != nil || len(got.Grants) != 1 || *got.Grants[0].Repository != *full || *got.Grants[0].Process != *pin {
+		t.Fatalf("after the newer read = %+v, %v", got, err)
+	}
+	for name, bad := range map[string]TeamGrantsRead{
+		"unknown state":       {State: "maybe", At: time.Now()},
+		"no time":             {State: GrantsDisabled},
+		"disabled with grant": {State: GrantsDisabled, At: time.Now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p1"}}},
+		"twice":               {State: GrantsEnabled, At: time.Now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p1"}, {HubID: "hub-a", ProjectID: "p1"}}},
+		"bad project":         {State: GrantsEnabled, At: time.Now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p 1"}}},
+		"long url": {State: GrantsEnabled, At: time.Now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p1",
+			Repository: &GrantRepository{Kind: "git", URL: strings.Repeat("u", maxGrantField+1)}}}},
+	} {
+		if _, err := s.RecordTeamGrants(ctx, ReconcilerCaller(), tm.ID, bad); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := s.RecordTeamGrants(ctx, ReconcilerCaller(), "no-such-team", TeamGrantsRead{State: GrantsDisabled, At: time.Now()}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown team: %v", err)
+	}
+	agent, err := AgentCaller("agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordTeamGrants(ctx, agent, tm.ID, TeamGrantsRead{State: GrantsDisabled, At: time.Now()}); !errors.Is(err, ErrForbidden) {
+		t.Errorf("an agent recorded grants: %v", err)
+	}
+}
+
+// A team created before teams named a hub can be given one, once.
+func TestSetTeamHub(t *testing.T) {
+	s, _ := openTemp(t)
+	ctx := context.Background()
+	op := operator(t)
+	tm := mustTeam(t, s, "t1", "crew")
+	got, err := s.SetTeamHub(ctx, op, "h1", tm.ID, "main")
+	if err != nil || got.Hub != "main" || got.Revision != tm.Revision+1 {
+		t.Fatalf("set hub = %+v, %v", got, err)
+	}
+	if again, err := s.SetTeamHub(ctx, op, "h2", tm.ID, "main"); err != nil || again.Revision != got.Revision {
+		t.Fatalf("the same hub again = %+v, %v", again, err)
+	}
+	if _, err := s.SetTeamHub(ctx, op, "h3", tm.ID, "lab"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("another hub: %v", err)
+	}
+	if _, err := s.SetTeamHub(ctx, op, "h4", tm.ID, "Lab!"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a bad alias: %v", err)
 	}
 }
 
@@ -235,7 +329,7 @@ func TestPersistsAcrossReopen(t *testing.T) {
 	}
 	defer s2.Close()
 	gotTeam, err := s2.GetTeam(ctx, tm.ID)
-	if err != nil || gotTeam.Name != "crew" || len(gotTeam.Projects) != 1 {
+	if err != nil || gotTeam.Name != "crew" || len(gotTeam.Grants) != 1 {
 		t.Fatalf("team after reopen = %+v, %v", gotTeam, err)
 	}
 	members, err := s2.ListMembers(ctx, tm.ID)
@@ -322,8 +416,8 @@ func TestInvalidInputRejected(t *testing.T) {
 	if _, err := s.CreateAgent(ctx, op, "", NewAgent{Label: "ok"}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("empty idempotency key: %v", err)
 	}
-	if _, err := s.CreateTeam(ctx, op, "t1", NewTeam{Name: "crew", Projects: []ProjectRef{{HubID: "", ProjectID: "p"}}}); !errors.Is(err, ErrInvalid) {
-		t.Errorf("empty hub id: %v", err)
+	if _, err := s.CreateTeam(ctx, op, "t1", NewTeam{Name: "crew", Hub: "Main Hub"}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("bad hub alias: %v", err)
 	}
 	a := mustAgent(t, s, "a3", "builder")
 	tm := mustTeam(t, s, "t2", "crew")
@@ -439,8 +533,7 @@ func TestConcurrentConflictingWritesHaveOneWinner(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			_, projectErrs[i] = s.SetTeamProjects(ctx, op, fmt.Sprintf("p%d", i), tm.ID, tm.Revision,
-				[]ProjectRef{{HubID: "hub-a", ProjectID: fmt.Sprintf("p%d", i)}})
+			_, projectErrs[i] = s.RenameTeam(ctx, op, fmt.Sprintf("p%d", i), tm.ID, tm.Revision, fmt.Sprintf("crew-%d", i))
 		}()
 		go func() {
 			defer wg.Done()
@@ -463,11 +556,11 @@ func TestConcurrentConflictingWritesHaveOneWinner(t *testing.T) {
 			t.Errorf("%s: %d winners, want 1", name, wins)
 		}
 	}
-	tally("set projects", projectErrs, ErrRevisionConflict)
+	tally("rename", projectErrs, ErrRevisionConflict)
 	tally("add member", memberErrs, ErrExists)
 
 	got, err := s.GetTeam(ctx, tm.ID)
-	if err != nil || got.Revision != 2 || len(got.Projects) != 1 {
+	if err != nil || got.Revision != 2 || got.Name == "crew" {
 		t.Errorf("team after race = %+v, %v", got, err)
 	}
 }

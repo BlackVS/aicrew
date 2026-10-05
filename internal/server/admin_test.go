@@ -72,8 +72,8 @@ func TestAdminRefusesEveryOtherCredential(t *testing.T) {
 	}
 	wrong, _ := optoken.Generate()
 	routes := adminRoutes(e.srv)
-	if len(routes) != 17 { // 13, and the four credential routes under their names before 0.3.0
-		t.Fatalf("%d operator routes, want 17", len(routes))
+	if len(routes) != 16 { // 12, and the four credential routes under their names before 0.3.0
+		t.Fatalf("%d operator routes, want 16", len(routes))
 	}
 	before, _ := e.store.ListTeams(context.Background())
 	for _, cred := range []struct{ name, token string }{{"none", ""}, {"wrong", wrong},
@@ -122,7 +122,7 @@ func TestAdminOperations(t *testing.T) {
 	// Teams.
 	var team opapi.Team
 	if got := e.admin(t, http.MethodPost, opapi.TeamsPath, tok,
-		opapi.TeamRequest{Name: "pilot", Projects: []opapi.ProjectRef{{HubID: "hub-test", ProjectID: "aicrew"}}}, &team); got.status != http.StatusCreated || team.ID == "" {
+		opapi.TeamRequest{Name: "pilot"}, &team); got.status != http.StatusCreated || team.ID == "" || team.Grants == nil || len(team.Grants) != 0 {
 		t.Fatalf("team create: %d %s", got.status, got.raw)
 	}
 	adminRefused(t, e.admin(t, http.MethodPost, opapi.TeamsPath, tok, opapi.TeamRequest{Name: "pilot"}, nil),
@@ -139,9 +139,11 @@ func TestAdminOperations(t *testing.T) {
 		t.Fatalf("team show: %d %s", got.status, got.raw)
 	}
 	adminRefused(t, e.admin(t, http.MethodGet, opapi.TeamPath+"?id=nope", tok, nil, nil), http.StatusNotFound, opapi.CodeNotFound)
-	if got := e.admin(t, http.MethodPost, opapi.TeamProjectsPath, tok,
-		opapi.TeamProjectsRequest{TeamID: team.ID, ExpectedRevision: team.Revision}, &team); got.status != http.StatusOK || len(team.Projects) != 0 {
-		t.Fatalf("team projects: %d %s", got.status, got.raw)
+	// The project list of earlier releases is gone: the hub's grants are
+	// the team's projects.
+	if got := e.send(t, http.MethodPost, opapi.TeamsPath, "application/json", "", tok,
+		`{"name":"listed","projects":[{"hub_id":"hub-test","project_id":"aicrew"}]}`); got.status != http.StatusBadRequest {
+		t.Fatalf("a team with a project list: %d %s", got.status, got.raw)
 	}
 	adminRefused(t, e.admin(t, http.MethodPost, opapi.TeamRenamePath, tok,
 		opapi.TeamRenameRequest{TeamID: team.ID, ExpectedRevision: team.Revision - 1, Name: "second-name"}, nil),

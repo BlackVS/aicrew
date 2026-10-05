@@ -51,8 +51,21 @@ a failure mode the design must cover. **Not measured**: no conclusion.
 | Wake an idle session | Works: a user message written to stdin 8 s after the last turn started the next turn in about 20 ms, the reply about 1 s later (Windows) | See "The Stop hook wait" below: works only while a hook still holds the turn's end | Works: an event to the idle session got its reply in 1.2 s (Windows) and 1.9 s (Linux) | Works by typing a prompt: about as fast, but the launcher must own the terminal |
 | Event while busy | Messages queue on stdin | n/a | Fragile: shown in the transcript during a 20 s tool call, but the model never acted on it (2.1.289; on 2.1.281 it was handled at the next model request) | n/a |
 | Duplicates | n/a | n/a | Delivered twice and answered twice: no deduplication | n/a |
-| Human attach / takeover | Impossible: there is no terminal UI | n/a (hooks run inside the human's session) | n/a (inside the human's session) | Works only if the launcher relays its own terminal to the human |
+| Human attach / takeover | Impossible: there is no terminal UI | n/a (hooks run inside the human's session) | n/a (inside the human's session) | Not measured: needs the launcher to relay its pseudo terminal to the human |
 | Consent and limits | None | Hooks are project settings; a hook runs within its `timeout` (killed beyond it) | `--dangerously-load-development-channels`, a start-up warning answered each run, first-party authentication; not in print mode (aimem probe) | First start in a new folder asks for workspace trust ("No, exit" is the default) |
+
+**The TUI under a pseudo terminal.** The interactive client was driven
+through a PTY on Linux and a ConPTY on Windows, each starting at 120×40.
+
+| | Linux PTY | Windows ConPTY |
+| --- | --- | --- |
+| Rendering | Works: the full TUI with its dialogs, input box and transcript | Works: the same, once the child inherits no redirected standard handles (see "Reproduce") |
+| Resize | Works: 120×40 to 90×30 while idle (`TIOCSWINSZ` and `SIGWINCH`). The TUI redrew within 3 s: its horizontal rule went from 120 to 90 characters, and the next prompt was answered. | Works: `ResizePseudoConsole` to 90×30. The rule went from 120 to 90 characters, and the next prompt and a permission dialog worked. |
+| Paste | Works: a two-line bracketed paste (`ESC[200~` ... `ESC[201~`), then Enter, arrived as one message and was answered | Works: the same paste, answered |
+| Ctrl-C | Works: two Ctrl-C exit with status 0 | Works: two Ctrl-C exit with code 0 |
+| Input injection | Works: typed text and Enter, the arrow keys in dialogs | Works: the same |
+| State recognition | Fragile: only by screen text, with whitespace lost to cursor movement; the hooks give the same states structurally | Fragile: the same |
+| Human takeover | Not measured: the probe drove the terminal itself; a relay of the pseudo terminal to a human's terminal was not built | Not measured: the same |
 
 **The Stop hook wait.** A `Stop` hook may refuse the stop with
 `{"decision":"block","reason":"..."}`, and Claude continues with the reason as
@@ -117,9 +130,11 @@ the opt-in idle path.
    - **(b) The launcher owns the client's terminal:** it runs the TUI in a
      PTY or ConPTY it relays to the human, and types a prompt when the
      `Notification` "waiting for your input" hook reports the member idle.
-     This was measured to work on both platforms, but it makes the launcher
-     a terminal proxy (resize, paste, signals) and types into a human's
-     input line. That is a later supervisor task, not 1aed.
+     Driving the client's pseudo terminal was measured to work on both
+     platforms (injection, resize, paste, Ctrl-C). The relay to the human's
+     terminal was not built, though. It makes the launcher a terminal proxy
+     that types into a human's input line. That is a later supervisor task,
+     not 1aed.
 3. **Permissions:** detection works through `PermissionRequest` and
    answering is possible, but no auto-approval policy is proposed here (a
    non-goal). The launcher may report a pending permission (the hook fires)
@@ -148,6 +163,7 @@ missing turn-end event, and attach.
 ## Not measured
 
 - OpenCode on Linux; OpenCode's TUI and `opencode attach`; Codex (deferred).
+- A human taking over a pseudo terminal the launcher owns: the relay was not built.
 - A `Stop` hook timeout beyond 900 s, and any upper bound Claude Code
   enforces on it.
 - A channel event while a permission prompt is pending; the permission relay
@@ -185,6 +201,10 @@ Every run used a disposable directory and the model's smallest tier.
   {"content":"...","meta":{"message_id":"m1"}}}`. Claude starts with
   `--mcp-config` naming it and `--dangerously-load-development-channels
   server:<name>`. (On 2.1.289 the client first sends `server/discover`.)
+- **Resize and paste:**
+  - On Linux, set the PTY's size with `TIOCSWINSZ` and send `SIGWINCH`; on Windows, call `ResizePseudoConsole`.
+  - The TUI's horizontal rule (`─`, U+2500, repeated) shows the width it drew at.
+  - A paste is the bracketed form `ESC[200~` text `ESC[201~`, then Enter.
 - **ConPTY on Windows:**
   - The child must not inherit the parent's redirected standard handles
     (`STARTF_USESTDHANDLES` with empty handles). Otherwise Claude sees no

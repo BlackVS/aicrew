@@ -122,8 +122,7 @@ type inboxMessage struct {
 	} `json:"task"`
 	// Offer is an offer's details, on the message that announces it.
 	Offer *struct {
-		BaseCommit string `json:"base_commit"`
-		Branch     string `json:"branch"`
+		Repository repositoryBody `json:"repository"`
 		Process    struct {
 			Repo     string `json:"repo"`
 			Commit   string `json:"commit"`
@@ -180,16 +179,33 @@ func describe(ans StepAnswerLite) string {
 	return string(b)
 }
 
+// repositoryBody is an offer's or a claim's repository.
+type repositoryBody struct {
+	Kind          string `json:"kind"`
+	URL           string `json:"url"`
+	Access        string `json:"access"`
+	DefaultBranch string `json:"default_branch"`
+	BaseCommit    string `json:"base_commit"`
+	Branch        string `json:"branch"`
+}
+
+// repositoryFor is the repository every step on task names: the hub's,
+// based on the process commit.
+func repositoryFor(task string) repositoryBody {
+	return repositoryBody{Kind: repoKind, URL: repoURL, Access: "write", DefaultBranch: "main", BaseCommit: processCommit,
+		Branch: "work/" + task}
+}
+
 func (h *harness) offerBody(task taskRef, worker *member, expires time.Time) map[string]any {
 	return map[string]any{"worker_agent_id": worker.agentID, "task": h.taskRefBody(task.ID),
-		"expected_revision": task.Revision, "base_commit": processCommit, "branch": "work/" + task.ID,
+		"expected_revision": task.Revision, "repository": repositoryFor(task.ID),
 		"process":            map[string]string{"repo": processRepo, "commit": processCommit, "manifest": processManifest},
 		"instruction_digest": instructionHash, "expires_at": expires.UTC().Format(time.RFC3339)}
 }
 
 func (h *harness) claimBody(task taskRef) map[string]any {
 	return map[string]any{"task": h.taskRefBody(task.ID), "expected_revision": task.Revision,
-		"base_commit": processCommit, "branch": "work/" + task.ID,
+		"repository":         repositoryFor(task.ID),
 		"process":            map[string]string{"repo": processRepo, "commit": processCommit, "manifest": processManifest},
 		"instruction_digest": instructionHash}
 }
@@ -383,6 +399,19 @@ func (h *harness) attemptsOfTask(sc *scenario, task string) []attemptRow {
 	return out
 }
 
+// attemptRepository is the repository aicrew recorded on an attempt.
+func (h *harness) attemptRepository(sc *scenario, id string) repositoryBody {
+	sc.t.Helper()
+	db := h.aicrewDB(sc)
+	defer db.Close()
+	var r repositoryBody
+	if err := db.QueryRow(`SELECT repository_kind, repository_url, repository_access, default_branch, base_commit, branch
+		FROM attempts WHERE id = ?`, id).Scan(&r.Kind, &r.URL, &r.Access, &r.DefaultBranch, &r.BaseCommit, &r.Branch); err != nil {
+		sc.t.Fatal(err)
+	}
+	return r
+}
+
 // openWorkOf counts an agent's open attempts: its capacity.
 func (h *harness) openWorkOf(sc *scenario, agent string) int {
 	sc.t.Helper()
@@ -455,9 +484,9 @@ func (h *harness) s1OfferFlow(t *testing.T) {
 	// worktree from them, and computes the instruction digest itself from
 	// the pinned manifest before accepting.
 	o := found.Offer
-	sc.require("the worker's inbox carries the offer's details", o != nil && o.BaseCommit == processCommit &&
-		o.Branch == "work/"+task.ID && o.Process.Repo == processRepo && o.Process.Commit == processCommit &&
-		o.Process.Manifest == processManifest, found)
+	sc.require("the worker's inbox carries the offer's details", o != nil && o.Repository == repositoryFor(task.ID) &&
+		o.Process.Repo == processRepo && o.Process.Commit == processCommit && o.Process.Manifest == processManifest, found)
+	sc.check("aicrew: the attempt records the offer's repository", h.attemptRepository(sc, id) == repositoryFor(task.ID))
 	digest := h.processDigest(o.Process.Commit, o.Process.Manifest)
 	sc.check("the worker's own digest of the pinned manifest equals the offer's", digest == o.InstructionDigest,
 		digest, o.InstructionDigest)

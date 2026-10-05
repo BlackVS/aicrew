@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 23
+const schemaVersion = 24
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -219,7 +219,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
 		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21,
-		schemaV22, schemaV23}
+		schemaV22, schemaV23, schemaV24}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -413,6 +413,19 @@ var schemaV5 = []string{
 // (pilot G2): the base commit, branch, process pin, instruction digest and
 // expiry, as JSON, so the worker starts its worktree and verifies the pin
 // from its own inbox. Every other message carries none.
+// schemaV24 records the repository an attempt's work happens in, beside its
+// base commit and branch (docs/proposals/PILOT-1-FOLLOWUPS.md, 3.5), and
+// whether the team's hub blocks the open attempt (grant revoked or profile
+// disabled, section 11). Earlier attempts name no repository.
+var schemaV24 = []string{
+	`ALTER TABLE attempts ADD COLUMN repository_kind TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN repository_url TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN repository_access TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN default_branch TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN blocked_reason TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE attempts ADD COLUMN blocked_since TEXT NOT NULL DEFAULT ''`,
+}
+
 // schemaV23 replaces aicrew's own project set with a snapshot of the
 // grants the team's hub holds (team.read; docs/proposals/PILOT-1-FOLLOWUPS.md,
 // 2.3): each granted project with its repository and process pin, and

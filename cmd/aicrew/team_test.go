@@ -41,7 +41,7 @@ func TestTeamLifecycle(t *testing.T) {
 		t.Fatalf("created = %+v", created)
 	}
 	other := decodeTeam(t, teamCLI(t, 0, "create", "-name", "alpha"))
-	read := store.TeamGrantsRead{State: store.GrantsEnabled, At: time.Now(), Grants: []store.TeamGrant{{HubID: "hub-a", ProjectID: "docs",
+	read := store.TeamGrantsRead{HubID: "hub-a", State: store.GrantsEnabled, At: time.Now(), Grants: []store.TeamGrant{{HubID: "hub-a", ProjectID: "docs",
 		Repository: &store.GrantRepository{Kind: "git", URL: "https://git.example.test/docs.git", Host: "git.example.test", Access: "write"},
 		Process:    &store.GrantProcess{Repo: "https://git.example.test/process.git", Commit: strings.Repeat("c", 40), Manifest: "m.json"}}}}
 	if _, err := s.store.RecordTeamGrants(context.Background(), store.ReconcilerCaller(), created.ID, read); err != nil {

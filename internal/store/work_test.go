@@ -126,12 +126,14 @@ func TestWorkLifecycle(t *testing.T) {
 			offers++
 			// The offer carries what the worker needs (pilot G2).
 			o := it.Offer
-			want := OfferDetail{BaseCommit: a.BaseCommit, Branch: a.Branch, InstructionDigest: a.Process.InstructionDigest,
-				ExpiresAt: a.OfferExpiresAt, Process: OfferProcess{Repo: a.Process.Identity.Repository,
+			want := OfferDetail{Repository: OfferRepository{Kind: testRepository.Kind, URL: testRepository.URL,
+				Access: testRepository.Access, DefaultBranch: testRepository.DefaultBranch, BaseCommit: a.BaseCommit, Branch: a.Branch},
+				InstructionDigest: a.Process.InstructionDigest,
+				ExpiresAt:         a.OfferExpiresAt, Process: OfferProcess{Repo: a.Process.Identity.Repository,
 					Commit: a.Process.Identity.Commit, Manifest: a.Process.Identity.Manifest}}
 			if o == nil || !o.ExpiresAt.Equal(want.ExpiresAt) {
 				t.Errorf("the offer's message carries %+v, want %+v", o, want)
-			} else if o.ExpiresAt = want.ExpiresAt; *o != want || o.BaseCommit == "" || o.Process.Repo == "" {
+			} else if o.ExpiresAt = want.ExpiresAt; *o != want || o.Repository.BaseCommit == "" || o.Process.Repo == "" {
 				t.Errorf("the offer's message carries %+v, want %+v", *o, want)
 			}
 		} else if it.Offer != nil {

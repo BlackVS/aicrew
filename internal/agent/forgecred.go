@@ -411,11 +411,13 @@ type BaseResolution struct {
 	Kept          bool   `json:"kept,omitempty"` // the body named its own base
 }
 
-// ResolveBase fills an offer's or a claim's base_commit from the forge
-// (docs/proposals/PILOT-1-FOLLOWUPS.md, section 3.5): the repository's
-// default branch and that branch's head, read with the home's own
-// credential for the repository's host. A body that already names a base
-// commit keeps it; the branch stays the body's.
+// ResolveBase fills an offer's or a claim's repository from the forge
+// (docs/proposals/PILOT-1-FOLLOWUPS.md, section 3.5): in the body's
+// `repository` object, the clone URL and the forge's kind when the body
+// names none, the repository's default branch, and that branch's head as
+// the base commit, read with the home's own credential for the
+// repository's host. What the body already names is kept: a base commit
+// is never replaced, and the branch and the access stay the body's.
 func ResolveBase(ctx context.Context, home string, api BaseAPI, cloneURL string, body []byte) ([]byte, BaseResolution, error) {
 	host, path, err := forge.Repository(cloneURL)
 	if err != nil {
@@ -428,12 +430,19 @@ func ResolveBase(ctx context.Context, home string, api BaseAPI, cloneURL string,
 			return nil, res, errors.New("the body is not a JSON object")
 		}
 	}
-	var given string
-	if raw, ok := fields["base_commit"]; ok {
-		_ = json.Unmarshal(raw, &given)
+	repo := map[string]any{}
+	if raw, ok := fields["repository"]; ok {
+		if err := json.Unmarshal(raw, &repo); err != nil || repo == nil {
+			return nil, res, errors.New("the body's repository is not a JSON object")
+		}
 	}
-	if given != "" {
-		res.BaseCommit, res.Kept = given, true
+	str := func(k string) string { v, _ := repo[k].(string); return v }
+	if str("url") == "" {
+		repo["url"] = cloneURL
+	}
+	res.DefaultBranch, res.BaseCommit = str("default_branch"), str("base_commit")
+	res.Kept = res.BaseCommit != ""
+	if res.Kept && res.DefaultBranch != "" && str("kind") != "" {
 		return body, res, nil
 	}
 	doc, _, err := readAgentDoc(home)
@@ -445,13 +454,24 @@ func ResolveBase(ctx context.Context, home string, api BaseAPI, cloneURL string,
 		return nil, res, err
 	}
 	k := forge.Kind(e.Kind)
-	if res.DefaultBranch, err = api.DefaultBranch(ctx, host, k, tok, path); err != nil {
-		return nil, res, fmt.Errorf("read %s's default branch on %s: %w", path, host, err)
+	if str("kind") == "" {
+		repo["kind"] = string(k)
 	}
-	if res.BaseCommit, err = api.BranchHead(ctx, host, k, tok, path, res.DefaultBranch); err != nil {
-		return nil, res, fmt.Errorf("read the head of %s on %s: %w", res.DefaultBranch, host, err)
+	if res.DefaultBranch == "" {
+		if res.DefaultBranch, err = api.DefaultBranch(ctx, host, k, tok, path); err != nil {
+			return nil, res, fmt.Errorf("read %s's default branch on %s: %w", path, host, err)
+		}
+		repo["default_branch"] = res.DefaultBranch
 	}
-	fields["base_commit"], _ = json.Marshal(res.BaseCommit)
+	if !res.Kept {
+		if res.BaseCommit, err = api.BranchHead(ctx, host, k, tok, path, res.DefaultBranch); err != nil {
+			return nil, res, fmt.Errorf("read the head of %s on %s: %w", res.DefaultBranch, host, err)
+		}
+		repo["base_commit"] = res.BaseCommit
+	}
+	if fields["repository"], err = json.Marshal(repo); err != nil {
+		return nil, res, err
+	}
 	out, err := json.Marshal(fields)
 	return out, res, err
 }

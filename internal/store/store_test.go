@@ -67,11 +67,18 @@ func mustTeam(t *testing.T, s *Store, key, name string, projects ...ProjectRef) 
 // grantClock orders the tests' team reads: each is sent after the last.
 var grantClock atomic.Int64
 
+// nextReadAt is when the tests' next team read is sent.
+func nextReadAt() time.Time {
+	return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(grantClock.Add(1)) * time.Second)
+}
+
 // grant records a team.read of the team's hub that grants exactly projects.
 func grant(t *testing.T, s *Store, teamID string, projects ...ProjectRef) Team {
 	t.Helper()
-	read := TeamGrantsRead{State: GrantsEnabled, Grants: []TeamGrant{},
-		At: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(grantClock.Add(1)) * time.Second)}
+	read := TeamGrantsRead{HubID: "hub-a", State: GrantsEnabled, Grants: []TeamGrant{}, At: nextReadAt()}
+	if len(projects) > 0 {
+		read.HubID = projects[0].HubID
+	}
 	for _, p := range projects {
 		read.Grants = append(read.Grants, TeamGrant{HubID: p.HubID, ProjectID: p.ProjectID})
 	}
@@ -101,7 +108,7 @@ func TestZeroCallerHasNoAuthority(t *testing.T) {
 		"rename team":  func() error { _, err := s.RenameTeam(ctx, zero, "k", tm.ID, tm.Revision, "z"); return err }(),
 		"set hub":      func() error { _, err := s.SetTeamHub(ctx, zero, "k", tm.ID, "main"); return err }(),
 		"record grants": func() error {
-			_, err := s.RecordTeamGrants(ctx, zero, tm.ID, TeamGrantsRead{State: GrantsDisabled, At: time.Now()})
+			_, err := s.RecordTeamGrants(ctx, zero, tm.ID, TeamGrantsRead{HubID: "hub-a", State: GrantsDisabled, At: time.Now()})
 			return err
 		}(),
 		"add member":    func() error { _, err := s.AddMember(ctx, zero, "k", tm.ID, a.ID, RoleWorker); return err }(),
@@ -209,13 +216,13 @@ func TestTeamGrantsFollowTheNewestRead(t *testing.T) {
 		got.GrantsState != GrantsEnabled || got.GrantsReadAt == nil {
 		t.Fatalf("granted = %+v", got)
 	}
-	stale := TeamGrantsRead{State: GrantsDisabled, At: got.GrantsReadAt.Add(-time.Second)}
+	stale := TeamGrantsRead{HubID: "hub-a", State: GrantsDisabled, At: got.GrantsReadAt.Add(-time.Second)}
 	if ok, err := s.RecordTeamGrants(ctx, ReconcilerCaller(), tm.ID, stale); err != nil || ok {
 		t.Fatalf("a stale read was recorded: %v, %v", ok, err)
 	}
 	full := &GrantRepository{Kind: "git", URL: "https://git.example.test/crew/p1.git", Host: "git.example.test", Access: "write"}
 	pin := &GrantProcess{Repo: "https://git.example.test/process.git", Commit: strings.Repeat("a", 40), Manifest: "m.json"}
-	newer := TeamGrantsRead{State: GrantsEnabled, At: got.GrantsReadAt.Add(time.Second),
+	newer := TeamGrantsRead{HubID: "hub-a", State: GrantsEnabled, At: got.GrantsReadAt.Add(time.Second),
 		Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p1", Repository: full, Process: pin}}}
 	if ok, err := s.RecordTeamGrants(ctx, ReconcilerCaller(), tm.ID, newer); err != nil || !ok {
 		t.Fatalf("a newer read: %v, %v", ok, err)
@@ -225,26 +232,28 @@ func TestTeamGrantsFollowTheNewestRead(t *testing.T) {
 		t.Fatalf("after the newer read = %+v, %v", got, err)
 	}
 	for name, bad := range map[string]TeamGrantsRead{
-		"unknown state":       {State: "maybe", At: time.Now()},
-		"no time":             {State: GrantsDisabled},
-		"disabled with grant": {State: GrantsDisabled, At: time.Now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p1"}}},
-		"twice":               {State: GrantsEnabled, At: time.Now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p1"}, {HubID: "hub-a", ProjectID: "p1"}}},
-		"bad project":         {State: GrantsEnabled, At: time.Now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p 1"}}},
-		"long url": {State: GrantsEnabled, At: time.Now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p1",
+		"unknown state":       {HubID: "hub-a", State: "maybe", At: time.Now()},
+		"no time":             {HubID: "hub-a", State: GrantsDisabled},
+		"no hub":              {State: GrantsDisabled, At: time.Now()},
+		"another hub's grant": {HubID: "hub-b", State: GrantsEnabled, At: time.Now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p1"}}},
+		"disabled with grant": {HubID: "hub-a", State: GrantsDisabled, At: time.Now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p1"}}},
+		"twice":               {HubID: "hub-a", State: GrantsEnabled, At: time.Now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p1"}, {HubID: "hub-a", ProjectID: "p1"}}},
+		"bad project":         {HubID: "hub-a", State: GrantsEnabled, At: time.Now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p 1"}}},
+		"long url": {HubID: "hub-a", State: GrantsEnabled, At: time.Now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "p1",
 			Repository: &GrantRepository{Kind: "git", URL: strings.Repeat("u", maxGrantField+1)}}}},
 	} {
 		if _, err := s.RecordTeamGrants(ctx, ReconcilerCaller(), tm.ID, bad); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	if _, err := s.RecordTeamGrants(ctx, ReconcilerCaller(), "no-such-team", TeamGrantsRead{State: GrantsDisabled, At: time.Now()}); !errors.Is(err, ErrNotFound) {
+	if _, err := s.RecordTeamGrants(ctx, ReconcilerCaller(), "no-such-team", TeamGrantsRead{HubID: "hub-a", State: GrantsDisabled, At: time.Now()}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("unknown team: %v", err)
 	}
 	agent, err := AgentCaller("agent-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RecordTeamGrants(ctx, agent, tm.ID, TeamGrantsRead{State: GrantsDisabled, At: time.Now()}); !errors.Is(err, ErrForbidden) {
+	if _, err := s.RecordTeamGrants(ctx, agent, tm.ID, TeamGrantsRead{HubID: "hub-a", State: GrantsDisabled, At: time.Now()}); !errors.Is(err, ErrForbidden) {
 		t.Errorf("an agent recorded grants: %v", err)
 	}
 }

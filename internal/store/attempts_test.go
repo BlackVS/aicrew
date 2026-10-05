@@ -38,11 +38,15 @@ func newExecTeam(t *testing.T, s *Store) execTeam {
 
 func task(id string) TaskRef { return TaskRef{HubID: "hub-a", ProjectID: "project-a", TaskID: id} }
 
+// testRepository is the repository the tests' offers and claims name.
+var testRepository = AttemptRepository{Kind: "gitea", URL: "https://git.example.test/crew/project-a.git", Access: "write",
+	DefaultBranch: "main"}
+
 func (e execTeam) offerReq(taskID string) OfferRequest {
 	return OfferRequest{
 		SessionID: e.lead.sess.ID, Generation: e.lead.sess.Generation, WorkerAgentID: e.builder.agent.ID,
 		Task: task(taskID), ExpectedRevision: 3, BaseCommit: "base-commit-1", Branch: "work/" + taskID,
-		Process: testPin, ExpiresAt: e.s.now().Add(time.Hour),
+		Repository: testRepository, Process: testPin, ExpiresAt: e.s.now().Add(time.Hour),
 	}
 }
 

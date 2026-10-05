@@ -111,7 +111,7 @@ func (s *stepEnv) run(t *testing.T, path string, body any) (StepResult, error) {
 }
 
 func (s *stepEnv) claimBody() map[string]any {
-	return map[string]any{"task": s.task(), "expected_revision": 3, "base_commit": "base-1", "branch": "work/task-1",
+	return map[string]any{"task": s.task(), "expected_revision": 3, "repository": testRepository,
 		"process": testProcess, "instruction_digest": testDigest}
 }
 
@@ -304,6 +304,8 @@ func (s *stepEnv) offered(t *testing.T) string {
 		Generation: s.coordSess.Generation, WorkerAgentID: s.agentID,
 		Task:             store.TaskRef{HubID: "hub-test", ProjectID: "project-t", TaskID: "task-1"},
 		ExpectedRevision: 3, BaseCommit: "base-1", Branch: "work/task-1",
+		Repository: store.AttemptRepository{Kind: testRepository["kind"], URL: testRepository["url"],
+			Access: testRepository["access"], DefaultBranch: testRepository["default_branch"]},
 		Process: store.TrustedProcess{InstructionDigest: testDigest, Identity: store.ProcessIdentity{
 			Repository: testProcess["repo"], Commit: testProcess["commit"], Manifest: testProcess["manifest"]}},
 		ExpiresAt: time.Now().Add(time.Hour)})

@@ -465,7 +465,7 @@ func TestTeamReadsAreConsistentSnapshots(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := range 300 {
-			read := TeamGrantsRead{State: GrantsEnabled, At: base.Add(time.Duration(i) * time.Second),
+			read := TeamGrantsRead{HubID: "hub-a", State: GrantsEnabled, At: base.Add(time.Duration(i) * time.Second),
 				Grants: []TeamGrant{{HubID: "hub-a", ProjectID: fmt.Sprintf("rev-%d", i)}}}
 			if _, err := s.RecordTeamGrants(ctx, ReconcilerCaller(), tm.ID, read); err != nil {
 				writerErr = err

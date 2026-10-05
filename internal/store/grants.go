@@ -51,6 +51,8 @@ type GrantProcess struct {
 // TeamGrantsRead is one team.read of a team: the state and grants the hub
 // answered, and when the read was sent.
 type TeamGrantsRead struct {
+	// HubID is the hub read: the team's.
+	HubID  string
 	State  string
 	Grants []TeamGrant
 	At     time.Time
@@ -68,13 +70,13 @@ func (r TeamGrantsRead) validate() error {
 	default:
 		return fmt.Errorf("%w: grants state %q", ErrInvalid, r.State)
 	}
-	if r.At.IsZero() {
-		return fmt.Errorf("%w: a team read names when it was sent", ErrInvalid)
+	if r.At.IsZero() || !refPattern.MatchString(r.HubID) {
+		return fmt.Errorf("%w: a team read names its hub and when it was sent", ErrInvalid)
 	}
 	seen := map[ProjectRef]bool{}
 	for _, g := range r.Grants {
 		p := ProjectRef{HubID: g.HubID, ProjectID: g.ProjectID}
-		if !g.Valid() || seen[p] {
+		if !g.Valid() || g.HubID != r.HubID || seen[p] {
 			return fmt.Errorf("%w: granted project %q/%q", ErrInvalid, p.HubID, p.ProjectID)
 		}
 		seen[p] = true
@@ -106,7 +108,9 @@ func (g TeamGrant) Valid() bool {
 
 // RecordTeamGrants replaces a team's grants snapshot with a team.read's
 // answer, unless a read sent later is already recorded: a slow read never
-// undoes a newer one. It reports whether the read was recorded. The
+// undoes a newer one. In the same transaction it blocks the team's open
+// attempts on the hub whose project the read no longer grants, and unblocks
+// those it grants again (applyBlocks). It reports whether the read was recorded. The
 // operator and aicrewd's own reconciler may record; the snapshot is
 // aicrewd's copy of the hub's grants and changes nothing in aimem.
 func (s *Store) RecordTeamGrants(ctx context.Context, c Caller, teamID string, read TeamGrantsRead) (bool, error) {
@@ -162,6 +166,9 @@ func (s *Store) RecordTeamGrants(ctx context.Context, c Caller, teamID string, r
 	if _, err := tx.ExecContext(ctx, `UPDATE teams SET grants_state = ?, grants_read_at = ? WHERE id = ?`,
 		read.State, formatTime(read.At), teamID); err != nil {
 		return false, fmt.Errorf("record team grants: %w", err)
+	}
+	if err := applyBlocks(ctx, tx, teamID, read, s.now()); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit: %w", err)

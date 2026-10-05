@@ -788,12 +788,16 @@ aicrew-agent step offer --repository https://github.com/team/app --body - < offe
 ```
 
 `--repository CLONE_URL`, on `offer` and `claim` only, fills the body's
-`base_commit` when it has none: the head of the repository's default
-branch, read through the forge with the home's own credential for that host
-(`join --cred`). It prints what it resolved on stderr. A body that names
-its own `base_commit` keeps it, and the `branch` is always the body's. A
-host the home holds no credential for is refused with the `join --cred`
-command that fixes it.
+`repository` object: the `url` (when the body names none), the forge's
+`kind` (from the home's credential for that host, when the body names
+none), the `default_branch`, and that branch's head as the `base_commit`,
+read through the forge with the home's own credential for that host
+(`join --cred`). It prints what it resolved on stderr. What the body names
+is kept: a given `base_commit` is never replaced, and the `branch` and the
+`access` are always the body's. aicrewd compares `kind`, `url` and
+`access` with the repository the hub binds to the project
+(`repository_mismatch`). A host the home holds no credential for is refused
+with the `join --cred` command that fixes it.
 
 - **Operations.** The reservation steps `offer`, `claim`, `accept`,
   `withdraw`, `work`, `release` and `finalize` take the begin route's body

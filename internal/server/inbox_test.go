@@ -73,7 +73,7 @@ func TestInboxNamesTheOfferedAttempt(t *testing.T) {
 		t.Fatalf("the worker's inbox holds no offer naming attempt %s: %+v", id, msgs)
 	}
 	// The offer's details come with it (pilot G2), as the offer route took them.
-	if o := offer.Offer; o == nil || o["base_commit"] != "base-1" || o["branch"] != "work/task-1" ||
+	if o := offer.Offer; o == nil || !sameRepository(o["repository"], repositoryJSON("task-1")) ||
 		o["instruction_digest"] != coordPin.InstructionDigest || o["process"].(map[string]any)["repo"] != coordPin.Identity.Repository {
 		t.Fatalf("the offer's details: %+v", offer.Offer)
 	}
@@ -150,4 +150,19 @@ func TestInboxRefusals(t *testing.T) {
 	if got := e.get(t, old, InboxPath); got.status == http.StatusOK {
 		t.Fatalf("a token fenced by the resume still reads the inbox: %s", got.raw)
 	}
+}
+
+// sameRepository reports whether a decoded repository object holds exactly
+// want's fields.
+func sameRepository(got any, want map[string]string) bool {
+	m, ok := got.(map[string]any)
+	if !ok || len(m) != len(want) {
+		return false
+	}
+	for k, v := range want {
+		if m[k] != v {
+			return false
+		}
+	}
+	return true
 }

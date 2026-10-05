@@ -86,11 +86,21 @@ type Message struct {
 // OfferDetail is an offer as its announcement carries it, in the shape of
 // the offer route's body.
 type OfferDetail struct {
-	BaseCommit        string       `json:"base_commit"`
-	Branch            string       `json:"branch"`
-	Process           OfferProcess `json:"process"`
-	InstructionDigest string       `json:"instruction_digest"`
-	ExpiresAt         time.Time    `json:"expires_at"`
+	Repository        OfferRepository `json:"repository"`
+	Process           OfferProcess    `json:"process"`
+	InstructionDigest string          `json:"instruction_digest"`
+	ExpiresAt         time.Time       `json:"expires_at"`
+}
+
+// OfferRepository is the offer's repository, as the offer route takes it:
+// where the work happens and the base and branch it starts from.
+type OfferRepository struct {
+	Kind          string `json:"kind"`
+	URL           string `json:"url"`
+	Access        string `json:"access"`
+	DefaultBranch string `json:"default_branch"`
+	BaseCommit    string `json:"base_commit"`
+	Branch        string `json:"branch"`
 }
 
 // OfferProcess is the offer's process pin, as the offer route takes it.
@@ -467,11 +477,20 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 			it.Task = &task
 		}
 		if offer != "" {
-			var o OfferDetail
+			var o struct {
+				OfferDetail
+				// An announcement from before schema 24 named the base and
+				// branch beside the process, and no repository.
+				BaseCommit string `json:"base_commit"`
+				Branch     string `json:"branch"`
+			}
 			if err := json.Unmarshal([]byte(offer), &o); err != nil {
 				return nil, fmt.Errorf("read the offer of message %s: %w", it.ID, err)
 			}
-			it.Offer = &o
+			if o.Repository.BaseCommit == "" {
+				o.Repository.BaseCommit, o.Repository.Branch = o.BaseCommit, o.Branch
+			}
+			it.Offer = &o.OfferDetail
 		}
 		if it.CreatedAt, err = parseTime(created); err != nil {
 			return nil, err

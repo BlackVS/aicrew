@@ -48,7 +48,8 @@ func newClaimStopEnv(t *testing.T) claimStopEnv {
 
 func (e claimStopEnv) claimInput(taskID string) ClaimInput {
 	return ClaimInput{Task: TaskRef{HubID: "hub-test", ProjectID: "project-t", TaskID: taskID}, ExpectedRevision: 3,
-		BaseCommit: "base-1", Branch: "work/" + taskID, Process: testPin, InstructionDigest: testPin.InstructionDigest}
+		BaseCommit: "base-1", Branch: "work/" + taskID, Repository: testRepository, Process: testPin,
+		InstructionDigest: testPin.InstructionDigest}
 }
 
 func (e claimStopEnv) settle(t *testing.T, token string, a Attempt, st Step, hint StepHint) (Attempt, Settlement, error) {

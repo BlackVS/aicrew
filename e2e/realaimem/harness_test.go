@@ -59,6 +59,10 @@ const (
 	// its URL is recorded, never fetched.
 	processRepo     = "https://git.example.test/e2e/process.git"
 	processManifest = "process/manifest.json"
+	// The repository the hub binds to the project, which every offer and
+	// claim names: recorded, never fetched.
+	repoKind = "gitea"
+	repoURL  = "https://git.example.test/e2e/pilot.git"
 )
 
 // processCommit and instructionHash are the bootstrap's: the commit of the

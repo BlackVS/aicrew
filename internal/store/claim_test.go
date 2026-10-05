@@ -32,7 +32,7 @@ func newClaimTeam(t *testing.T, s *Store) claimTeam {
 func (e claimTeam) claimReq(by crewMember, taskID string) ClaimRequest {
 	return ClaimRequest{SessionID: by.sess.ID, Generation: by.sess.Generation, Task: task(taskID),
 		ExpectedRevision: 3, BaseCommit: "base-commit-1", Branch: "work/" + taskID,
-		Process: testPin, InstructionDigest: testPin.InstructionDigest}
+		Repository: testRepository, Process: testPin, InstructionDigest: testPin.InstructionDigest}
 }
 
 func (e claimTeam) claim(t *testing.T, key string, by crewMember, taskID string) (Attempt, error) {

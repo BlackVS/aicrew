@@ -119,7 +119,8 @@ func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
 	}
 	if o.steps {
 		read := store.TeamGrantsRead{HubID: "hub-test", State: store.GrantsEnabled, At: time.Now(),
-			Grants: []store.TeamGrant{{HubID: "hub-test", ProjectID: "project-t"}}}
+			Grants: []store.TeamGrant{{HubID: "hub-test", ProjectID: "project-t",
+				Repository: &store.GrantRepository{Kind: "gitea", URL: testRepository["url"], Access: "write"}}}}
 		if _, err := st.RecordTeamGrants(ctx, store.ReconcilerCaller(), tm.ID, read); err != nil {
 			t.Fatal(err)
 		}

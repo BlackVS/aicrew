@@ -323,6 +323,11 @@ func setupCoordinationWith(t *testing.T, withReader bool) *coordEnv {
 	e := &coordEnv{running: r, op: op, team: team, hub: hub,
 		lead: join("lead", store.RoleCoordinator), worker: join("worker", store.RoleWorker),
 		indep: join("indep", store.RoleIndependent)}
+	// The worker's home verified write access to the project's repository.
+	if _, err := r.store.ReportCapabilitiesWithToken(ctx, e.worker.token, []store.Capability{{Host: "git.example.test",
+		Kind: coordRepo.Kind, Account: "worker", Repositories: []store.RepositoryCapability{{URL: coordRepo.URL, Access: "write"}}}}); err != nil {
+		t.Fatal(err)
+	}
 	_, e.bearer, err = r.store.IssueIntrospectionCredential(ctx, op, "cred", coordHub)
 	if err != nil {
 		t.Fatal(err)

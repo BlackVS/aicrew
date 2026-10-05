@@ -72,6 +72,14 @@ func setupStepsWith(t *testing.T, o crewOptions) *stepEnv {
 	if _, err := db.Exec(`UPDATE agents SET linked_hub_id = 'hub-test', linked_user_id = 'user-lead', linked_token_id = 'tok-lead' WHERE id = ?`, lead.ID); err != nil {
 		t.Fatal(err)
 	}
+	// Every agent of the crew verified write access to the project's
+	// repository, as its launcher would report it.
+	report := `[{"host":"git.example.test","kind":"gitea","account":"member","repositories":[{"url":"` + testRepository["url"] +
+		`","access":"write"}]}]`
+	if _, err := db.Exec(`INSERT INTO agent_capabilities (agent_id, report, reported_at) SELECT id, ?, '2026-01-01T00:00:00.000000000Z' FROM agents`,
+		report); err != nil {
+		t.Fatal(err)
+	}
 	db.Close()
 	coord, _ := store.AgentCaller(lead.ID)
 	coordSess, err := c.store.StartSession(ctx, coord, "start-lead", c.teamID)

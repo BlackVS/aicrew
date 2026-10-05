@@ -40,6 +40,7 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	t := h.t
 	t.Helper()
 	h.newCA()
+	h.forge = h.startForge()
 	hubCert, hubKey, hubPin := h.leaf("hub")
 	aCert, aKey, aPin := h.leaf("aicrewd")
 	h.hubPin, h.aicrewdPin = hubPin, aPin
@@ -83,7 +84,7 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	h.must(host, nil, h.aimem(), "process", "select", processRepo, processCommit, processManifest, "-p", projectID)
 	// The project's repository: recorded, never fetched; every offer and
 	// claim names it, and aicrewd checks it against the hub's.
-	h.must(host, nil, h.aimem(), "project", "repo", "set", "--project", projectID, "--kind", repoKind, "--url", repoURL,
+	h.must(host, nil, h.aimem(), "project", "repo", "set", "--project", projectID, "--kind", repoKind, "--url", h.forge.repoURL(),
 		"--access", "write")
 
 	// 4. The peer, and the hub's ID.
@@ -246,7 +247,8 @@ func (h *harness) prepareMember(sp memberSpec, aEnv []string) *member {
 	dir := h.mkdir(filepath.Join(h.root, "m", name))
 	mem := &member{name: name, role: role, dir: dir, userID: user.ID, home: filepath.Join(dir, "a"), token: tok.Secret}
 	h.knowSecret(tok.Secret)
-	mem.env = h.isolatedEnv(dir)
+	// The member's home reads the run's forge under the run's CA.
+	mem.env = h.isolatedEnv(dir, "SSL_CERT_FILE="+h.caFile)
 	// The member's aimem installation is the one in its agent home (D-STORE),
 	// which aicrew-agent gives every aimem process it starts there: the
 	// operator provisions it with the home's two variables.
@@ -289,9 +291,16 @@ func (h *harness) joinMember(mem *member) {
 	h.writePrivate(tokenFile, []byte(mem.token+"\n"))
 	h.knowSecretFile(tokenFile)
 	mem.token = ""
-	h.join(mem, mem.code, "-aimem-url", h.hubProxy.url, "-aimem-token-file", tokenFile, "-aimem-ca-file", h.caFile)
+	// The member's own forge token, verified and written by join (--cred).
+	forgeTok := h.forge.member(name)
+	h.knowSecret(forgeTok)
+	forgeFile := filepath.Join(mem.dir, "forge.token")
+	h.writePrivate(forgeFile, []byte(forgeTok+"\n"))
+	h.join(mem, mem.code, "-aimem-url", h.hubProxy.url, "-aimem-token-file", tokenFile, "-aimem-ca-file", h.caFile,
+		"--cred", h.forge.host+"="+forgeFile)
 	mem.code = ""
 	os.Remove(tokenFile)
+	os.Remove(forgeFile)
 	var cred struct {
 		Credential string `json:"credential"`
 		State      string `json:"state"`

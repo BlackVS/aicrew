@@ -371,6 +371,9 @@ trusts a caller it is given, and a test enforces that.
 | `POST /v1/crew/attempts/{id}/settle` | `Authorization: Bearer` session token | Settle a step through aimem's read scope. |
 | `GET /v1/crew/inbox?limit=N` | `Authorization: Bearer` session token | Deliver the member's oldest unacknowledged messages, at most N (1 to 100, default 20) and at most 128 KiB of JSON (always at least one), and record the delivery of those returned ("Inbox, receipts and audit"). Reply: `messages`. |
 | `POST /v1/crew/inbox/ack`, JSON `{"ids"}`, with `Idempotency-Key` | `Authorization: Bearer` session token | Acknowledge messages delivered to the member. Reply: `acknowledged`, `already`. A message never delivered to it is `409 message_not_delivered`. |
+| `GET /v1/crew/requirements` | `Authorization: Bearer` session token | The team's granted projects with the repository the hub binds to each (`hub_id`, `project_id`, `repository {kind, url, access}`), from the grants snapshot: what a member's home verifies ("Capabilities"). Reply: `projects`. |
+| `POST /v1/crew/capabilities`, JSON `{"capabilities"}` | `Authorization: Bearer` session token | Record the member's capabilities, replacing its earlier report ("Capabilities"). Reply: `reported_at`. |
+| `GET /v1/crew/capabilities` | `Authorization: Bearer` session token | The team's current members with their last reports (`agent_id`, `label`, `role`, `reported_at`, `capabilities`), for planning who can take a task. Reply: `members`. |
 
 - **Entry and resume.** The exchange names the proof type, this service as
   `audience`, the `challenge_id`, and either `team_id` (enter) or
@@ -640,7 +643,8 @@ begin needs an `Idempotency-Key`; settle does not.
     this step;
   - `409 task_busy`: this service already has an open attempt on the task,
     in any team;
-  - `409 project_not_granted`, `409 repository_mismatch` and the retryable
+  - `409 project_not_granted`, `409 repository_mismatch`, `409
+    capability_missing` ("Capabilities") and the retryable
     `503 hub_unavailable` at an offer or a claim ("Teams, projects and
     roles", "The attempt's repository");
   - `409` for `agent_busy`, `attempt_state`, `offer_expired`,
@@ -859,6 +863,26 @@ All six are recorded on the attempt when it is created and never change for
 its lifetime: a repository the hub binds later changes nothing recorded, and
 the next offer must name the new one. The attempt's view and the offer's
 announcement carry them.
+
+### Capabilities
+
+A member's capabilities are what its home verified on each forge host: the
+account its credential authenticates as there, and each repository the team
+requires, with the access the forge itself reports for it
+(`capabilities: [{host, kind, account, repositories: [{url, access}]}]`, at
+most 32 hosts of 256 repositories each).
+- The member's launcher reads the team's requirements, verifies them with
+  the home's own credentials, and reports them at its session's start and
+  whenever `aicrew-agent check` asks it to; each report replaces the last.
+- aicrewd stores them per agent as **planning facts**: they authorize
+  nothing, the forge enforces each token, and a missing capability never
+  blocks the member's home or its other work.
+- **At an offer**, after the live team read and the repository check, aicrewd
+  refuses an offer whose worker's last report did not verify the offer's
+  repository at the offer's access or higher (`write` covers `read`):
+  `409 capability_missing`, naming the host and the access. Nothing begins.
+  An independent claim is not checked: the claimer verifies with its own
+  credential, and the worker's own check is the last guard at accept.
 
 ### Blocked attempts
 

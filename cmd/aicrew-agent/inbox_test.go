@@ -18,6 +18,10 @@ type fakeInbox struct {
 	acked []string
 }
 
+func (f *fakeInbox) Read(context.Context, string, string) (json.RawMessage, error) {
+	return json.RawMessage(`{"projects":[]}`), nil
+}
+
 func (f *fakeInbox) Inbox(context.Context, string, int) (json.RawMessage, error) {
 	return json.RawMessage(f.page), nil
 }

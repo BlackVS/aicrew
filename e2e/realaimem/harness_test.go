@@ -59,10 +59,10 @@ const (
 	// its URL is recorded, never fetched.
 	processRepo     = "https://git.example.test/e2e/process.git"
 	processManifest = "process/manifest.json"
-	// The repository the hub binds to the project, which every offer and
-	// claim names: recorded, never fetched.
+	// The forge dialect of the repository the hub binds to the project
+	// (the run's test forge, forge_test.go), which every offer and claim
+	// names.
 	repoKind = "gitea"
-	repoURL  = "https://git.example.test/e2e/pilot.git"
 )
 
 // processCommit and instructionHash are the bootstrap's: the commit of the
@@ -73,6 +73,8 @@ var processCommit, instructionHash string
 // harness is one isolated run: a fresh directory, a hub, aicrewd, and the
 // members, torn down at the end.
 type harness struct {
+	// forge is the run's test forge, which holds the project's repository.
+	forge   *testForge
 	t       *testing.T
 	root    string // every path the run uses is under it
 	bin     string

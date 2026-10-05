@@ -26,26 +26,15 @@ func (s *Server) liveGrant(ctx context.Context, teamID string, task store.TaskRe
 	if err != nil {
 		return none, refusalCode(err)
 	}
-	b, configured := s.hubs[t.Hub]
-	switch {
-	case t.Hub == "":
+	if t.Hub == "" {
 		return none, "project_not_granted" // a team that names no hub is granted nothing
-	case !configured || b.teams == nil || !b.teams.CanRead():
-		s.log.Warn("team read: the team's hub has no team.read credential", "team_id", t.ID, "hub", t.Hub)
-		return none, "hub_unavailable"
-	case task.HubID != b.id:
+	}
+	if b, ok := s.hubs[t.Hub]; ok && task.HubID != b.id {
 		return none, "project_not_granted"
 	}
-	at := time.Now()
-	team, err := b.teams.ReadTeam(ctx, t.ID)
-	read, ok := grantsRead(b.id, team, err, at)
-	if !ok {
-		s.log.Warn("team read", "team_id", t.ID, "hub", t.Hub, "code", hubteams.Code(err))
-		return none, "hub_unavailable"
-	}
-	if _, err := s.store.RecordTeamGrants(ctx, store.ReconcilerCaller(), t.ID, read); err != nil {
-		s.log.Error("record a team's grants", "team_id", t.ID, "err", err)
-		return none, "hub_unavailable"
+	read, code := s.readTeam(ctx, t)
+	if code != "" {
+		return none, code
 	}
 	for _, g := range read.Grants {
 		if g.ProjectID == task.ProjectID {
@@ -53,6 +42,28 @@ func (s *Server) liveGrant(ctx context.Context, teamID string, task store.TaskRe
 		}
 	}
 	return none, "project_not_granted"
+}
+
+// readTeam reads the team's grants from its hub, once, and records them:
+// the read, or hub_unavailable when the hub did not answer, refused the
+// read, or its block has no team.read credential.
+func (s *Server) readTeam(ctx context.Context, t store.Team) (store.TeamGrantsRead, string) {
+	b, configured := s.hubs[t.Hub]
+	if !configured || b.teams == nil || !b.teams.CanRead() {
+		s.log.Warn("team read: the team's hub has no team.read credential", "team_id", t.ID, "hub", t.Hub)
+		return store.TeamGrantsRead{}, "hub_unavailable"
+	}
+	team, err := b.teams.ReadTeam(ctx, t.ID)
+	read, ok := grantsRead(b.id, team, err, time.Now())
+	if !ok {
+		s.log.Warn("team read", "team_id", t.ID, "hub", t.Hub, "code", hubteams.Code(err))
+		return read, "hub_unavailable"
+	}
+	if _, err := s.store.RecordTeamGrants(ctx, store.ReconcilerCaller(), t.ID, read); err != nil {
+		s.log.Error("record a team's grants", "team_id", t.ID, "err", err)
+		return read, "hub_unavailable"
+	}
+	return read, ""
 }
 
 // grantsRead turns a team.read answer into the snapshot it records: the

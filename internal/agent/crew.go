@@ -345,6 +345,16 @@ func (c *Crew) LocalStep(ctx context.Context, key, token, path string, body []by
 	return out, nil
 }
 
+// Read is one session-API read as the token's session: the requirements
+// or the team's capabilities.
+func (c *Crew) Read(ctx context.Context, token, path string) (json.RawMessage, error) {
+	var out json.RawMessage
+	if _, _, err := c.exchangeUpTo(ctx, maxInboxReply, http.MethodGet, path, "", "", token, nil, &out, http.StatusOK); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // inboxPath is aicrewd's member inbox (pilot G1).
 const inboxPath = "/v1/crew/inbox"
 

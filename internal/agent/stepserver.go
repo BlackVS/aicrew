@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/forge"
 	"github.com/BlackVS/aicrew/internal/privatefile"
 )
 
@@ -85,7 +86,11 @@ type StepError struct {
 type LocalAPI interface {
 	LocalStep(ctx context.Context, key, token, path string, body []byte) (json.RawMessage, error)
 	Inbox(ctx context.Context, token string, limit int) (json.RawMessage, error)
+	Read(ctx context.Context, token, path string) (json.RawMessage, error)
 }
+
+// newAccessAPI is the forge a capability check reads; tests replace it.
+var newAccessAPI = func() AccessAPI { return forge.NewClient() }
 
 // stepOps are the reservation steps: the begin route and where the aimem
 // task comes from.
@@ -276,6 +281,14 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 			return answerErr(err)
 		}
 		return StepAnswer{OK: true, Status: StepDone, Result: out}
+	case call.Op == "capabilities":
+		// Verify the team's requirements with this home's credentials and
+		// report them (aicrew-agent check): answers the check's rows.
+		rows, err := s.ReportCapabilities(ctx)
+		if err != nil {
+			return answerErr(err)
+		}
+		return done(rows)
 	case call.Op == "ack":
 		// Acknowledge delivered messages: {"ids": [...]}.
 		var in struct {
@@ -303,7 +316,7 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 	op, ok := stepOps[call.Op]
 	if !ok {
 		return refuse("invalid_request", "Unknown step "+call.Op+".", "Use offer, accept, withdraw, claim, work, release, finalize, "+
-			"decline, review, stop, confirm-stop, confirm-delivery, recover, pending, inbox or ack.")
+			"decline, review, stop, confirm-stop, confirm-delivery, recover, pending, inbox, ack or capabilities.")
 	}
 	req := StepRequest{Body: bodyOrEmpty(call.Body), TaskID: call.TaskID}
 	if op.fromBody {
@@ -369,6 +382,12 @@ func attemptIDShape(id string) bool {
 // ErrNoLauncher reports that no launcher serves the agent home's step
 // channel.
 var ErrNoLauncher = errors.New("no aicrew-agent launcher serves this agent home; start the client with `aicrew-agent run`")
+
+// ReportCapabilities verifies the team's requirements with the home's
+// credentials and reports them to aicrewd as the launcher's session.
+func (s *StepServer) ReportCapabilities(ctx context.Context) ([]CapabilityRow, error) {
+	return ReportCapabilities(ctx, s.home, s.local, newAccessAPI(), s.driver.Session.stepToken())
+}
 
 // CallStep sends one call to the launcher of home and returns its answer.
 func CallStep(ctx context.Context, home string, call StepCall) (StepAnswer, error) {

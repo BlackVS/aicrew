@@ -113,6 +113,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 	s.handleOwnBody(http.MethodPost, LeavePath, s.leave)
 	s.registerAttempts()
 	s.registerInbox()
+	s.registerCapabilities()
 	s.registerRedemption()
 	s.registerAdmin()
 	s.http = &http.Server{

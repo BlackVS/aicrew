@@ -305,6 +305,61 @@ func (c *Client) BranchHead(ctx context.Context, host string, k Kind, token, pat
 	return sha, nil
 }
 
+// Repository access levels, as RepositoryAccess answers them.
+const (
+	AccessWrite = "write"
+	AccessRead  = "read"
+	AccessNone  = ""
+)
+
+// RepositoryAccess is what token may do on the repository at path, as the
+// forge itself reports it: "write" (push, and so open pull requests), "read",
+// or "" when the repository is visible but grants neither. A repository the
+// token cannot see is ErrNotFound.
+func (c *Client) RepositoryAccess(ctx context.Context, host string, k Kind, token, path string) (string, error) {
+	var r struct {
+		Permissions struct {
+			Push bool `json:"push"`
+			Pull bool `json:"pull"`
+			// GitLab's levels: 10 guest, 20 reporter, 30 developer and up.
+			Project *struct {
+				Level int `json:"access_level"`
+			} `json:"project_access"`
+			Group *struct {
+				Level int `json:"access_level"`
+			} `json:"group_access"`
+		} `json:"permissions"`
+	}
+	if err := c.get(ctx, host, k, token, repoPath(k, path), &r); err != nil {
+		return AccessNone, err
+	}
+	p := r.Permissions
+	if k == GitLab {
+		level := 0
+		for _, a := range []*struct {
+			Level int `json:"access_level"`
+		}{p.Project, p.Group} {
+			if a != nil && a.Level > level {
+				level = a.Level
+			}
+		}
+		switch {
+		case level >= 30:
+			return AccessWrite, nil
+		case level >= 20:
+			return AccessRead, nil
+		}
+		return AccessNone, nil
+	}
+	switch {
+	case p.Push:
+		return AccessWrite, nil
+	case p.Pull:
+		return AccessRead, nil
+	}
+	return AccessNone, nil
+}
+
 func repoPath(k Kind, path string) string {
 	if k == GitLab {
 		return "/projects/" + url.PathEscape(path)

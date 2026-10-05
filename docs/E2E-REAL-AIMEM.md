@@ -58,7 +58,11 @@ Every listener is on 127.0.0.1.
 
 1. **TLS.** A throwaway CA, and a leaf for the hub and for aicrewd, for
    127.0.0.1 and localhost. aicrewd pins the hub (`spki_sha256`), and the hub
-   pins aicrewd (`--peer-trust-pin`).
+   pins aicrewd (`--peer-trust-pin`). A leaf of the same CA serves the
+   run's test forge (`forge_test.go`): a Gitea-dialect API on 127.0.0.1 that
+   answers who a token is, the project repository's permissions for it and
+   its default branch's head, and holds no Git data. The members read it
+   under the run's CA (`SSL_CERT_FILE`).
 2. **The hub, following aimem's pilot runbook:**
    - `tasks on` and `process select`;
    - aicrew registered as the identity peer, with the hub ID read back;
@@ -130,6 +134,16 @@ no fault armed.
     already cannot read the task through aimem.
   - Nothing reaches aimem's reservation.
   - Granted again, the offer commits.
+- **G2. Capabilities.** Each member joined with its own forge token
+  (`join --cred`), and its launcher reported, as its session started, that
+  its home verified write access to the project's repository; the run
+  waits for the three reports before S1.
+  - The forge withdraws the worker's push right; the worker's check
+    (`aicrew-agent step capabilities`, through its launcher) reports read
+    access.
+  - The next offer to the worker is refused `capability_missing`, naming
+    the forge's host and `write`, and nothing begins.
+  - Restored and checked again, the offer commits.
 
 Each scenario asserts both stores: aicrew's attempts, audit and capacity,
 read-only; and aimem's tasks, holds and receipts, through admin reads.

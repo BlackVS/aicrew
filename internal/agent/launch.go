@@ -82,8 +82,20 @@ func serveSteps(e *Engine) *StepServer {
 		return nil
 	}
 	s.RecoverPending()
+	// The session's start reports the home's capabilities (3.6); a failure
+	// is logged and never holds the session back.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), capabilityBudget)
+		defer cancel()
+		if _, err := s.ReportCapabilities(ctx); err != nil {
+			e.Log.Warn("the capabilities were not reported", "error", err.Error())
+		}
+	}()
 	return s
 }
+
+// capabilityBudget bounds the capability report at a session's start.
+const capabilityBudget = 2 * time.Minute
 
 // RunClient starts the agent's team session, runs the client as a child in
 // the agent home with the session bound to it, keeps the session alive

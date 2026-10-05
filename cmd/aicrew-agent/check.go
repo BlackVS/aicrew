@@ -90,6 +90,12 @@ func printCheck(w io.Writer, rep agent.CheckReport) {
 			fmt.Fprintf(w, "%-28s %-24s %-11s %s\n", f.Host, f.Account, f.Purpose, f.State)
 		}
 	}
+	if len(rep.Projects) > 0 {
+		fmt.Fprintf(w, "%-20s %-44s %-24s %-20s %-8s %s\n", "project", "repository", "host", "account", "required", "state")
+		for _, p := range rep.Projects {
+			fmt.Fprintf(w, "%-20s %-44s %-24s %-20s %-8s %s\n", p.Project, p.Repository, p.Host, orNone(p.Account), p.Required, p.State)
+		}
+	}
 	for _, n := range rep.Notices {
 		fmt.Fprintf(w, "notice: %s\n", n)
 	}

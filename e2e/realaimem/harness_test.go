@@ -44,11 +44,12 @@ import (
 	"time"
 )
 
-// aimemPin is the aimem commit the harness builds (b4 decision D-b4-1): the
-// v0.7.4 release, the tested aimem in supported.json. It carries every
-// prerequisite (C5b, C6, C5-w3, `aimem hub credential`), the fixture's
-// corrected fences (#164) and `hub add --ca-file` with token files (#165).
-const aimemPin = "79f713fcde7746ec2db2cca59102906da6b4a280"
+// aimemPin is the aimem commit the harness builds (b4 decision D-b4-1):
+// aimem master after #176, past the v0.7.4 release. Beside every earlier
+// prerequisite (C5b, C6, C5-w3, `aimem hub credential`, the fixture's
+// corrected fences of #164, `hub add --ca-file` of #165) it carries team
+// registration and team read (#175): aicrewd names its own team profiles.
+const aimemPin = "935873dbf3808cd937d5ecc97ed292bbad5f9c9c"
 
 const (
 	serviceID = "aicrew-e2e"

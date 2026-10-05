@@ -36,15 +36,18 @@ yet: the harness skips there.
 ## The pin
 
 `aimemPin` in `e2e/realaimem/harness_test.go` is the aimem commit the
-harness builds: the v0.7.4 release (79f713f), the tested aimem in
-`internal/agent/supported.json`. It carries every prerequisite (C5b, C6,
-C5-w3 and `aimem hub credential`), the reservation fixture's corrected
-fences, and `hub add --ca-file` with token files.
+harness builds: aimem master at 935873d, after aimem #176, past the
+v0.7.4 release that `internal/agent/supported.json` names. It carries every
+prerequisite (C5b, C6, C5-w3 and `aimem hub credential`), the reservation
+fixture's corrected fences, `hub add --ca-file` with token files, and team
+registration and team read (aimem #175), with which aicrewd names its own
+team profiles.
 
 The build stamps the commit's `git describe` as aimem's version, as aimem's
-release build stamps the tag, so the version is `v0.7.4` and
-`aicrew-agent`'s dependency check reads it as the supported release. The
-source clone must hold the tag's commit (`git fetch --tags`).
+release build stamps the tag, so the version is `v0.7.4-8-g935873d`, which
+`aicrew-agent`'s dependency check reads as newer than the supported
+release. The source clone must hold the commit and the tag
+(`git fetch --tags`).
 
 ## What a run sets up
 
@@ -59,18 +62,20 @@ Every listener is on 127.0.0.1.
 2. **The hub, following aimem's pilot runbook:**
    - `tasks on` and `process select`;
    - aicrew registered as the identity peer, with the hub ID read back;
-   - the identity.redeem and reservation.read credentials;
-   - the team profile, with its grant.
+   - the identity.redeem, reservation.read and team.register credentials.
 3. **aicrew.**
-   - aicrewd starts with its operator credential and without its aimem
-     section, the order the pilot's deployment follows. The operator
-     administers it with `aicrew` through the operator API while it runs.
-   - The team with its project, created with `aicrew team create`.
+   - aicrewd starts with its operator credential and the hub as a named
+     block of `aimem_hubs`, pointing at the hub through the fault proxy.
+     The operator administers it with `aicrew` through the operator API
+     while it runs.
+   - The team with its project, created with `aicrew team create --hub`:
+     aicrewd registers it on the hub (team.register), and the run fails
+     unless the team comes back `registered`.
+   - The team's grant on the hub, by the name aicrewd registered
+     (`aimem identity team grant --team-name`).
    - The hub's outbound credential, issued with `aicrew hub-credential
      issue`.
    - One invitation per member, issued with `aicrew invitation issue`.
-   - aicrewd then restarts with its aimem section, pointing at the hub
-     through the fault proxy.
 4. **Members:** a coordinator, a worker and an independent member.
    - Each is an aimem user with an admin-issued `aimem_user_` token. Its
      aimem client state is the installation in its agent home, `<home>/aimem`,

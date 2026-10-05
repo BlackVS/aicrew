@@ -27,6 +27,25 @@ type ReservationReader interface {
 	HoldStatus(ctx context.Context, task TaskRef) (ScopeHold, error)
 }
 
+// HubReader is a read scope bound to the one hub that issued it. Another
+// hub's task is never read through it: its "none" would say nothing about
+// that task, and taken as final it would settle a committed step as not
+// committed or close a held attempt as recovered.
+type HubReader struct {
+	ReservationReader
+	HubID string
+}
+
+// ReaderFor is reader if it may read the reservations of hubID's tasks, or
+// nil: a HubReader of another hub. A reader bound to no hub reads every
+// task, as with one unnamed hub.
+func ReaderFor(reader ReservationReader, hubID string) ReservationReader {
+	if h, ok := reader.(HubReader); ok && h.HubID != hubID {
+		return nil
+	}
+	return reader
+}
+
 // Read-scope receipt and hold states.
 const (
 	ScopeCommitted = "committed"

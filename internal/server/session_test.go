@@ -611,7 +611,7 @@ func TestExposureGuard(t *testing.T) {
 		"ListIntrospectionCredentials": true, "IssueIntrospectionCredential": true, "RevokeIntrospectionCredential": true,
 		"ListTeams": true, "CreateTeam": true, "GetTeam": true, "ListMembers": true, "SetTeamProjects": true,
 		"RenameTeam": true, "ListInvitations": true, "IssueInvitation": true, "GetInvitation": true,
-		"RevokeInvitation": true,
+		"RevokeInvitation": true, "RecordTeamRegistration": true,
 	}
 	allowed := map[string]bool{
 		"AuthenticateIntrospection": true, "Introspect": true,
@@ -711,7 +711,7 @@ func TestRouteInventory(t *testing.T) {
 		"POST /v1/admin/hub-credentials", "POST /v1/admin/hub-credentials/revoke", "POST /v1/admin/hub-credentials/rotate",
 		"POST /v1/admin/introspection-credentials", "POST /v1/admin/introspection-credentials/revoke",
 		"POST /v1/admin/introspection-credentials/rotate", "POST /v1/admin/invitations", "POST /v1/admin/invitations/revoke",
-		"POST /v1/admin/team/projects", "POST /v1/admin/team/rename", "POST /v1/admin/teams",
+		"POST /v1/admin/team/projects", "POST /v1/admin/team/register", "POST /v1/admin/team/rename", "POST /v1/admin/teams",
 		"POST /v1/crew/attempts", "POST /v1/crew/attempts/claim",
 		"POST /v1/crew/attempts/{id}/accept", "POST /v1/crew/attempts/{id}/confirm-delivery",
 		"POST /v1/crew/attempts/{id}/confirm-stop", "POST /v1/crew/attempts/{id}/decline", "POST /v1/crew/attempts/{id}/finalize",

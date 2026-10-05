@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/aimemread"
+	"github.com/BlackVS/aicrew/internal/hubteams"
 	"github.com/BlackVS/aicrew/internal/reconcile"
 	"github.com/BlackVS/aicrew/internal/store"
 	"github.com/BlackVS/aicrew/internal/verifier"
@@ -44,6 +45,8 @@ type Server struct {
 	// verifier redeems aimem proofs at session entry; nil when no aimem
 	// hub is configured.
 	verifier store.Verifier
+	// hubs are the configured hubs by name (bindHubs).
+	hubs map[string]hubBinding
 	// reader is aimem's read scope for settling member-driven steps; nil
 	// when no read credential is configured, so those steps stay pending.
 	reader store.ReservationReader
@@ -86,26 +89,8 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 			NextProtos:   []string{"http/1.1"},
 		},
 	}
-	if cfg.Aimem != nil {
-		v, err := verifier.New(cfg.Aimem.verifierConfig(cfg.ServiceID))
-		if err != nil {
-			return nil, fmt.Errorf("aimem: %w", err)
-		}
-		if err := v.CheckCredential(); err != nil {
-			return nil, fmt.Errorf("aimem.redemption_token_file: %w", err)
-		}
-		s.verifier = v
-		if cfg.Aimem.ReadTokenFile != "" {
-			r, err := aimemread.New(cfg.Aimem.readerConfig(cfg.ServiceID))
-			if err != nil {
-				return nil, fmt.Errorf("aimem: %w", err)
-			}
-			if err := r.CheckCredential(); err != nil {
-				return nil, fmt.Errorf("aimem.read_token_file: %w", err)
-			}
-			s.reader = r
-			s.loop = reconcile.New(st, r, log)
-		}
+	if err := s.bindHubs(); err != nil {
+		return nil, err
 	}
 	if err := s.checkOperatorToken(); err != nil {
 		return nil, fmt.Errorf("operator_token_file: %w", err)
@@ -332,4 +317,105 @@ func (r *statusRecorder) WriteHeader(code int) {
 func (r *statusRecorder) Write(b []byte) (int, error) {
 	r.wrote = true
 	return r.ResponseWriter.Write(b)
+}
+
+// hubBinding is one configured hub as the service uses it: its stable ID
+// and, when the hub issued them, its team.register and team.read client.
+type hubBinding struct {
+	id    string
+	teams hubTeams
+}
+
+// hubTeams is what the service asks of a hub's team operations;
+// *hubteams.Client is the real one.
+type hubTeams interface {
+	CanRegister() bool
+	CanRead() bool
+	Register(ctx context.Context, teamID, name string) (hubteams.Registration, error)
+	ReadTeam(ctx context.Context, teamID string) (hubteams.Team, error)
+}
+
+// WithHub binds a hub alias to a hub ID and its team operations, replacing
+// what the configuration would build. Tests use it.
+func WithHub(name, hubID string, teams hubTeams) Option {
+	return func(s *Server) { s.hubs[name] = hubBinding{id: hubID, teams: teams} }
+}
+
+// bindHubs builds the configured hubs' clients: a redemption verifier per
+// hub, routed by the challenge's hub ID; the reservation read scope and the
+// reconciliation loop from the one hub that has a read credential; and each
+// hub's team client.
+func (s *Server) bindHubs() error {
+	cfg := s.cfg
+	hubs := cfg.Hubs()
+	s.hubs = map[string]hubBinding{}
+	if len(hubs) == 0 {
+		return nil
+	}
+	if cfg.Aimem != nil {
+		s.log.Warn("aicrewd.json: the aimem block is read as aimem_hubs[" + LegacyHubName + "] for this release " +
+			"and is removed in 0.4.0; move it into aimem_hubs with its name and hub_id")
+	}
+	verifiers := hubVerifier{}
+	for i, h := range hubs {
+		at := fmt.Sprintf("aimem_hubs[%d]", i)
+		if cfg.Aimem != nil {
+			at = "aimem"
+		}
+		v, err := verifier.New(h.verifierConfig(cfg.ServiceID))
+		if err != nil {
+			return fmt.Errorf("%s: %w", at, err)
+		}
+		if err := v.CheckCredential(); err != nil {
+			return fmt.Errorf("%s.redemption_token_file: %w", at, err)
+		}
+		verifiers[h.HubID] = v
+		if h.ReadTokenFile != "" {
+			r, err := aimemread.New(h.readerConfig(cfg.ServiceID))
+			if err != nil {
+				return fmt.Errorf("%s: %w", at, err)
+			}
+			if err := r.CheckCredential(); err != nil {
+				return fmt.Errorf("%s.read_token_file: %w", at, err)
+			}
+			var scope store.ReservationReader = r
+			if h.HubID != "" {
+				scope = store.HubReader{ReservationReader: r, HubID: h.HubID}
+			}
+			s.reader = scope
+			s.loop = reconcile.New(s.store, scope, s.log)
+		}
+		b := hubBinding{id: h.HubID}
+		if tc, ok := h.teamsConfig(cfg.ServiceID); ok {
+			c, err := hubteams.New(tc)
+			if err != nil {
+				return fmt.Errorf("%s: %w", at, err)
+			}
+			if err := c.CheckCredentials(); err != nil {
+				return fmt.Errorf("%s: team credentials: %w", at, err)
+			}
+			b.teams = c
+		}
+		s.hubs[h.Name] = b
+	}
+	if cfg.Aimem != nil {
+		// The legacy block names no hub ID: its one verifier redeems every
+		// challenge, as before named hubs.
+		s.verifier = verifiers[""]
+	} else {
+		s.verifier = verifiers
+	}
+	return nil
+}
+
+// hubVerifier routes a redemption to its hub's verifier by the challenge's
+// hub ID.
+type hubVerifier map[string]store.Verifier
+
+func (m hubVerifier) Redeem(ctx context.Context, req store.RedeemRequest) (store.VerifiedIdentity, error) {
+	v, ok := m[req.HubID]
+	if !ok {
+		return store.VerifiedIdentity{}, &verifier.Error{Code: "peer_unknown", Reason: "hub"}
+	}
+	return v.Redeem(ctx, req)
 }

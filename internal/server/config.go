@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/aimemread"
+	"github.com/BlackVS/aicrew/internal/hubteams"
 	"github.com/BlackVS/aicrew/internal/verifier"
 )
 
@@ -33,9 +34,55 @@ type Config struct {
 	// is read on every operator call, so replacing the file rotates the
 	// credential without a restart.
 	OperatorTokenFile string `json:"operator_token_file"`
-	// Aimem names the aimem hub that vouches for agents' proofs. Without it
-	// the service refuses session entry and resume; everything else works.
+	// AimemHubs are the aimem hubs this service works with, one named block
+	// each (docs/proposals/PILOT-1-FOLLOWUPS.md, 2.2). Without any, the
+	// service refuses session entry and resume; everything else works.
+	AimemHubs []AimemHub `json:"aimem_hubs,omitempty"`
+	// Aimem is the single unnamed block before 0.3.0, read as one block
+	// named "default" for one release and refused together with
+	// aimem_hubs. It has no hub ID, so no team can name it as its hub.
 	Aimem *AimemConfig `json:"aimem,omitempty"`
+}
+
+// AimemHub is one named aimem hub: its name, the hub's stable ID, how to
+// reach and trust it, and the peer credentials aimem issued to this
+// service for it.
+type AimemHub struct {
+	// Name is the alias a team names its hub by (team create --hub).
+	Name string `json:"name"`
+	// HubID is the hub's stable identity, as invitations and task
+	// references name it.
+	HubID string `json:"hub_id"`
+	AimemConfig
+	// TeamRegisterTokenFile and TeamReadTokenFile hold the team.register
+	// and team.read peer credentials, each separate from the others.
+	TeamRegisterTokenFile string `json:"team_register_token_file,omitempty"`
+	TeamReadTokenFile     string `json:"team_read_token_file,omitempty"`
+}
+
+// LegacyHubName is the name the single block before 0.3.0 is read under.
+const LegacyHubName = "default"
+
+// Hubs are the configured hubs: aimem_hubs, or the legacy block as one hub
+// named "default".
+func (c Config) Hubs() []AimemHub {
+	if len(c.AimemHubs) > 0 {
+		return c.AimemHubs
+	}
+	if c.Aimem != nil {
+		return []AimemHub{{Name: LegacyHubName, AimemConfig: *c.Aimem}}
+	}
+	return nil
+}
+
+// teamsConfig is the hub's team.register and team.read client
+// configuration, or false when it has neither credential.
+func (h AimemHub) teamsConfig(serviceID string) (hubteams.Config, bool) {
+	if h.TeamRegisterTokenFile == "" && h.TeamReadTokenFile == "" {
+		return hubteams.Config{}, false
+	}
+	return hubteams.Config{BaseURL: h.BaseURL, ServiceID: serviceID, TLSMode: h.TLSTrustMode, TLSValue: h.TLSTrustValue,
+		RegisterTokenFile: h.TeamRegisterTokenFile, ReadTokenFile: h.TeamReadTokenFile}, true
 }
 
 // AimemConfig is how aicrew reaches aimem to redeem proof receipts
@@ -152,15 +199,52 @@ func (c Config) validate() error {
 	if d := time.Duration(c.ShutdownTimeout); d <= 0 || d > maxShutdownTimeout {
 		return fmt.Errorf("config: shutdown_timeout must be positive and at most %s", maxShutdownTimeout)
 	}
-	if c.Aimem != nil {
-		if _, err := verifier.New(c.Aimem.verifierConfig(c.ServiceID)); err != nil {
-			return fmt.Errorf("config: aimem: %w", err)
+	if c.Aimem != nil && len(c.AimemHubs) > 0 {
+		return errors.New("config: aimem and aimem_hubs are given together; move the aimem block into aimem_hubs")
+	}
+	names, ids, readers := map[string]bool{}, map[string]bool{}, ""
+	for i, h := range c.Hubs() {
+		at := fmt.Sprintf("aimem_hubs[%d]", i)
+		if c.Aimem != nil {
+			at = "aimem"
 		}
-		if c.Aimem.ReadTokenFile != "" {
-			if _, err := aimemread.New(c.Aimem.readerConfig(c.ServiceID)); err != nil {
-				return fmt.Errorf("config: aimem: %w", err)
+		if !hubNameShape.MatchString(h.Name) {
+			return fmt.Errorf("config: %s.name must be 1 to 32 lowercase letters, digits or '-'", at)
+		}
+		if names[h.Name] {
+			return fmt.Errorf("config: %s.name %q names two hubs", at, h.Name)
+		}
+		names[h.Name] = true
+		if c.Aimem == nil {
+			if !serviceIDShape.MatchString(h.HubID) || h.HubID == "." || h.HubID == ".." {
+				return fmt.Errorf("config: %s.hub_id is required: the hub's stable ID", at)
+			}
+			if ids[h.HubID] {
+				return fmt.Errorf("config: %s.hub_id %q is another hub's too", at, h.HubID)
+			}
+			ids[h.HubID] = true
+		}
+		if _, err := verifier.New(h.verifierConfig(c.ServiceID)); err != nil {
+			return fmt.Errorf("config: %s: %w", at, err)
+		}
+		if h.ReadTokenFile != "" {
+			if readers != "" {
+				// ReceiptByProof names no hub: one hub serves the read scope.
+				return fmt.Errorf("config: %s.read_token_file: only one hub serves the reservation read scope (%s does)", at, readers)
+			}
+			readers = h.Name
+			if _, err := aimemread.New(h.readerConfig(c.ServiceID)); err != nil {
+				return fmt.Errorf("config: %s: %w", at, err)
+			}
+		}
+		if tc, ok := h.teamsConfig(c.ServiceID); ok {
+			if _, err := hubteams.New(tc); err != nil {
+				return fmt.Errorf("config: %s: %w", at, err)
 			}
 		}
 	}
 	return nil
 }
+
+// hubNameShape is a hub's alias.
+var hubNameShape = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)

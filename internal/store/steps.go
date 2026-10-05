@@ -324,6 +324,7 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 	if err := s.mayReconcile(ctx, c, a); err != nil {
 		return Attempt{}, Settlement{}, err
 	}
+	reader = ReaderFor(reader, a.Task.HubID)
 	if a.PendingKey != requestKey && a.PendingOp == ReservationUpdate {
 		// A superseded key settles its update step.
 		if alias, err := s.supersededKey(ctx, a.ID, requestKey); err != nil {

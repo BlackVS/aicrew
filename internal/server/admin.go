@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/hubteams"
 	"github.com/BlackVS/aicrew/internal/opapi"
 	"github.com/BlackVS/aicrew/internal/optoken"
 	"github.com/BlackVS/aicrew/internal/store"
@@ -44,9 +45,10 @@ const (
 // adminState is the operator API's own state.
 type adminState struct {
 	failures *limiter
-	// names serializes team creation and renaming, so two concurrent
-	// requests can never both take one name: the store does not enforce
-	// names' uniqueness, the operator commands always have.
+	// names serializes team creation, renaming and registration, so two
+	// concurrent requests can never both take one name (the store does not
+	// enforce names' uniqueness, the operator commands always have), and a
+	// registration never sends a name a rename has since replaced.
 	names sync.Mutex
 }
 
@@ -67,6 +69,7 @@ func (s *Server) registerAdmin() {
 	s.handle(http.MethodGet, opapi.TeamPath, s.operator("team.show", s.showTeam))
 	s.handle(http.MethodPost, opapi.TeamProjectsPath, s.operator("team.projects", s.setTeamProjects))
 	s.handle(http.MethodPost, opapi.TeamRenamePath, s.operator("team.rename", s.renameTeam))
+	s.handle(http.MethodPost, opapi.TeamRegisterPath, s.operator("team.register", s.registerTeamRoute))
 	s.handle(http.MethodGet, opapi.InvitationsPath, s.operator("invitation.list", s.listInvitations))
 	s.handle(http.MethodPost, opapi.InvitationsPath, s.operator("invitation.issue", s.issueInvitation))
 	s.handle(http.MethodPost, opapi.InvitationRevokePath, s.operator("invitation.revoke", s.revokeInvitation))
@@ -202,8 +205,12 @@ func teamOf(t store.Team) opapi.Team {
 	for _, p := range t.Projects {
 		projects = append(projects, opapi.ProjectRef{HubID: p.HubID, ProjectID: p.ProjectID})
 	}
-	return opapi.Team{ID: t.ID, Name: t.Name, Projects: projects, Revision: t.Revision,
-		CoordinatorGeneration: t.CoordinatorGeneration, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt}
+	v := opapi.Team{ID: t.ID, Name: t.Name, Projects: projects, Revision: t.Revision,
+		CoordinatorGeneration: t.CoordinatorGeneration, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt, Hub: t.Hub}
+	if r := t.Registration; r != nil {
+		v.Registration = &opapi.TeamRegistration{State: r.State, Detail: r.Detail, Name: r.Name, At: r.At}
+	}
+	return v
 }
 
 func projectsOf(refs []opapi.ProjectRef) []store.ProjectRef {
@@ -356,12 +363,98 @@ func (s *Server) createTeam(w http.ResponseWriter, r *http.Request, op store.Cal
 	if code, taken := s.nameTaken(w, r, op, req.Name, ""); taken {
 		return code, ""
 	}
-	t, err := s.store.CreateTeam(r.Context(), op, commandKey(), store.NewTeam{Name: req.Name, Projects: projectsOf(req.Projects)})
+	if req.Hub != "" {
+		if msg := s.hubProblem(req.Hub); msg != "" {
+			adminRefuse(w, http.StatusBadRequest, opapi.CodeInvalid, msg)
+			return opapi.CodeInvalid, ""
+		}
+	}
+	t, err := s.store.CreateTeam(r.Context(), op, commandKey(), store.NewTeam{Name: req.Name, Projects: projectsOf(req.Projects),
+		Hub: req.Hub})
 	if err != nil {
 		return adminFail(w, err), ""
 	}
+	t = s.registerTeam(r.Context(), op, t)
 	writeJSON(w, http.StatusCreated, teamOf(t))
 	return "created", t.ID
+}
+
+// hubProblem says why alias cannot be a team's hub, or "" when it can: a
+// configured hub with a hub ID.
+func (s *Server) hubProblem(alias string) string {
+	b, ok := s.hubs[alias]
+	switch {
+	case !ok:
+		return fmt.Sprintf("hub %q is not an aimem block of aicrewd.json (aimem_hubs[].name)", alias)
+	case b.id == "":
+		return fmt.Sprintf("hub %q is the aimem block before 0.3.0, which names no hub_id: move it into aimem_hubs", alias)
+	}
+	return ""
+}
+
+// registerTeam registers t on its hub through team.register, when the team
+// names a hub whose block holds a team.register credential, and records the
+// outcome on the team. The team exists whatever the hub answers; a refusal
+// or an unreachable hub is recorded with what to do, and
+// `aicrew team register` retries. op is the operator's caller: only an
+// authenticated handler has one.
+func (s *Server) registerTeam(ctx context.Context, op store.Caller, t store.Team) store.Team {
+	b, ok := s.hubs[t.Hub]
+	if t.Hub == "" || !ok || b.teams == nil || !b.teams.CanRegister() {
+		return t
+	}
+	reg := store.TeamRegistration{State: "registered"}
+	r, err := b.teams.Register(ctx, t.ID, t.Name)
+	if err == nil {
+		reg.Name = r.TeamName
+	} else {
+		reg.State, reg.Detail = registrationOutcome(hubteams.Code(err), t.Name)
+	}
+	recorded, rerr := s.store.RecordTeamRegistration(ctx, op, commandKey(), t.ID, reg)
+	if rerr != nil {
+		s.log.Error("record a team registration", "team", t.ID, "err", rerr)
+		return t
+	}
+	return recorded
+}
+
+// registrationOutcome is a refused registration's state and what to do.
+func registrationOutcome(code, name string) (string, string) {
+	switch code {
+	case "team_name_taken":
+		return code, fmt.Sprintf("another team of this service holds the name %q on the hub: rename this team, then run aicrew team register", name)
+	case "profile_disabled":
+		return code, "the hub's operator disabled this team's profile: re-enable it on the hub, then run aicrew team register"
+	case hubteams.CodeUnavailable, "rate_limited", "request_in_progress", "identity_unavailable":
+		return hubteams.CodeUnavailable, "the hub did not answer: run aicrew team register later"
+	case "":
+		return "failed", "the registration failed: run aicrew team register"
+	}
+	return code, "the hub refused the registration (" + code + "): check the hub's peer and its team.register credential, then run aicrew team register"
+}
+
+// registerTeamRoute is POST /v1/admin/team/register: register a team on its
+// hub again.
+func (s *Server) registerTeamRoute(w http.ResponseWriter, r *http.Request, op store.Caller) (string, string) {
+	var req opapi.IDRequest
+	if !adminBody(w, r, &req) {
+		return opapi.CodeInvalid, ""
+	}
+	s.admin.names.Lock()
+	defer s.admin.names.Unlock()
+	t, err := s.store.GetTeam(r.Context(), req.ID)
+	if err != nil {
+		return adminFail(w, err), ""
+	}
+	b, ok := s.hubs[t.Hub]
+	if t.Hub == "" || !ok || b.teams == nil || !b.teams.CanRegister() {
+		adminRefuse(w, http.StatusConflict, opapi.CodeInvalid,
+			"the team names no hub with a team.register credential (aimem_hubs[].team_register_token_file)")
+		return opapi.CodeInvalid, t.ID
+	}
+	t = s.registerTeam(r.Context(), op, t)
+	writeJSON(w, http.StatusOK, teamOf(t))
+	return "registered", t.ID
 }
 
 func (s *Server) showTeam(w http.ResponseWriter, r *http.Request, _ store.Caller) (string, string) {
@@ -413,6 +506,7 @@ func (s *Server) renameTeam(w http.ResponseWriter, r *http.Request, op store.Cal
 	if err != nil {
 		return adminFail(w, err), ""
 	}
+	t = s.registerTeam(r.Context(), op, t)
 	writeJSON(w, http.StatusOK, teamOf(t))
 	return "renamed", t.ID
 }

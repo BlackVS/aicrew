@@ -109,6 +109,9 @@ func (l *Loop) Round(ctx context.Context) (settled, closed int) {
 	l.mu.Unlock()
 	reader := budgeted{l}
 	for _, c := range cands {
+		if store.ReaderFor(l.Reader, c.Task.HubID) == nil {
+			continue // another hub's task: its read scope is not this one
+		}
 		if c.Pending {
 			before := l.spent()
 			_, set, err := l.Store.ReconcileStep(ctx, reader, c.AttemptID)

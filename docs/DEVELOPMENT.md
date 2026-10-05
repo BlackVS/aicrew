@@ -131,20 +131,28 @@ an address; it holds no secret itself:
   `aicrew operator-token new` writes it; the service refuses to start
   otherwise.
 - `shutdown_timeout` is optional (default 15 s, at most 5 min).
-- `aimem` is optional. Without it, session entry and resume are refused;
-  with it, the service redeems agents' proofs with that aimem hub:
+- `aimem_hubs` is optional. Without it, session entry and resume are
+  refused; with it, the service redeems agents' proofs with those aimem
+  hubs, each a named block:
 
   ```json
-  "aimem": {
+  "aimem_hubs": [{
+    "name": "main",
+    "hub_id": "HUB_ID",
     "base_url": "https://aimem.example:8443",
     "tls_trust_mode": "ca_dns",
     "tls_trust_value": "aimem.example",
     "redemption_token_file": "/etc/aicrew/aimem-redemption.token",
-    "read_token_file": "/etc/aicrew/aimem-read.token"
-  }
+    "read_token_file": "/etc/aicrew/aimem-read.token",
+    "team_register_token_file": "/etc/aicrew/aimem-team-register.token"
+  }]
   ```
 
-  `base_url` is aimem's https origin. `tls_trust_mode` is `ca_dns` (the
+  `name` is the hub's alias in aicrew, which `aicrew team create --hub`
+  takes: 1 to 32 lowercase letters, digits or `-`, unique. `hub_id` is the
+  ID the hub reports (`aimem identity peer list`), unique; a proof is
+  redeemed with the hub its challenge names. `base_url` is aimem's https
+  origin. `tls_trust_mode` is `ca_dns` (the
   value is the origin's host) or `spki_sha256` (`sha256-` and the base64
   SHA-256 of aimem's public key). The token file holds the redemption
   bearer aimem issued to this service; it must be readable by the service's
@@ -159,7 +167,19 @@ an address; it holds no secret itself:
   is missing, readable by another account, not a peer credential, the
   redemption file, or holding the redemption credential. It is read on every
   call, like the redemption bearer. A refused or unreadable answer from
-  aimem never counts as "nothing committed": the step stays pending.
+  aimem never counts as "nothing committed": the step stays pending. One
+  block at most has a `read_token_file`, and that hub's read scope settles
+  and reconciles only its own tasks: a step on another hub stays pending.
+- `team_register_token_file` and `team_read_token_file` are optional. They
+  hold the `team.register` and `team.read` credentials aimem issued to this
+  service (`aimem identity cred issue … --operation team.register`), each its
+  own file, checked like the read credential. With `team.register`, aicrewd
+  registers each team created on that hub under the team's name (below).
+- The single `aimem` block of earlier releases, without `name` or
+  `hub_id`, is still read for this release, as the hub `default`, and logs
+  a warning; a configuration with both forms is refused. Move it into
+  `aimem_hubs`: a team cannot name that hub (`--hub`) because it has no
+  hub ID.
 - Keep the TLS key readable only by the service's account.
 
 The service logs JSON lines to stderr: each request's method, matched route,
@@ -193,10 +213,11 @@ in `internal/opapi`:
 | `POST /v1/admin/hub-credentials/rotate` | `{"hub_id", "operations"}`: needs exactly one active credential for the hub (otherwise `409 rotate_needs_one_active`) and issues a second, answered once with `replaces` naming the first, which stays active until it is revoked |
 | `POST /v1/admin/hub-credentials/revoke` | revoke: `{"id"}` |
 | `GET /v1/admin/teams` | list teams |
-| `POST /v1/admin/teams` | create: `{"name", "projects"}` |
+| `POST /v1/admin/teams` | create: `{"name", "projects", "hub"}`; registers the team on its hub |
 | `GET /v1/admin/team?id=TEAM` | show a team and its members |
 | `POST /v1/admin/team/projects` | `{"team_id", "expected_revision", "projects"}` |
 | `POST /v1/admin/team/rename` | `{"team_id", "expected_revision", "name"}` |
+| `POST /v1/admin/team/register` | `{"id"}`: register the team on its hub again |
 | `GET /v1/admin/invitations?team=TEAM` | list invitations (metadata, with each team's ID and name) |
 | `POST /v1/admin/invitations` | issue: `{"purpose", "team_id", "role", "hub_id", "label", "agent_id", "expected_user_id", "ttl"}`; the answer carries the code, once |
 | `POST /v1/admin/invitations/revoke` | revoke: `{"id"}` |
@@ -339,7 +360,7 @@ bin/aicrew hub-credential revoke --id ID
 
 ## Reconciliation
 
-With `aimem.read_token_file` configured, aicrewd also runs its
+With a hub's `read_token_file` configured, aicrewd also runs its
 reconciliation loop: every 15 s it settles the steps members left pending
 and closes as recovered the attempts whose reservation aimem closed outside
 aicrew, reading at most 30 times a minute (`docs/CREW-CONTRACT.md`,
@@ -355,7 +376,8 @@ prints the team as JSON; `list` adds each team's member count and `show` its
 current members.
 
 ```sh
-bin/aicrew team create   --name crew --project HUB_ID/PROJECT_ID
+bin/aicrew team create   --name crew --hub main --project HUB_ID/PROJECT_ID
+bin/aicrew team register --team-name crew
 bin/aicrew team list
 bin/aicrew team show     --team-name crew
 bin/aicrew team projects --team TEAM --expect-revision N --project HUB_ID/PROJECT_ID
@@ -368,6 +390,15 @@ bin/aicrew team rename   --team-name crew --expect-revision N --name crew-2
 
 - `create` and `rename` refuse a name another team already has
   (`team_exists`).
+- `--hub` names the team's hub by its alias in `aimem_hubs`; a team keeps
+  its hub. When that hub's block has `team_register_token_file`, `create`
+  registers the team there under its name (aimem's team.register), and
+  `rename` registers the new name. The outcome is the team's
+  `registration`: `registered`, or the hub's refusal (`team_name_taken`:
+  another team of this service holds the name on the hub; `profile_disabled`)
+  or `hub_unavailable`, each with what to do in `detail`, also printed on
+  stderr. The team exists whatever the hub answers. `register` tries again
+  and exits 1 unless the team is registered.
 - `projects` replaces the whole set; with no `--project` it clears it.
   `projects` and `rename` apply only to the revision `show` or `list`
   printed, and refuse a team that changed since (`revision_conflict`).

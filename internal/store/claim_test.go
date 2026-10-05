@@ -127,7 +127,7 @@ func TestClaimAuthority(t *testing.T) {
 	refused("stale generation", e.solo.caller, stale, ErrContextStale)
 	other := e.claimReq(e.solo, "task-1")
 	other.Task.ProjectID = "project-b"
-	refused("project outside the set", e.solo.caller, other, ErrInvalid)
+	refused("project the hub does not grant", e.solo.caller, other, ErrProjectNotGranted)
 	digest := e.claimReq(e.solo, "task-1")
 	digest.InstructionDigest = "sha256:other-instructions"
 	refused("other instructions", e.solo.caller, digest, ErrInstructionMismatch)

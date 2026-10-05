@@ -86,7 +86,7 @@ func claimCommand(c Caller, key string, in ClaimRequest, proof *string) command 
 		if err != nil {
 			return nil, err
 		}
-		if err := requireTeamProject(ctx, tx, sess.TeamID, ProjectRef{HubID: in.Task.HubID, ProjectID: in.Task.ProjectID}); err != nil {
+		if err := requireTeamGrant(ctx, tx, sess.TeamID, ProjectRef{HubID: in.Task.HubID, ProjectID: in.Task.ProjectID}); err != nil {
 			return nil, err
 		}
 		if err := taskFree(ctx, tx, in.Task); err != nil {

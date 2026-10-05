@@ -609,7 +609,7 @@ func TestLimiterRefills(t *testing.T) {
 func TestExposureGuard(t *testing.T) {
 	operatorOps := map[string]bool{
 		"ListIntrospectionCredentials": true, "IssueIntrospectionCredential": true, "RevokeIntrospectionCredential": true,
-		"ListTeams": true, "CreateTeam": true, "GetTeam": true, "ListMembers": true, "SetTeamProjects": true,
+		"ListTeams": true, "CreateTeam": true, "GetTeam": true, "ListMembers": true, "SetTeamHub": true,
 		"RenameTeam": true, "ListInvitations": true, "IssueInvitation": true, "GetInvitation": true,
 		"RevokeInvitation": true, "RecordTeamRegistration": true,
 	}
@@ -628,6 +628,10 @@ func TestExposureGuard(t *testing.T) {
 		// Invitation redemption authenticates by the invitation code, which
 		// the store checks inside every command (1a81-3).
 		"BeginRedemption": true, "CompleteRedemption": true,
+		// The team's grants, read from its hub live at offer and claim and
+		// refreshed periodically: aicrewd's own reads, recorded as its
+		// reconciler (354c-1a).
+		"GetTeam": true, "ListTeams": true, "RecordTeamGrants": true,
 	}
 	forbiddenPkg := map[string]bool{"AgentCaller": true, "OperatorCaller": true}
 	files, err := filepath.Glob("*.go")
@@ -711,7 +715,7 @@ func TestRouteInventory(t *testing.T) {
 		"POST /v1/admin/hub-credentials", "POST /v1/admin/hub-credentials/revoke", "POST /v1/admin/hub-credentials/rotate",
 		"POST /v1/admin/introspection-credentials", "POST /v1/admin/introspection-credentials/revoke",
 		"POST /v1/admin/introspection-credentials/rotate", "POST /v1/admin/invitations", "POST /v1/admin/invitations/revoke",
-		"POST /v1/admin/team/projects", "POST /v1/admin/team/register", "POST /v1/admin/team/rename", "POST /v1/admin/teams",
+		"POST /v1/admin/team/register", "POST /v1/admin/team/rename", "POST /v1/admin/teams",
 		"POST /v1/crew/attempts", "POST /v1/crew/attempts/claim",
 		"POST /v1/crew/attempts/{id}/accept", "POST /v1/crew/attempts/{id}/confirm-delivery",
 		"POST /v1/crew/attempts/{id}/confirm-stop", "POST /v1/crew/attempts/{id}/decline", "POST /v1/crew/attempts/{id}/finalize",

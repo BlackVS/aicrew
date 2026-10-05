@@ -3,12 +3,14 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -99,6 +101,64 @@ func (f *fakeHubTeams) Register(_ context.Context, teamID, name string) (hubteam
 }
 func (f *fakeHubTeams) ReadTeam(context.Context, string) (hubteams.Team, error) {
 	return hubteams.Team{}, errors.New("not used")
+}
+func (f *fakeHubTeams) ReadTeams(context.Context) ([]hubteams.Team, error) {
+	return nil, errors.New("not used")
+}
+
+// grantingHub is a hub that grants every team the projects in grants, and
+// answers team reads as team.read does; down makes it unreachable. It
+// counts the reads.
+type grantingHub struct {
+	mu     sync.Mutex
+	grants []string
+	down   bool
+	reads  int
+}
+
+func (h *grantingHub) set(down bool, grants ...string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.down, h.grants = down, grants
+}
+
+func (h *grantingHub) team(id string) hubteams.Team {
+	t := hubteams.Team{TeamID: id, TeamName: "crew", Enabled: true, Projects: []hubteams.Project{}}
+	for _, p := range h.grants {
+		t.Projects = append(t.Projects, hubteams.Project{Project: p,
+			Repository: &hubteams.Repository{Kind: "git", URL: "https://git.example.test/" + p + ".git", Host: "git.example.test", Access: "write"}})
+	}
+	return t
+}
+
+func (h *grantingHub) CanRegister() bool { return false }
+func (h *grantingHub) CanRead() bool     { return true }
+func (h *grantingHub) Register(context.Context, string, string) (hubteams.Registration, error) {
+	return hubteams.Registration{}, errors.New("not used")
+}
+func (h *grantingHub) ReadTeam(_ context.Context, id string) (hubteams.Team, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.reads++
+	if h.down {
+		return hubteams.Team{}, &hubteams.Error{Code: hubteams.CodeUnavailable}
+	}
+	return h.team(id), nil
+}
+func (h *grantingHub) ReadTeams(_ context.Context) ([]hubteams.Team, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.reads++
+	if h.down {
+		return nil, &hubteams.Error{Code: hubteams.CodeUnavailable}
+	}
+	return nil, nil
+}
+
+func (h *grantingHub) readCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.reads
 }
 
 // team create --hub registers the team on that hub and records the
@@ -245,4 +305,205 @@ func (f *slowHubTeams) Register(ctx context.Context, teamID, name string) (hubte
 	f.entered <- name
 	<-f.release
 	return f.fakeHubTeams.Register(ctx, teamID, name)
+}
+
+// An offer and a claim each read the team's grants from its hub, live: a
+// revoked grant refuses the next step by name, a hub that does not answer
+// refuses it as hub_unavailable even when the snapshot holds the grant, and
+// nothing begins either way. Only the role that may take the step reads.
+func TestOfferAndClaimReadTheHubLive(t *testing.T) {
+	e := setupCoordination(t)
+	ctx := context.Background()
+	expires := time.Now().Add(time.Hour)
+	attempts := func() int {
+		t.Helper()
+		db, err := sql.Open("sqlite", e.storePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM attempts`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	e.hub.set(false) // the hub revokes the team's only grant
+	refused(t, e.call(t, e.lead.token, AttemptsPath, "offer-1", e.offerBody("task-1", expires)), http.StatusConflict, "project_not_granted")
+	refused(t, e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-2")), http.StatusConflict, "project_not_granted")
+	if tm, err := e.store.GetTeam(ctx, e.team.ID); err != nil || len(tm.Grants) != 0 || tm.GrantsState != store.GrantsEnabled {
+		t.Fatalf("the snapshot after the revoking read = %+v, %v", tm, err)
+	}
+
+	seedGrants(t, e.store, e.team.ID)  // the snapshot holds the grant ...
+	e.hub.set(true, "project-example") // ... and the hub does not answer
+	got := e.call(t, e.lead.token, AttemptsPath, "offer-1", e.offerBody("task-1", expires))
+	refused(t, got, http.StatusServiceUnavailable, "hub_unavailable")
+	if got.header.Get("Retry-After") != "30" {
+		t.Fatalf("Retry-After %q", got.header.Get("Retry-After"))
+	}
+	refused(t, e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-2")), http.StatusServiceUnavailable, "hub_unavailable")
+	if n := attempts(); n != 0 {
+		t.Fatalf("%d attempts began while the hub refused", n)
+	}
+
+	reads := e.hub.readCount()
+	refused(t, e.call(t, e.worker.token, AttemptsPath, "offer-w", e.offerBody("task-1", expires)), http.StatusForbidden, "attempt_forbidden")
+	if e.hub.readCount() != reads {
+		t.Fatal("a worker's offer read the hub")
+	}
+
+	e.hub.set(false, "project-example")
+	stepOf(t, e.call(t, e.lead.token, AttemptsPath, "offer-1", e.offerBody("task-1", expires)))
+	stepOf(t, e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-2")))
+	if e.hub.readCount() != reads+2 {
+		t.Fatalf("%d reads for two steps", e.hub.readCount()-reads)
+	}
+}
+
+// A team that names no hub, or a task on another hub than the team's, is
+// granted nothing; a team whose hub has no team.read credential cannot be
+// read.
+func TestLiveGrantWithoutTheHub(t *testing.T) {
+	e := setupAPI(t, WithHub("main", "hub-a", &grantingHub{grants: []string{"docs"}}), WithHub("noread", "hub-b", nil))
+	ctx := context.Background()
+	team := func(name, hub string) string {
+		t.Helper()
+		tm, err := e.store.CreateTeam(ctx, mustOperator(t), "team-"+name, store.NewTeam{Name: name, Hub: hub})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tm.ID
+	}
+	task := store.TaskRef{HubID: "hub-a", ProjectID: "docs", TaskID: "task-1"}
+	if code := e.srv.liveGrant(ctx, team("bare", ""), task); code != "project_not_granted" {
+		t.Fatalf("a team without a hub: %q", code)
+	}
+	main := team("main-crew", "main")
+	if code := e.srv.liveGrant(ctx, main, task); code != "" {
+		t.Fatalf("the granted project: %q", code)
+	}
+	other := task
+	other.HubID = "hub-b"
+	if code := e.srv.liveGrant(ctx, main, other); code != "project_not_granted" {
+		t.Fatalf("a task on another hub: %q", code)
+	}
+	if code := e.srv.liveGrant(ctx, team("lab-crew", "noread"), other); code != "hub_unavailable" {
+		t.Fatalf("a hub without team.read: %q", code)
+	}
+}
+
+// The refresh reads each hub once and records every team of it: the
+// granted projects of a listed team, nothing for a team the hub does not
+// list. A hub that does not answer keeps the snapshot.
+func TestRefreshGrants(t *testing.T) {
+	hub := &listingHub{grantingHub: grantingHub{grants: []string{"docs"}}}
+	e := setupAPI(t, WithHub("main", "hub-a", hub))
+	ctx := context.Background()
+	op := mustOperator(t)
+	listed, err := e.store.CreateTeam(ctx, op, "listed", store.NewTeam{Name: "listed", Hub: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlisted, err := e.store.CreateTeam(ctx, op, "unlisted", store.NewTeam{Name: "unlisted", Hub: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub.mu.Lock()
+	hub.listed = []string{listed.ID}
+	hub.mu.Unlock()
+	e.srv.refreshGrants(ctx)
+	tm, err := e.store.GetTeam(ctx, listed.ID)
+	if err != nil || len(tm.Grants) != 1 || tm.Grants[0].ProjectID != "docs" || tm.Grants[0].HubID != "hub-a" ||
+		tm.Grants[0].Repository == nil || tm.GrantsState != store.GrantsEnabled {
+		t.Fatalf("listed team = %+v, %v", tm, err)
+	}
+	if un, err := e.store.GetTeam(ctx, unlisted.ID); err != nil || un.GrantsState != store.GrantsNotRegistered || len(un.Grants) != 0 {
+		t.Fatalf("unlisted team = %+v, %v", un, err)
+	}
+	if hub.readCount() != 1 {
+		t.Fatalf("%d reads of one hub", hub.readCount())
+	}
+	hub.set(true)
+	e.srv.refreshGrants(ctx)
+	if tm, err := e.store.GetTeam(ctx, listed.ID); err != nil || len(tm.Grants) != 1 {
+		t.Fatalf("a hub that did not answer changed the snapshot: %+v, %v", tm, err)
+	}
+}
+
+func mustOperator(t *testing.T) store.Caller {
+	t.Helper()
+	op, err := store.OperatorCaller("op-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return op
+}
+
+// listingHub lists the teams in listed, each granted the hub's grants.
+type listingHub struct {
+	grantingHub
+	listed []string
+}
+
+func (h *listingHub) ReadTeams(ctx context.Context) ([]hubteams.Team, error) {
+	if _, err := h.grantingHub.ReadTeams(ctx); err != nil {
+		return nil, err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []hubteams.Team
+	for _, id := range h.listed {
+		out = append(out, h.team(id))
+	}
+	return out, nil
+}
+
+// aicrew team register --hub names the hub of a team created before teams
+// named one, then registers it; a team keeps its hub.
+func TestRegisterNamesTheHubOnce(t *testing.T) {
+	hub := &fakeHubTeams{registered: map[string]string{}}
+	e := setupAPI(t, WithHub("main", "hub-a", hub), WithHub("lab", "hub-b", hub))
+	tok := e.opToken
+	var team opapi.Team
+	if got := e.admin(t, http.MethodPost, opapi.TeamRegisterPath, tok, opapi.TeamRegisterRequest{ID: e.teamID, Hub: "main"}, &team); got.status != http.StatusOK ||
+		team.Hub != "main" || team.Registration == nil || team.Registration.State != "registered" || hub.registered[e.teamID] != "crew" {
+		t.Fatalf("register with a hub: %d %s", got.status, got.raw)
+	}
+	adminRefused(t, e.admin(t, http.MethodPost, opapi.TeamRegisterPath, tok, opapi.TeamRegisterRequest{ID: e.teamID, Hub: "lab"}, nil),
+		http.StatusBadRequest, opapi.CodeInvalid)
+	adminRefused(t, e.admin(t, http.MethodPost, opapi.TeamRegisterPath, tok, opapi.TeamRegisterRequest{ID: e.teamID, Hub: "nowhere"}, nil),
+		http.StatusBadRequest, opapi.CodeInvalid)
+	if got := e.admin(t, http.MethodPost, opapi.TeamRegisterPath, tok, opapi.TeamRegisterRequest{ID: e.teamID, Hub: "main"}, &team); got.status != http.StatusOK ||
+		team.Hub != "main" {
+		t.Fatalf("the same hub again: %d %s", got.status, got.raw)
+	}
+}
+
+// A hub's project that no task can name, or one named twice, is left out of
+// the snapshot; the team keeps its other grants.
+func TestGrantsReadSkipsUnusableProjects(t *testing.T) {
+	team := hubteams.Team{TeamID: "t1", TeamName: "crew", Enabled: true, Projects: []hubteams.Project{
+		{Project: "docs"}, {Project: "has space"}, {Project: "docs"},
+		{Project: "api", Repository: &hubteams.Repository{Kind: "git", URL: strings.Repeat("u", 4096)}},
+	}}
+	read, ok := grantsRead("hub-a", team, nil, time.Now())
+	if !ok || read.State != store.GrantsEnabled || len(read.Grants) != 1 || read.Grants[0].ProjectID != "docs" {
+		t.Fatalf("read = %+v, %v", read, ok)
+	}
+	if off, ok := grantsRead("hub-a", hubteams.Team{TeamID: "t1", Projects: []hubteams.Project{}}, nil, time.Now()); !ok ||
+		off.State != store.GrantsDisabled {
+		t.Fatalf("a disabled profile = %+v, %v", off, ok)
+	}
+	for code, want := range map[string]string{"not_found": store.GrantsNotRegistered, "profile_disabled": store.GrantsDisabled} {
+		if r, ok := grantsRead("hub-a", hubteams.Team{}, &hubteams.Error{Code: code}, time.Now()); !ok || r.State != want {
+			t.Fatalf("%s = %+v, %v", code, r, ok)
+		}
+	}
+	for _, code := range []string{hubteams.CodeUnavailable, "peer_forbidden", "rate_limited"} {
+		if _, ok := grantsRead("hub-a", hubteams.Team{}, &hubteams.Error{Code: code}, time.Now()); ok {
+			t.Fatalf("%s was taken for an answer", code)
+		}
+	}
 }

@@ -25,13 +25,14 @@ import (
 //  2. the hub, terminating TLS itself;
 //  3. the project (tasks on, process selected);
 //  4. aicrew registered as the identity peer, with the hub's ID read back;
-//  5. aicrew's three aimem credentials (identity.redeem, reservation.read,
-//     team.register);
+//  5. aicrew's four aimem credentials (identity.redeem, reservation.read,
+//     team.register, team.read);
 //  6. aicrewd, started with that hub as a named aimem block, and through
 //     its operator API with `aicrew`: the team on that hub, which aicrewd
 //     registers there (team.register), and the hub's outbound credential
 //     (introspection and coordination);
-//  7. the team's grant, by the name aicrewd registered;
+//  7. the team's grant, by the name aicrewd registered: the team's only
+//     project set, which aicrewd reads live at every offer and claim;
 //  8. the members' aimem users and tokens, and their aicrew invitations;
 //  9. the reconciliation loop, and the peer check end to end;
 //  10. each member's aimem client, `aicrew-agent join`, and its launcher.
@@ -95,8 +96,9 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	aDir := h.mkdir(filepath.Join(h.root, "aicrewd"))
 	h.storePath = filepath.Join(aDir, "aicrew.db")
 	redeem, read := filepath.Join(aDir, "redeem.secret"), filepath.Join(aDir, "read.secret")
-	register := filepath.Join(aDir, "team-register.secret")
-	for op, file := range map[string]string{"identity.redeem": redeem, "reservation.read": read, "team.register": register} {
+	register, teamRead := filepath.Join(aDir, "team-register.secret"), filepath.Join(aDir, "team-read.secret")
+	for op, file := range map[string]string{"identity.redeem": redeem, "reservation.read": read, "team.register": register,
+		"team.read": teamRead} {
 		h.must(host, nil, h.identity("cred", "issue", serviceID, "--expires", "30d", "--output", file, "--operation", op)...)
 		h.knowSecretFile(file)
 	}
@@ -121,7 +123,7 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 		"tls_cert_file": aCert, "tls_key_file": aKey, "service_id": serviceID, "operator_token_file": opFile,
 		"aimem_hubs": []map[string]any{{"name": hubName, "hub_id": h.hubID, "base_url": h.hubProxy.url,
 			"tls_trust_mode": "spki_sha256", "tls_trust_value": h.hubPin, "redemption_token_file": redeem,
-			"read_token_file": read, "team_register_token_file": register}},
+			"read_token_file": read, "team_register_token_file": register, "team_read_token_file": teamRead}},
 	}
 	cfgPath := filepath.Join(aDir, "aicrewd.json")
 	h.startAicrewd(aEnv, aDir, cfgPath, cfg)
@@ -135,7 +137,7 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 		} `json:"registration"`
 	}
 	if err := json.Unmarshal([]byte(h.must(opEnv, nil, filepath.Join(h.bin, "aicrew"), "team", "create",
-		"-name", "e2e", "-hub", hubName, "-project", h.hubID+"/"+projectID)), &team); err != nil || team.ID == "" {
+		"-name", "e2e", "-hub", hubName)), &team); err != nil || team.ID == "" {
 		t.Fatalf("aicrew team create printed no team: %v", err)
 	}
 	if team.Registration == nil || team.Registration.State != "registered" {

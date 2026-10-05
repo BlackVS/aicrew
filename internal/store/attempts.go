@@ -355,9 +355,10 @@ func offerCommand(c Caller, key string, in OfferRequest, proof *string) command 
 		if err != nil {
 			return nil, err
 		}
-		// Only a task in one of the team's projects may be offered; removing
-		// a project from the team blocks new offers for it.
-		if err := requireTeamProject(ctx, tx, sess.TeamID, ProjectRef{HubID: in.Task.HubID, ProjectID: in.Task.ProjectID}); err != nil {
+		// Only a task of a project the team's hub grants may be offered. The
+		// service reads the grants live just before (team.read); a revoked
+		// grant refuses the next offer.
+		if err := requireTeamGrant(ctx, tx, sess.TeamID, ProjectRef{HubID: in.Task.HubID, ProjectID: in.Task.ProjectID}); err != nil {
 			return nil, err
 		}
 		if err := taskFree(ctx, tx, in.Task); err != nil {

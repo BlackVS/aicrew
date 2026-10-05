@@ -56,11 +56,37 @@ marked as observed. An observed value never authorizes anything.
 
 ## Teams, projects and roles
 
-A team is linked by the operator to one aimem team access profile, as the
-context contract describes. Its project set is an explicit list of team
-projects on one hub. Adding a project to that list is a coordination fact:
-it grants nothing. Whether the team may read or write a project is decided by
+A team names one hub, by the alias of its aimem block, and has one aimem
+team access profile there, as the context contract describes. aicrewd
+creates and names that profile itself through the peer operation
+`team.register`, keyed by the team's ID; the hub's operator grants it
+projects.
+
+**The team record** is the team's ID, name, revision, hub, the outcome of its
+last registration, and a snapshot of its grants:
+- each granted project with its repository (kind, URL, host, access) and
+  selected process pin;
+- the state the hub answered (`enabled`, `disabled`, `not_registered`);
+- when the read was sent.
+
+aicrewd refreshes the snapshot with `team.read` on a regular interval and
+at every offer and claim. A read sent earlier never replaces one sent
+later. `team show` and the inbox's project scope read the snapshot.
+
+**The project set** is the hub's grants, nothing else: aicrew keeps no list
+of its own. Whether the team may read or write a project is decided by
 aimem from the profile's live grants on every request.
+
+**Offers and claims read live.** An offer and an independent claim each
+read the team's grants from its hub, once, before anything begins; the
+snapshot is never the answer for them:
+- `409 project_not_granted`: the hub does not grant the team the task's
+  project, the task is on another hub, or the team names no hub;
+- `503 hub_unavailable`, retryable with `Retry-After`: the hub did not
+  answer, refused the read, or its block has no `team.read` credential.
+
+Either way no attempt begins and nothing reaches the worker or aimem. A
+replay of an offer or a claim reads the hub again.
 
 Membership is an (agent, team, role) record created or changed only by the
 operator, or by redeeming an operator-issued invitation (crew-onboarding).
@@ -456,7 +482,7 @@ begin needs an `Idempotency-Key`; settle does not.
     was never accepted, whether withdrawn, declined or expired. The body is
     empty or `{}`.
   - `POST /v1/crew/attempts/claim`: an independent member claims a task in
-    one of its team's projects for itself. The body carries `task`,
+    a project its team's hub grants for itself. The body carries `task`,
     `expected_revision`, `base_commit`, `branch`, `process` and
     `instruction_digest`, all the claimer's ("Process pins"). The claim's
     fact carries the pin. `Location` names the new attempt.
@@ -611,6 +637,8 @@ begin needs an `Idempotency-Key`; settle does not.
     this step;
   - `409 task_busy`: this service already has an open attempt on the task,
     in any team;
+  - `409 project_not_granted` and the retryable `503 hub_unavailable` at
+    an offer or a claim ("Teams, projects and roles");
   - `409` for `agent_busy`, `attempt_state`, `offer_expired`,
     `offer_declined`, `offer_stale`, `instruction_mismatch`,
     `delivery_unconfirmed`, `supersede_limit` and `step_settled`;
@@ -1040,10 +1068,11 @@ project's selection when the hold is taken ("Coordination facts").
 
 Each team has one durable, ordered message log with a monotonic sequence.
 
-- **Scope.** A message is either team-wide or scoped to one team project. A
-  project-scoped message is readable only while that project remains in the
-  team's project set; removing the project hides it from ordinary reads and
-  keeps it for audit. Because every member of a team uses the same aimem
+- **Scope.** A message is either team-wide or scoped to one project the
+  team's hub grants it. A project-scoped message is readable only while the
+  team's grants snapshot holds that project; a revoked grant hides it from
+  ordinary reads and keeps it for audit, and a new grant shows it again. A
+  message for a project the snapshot does not hold is refused. Because every member of a team uses the same aimem
   profile, project scope within a team is not a per-member grant check;
   knowledge access itself stays in aimem.
 - **Recipients** are fixed at send time. A team-wide message goes to every

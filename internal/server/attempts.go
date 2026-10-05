@@ -83,6 +83,7 @@ var attemptRefusals = []struct {
 	{store.ErrDeliveryUnconfirmed, "delivery_unconfirmed"},
 	{store.ErrSupersedeLimit, "supersede_limit"},
 	{store.ErrOutcomeUnknown, "outcome_unknown"},
+	{store.ErrProjectNotGranted, "project_not_granted"},
 }
 
 func attemptRefusal(err error) string {
@@ -174,7 +175,7 @@ type offerBody struct {
 func (s *Server) offer(w http.ResponseWriter, r *http.Request) {
 	var in offerBody
 	token, key, ok := s.stepRequest(w, r, true, &in)
-	if !ok {
+	if !ok || !s.granted(w, r, token, store.RoleCoordinator, in.Task) {
 		return
 	}
 	a, step, err := s.store.BeginOfferWithToken(r.Context(), key, token, store.OfferInput{
@@ -186,6 +187,34 @@ func (s *Server) offer(w http.ResponseWriter, r *http.Request) {
 	})
 	s.writeStep(w, r, a, step, err)
 }
+
+// granted checks, for an offer or a claim, that the team's hub grants the
+// task's project, by one live team.read (liveGrant), and refuses the step
+// otherwise; it reports whether the step may go on. A session in another
+// role reads nothing: the store refuses its step.
+func (s *Server) granted(w http.ResponseWriter, r *http.Request, token string, role store.Role, task store.TaskRef) bool {
+	b, err := s.store.AuthenticateSessionToken(r.Context(), token)
+	if err != nil {
+		s.refuseSession(w, r, refusalCode(err), false, 0)
+		return false
+	}
+	if b.Role != role {
+		return true
+	}
+	if code := s.liveGrant(r.Context(), b.TeamID, task); code != "" {
+		var after time.Duration
+		if code == "hub_unavailable" {
+			after = hubRetryAfter
+		}
+		s.refuseSession(w, r, code, false, after)
+		return false
+	}
+	return true
+}
+
+// hubRetryAfter is the Retry-After of a step refused because the team's hub
+// did not answer its team read.
+const hubRetryAfter = 30 * time.Second
 
 // accept begins the worker's acceptance of its offer.
 func (s *Server) accept(w http.ResponseWriter, r *http.Request) {
@@ -268,7 +297,7 @@ type claimBody struct {
 func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	var in claimBody
 	token, key, ok := s.stepRequest(w, r, true, &in)
-	if !ok {
+	if !ok || !s.granted(w, r, token, store.RoleIndependent, in.Task) {
 		return
 	}
 	a, step, err := s.store.BeginClaimWithToken(r.Context(), key, token, store.ClaimInput{

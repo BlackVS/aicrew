@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 22
+const schemaVersion = 23
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -219,7 +219,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
 		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21,
-		schemaV22}
+		schemaV22, schemaV23}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -413,6 +413,32 @@ var schemaV5 = []string{
 // (pilot G2): the base commit, branch, process pin, instruction digest and
 // expiry, as JSON, so the worker starts its worktree and verifies the pin
 // from its own inbox. Every other message carries none.
+// schemaV23 replaces aicrew's own project set with a snapshot of the
+// grants the team's hub holds (team.read; docs/proposals/PILOT-1-FOLLOWUPS.md,
+// 2.3): each granted project with its repository and process pin, and
+// when and with what state the hub was last read. team_projects is
+// dropped: the list it held granted nothing, and offers now follow the hub.
+var schemaV23 = []string{
+	`CREATE TABLE team_grants (
+		team_id           TEXT NOT NULL REFERENCES teams (id),
+		hub_id            TEXT NOT NULL,
+		project_id        TEXT NOT NULL,
+		has_repository    INTEGER NOT NULL,
+		repository_kind   TEXT NOT NULL,
+		repository_url    TEXT NOT NULL,
+		repository_host   TEXT NOT NULL,
+		repository_access TEXT NOT NULL,
+		has_process       INTEGER NOT NULL,
+		process_repo      TEXT NOT NULL,
+		process_commit    TEXT NOT NULL,
+		process_manifest  TEXT NOT NULL,
+		PRIMARY KEY (team_id, hub_id, project_id)
+	)`,
+	`ALTER TABLE teams ADD COLUMN grants_state TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE teams ADD COLUMN grants_read_at TEXT NOT NULL DEFAULT ''`,
+	`DROP TABLE team_projects`,
+}
+
 // schemaV22 names a team's hub, by the alias of its aimem block, and keeps
 // the outcome of the team's last registration on that hub (team.register;
 // docs/proposals/PILOT-1-FOLLOWUPS.md, 2.2). Earlier teams name no hub.

@@ -119,6 +119,8 @@ func downgradeToV10(t *testing.T, path string) {
 		`ALTER TABLE teams DROP COLUMN hub`, `ALTER TABLE teams DROP COLUMN registration_state`,
 		`ALTER TABLE teams DROP COLUMN registration_detail`, `ALTER TABLE teams DROP COLUMN registered_name`,
 		`ALTER TABLE teams DROP COLUMN registered_at`,
+		`DROP TABLE team_grants`, `ALTER TABLE teams DROP COLUMN grants_state`,
+		`ALTER TABLE teams DROP COLUMN grants_read_at`, teamProjectsV1,
 		`UPDATE schema_version SET version = 10`)
 	tx, err := db.Begin()
 	if err != nil {
@@ -251,11 +253,7 @@ func TestMigrationV11KeepsEveryAttempt(t *testing.T) {
 	if !busy(t, s2, openOffer) {
 		t.Fatal("an open offer's worker is not busy after the migration")
 	}
-	if _, err := s2.SetTeamProjects(ctx, operator(t), "projects", mustTeamByName(t, s2, "crew").ID,
-		mustTeamByName(t, s2, "crew").Revision, []ProjectRef{projectA}); err != nil {
-		t.Fatal(err)
-	}
-	tm := mustTeamByName(t, s2, "crew")
+	tm := grant(t, s2, mustTeamByName(t, s2, "crew").ID, projectA)
 	solo := joinCrew(t, s2, tm.ID, "solo", RoleIndependent)
 	ce := claimTeam{execTeam: execTeam{s: s2, tm: tm, port: newFakeReservations(t)}, solo: solo}
 	if a, err := ce.claim(t, "c1", solo, "task-new"); err != nil || a.State != AttemptRunning || a.Origin != OriginClaim {
@@ -487,9 +485,29 @@ func dropMessageOffer(t *testing.T, raw *sql.DB) {
 	}
 }
 
+// teamProjectsV1 is the team_projects table schema v23 drops.
+const teamProjectsV1 = `CREATE TABLE team_projects (
+		team_id    TEXT NOT NULL REFERENCES teams (id),
+		hub_id     TEXT NOT NULL,
+		project_id TEXT NOT NULL,
+		PRIMARY KEY (team_id, hub_id, project_id)
+	)`
+
+// dropTeamGrants takes a store back to v22.
+func dropTeamGrants(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	for _, stmt := range []string{`DROP TABLE team_grants`, `ALTER TABLE teams DROP COLUMN grants_state`,
+		`ALTER TABLE teams DROP COLUMN grants_read_at`, teamProjectsV1} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // dropTeamHub takes a store back to v21.
 func dropTeamHub(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropTeamGrants(t, raw)
 	for _, col := range []string{"hub", "registration_state", "registration_detail", "registered_name", "registered_at"} {
 		if _, err := raw.Exec(`ALTER TABLE teams DROP COLUMN ` + col); err != nil {
 			t.Fatal(err)
@@ -526,6 +544,48 @@ func TestMigrationV22AddsTheTeamHub(t *testing.T) {
 	}
 	if after != before || before == 0 || named != 0 {
 		t.Fatalf("after v22: %d teams (was %d), %d naming a hub or a registration", after, before, named)
+	}
+}
+
+// Schema v23 replaces a populated v22 store's project lists with an empty
+// grants snapshot: every team is kept, granted nothing until its hub is
+// read, and team_projects is gone with the lists it held.
+func TestMigrationV23ReplacesTheProjectSet(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM teams`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropTeamGrants(t, raw)
+	if _, err := raw.Exec(`INSERT INTO team_projects (team_id, hub_id, project_id) SELECT id, 'hub-a', 'docs' FROM teams`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 22`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v22 store: %v", err)
+	}
+	defer s2.Close()
+	var after, read, grants, old int
+	if err := s2.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(grants_state, '')) + COUNT(NULLIF(grants_read_at, '')) FROM teams`).
+		Scan(&after, &read); err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM team_grants`).Scan(&grants); err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'team_projects'`).Scan(&old); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || before == 0 || read != 0 || grants != 0 || old != 0 {
+		t.Fatalf("after v23: %d teams (was %d), %d read, %d grants, team_projects %d", after, before, read, grants, old)
 	}
 }
 

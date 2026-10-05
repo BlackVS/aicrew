@@ -175,6 +175,9 @@ an address; it holds no secret itself:
   service (`aimem identity cred issue … --operation team.register`), each its
   own file, checked like the read credential. With `team.register`, aicrewd
   registers each team created on that hub under the team's name (below).
+  With `team.read`, aicrewd reads the team's grants at every offer and
+  claim, and refreshes every team's grants snapshot once a minute; without
+  it, offers and claims of that hub's teams are refused `hub_unavailable`.
 - The single `aimem` block of earlier releases, without `name` or
   `hub_id`, is still read for this release, as the hub `default`, and logs
   a warning; a configuration with both forms is refused. Move it into
@@ -213,11 +216,10 @@ in `internal/opapi`:
 | `POST /v1/admin/hub-credentials/rotate` | `{"hub_id", "operations"}`: needs exactly one active credential for the hub (otherwise `409 rotate_needs_one_active`) and issues a second, answered once with `replaces` naming the first, which stays active until it is revoked |
 | `POST /v1/admin/hub-credentials/revoke` | revoke: `{"id"}` |
 | `GET /v1/admin/teams` | list teams |
-| `POST /v1/admin/teams` | create: `{"name", "projects", "hub"}`; registers the team on its hub |
+| `POST /v1/admin/teams` | create: `{"name", "hub"}`; registers the team on its hub |
 | `GET /v1/admin/team?id=TEAM` | show a team and its members |
-| `POST /v1/admin/team/projects` | `{"team_id", "expected_revision", "projects"}` |
 | `POST /v1/admin/team/rename` | `{"team_id", "expected_revision", "name"}` |
-| `POST /v1/admin/team/register` | `{"id"}`: register the team on its hub again |
+| `POST /v1/admin/team/register` | `{"id", "hub"}`: register the team on its hub again; `hub` names the hub of a team that names none |
 | `GET /v1/admin/invitations?team=TEAM` | list invitations (metadata, with each team's ID and name) |
 | `POST /v1/admin/invitations` | issue: `{"purpose", "team_id", "role", "hub_id", "label", "agent_id", "expected_user_id", "ttl"}`; the answer carries the code, once |
 | `POST /v1/admin/invitations/revoke` | revoke: `{"id"}` |
@@ -369,18 +371,18 @@ read credential the loop does not run.
 
 ## Teams
 
-A team has a name and its intended projects (`HUB_ID/PROJECT_ID`; the list
-grants no aimem access, and aicrewd refuses an offer outside it). The
-operator manages teams with `aicrew`, while `aicrewd` runs. Each command
-prints the team as JSON; `list` adds each team's member count and `show` its
-current members.
+A team has a name and a hub. Its projects are the grants its hub's
+operator gives the team's profile there (`aimem identity team grant
+--team-name crew --project PROJECT`): aicrew keeps no project list of its
+own. The operator manages teams with `aicrew`, while `aicrewd` runs. Each
+command prints the team as JSON; `list` adds each team's member count and
+`show` its current members.
 
 ```sh
-bin/aicrew team create   --name crew --hub main --project HUB_ID/PROJECT_ID
-bin/aicrew team register --team-name crew
+bin/aicrew team create   --name crew --hub main
+bin/aicrew team register --team-name crew [--hub main]
 bin/aicrew team list
 bin/aicrew team show     --team-name crew
-bin/aicrew team projects --team TEAM --expect-revision N --project HUB_ID/PROJECT_ID
 bin/aicrew team rename   --team-name crew --expect-revision N --name crew-2
 ```
 
@@ -399,9 +401,19 @@ bin/aicrew team rename   --team-name crew --expect-revision N --name crew-2
   or `hub_unavailable`, each with what to do in `detail`, also printed on
   stderr. The team exists whatever the hub answers. `register` tries again
   and exits 1 unless the team is registered.
-- `projects` replaces the whole set; with no `--project` it clears it.
-  `projects` and `rename` apply only to the revision `show` or `list`
-  printed, and refuse a team that changed since (`revision_conflict`).
+- `show` and `list` print the team's `grants` as aicrewd last read them
+  from the hub (`team.read`): each granted project with its repository and
+  process pin, the `grants_state` the hub answered (`enabled`, `disabled`,
+  `not_registered`) and `grants_read_at`. An offer or a claim never uses
+  this copy: each reads the hub live, and is refused `project_not_granted`
+  when the hub does not grant the task's project, or `hub_unavailable` when
+  the hub does not answer.
+- `register --hub ALIAS` names the hub of a team created before teams named
+  one, then registers it; a team keeps its hub.
+- `rename` applies only to the revision `show` or `list` printed, and
+  refuses a team that changed since (`revision_conflict`).
+- `team projects` and `--project` of earlier releases are removed; the
+  service refuses a request that still carries `projects`.
 - Members join through invitations (below); `aicrew team` does not change
   membership.
 

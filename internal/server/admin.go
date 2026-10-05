@@ -67,7 +67,6 @@ func (s *Server) registerAdmin() {
 	s.handle(http.MethodGet, opapi.TeamsPath, s.operator("team.list", s.listTeams))
 	s.handle(http.MethodPost, opapi.TeamsPath, s.operator("team.create", s.createTeam))
 	s.handle(http.MethodGet, opapi.TeamPath, s.operator("team.show", s.showTeam))
-	s.handle(http.MethodPost, opapi.TeamProjectsPath, s.operator("team.projects", s.setTeamProjects))
 	s.handle(http.MethodPost, opapi.TeamRenamePath, s.operator("team.rename", s.renameTeam))
 	s.handle(http.MethodPost, opapi.TeamRegisterPath, s.operator("team.register", s.registerTeamRoute))
 	s.handle(http.MethodGet, opapi.InvitationsPath, s.operator("invitation.list", s.listInvitations))
@@ -201,24 +200,24 @@ func invitationOf(inv store.Invitation, now time.Time, names map[string]string) 
 }
 
 func teamOf(t store.Team) opapi.Team {
-	projects := make([]opapi.ProjectRef, 0, len(t.Projects))
-	for _, p := range t.Projects {
-		projects = append(projects, opapi.ProjectRef{HubID: p.HubID, ProjectID: p.ProjectID})
+	grants := make([]opapi.Grant, 0, len(t.Grants))
+	for _, g := range t.Grants {
+		v := opapi.Grant{HubID: g.HubID, ProjectID: g.ProjectID}
+		if r := g.Repository; r != nil {
+			v.Repository = &opapi.GrantRepository{Kind: r.Kind, URL: r.URL, Host: r.Host, Access: r.Access}
+		}
+		if p := g.Process; p != nil {
+			v.Process = &opapi.GrantProcess{Repo: p.Repo, Commit: p.Commit, Manifest: p.Manifest}
+		}
+		grants = append(grants, v)
 	}
-	v := opapi.Team{ID: t.ID, Name: t.Name, Projects: projects, Revision: t.Revision,
-		CoordinatorGeneration: t.CoordinatorGeneration, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt, Hub: t.Hub}
+	v := opapi.Team{ID: t.ID, Name: t.Name, Grants: grants, GrantsState: t.GrantsState, GrantsReadAt: t.GrantsReadAt,
+		Revision: t.Revision, CoordinatorGeneration: t.CoordinatorGeneration, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
+		Hub: t.Hub}
 	if r := t.Registration; r != nil {
 		v.Registration = &opapi.TeamRegistration{State: r.State, Detail: r.Detail, Name: r.Name, At: r.At}
 	}
 	return v
-}
-
-func projectsOf(refs []opapi.ProjectRef) []store.ProjectRef {
-	out := make([]store.ProjectRef, 0, len(refs))
-	for _, p := range refs {
-		out = append(out, store.ProjectRef{HubID: p.HubID, ProjectID: p.ProjectID})
-	}
-	return out
 }
 
 // commandKey is a fresh store key: every operator write is its own command.
@@ -369,8 +368,7 @@ func (s *Server) createTeam(w http.ResponseWriter, r *http.Request, op store.Cal
 			return opapi.CodeInvalid, ""
 		}
 	}
-	t, err := s.store.CreateTeam(r.Context(), op, commandKey(), store.NewTeam{Name: req.Name, Projects: projectsOf(req.Projects),
-		Hub: req.Hub})
+	t, err := s.store.CreateTeam(r.Context(), op, commandKey(), store.NewTeam{Name: req.Name, Hub: req.Hub})
 	if err != nil {
 		return adminFail(w, err), ""
 	}
@@ -436,7 +434,7 @@ func registrationOutcome(code, name string) (string, string) {
 // registerTeamRoute is POST /v1/admin/team/register: register a team on its
 // hub again.
 func (s *Server) registerTeamRoute(w http.ResponseWriter, r *http.Request, op store.Caller) (string, string) {
-	var req opapi.IDRequest
+	var req opapi.TeamRegisterRequest
 	if !adminBody(w, r, &req) {
 		return opapi.CodeInvalid, ""
 	}
@@ -445,6 +443,15 @@ func (s *Server) registerTeamRoute(w http.ResponseWriter, r *http.Request, op st
 	t, err := s.store.GetTeam(r.Context(), req.ID)
 	if err != nil {
 		return adminFail(w, err), ""
+	}
+	if req.Hub != "" && req.Hub != t.Hub {
+		if msg := s.hubProblem(req.Hub); msg != "" {
+			adminRefuse(w, http.StatusBadRequest, opapi.CodeInvalid, msg)
+			return opapi.CodeInvalid, t.ID
+		}
+		if t, err = s.store.SetTeamHub(r.Context(), op, commandKey(), t.ID, req.Hub); err != nil {
+			return adminFail(w, err), req.ID
+		}
 	}
 	b, ok := s.hubs[t.Hub]
 	if t.Hub == "" || !ok || b.teams == nil || !b.teams.CanRegister() {
@@ -477,19 +484,6 @@ func (s *Server) showTeam(w http.ResponseWriter, r *http.Request, _ store.Caller
 	}
 	writeJSON(w, http.StatusOK, d)
 	return "ok", t.ID
-}
-
-func (s *Server) setTeamProjects(w http.ResponseWriter, r *http.Request, op store.Caller) (string, string) {
-	var req opapi.TeamProjectsRequest
-	if !adminBody(w, r, &req) {
-		return opapi.CodeInvalid, ""
-	}
-	t, err := s.store.SetTeamProjects(r.Context(), op, commandKey(), req.TeamID, req.ExpectedRevision, projectsOf(req.Projects))
-	if err != nil {
-		return adminFail(w, err), ""
-	}
-	writeJSON(w, http.StatusOK, teamOf(t))
-	return "updated", t.ID
 }
 
 func (s *Server) renameTeam(w http.ResponseWriter, r *http.Request, op store.Caller) (string, string) {

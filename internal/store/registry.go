@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"sort"
 	"time"
 )
 
@@ -51,18 +50,21 @@ type Agent struct {
 	UpdatedAt time.Time    `json:"updated_at"`
 }
 
-// ProjectRef names an aimem project by its hub and stable project ID. A
-// team's project list states intended scope; it grants nothing.
+// ProjectRef names an aimem project by its hub and stable project ID.
 type ProjectRef struct {
 	HubID     string `json:"hub_id"`
 	ProjectID string `json:"project_id"`
 }
 
 type Team struct {
-	ID       string       `json:"id"`
-	Name     string       `json:"name"`
-	Projects []ProjectRef `json:"projects"`
-	Revision int64        `json:"revision"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Revision int64  `json:"revision"`
+	// Grants are the projects the team's hub grants it, as team.read last
+	// answered (GrantsState and GrantsReadAt); empty before any read.
+	Grants       []TeamGrant `json:"grants"`
+	GrantsState  string      `json:"grants_state,omitempty"`
+	GrantsReadAt *time.Time  `json:"grants_read_at,omitempty"`
 	// Hub is the alias of the aimem block the team belongs to, or "" for a
 	// team created before teams named their hub.
 	Hub string `json:"hub"`
@@ -93,7 +95,7 @@ const (
 	opCreateTeam      = "team.create"
 	opRecordRegister  = "team.record_registration"
 	opRenameTeam      = "team.rename"
-	opSetTeamProjects = "team.set_projects"
+	opSetTeamHub      = "team.set_hub"
 	opAddMember       = "member.add"
 	opSetMemberRole   = "member.set_role"
 	opRemoveMember    = "member.remove"
@@ -125,29 +127,6 @@ func (p Profile) validate() error {
 		}
 	}
 	return nil
-}
-
-// normalizeProjects validates, de-duplicates and sorts a project list so that
-// equal sets produce equal idempotency digests.
-func normalizeProjects(in []ProjectRef) ([]ProjectRef, error) {
-	seen := make(map[ProjectRef]bool, len(in))
-	out := make([]ProjectRef, 0, len(in))
-	for _, p := range in {
-		if !refPattern.MatchString(p.HubID) || !refPattern.MatchString(p.ProjectID) {
-			return nil, fmt.Errorf("%w: project ref %q/%q", ErrInvalid, p.HubID, p.ProjectID)
-		}
-		if !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].HubID != out[j].HubID {
-			return out[i].HubID < out[j].HubID
-		}
-		return out[i].ProjectID < out[j].ProjectID
-	})
-	return out, nil
 }
 
 // casUpdate reports ErrNotFound or ErrRevisionConflict when an update matched
@@ -364,8 +343,7 @@ func resolveLabel(ctx context.Context, q querier, query, what, label string) (st
 // --- teams ---
 
 type NewTeam struct {
-	Name     string       `json:"name"`
-	Projects []ProjectRef `json:"projects"`
+	Name string `json:"name"`
 	// Hub is the alias of the team's aimem block; the service checks that
 	// it names a configured hub.
 	Hub string `json:"hub,omitempty"`
@@ -398,9 +376,7 @@ func (s *Store) CreateTeam(ctx context.Context, c Caller, key string, in NewTeam
 			if in.Hub != "" && !hubAliasShape.MatchString(in.Hub) {
 				return fmt.Errorf("%w: a hub alias is 1 to 32 lowercase letters, digits or '-'", ErrInvalid)
 			}
-			var err error
-			in.Projects, err = normalizeProjects(in.Projects)
-			return err
+			return nil
 		},
 		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
 			id, err := newID(now)
@@ -412,9 +388,6 @@ func (s *Store) CreateTeam(ctx context.Context, c Caller, key string, in NewTeam
 				`INSERT INTO teams (id, name, revision, created_at, updated_at, hub) VALUES (?, ?, 1, ?, ?, ?)`,
 				id, in.Name, at, at, in.Hub); err != nil {
 				return nil, fmt.Errorf("insert team: %w", err)
-			}
-			if err := insertProjects(ctx, tx, id, in.Projects); err != nil {
-				return nil, err
 			}
 			return getTeam(ctx, tx, id)
 		},
@@ -490,55 +463,45 @@ func (s *Store) RecordTeamRegistration(ctx context.Context, c Caller, key, teamI
 
 var registrationStateShape = regexp.MustCompile(`^[a-z_]{1,64}$`)
 
-type teamProjectsUpdate struct {
-	TeamID           string       `json:"team_id"`
-	ExpectedRevision int64        `json:"expected_revision"`
-	Projects         []ProjectRef `json:"projects"`
+type teamHubSet struct {
+	TeamID string `json:"team_id"`
+	Hub    string `json:"hub"`
 }
 
-// SetTeamProjects replaces a team's intended project scope. Operator only.
-// The list grants no access to any project.
-func (s *Store) SetTeamProjects(ctx context.Context, c Caller, key, teamID string, expectedRevision int64, projects []ProjectRef) (Team, error) {
-	in := teamProjectsUpdate{TeamID: teamID, ExpectedRevision: expectedRevision, Projects: projects}
+// SetTeamHub names the hub of a team created before teams named one. A
+// team keeps its hub: naming another is refused. Operator only.
+func (s *Store) SetTeamHub(ctx context.Context, c Caller, key, teamID, hub string) (Team, error) {
+	in := teamHubSet{TeamID: teamID, Hub: hub}
 	var out Team
 	err := s.run(ctx, c, command{
-		op: opSetTeamProjects, scope: teamID, key: key, input: &in, authorize: requireOperator,
+		op: opSetTeamHub, scope: teamID, key: key, input: in, authorize: requireOperator,
 		validate: func() error {
-			var err error
-			in.Projects, err = normalizeProjects(in.Projects)
-			return err
+			if !hubAliasShape.MatchString(in.Hub) {
+				return fmt.Errorf("%w: a hub alias is 1 to 32 lowercase letters, digits or '-'", ErrInvalid)
+			}
+			return nil
 		},
 		apply: func(ctx context.Context, tx *sql.Tx, now time.Time) (any, error) {
-			res, err := tx.ExecContext(ctx,
-				`UPDATE teams SET revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?`,
-				formatTime(now), teamID, expectedRevision)
+			t, err := getTeam(ctx, tx, teamID)
 			if err != nil {
-				return nil, fmt.Errorf("update team: %w", err)
-			}
-			if err := casUpdate(ctx, tx, res, `SELECT 1 FROM teams WHERE id = ?`, teamID); err != nil {
-				return nil, fmt.Errorf("set team projects %s: %w", teamID, err)
-			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM team_projects WHERE team_id = ?`, teamID); err != nil {
-				return nil, fmt.Errorf("clear team projects: %w", err)
-			}
-			if err := insertProjects(ctx, tx, teamID, in.Projects); err != nil {
 				return nil, err
+			}
+			switch t.Hub {
+			case in.Hub:
+				return t, nil
+			case "":
+			default:
+				return nil, fmt.Errorf("%w: team %s names hub %q; a team keeps its hub", ErrInvalid, teamID, t.Hub)
+			}
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE teams SET hub = ?, revision = revision + 1, updated_at = ? WHERE id = ?`,
+				in.Hub, formatTime(now), teamID); err != nil {
+				return nil, fmt.Errorf("set team hub: %w", err)
 			}
 			return getTeam(ctx, tx, teamID)
 		},
 	}, &out)
 	return out, err
-}
-
-func insertProjects(ctx context.Context, tx *sql.Tx, teamID string, projects []ProjectRef) error {
-	for _, p := range projects {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO team_projects (team_id, hub_id, project_id) VALUES (?, ?, ?)`,
-			teamID, p.HubID, p.ProjectID); err != nil {
-			return fmt.Errorf("insert team project: %w", err)
-		}
-	}
-	return nil
 }
 
 // GetTeam reads a team and its project list by ID.
@@ -615,14 +578,15 @@ func (s *Store) ResolveTeam(ctx context.Context, name string) (Team, error) {
 func getTeam(ctx context.Context, q querier, id string) (Team, error) {
 	var (
 		t                                   Team
-		createdAt, updated                  string
+		createdAt, updated, grantsAt        string
 		regState, regDetail, regName, regAt string
 	)
 	err := q.QueryRowContext(ctx,
 		`SELECT id, name, revision, coordinator_generation, created_at, updated_at, hub,
-		        registration_state, registration_detail, registered_name, registered_at FROM teams WHERE id = ?`, id).
+		        registration_state, registration_detail, registered_name, registered_at, grants_state, grants_read_at
+		 FROM teams WHERE id = ?`, id).
 		Scan(&t.ID, &t.Name, &t.Revision, &t.CoordinatorGeneration, &createdAt, &updated, &t.Hub,
-			&regState, &regDetail, &regName, &regAt)
+			&regState, &regDetail, &regName, &regAt, &t.GrantsState, &grantsAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Team{}, fmt.Errorf("team %s: %w", id, ErrNotFound)
 	}
@@ -642,21 +606,17 @@ func getTeam(ctx context.Context, q querier, id string) (Team, error) {
 		}
 		t.Registration = r
 	}
-	rows, err := q.QueryContext(ctx,
-		`SELECT hub_id, project_id FROM team_projects WHERE team_id = ? ORDER BY hub_id, project_id`, id)
-	if err != nil {
-		return Team{}, fmt.Errorf("read team projects: %w", err)
-	}
-	defer rows.Close()
-	t.Projects = []ProjectRef{}
-	for rows.Next() {
-		var p ProjectRef
-		if err := rows.Scan(&p.HubID, &p.ProjectID); err != nil {
+	if grantsAt != "" {
+		at, err := parseTime(grantsAt)
+		if err != nil {
 			return Team{}, err
 		}
-		t.Projects = append(t.Projects, p)
+		t.GrantsReadAt = &at
 	}
-	return t, rows.Err()
+	if t.Grants, err = teamGrants(ctx, q, id); err != nil {
+		return Team{}, err
+	}
+	return t, nil
 }
 
 // --- memberships ---

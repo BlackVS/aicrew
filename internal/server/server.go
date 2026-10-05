@@ -47,6 +47,9 @@ type Server struct {
 	verifier store.Verifier
 	// hubs are the configured hubs by name (bindHubs).
 	hubs map[string]hubBinding
+	// grantsEvery is how often the grants snapshot is refreshed
+	// (GrantsRefresh; tests shorten it).
+	grantsEvery time.Duration
 	// reader is aimem's read scope for settling member-driven steps; nil
 	// when no read credential is configured, so those steps stay pending.
 	reader store.ReservationReader
@@ -146,6 +149,12 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		looped := make(chan struct{})
 		go func() { s.loop.Run(loopCtx); close(looped) }()
 		defer func() { stopLoop(); <-looped }()
+	}
+	if s.readsGrants() {
+		grantsCtx, stopGrants := context.WithCancel(ctx)
+		refreshed := make(chan struct{})
+		go func() { s.runGrants(grantsCtx); close(refreshed) }()
+		defer func() { stopGrants(); <-refreshed }()
 	}
 	served := make(chan error, 1)
 	go func() { served <- s.http.Serve(tls.NewListener(ln, s.tls)) }()
@@ -333,6 +342,7 @@ type hubTeams interface {
 	CanRead() bool
 	Register(ctx context.Context, teamID, name string) (hubteams.Registration, error)
 	ReadTeam(ctx context.Context, teamID string) (hubteams.Team, error)
+	ReadTeams(ctx context.Context) ([]hubteams.Team, error)
 }
 
 // WithHub binds a hub alias to a hub ID and its team operations, replacing
@@ -349,6 +359,7 @@ func (s *Server) bindHubs() error {
 	cfg := s.cfg
 	hubs := cfg.Hubs()
 	s.hubs = map[string]hubBinding{}
+	s.grantsEvery = GrantsRefresh
 	if len(hubs) == 0 {
 		return nil
 	}

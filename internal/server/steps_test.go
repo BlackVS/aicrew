@@ -362,11 +362,11 @@ func TestStepRoutesWithoutReader(t *testing.T) {
 func (e *coordEnv) otherTeam(t *testing.T) member {
 	t.Helper()
 	ctx := context.Background()
-	team, err := e.store.CreateTeam(ctx, e.op, "team-2", store.NewTeam{Name: "crew-2",
-		Projects: []store.ProjectRef{{HubID: coordHub, ProjectID: "project-example"}}})
+	team, err := e.store.CreateTeam(ctx, e.op, "team-2", store.NewTeam{Name: "crew-2", Hub: coordHubAlias})
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedGrants(t, e.store, team.ID)
 	a, err := e.store.CreateAgent(ctx, e.op, "agent-other", store.NewAgent{Label: "other"})
 	if err != nil {
 		t.Fatal(err)

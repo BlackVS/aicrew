@@ -81,7 +81,9 @@ func TestVerifyCapabilities(t *testing.T) {
 // verifies them and reports them to aicrewd as the session, which then
 // holds them; the answer is the check's rows.
 func TestLauncherReportsCapabilities(t *testing.T) {
-	s := setupSteps(t, store.RoleWorker)
+	// The step socket needs a short home: macOS caps a socket path at 104
+	// bytes, and its t.TempDir() is longer.
+	s := setupStepsWith(t, crewOptions{role: store.RoleWorker, steps: true, shortHome: true})
 	provisionTestForge(t, s.cfg.Home, "git.example.test", "gt")
 	defer swapAccess(fakeAccess{token: "gt", access: map[string]string{"crew/project-t": "write"}})()
 	s.serve(t)

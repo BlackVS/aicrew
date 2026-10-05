@@ -2,7 +2,9 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -190,7 +192,7 @@ type offerBody struct {
 func (s *Server) offer(w http.ResponseWriter, r *http.Request) {
 	var in offerBody
 	token, key, ok := s.stepRequest(w, r, true, &in)
-	if !ok || !s.granted(w, r, token, store.RoleCoordinator, in.Task, in.Repository) {
+	if !ok || !s.granted(w, r, token, store.RoleCoordinator, in.Task, in.Repository, in.WorkerAgentID) {
 		return
 	}
 	a, step, err := s.store.BeginOfferWithToken(r.Context(), key, token, store.OfferInput{
@@ -207,10 +209,12 @@ func (s *Server) offer(w http.ResponseWriter, r *http.Request) {
 // granted checks, for an offer or a claim, that the team's hub grants the
 // task's project and binds it the repository the step names (kind, URL and
 // access), by one live team.read (liveGrant), and refuses the step
-// otherwise; it reports whether the step may go on. A session in another
-// role reads nothing: the store refuses its step.
+// otherwise; it reports whether the step may go on. For an offer, worker
+// names the worker, whose last capability report must verify the
+// repository at the offer's access (capability_missing). A session in
+// another role reads nothing: the store refuses its step.
 func (s *Server) granted(w http.ResponseWriter, r *http.Request, token string, role store.Role, task store.TaskRef,
-	repo repositoryBody) bool {
+	repo repositoryBody, worker string) bool {
 	b, err := s.store.AuthenticateSessionToken(r.Context(), token)
 	if err != nil {
 		s.refuseSession(w, r, refusalCode(err), false, 0)
@@ -223,6 +227,21 @@ func (s *Server) granted(w http.ResponseWriter, r *http.Request, token string, r
 	if code == "" && (g.Repository == nil || g.Repository.Kind != repo.Kind || g.Repository.URL != repo.URL ||
 		g.Repository.Access != repo.Access) {
 		code = "repository_mismatch"
+	}
+	if code == "" && worker != "" {
+		caps, _, err := s.store.AgentCapabilities(r.Context(), worker)
+		switch {
+		case err != nil:
+			code = refusalCode(err)
+		case store.CapabilityGap(caps, repo.attempt()) != "":
+			host := repo.URL
+			if u, err := url.Parse(repo.URL); err == nil {
+				host = u.Host
+			}
+			s.refuseSessionSaying(w, r, "capability_missing", false, 0, fmt.Sprintf(
+				"The worker has not verified %s access to the offer's repository on %s; nothing was sent.", repo.Access, host))
+			return false
+		}
 	}
 	if code != "" {
 		var after time.Duration
@@ -334,7 +353,7 @@ type claimBody struct {
 func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	var in claimBody
 	token, key, ok := s.stepRequest(w, r, true, &in)
-	if !ok || !s.granted(w, r, token, store.RoleIndependent, in.Task, in.Repository) {
+	if !ok || !s.granted(w, r, token, store.RoleIndependent, in.Task, in.Repository, "") {
 		return
 	}
 	a, step, err := s.store.BeginClaimWithToken(r.Context(), key, token, store.ClaimInput{

@@ -54,7 +54,17 @@ func fake(t *testing.T, k Kind) (*Client, string, *[]string) {
 				w.Write([]byte(`{"id":9,"username":"example_bot","name":"Example Bot","commit_email":"bot@example.org"}`))
 			}
 		case "/repos/team/app", "/projects/team%2Fapp":
-			w.Write([]byte(`{"default_branch":"main"}`))
+			if k == GitLab {
+				w.Write([]byte(`{"default_branch":"main","permissions":{"project_access":{"access_level":20},"group_access":{"access_level":30}}}`))
+			} else {
+				w.Write([]byte(`{"default_branch":"main","permissions":{"admin":false,"push":true,"pull":true}}`))
+			}
+		case "/repos/team/docs", "/projects/team%2Fdocs":
+			if k == GitLab {
+				w.Write([]byte(`{"default_branch":"main","permissions":{"project_access":{"access_level":20},"group_access":null}}`))
+			} else {
+				w.Write([]byte(`{"default_branch":"main","permissions":{"push":false,"pull":true}}`))
+			}
 		case "/repos/team/app/branches/main", "/projects/team%2Fapp/repository/branches/main":
 			if k == GitLab {
 				w.Write([]byte(`{"commit":{"id":"0123456789abcdef0123456789abcdef01234567"}}`))
@@ -104,6 +114,17 @@ func TestDialects(t *testing.T) {
 			head, err := c.BranchHead(context.Background(), host, k, testToken, "team/app", branch)
 			if err != nil || head != "0123456789abcdef0123456789abcdef01234567" {
 				t.Fatalf("branch head: %q %v", head, err)
+			}
+			// The repository's own permissions: write on app (GitLab by its
+			// group's developer level), read on docs.
+			if acc, err := c.RepositoryAccess(context.Background(), host, k, testToken, "team/app"); err != nil || acc != AccessWrite {
+				t.Fatalf("access to app: %q %v", acc, err)
+			}
+			if acc, err := c.RepositoryAccess(context.Background(), host, k, testToken, "team/docs"); err != nil || acc != AccessRead {
+				t.Fatalf("access to docs: %q %v", acc, err)
+			}
+			if _, err := c.RepositoryAccess(context.Background(), host, k, testToken, "team/none"); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("access to a missing repository: %v", err)
 			}
 			if _, err := c.WhoAmI(context.Background(), host, k, "wrong"); !errors.Is(err, ErrRejected) {
 				t.Fatalf("a wrong token: %v", err)

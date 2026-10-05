@@ -34,6 +34,17 @@ func TestRealAimem(t *testing.T) {
 			sc.check(m.name+"'s join: "+m.checkNote, true)
 		}
 	}
+	// Each launcher reports its home's capabilities as its session starts;
+	// the offers below need the worker's.
+	h.waitFor("the members' capability reports", 60*time.Second, func() bool {
+		for _, m := range h.members {
+			if h.capabilityOf(sc, m.agentID) != "write" {
+				return false
+			}
+		}
+		return true
+	})
+	sc.check("each member's launcher reported its capabilities", true)
 	sc.finish()
 
 	t.Run("S1_offer_flow", func(t *testing.T) { h.s1OfferFlow(t) })
@@ -42,6 +53,7 @@ func TestRealAimem(t *testing.T) {
 	t.Run("S4_never_accepted", func(t *testing.T) { h.s4NeverAccepted(t) })
 	t.Run("S5_dependencies", func(t *testing.T) { h.s5Dependencies(t) })
 	t.Run("G1_grants", func(t *testing.T) { h.g1Grants(t) })
+	t.Run("G2_capabilities", func(t *testing.T) { h.g2Capabilities(t) })
 	t.Run("F1_lost_aimem_replies", func(t *testing.T) { h.f1LostAimemReplies(t) })
 	t.Run("F2_lost_aicrewd_replies", func(t *testing.T) { h.f2LostAicrewdReplies(t) })
 	t.Run("F3_restarts", func(t *testing.T) { h.f3Restarts(t) })
@@ -191,21 +203,21 @@ type repositoryBody struct {
 
 // repositoryFor is the repository every step on task names: the hub's,
 // based on the process commit.
-func repositoryFor(task string) repositoryBody {
-	return repositoryBody{Kind: repoKind, URL: repoURL, Access: "write", DefaultBranch: "main", BaseCommit: processCommit,
+func (h *harness) repositoryFor(task string) repositoryBody {
+	return repositoryBody{Kind: repoKind, URL: h.forge.repoURL(), Access: "write", DefaultBranch: "main", BaseCommit: processCommit,
 		Branch: "work/" + task}
 }
 
 func (h *harness) offerBody(task taskRef, worker *member, expires time.Time) map[string]any {
 	return map[string]any{"worker_agent_id": worker.agentID, "task": h.taskRefBody(task.ID),
-		"expected_revision": task.Revision, "repository": repositoryFor(task.ID),
+		"expected_revision": task.Revision, "repository": h.repositoryFor(task.ID),
 		"process":            map[string]string{"repo": processRepo, "commit": processCommit, "manifest": processManifest},
 		"instruction_digest": instructionHash, "expires_at": expires.UTC().Format(time.RFC3339)}
 }
 
 func (h *harness) claimBody(task taskRef) map[string]any {
 	return map[string]any{"task": h.taskRefBody(task.ID), "expected_revision": task.Revision,
-		"repository":         repositoryFor(task.ID),
+		"repository":         h.repositoryFor(task.ID),
 		"process":            map[string]string{"repo": processRepo, "commit": processCommit, "manifest": processManifest},
 		"instruction_digest": instructionHash}
 }
@@ -484,9 +496,9 @@ func (h *harness) s1OfferFlow(t *testing.T) {
 	// worktree from them, and computes the instruction digest itself from
 	// the pinned manifest before accepting.
 	o := found.Offer
-	sc.require("the worker's inbox carries the offer's details", o != nil && o.Repository == repositoryFor(task.ID) &&
+	sc.require("the worker's inbox carries the offer's details", o != nil && o.Repository == h.repositoryFor(task.ID) &&
 		o.Process.Repo == processRepo && o.Process.Commit == processCommit && o.Process.Manifest == processManifest, found)
-	sc.check("aicrew: the attempt records the offer's repository", h.attemptRepository(sc, id) == repositoryFor(task.ID))
+	sc.check("aicrew: the attempt records the offer's repository", h.attemptRepository(sc, id) == h.repositoryFor(task.ID))
 	digest := h.processDigest(o.Process.Commit, o.Process.Manifest)
 	sc.check("the worker's own digest of the pinned manifest equals the offer's", digest == o.InstructionDigest,
 		digest, o.InstructionDigest)

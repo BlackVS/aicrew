@@ -632,6 +632,11 @@ func TestExposureGuard(t *testing.T) {
 		// refreshed periodically: aicrewd's own reads, recorded as its
 		// reconciler (354c-1a).
 		"GetTeam": true, "ListTeams": true, "RecordTeamGrants": true,
+		// The member's requirements and capability reports, by its session
+		// token; and the worker's last report, a planning fact the offer's
+		// capability check reads (354c-2).
+		"RequirementsWithToken": true, "ReportCapabilitiesWithToken": true, "TeamCapabilitiesWithToken": true,
+		"AgentCapabilities": true,
 	}
 	forbiddenPkg := map[string]bool{"AgentCaller": true, "OperatorCaller": true}
 	files, err := filepath.Glob("*.go")
@@ -711,7 +716,8 @@ func TestRouteInventory(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{"GET /healthz", "GET /v1/admin/hub-credentials", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations",
-		"GET /v1/admin/team", "GET /v1/admin/teams", "GET /v1/crew/inbox", "GET /v1/crew/session",
+		"GET /v1/admin/team", "GET /v1/admin/teams", "GET /v1/crew/capabilities", "GET /v1/crew/inbox",
+		"GET /v1/crew/requirements", "GET /v1/crew/session",
 		"POST /v1/admin/hub-credentials", "POST /v1/admin/hub-credentials/revoke", "POST /v1/admin/hub-credentials/rotate",
 		"POST /v1/admin/introspection-credentials", "POST /v1/admin/introspection-credentials/revoke",
 		"POST /v1/admin/introspection-credentials/rotate", "POST /v1/admin/invitations", "POST /v1/admin/invitations/revoke",
@@ -720,7 +726,7 @@ func TestRouteInventory(t *testing.T) {
 		"POST /v1/crew/attempts/{id}/accept", "POST /v1/crew/attempts/{id}/confirm-delivery",
 		"POST /v1/crew/attempts/{id}/confirm-stop", "POST /v1/crew/attempts/{id}/decline", "POST /v1/crew/attempts/{id}/finalize",
 		"POST /v1/crew/attempts/{id}/release", "POST /v1/crew/attempts/{id}/review", "POST /v1/crew/attempts/{id}/settle",
-		"POST /v1/crew/attempts/{id}/stop", "POST /v1/crew/attempts/{id}/withdraw", "POST /v1/crew/attempts/{id}/work", "POST /v1/crew/challenges", "POST /v1/crew/coordination",
+		"POST /v1/crew/attempts/{id}/stop", "POST /v1/crew/attempts/{id}/withdraw", "POST /v1/crew/attempts/{id}/work", "POST /v1/crew/capabilities", "POST /v1/crew/challenges", "POST /v1/crew/coordination",
 		"POST /v1/crew/inbox/ack", "POST /v1/crew/introspect", "POST /v1/crew/invitations/begin", "POST /v1/crew/invitations/complete",
 		"POST /v1/crew/session/leave", "POST /v1/crew/token"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {

@@ -62,15 +62,18 @@ type ClientReport struct {
 
 // CheckReport is the check's result. It never carries a secret.
 type CheckReport struct {
-	Status       string            `json:"status"`
-	Reason       string            `json:"reason,omitempty"`
-	Agent        version.Info      `json:"aicrew_agent"`
-	Components   []ComponentReport `json:"components"`
-	Clients      []ClientReport    `json:"clients"`
-	Wiring       []FileChange      `json:"wiring,omitempty"`
-	Forge        []ForgeCheck      `json:"forge,omitempty"`
-	Notices      []string          `json:"notices,omitempty"`
-	Instructions []string          `json:"instructions,omitempty"`
+	Status     string            `json:"status"`
+	Reason     string            `json:"reason,omitempty"`
+	Agent      version.Info      `json:"aicrew_agent"`
+	Components []ComponentReport `json:"components"`
+	Clients    []ClientReport    `json:"clients"`
+	Wiring     []FileChange      `json:"wiring,omitempty"`
+	Forge      []ForgeCheck      `json:"forge,omitempty"`
+	// Projects are the team's requirements as the launcher verified and
+	// reported them (3.6); absent when no launcher serves the home.
+	Projects     []CapabilityRow `json:"projects,omitempty"`
+	Notices      []string        `json:"notices,omitempty"`
+	Instructions []string        `json:"instructions,omitempty"`
 }
 
 // homeLockName serializes join and check runs on one home.
@@ -227,6 +230,41 @@ func (c *checker) checkForgeCreds(ctx context.Context) {
 		if f.State != ForgeVerified {
 			c.notice(fmt.Sprintf("forge credential for %s (%s): %s: %s; work on that host is refused "+
 				"until it is fixed, and the home stays usable", f.Host, f.Account, f.State, f.Detail))
+		}
+	}
+	c.checkProjects(ctx)
+}
+
+// checkProjects asks the home's launcher, when one serves it, to verify the
+// team's requirements and report them to aicrewd (only the launcher holds
+// the session), and adds the rows. A requirement not verified is a notice,
+// never a blocker: it narrows which offers the member can take.
+func (c *checker) checkProjects(ctx context.Context) {
+	ans, err := CallStep(ctx, c.o.Home, StepCall{Op: "capabilities"})
+	switch {
+	case errors.Is(err, ErrNoLauncher):
+		c.notice("the team's projects are verified by the running launcher (aicrew-agent launch): " +
+			"rerun check while it runs to see them and report them to aicrewd")
+		return
+	case err != nil:
+		c.notice("the launcher did not verify the team's projects: " + err.Error())
+		return
+	case !ans.OK:
+		msg := ans.Status
+		if ans.Error != nil {
+			msg = ans.Error.Code + ": " + ans.Error.Message
+		}
+		c.notice("the launcher did not verify the team's projects: " + msg)
+		return
+	}
+	if err := json.Unmarshal(ans.Result, &c.rep.Projects); err != nil {
+		c.notice("the launcher's answer about the team's projects is not readable")
+		return
+	}
+	for _, p := range c.rep.Projects {
+		if p.State != CapabilityVerified {
+			c.notice(fmt.Sprintf("project %s needs %s access to %s (%s): %s: %s; offers that need it are refused, "+
+				"and the home stays usable", p.Project, p.Required, p.Repository, p.Host, p.State, p.Detail))
 		}
 	}
 }

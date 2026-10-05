@@ -119,6 +119,7 @@ func downgradeToV10(t *testing.T, path string) {
 		`ALTER TABLE teams DROP COLUMN hub`, `ALTER TABLE teams DROP COLUMN registration_state`,
 		`ALTER TABLE teams DROP COLUMN registration_detail`, `ALTER TABLE teams DROP COLUMN registered_name`,
 		`ALTER TABLE teams DROP COLUMN registered_at`,
+		`DROP TABLE agent_capabilities`,
 		`DROP TABLE team_grants`, `ALTER TABLE teams DROP COLUMN grants_state`,
 		`ALTER TABLE teams DROP COLUMN grants_read_at`, teamProjectsV1,
 		`UPDATE schema_version SET version = 10`)
@@ -496,6 +497,9 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 // dropAttemptRepository takes a store back to v23.
 func dropAttemptRepository(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	if _, err := raw.Exec(`DROP TABLE agent_capabilities`); err != nil {
+		t.Fatal(err)
+	}
 	for _, col := range []string{"repository_kind", "repository_url", "repository_access", "default_branch",
 		"blocked_reason", "blocked_since"} {
 		if _, err := raw.Exec(`ALTER TABLE attempts DROP COLUMN ` + col); err != nil {

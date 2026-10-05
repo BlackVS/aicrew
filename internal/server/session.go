@@ -157,6 +157,9 @@ var sessionRefusals = map[string]struct {
 	"project_not_granted": {http.StatusConflict, "", false,
 		"The team's hub does not grant the team the task's project; nothing was sent.",
 		"Ask the hub's operator for the grant (aimem identity team grant), or choose a task of a granted project."},
+	"capability_missing": {http.StatusConflict, "", false,
+		"The worker has not verified the offer's repository at the access it needs; nothing was sent.",
+		"Offer the task to a worker that has (GET /v1/crew/capabilities), or ask the worker to provision the forge credential (aicrew-agent join --cred) and run aicrew-agent check."},
 	"repository_mismatch": {http.StatusConflict, "", false,
 		"The step's repository kind, URL or access is not the one the hub binds to the task's project; nothing was sent.",
 		"Read the project's repository from the hub (aimem project show) and name it in the step."},
@@ -190,9 +193,20 @@ type envelope struct {
 // only a conflict, a rate limit or unavailability keeps its own status.
 // The route and code are logged; nothing the client sent is.
 func (s *Server) refuseSession(w http.ResponseWriter, r *http.Request, code string, oauth bool, retryAfter time.Duration) {
+	s.refuseSessionSaying(w, r, code, oauth, retryAfter, "")
+}
+
+// refuseSessionSaying is refuseSession with message, when not empty, in
+// place of the code's own: a refusal that names what it refers to, never
+// anything the client sent as a secret.
+func (s *Server) refuseSessionSaying(w http.ResponseWriter, r *http.Request, code string, oauth bool, retryAfter time.Duration,
+	message string) {
 	ref := sessionRefusals[code]
 	status := ref.status
 	body := envelope{Code: code, Message: ref.message, Retryable: ref.retryable, NextAction: ref.nextAction}
+	if message != "" {
+		body.Message = message
+	}
 	if oauth && ref.oauth != "" {
 		body.Error, body.ErrorDescription = ref.oauth, ref.message
 		if status == http.StatusUnauthorized || status == http.StatusForbidden {

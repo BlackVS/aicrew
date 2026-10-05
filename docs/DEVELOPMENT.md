@@ -766,6 +766,24 @@ member's user-level skills under it. It reports:
   `join --cred` command that fixes it, never a blocker: it narrows the work
   the member can take on that host, while the home stays usable. Only the
   aimem credential blocks.
+- **The team's projects (capabilities).** When the home's launcher runs,
+  the check asks it to verify the team's requirements and report them to
+  aicrewd: only the launcher holds the session. For each project the team's
+  hub grants, the launcher reads the repository's permissions on its forge
+  with the home's credential for that host (push for `write`), and the
+  check prints a table: project, repository, host, account, required access
+  and state.
+  - The state is `verified`, `insufficient` (less access than required),
+    `missing` (no credential for the host), `refused` (the forge rejected
+    the token or shows no such repository) or `unreachable`.
+  - The verified repositories, with the access the forge reports, go to
+    aicrewd as the member's capabilities.
+  - The launcher also reports them when its session starts, so the
+    capabilities of a `join` arrive with the session that follows it.
+  - A requirement that is not verified is a notice, never a blocker: aicrewd
+    refuses only the offers that need it (`capability_missing`).
+  - Without a running launcher, the check says so and prints no project
+    rows.
 
 `version` reports the build: a release build stamps
 `github.com/BlackVS/aicrew/internal/version.Override` with `-ldflags -X`;

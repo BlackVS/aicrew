@@ -23,7 +23,7 @@ import (
 // pilot runbook's order (aimem docs/PILOT-HUB-RUNBOOK.md at the pin):
 //  1. TLS: the run's CA, a leaf for the hub and one for aicrewd;
 //  2. the hub, terminating TLS itself;
-//  3. the project (tasks on, process selected);
+//  3. the project (tasks on, process selected, its repository bound);
 //  4. aicrew registered as the identity peer, with the hub's ID read back;
 //  5. aicrew's four aimem credentials (identity.redeem, reservation.read,
 //     team.register, team.read);
@@ -81,6 +81,10 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	h.makeProcess()
 	h.must(host, nil, h.aimem(), "tasks", "on", "-p", projectID)
 	h.must(host, nil, h.aimem(), "process", "select", processRepo, processCommit, processManifest, "-p", projectID)
+	// The project's repository: recorded, never fetched; every offer and
+	// claim names it, and aicrewd checks it against the hub's.
+	h.must(host, nil, h.aimem(), "project", "repo", "set", "--project", projectID, "--kind", repoKind, "--url", repoURL,
+		"--access", "write")
 
 	// 4. The peer, and the hub's ID.
 	h.must(host, nil, h.identity("peer", "register", serviceID,

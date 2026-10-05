@@ -30,12 +30,16 @@ type guideRole struct {
 // claim, reuse its pin.
 const offerExample = `{"worker_agent_id": "WORKER_AGENT_ID",
  "task": {"hub_id": "HUB_ID", "project_id": "PROJECT_ID", "task_id": "TASK_ID"},
- "expected_revision": 7, "base_commit": "BASE_COMMIT", "branch": "work/TASK_ID",
+ "expected_revision": 7,
+ "repository": {"kind": "REPO_KIND", "url": "REPO_URL", "access": "write",
+  "default_branch": "DEFAULT_BRANCH", "base_commit": "BASE_COMMIT", "branch": "work/TASK_ID"},
  "process": {"repo": "PROCESS_REPO", "commit": "PROCESS_COMMIT", "manifest": "PROCESS_MANIFEST"},
  "instruction_digest": "sha256:DIGEST", "expires_at": "2026-10-03T12:00:00Z"}`
 
 const claimExample = `{"task": {"hub_id": "HUB_ID", "project_id": "PROJECT_ID", "task_id": "TASK_ID"},
- "expected_revision": 7, "base_commit": "BASE_COMMIT", "branch": "work/TASK_ID",
+ "expected_revision": 7,
+ "repository": {"kind": "REPO_KIND", "url": "REPO_URL", "access": "write",
+  "default_branch": "DEFAULT_BRANCH", "base_commit": "BASE_COMMIT", "branch": "work/TASK_ID"},
  "process": {"repo": "PROCESS_REPO", "commit": "PROCESS_COMMIT", "manifest": "PROCESS_MANIFEST"},
  "instruction_digest": "sha256:DIGEST"}`
 
@@ -45,8 +49,11 @@ var guideRoles = []guideRole{
 		Steps: []guideStep{
 			{"offer", "", offerExample, "Offer a task to a named worker. `expected_revision` is the task's current " +
 				"revision in aimem; `process` is the project's selected process (`aimem process show`), and " +
-				"`instruction_digest` its digest (see \"The instruction digest\" above). The launcher reads the task's dependencies itself and " +
-				"refuses an offer while any is not DONE."},
+				"`instruction_digest` its digest (see \"The instruction digest\" above). `repository` is the project's " +
+				"repository as the hub binds it (`aimem project show`: kind, url, access, which aicrewd checks against the hub), " +
+				"with its default branch, the base commit and the attempt's branch; `--repository REPO_URL` fills the URL, " +
+				"default branch and base commit from the forge with your own credential. The launcher reads the task's " +
+				"dependencies itself and refuses an offer while any is not DONE."},
 			{"withdraw", "--attempt ATTEMPT_ID --task TASK_ID", "", "Release an offer that was declined, expired or is no " +
 				"longer wanted, before it was accepted."},
 			{"review", "--attempt ATTEMPT_ID", `{"result_seq": 1, "decision": "accept"}`, "Decide on the worker's latest " +
@@ -66,7 +73,7 @@ var guideRoles = []guideRole{
 			{"accept", "--attempt ATTEMPT_ID --task TASK_ID", `{"instruction_digest": "sha256:DIGEST"}`, "Accept an " +
 				"offer from your inbox. Compute the digest yourself from the pin the offer names (see " +
 				"\"The instruction digest\" above); it must " +
-				"equal the offer's. Then start your worktree from the offer's `base_commit` on its `branch`."},
+				"equal the offer's. Then start your worktree in the offer's `repository`: its `base_commit` on its `branch`."},
 			{"decline", "--attempt ATTEMPT_ID", "", "Decline an offer you cannot take, for example when the pinned " +
 				"process or its required skills are not available to you."},
 			{"work", "--attempt ATTEMPT_ID --task TASK_ID", `{"intent": "submit", "detail": "RESULT_URL"}`, "Report " +

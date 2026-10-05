@@ -156,15 +156,30 @@ func (s *Server) writeStep(w http.ResponseWriter, r *http.Request, a store.Attem
 	}
 }
 
+// repositoryBody is an offer's or a claim's repository: kind, url and
+// access as the hub binds them to the project, and the default branch, base
+// commit and branch the offering member resolved.
+type repositoryBody struct {
+	Kind          string `json:"kind"`
+	URL           string `json:"url"`
+	Access        string `json:"access"`
+	DefaultBranch string `json:"default_branch"`
+	BaseCommit    string `json:"base_commit"`
+	Branch        string `json:"branch"`
+}
+
+func (b repositoryBody) attempt() store.AttemptRepository {
+	return store.AttemptRepository{Kind: b.Kind, URL: b.URL, Access: b.Access, DefaultBranch: b.DefaultBranch}
+}
+
 type offerBody struct {
-	WorkerAgentID     string        `json:"worker_agent_id"`
-	Task              store.TaskRef `json:"task"`
-	ExpectedRevision  int64         `json:"expected_revision"`
-	BaseCommit        string        `json:"base_commit"`
-	Branch            string        `json:"branch"`
-	Process           processPin    `json:"process"`
-	InstructionDigest string        `json:"instruction_digest"`
-	ExpiresAt         time.Time     `json:"expires_at"`
+	WorkerAgentID     string         `json:"worker_agent_id"`
+	Task              store.TaskRef  `json:"task"`
+	ExpectedRevision  int64          `json:"expected_revision"`
+	Repository        repositoryBody `json:"repository"`
+	Process           processPin     `json:"process"`
+	InstructionDigest string         `json:"instruction_digest"`
+	ExpiresAt         time.Time      `json:"expires_at"`
 	// DependencyEvidence is the client's read of the task's dependencies,
 	// recorded in the offer's audit (1aad G1).
 	DependencyEvidence []store.DependencyEvidence `json:"dependency_evidence"`
@@ -175,12 +190,13 @@ type offerBody struct {
 func (s *Server) offer(w http.ResponseWriter, r *http.Request) {
 	var in offerBody
 	token, key, ok := s.stepRequest(w, r, true, &in)
-	if !ok || !s.granted(w, r, token, store.RoleCoordinator, in.Task) {
+	if !ok || !s.granted(w, r, token, store.RoleCoordinator, in.Task, in.Repository) {
 		return
 	}
 	a, step, err := s.store.BeginOfferWithToken(r.Context(), key, token, store.OfferInput{
 		WorkerAgentID: in.WorkerAgentID, Task: in.Task, ExpectedRevision: in.ExpectedRevision,
-		BaseCommit: in.BaseCommit, Branch: in.Branch, ExpiresAt: in.ExpiresAt,
+		BaseCommit: in.Repository.BaseCommit, Branch: in.Repository.Branch, Repository: in.Repository.attempt(),
+		ExpiresAt: in.ExpiresAt,
 		Process: store.TrustedProcess{InstructionDigest: in.InstructionDigest, Identity: store.ProcessIdentity{
 			Repository: in.Process.Repo, Commit: in.Process.Commit, Manifest: in.Process.Manifest}},
 		Dependencies: in.DependencyEvidence,
@@ -189,10 +205,12 @@ func (s *Server) offer(w http.ResponseWriter, r *http.Request) {
 }
 
 // granted checks, for an offer or a claim, that the team's hub grants the
-// task's project, by one live team.read (liveGrant), and refuses the step
+// task's project and binds it the repository the step names (kind, URL and
+// access), by one live team.read (liveGrant), and refuses the step
 // otherwise; it reports whether the step may go on. A session in another
 // role reads nothing: the store refuses its step.
-func (s *Server) granted(w http.ResponseWriter, r *http.Request, token string, role store.Role, task store.TaskRef) bool {
+func (s *Server) granted(w http.ResponseWriter, r *http.Request, token string, role store.Role, task store.TaskRef,
+	repo repositoryBody) bool {
 	b, err := s.store.AuthenticateSessionToken(r.Context(), token)
 	if err != nil {
 		s.refuseSession(w, r, refusalCode(err), false, 0)
@@ -201,7 +219,12 @@ func (s *Server) granted(w http.ResponseWriter, r *http.Request, token string, r
 	if b.Role != role {
 		return true
 	}
-	if code := s.liveGrant(r.Context(), b.TeamID, task); code != "" {
+	g, code := s.liveGrant(r.Context(), b.TeamID, task)
+	if code == "" && (g.Repository == nil || g.Repository.Kind != repo.Kind || g.Repository.URL != repo.URL ||
+		g.Repository.Access != repo.Access) {
+		code = "repository_mismatch"
+	}
+	if code != "" {
 		var after time.Duration
 		if code == "hub_unavailable" {
 			after = hubRetryAfter
@@ -255,12 +278,27 @@ type attemptView struct {
 	// aimem verified the attempt's process pin; absent while the pin is
 	// unverified input.
 	ProcessVerifiedReceipt string `json:"process_verified_receipt,omitempty"`
+	// Repository is the attempt's repository, recorded at its creation;
+	// absent for an attempt from before it was recorded.
+	Repository *repositoryBody `json:"repository,omitempty"`
+	// Blocked says why the team's hub blocks the open attempt.
+	Blocked *store.AttemptBlock `json:"blocked,omitempty"`
 }
 
 func viewOf(a store.Attempt) attemptView {
 	return attemptView{ID: a.ID, State: string(a.State), Declined: a.Declined, Stop: string(a.Stop), Phase: string(a.Phase),
 		CloseReason: a.CloseReason, AcceptedResult: a.AcceptedResult, DeliveryResult: a.DeliveryResult,
-		ProcessVerifiedReceipt: a.ProcessVerifiedReceipt}
+		ProcessVerifiedReceipt: a.ProcessVerifiedReceipt, Repository: repositoryOf(a), Blocked: a.Blocked}
+}
+
+// repositoryOf is an attempt's six repository fields, or nil for an attempt
+// that recorded none.
+func repositoryOf(a store.Attempt) *repositoryBody {
+	if a.Repository.URL == "" {
+		return nil
+	}
+	return &repositoryBody{Kind: a.Repository.Kind, URL: a.Repository.URL, Access: a.Repository.Access,
+		DefaultBranch: a.Repository.DefaultBranch, BaseCommit: a.BaseCommit, Branch: a.Branch}
 }
 
 // writeAttempt answers a local step with the attempt.
@@ -284,12 +322,11 @@ func (s *Server) decline(w http.ResponseWriter, r *http.Request) {
 }
 
 type claimBody struct {
-	Task              store.TaskRef `json:"task"`
-	ExpectedRevision  int64         `json:"expected_revision"`
-	BaseCommit        string        `json:"base_commit"`
-	Branch            string        `json:"branch"`
-	Process           processPin    `json:"process"`
-	InstructionDigest string        `json:"instruction_digest"`
+	Task              store.TaskRef  `json:"task"`
+	ExpectedRevision  int64          `json:"expected_revision"`
+	Repository        repositoryBody `json:"repository"`
+	Process           processPin     `json:"process"`
+	InstructionDigest string         `json:"instruction_digest"`
 }
 
 // claim begins an independent member's claim of a task for itself. The
@@ -297,11 +334,12 @@ type claimBody struct {
 func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 	var in claimBody
 	token, key, ok := s.stepRequest(w, r, true, &in)
-	if !ok || !s.granted(w, r, token, store.RoleIndependent, in.Task) {
+	if !ok || !s.granted(w, r, token, store.RoleIndependent, in.Task, in.Repository) {
 		return
 	}
 	a, step, err := s.store.BeginClaimWithToken(r.Context(), key, token, store.ClaimInput{
-		Task: in.Task, ExpectedRevision: in.ExpectedRevision, BaseCommit: in.BaseCommit, Branch: in.Branch,
+		Task: in.Task, ExpectedRevision: in.ExpectedRevision, BaseCommit: in.Repository.BaseCommit,
+		Branch: in.Repository.Branch, Repository: in.Repository.attempt(),
 		InstructionDigest: in.InstructionDigest,
 		Process: store.TrustedProcess{InstructionDigest: in.InstructionDigest, Identity: store.ProcessIdentity{
 			Repository: in.Process.Repo, Commit: in.Process.Commit, Manifest: in.Process.Manifest}},

@@ -242,12 +242,18 @@ const coordHub, coordService = "hub-example", "aicrew-example"
 // team read would, for the tests that step through the store directly.
 func seedGrants(t *testing.T, st *store.Store, teamID string) {
 	t.Helper()
-	read := store.TeamGrantsRead{State: store.GrantsEnabled, At: time.Now(),
-		Grants: []store.TeamGrant{{HubID: coordHub, ProjectID: "project-example"}}}
+	read := store.TeamGrantsRead{HubID: coordHub, State: store.GrantsEnabled, At: time.Now(),
+		Grants: []store.TeamGrant{{HubID: coordHub, ProjectID: "project-example", Repository: &store.GrantRepository{
+			Kind: coordRepo.Kind, URL: coordRepo.URL, Access: coordRepo.Access}}}}
 	if _, err := st.RecordTeamGrants(context.Background(), store.ReconcilerCaller(), teamID, read); err != nil {
 		t.Fatal(err)
 	}
 }
+
+// coordRepo is the repository the hub binds to project-example, which the
+// tests' offers and claims name.
+var coordRepo = store.AttemptRepository{Kind: "gitea", URL: "https://git.example.test/crew/project-example.git",
+	Access: "write", DefaultBranch: "main"}
 
 // coordHubAlias is the hub's alias in the test service's configuration.
 const coordHubAlias = "main"
@@ -609,7 +615,7 @@ func (e *coordEnv) offer(t *testing.T, key, taskID string) (store.Attempt, error
 	return e.store.OfferTask(context.Background(), e.lead.caller, e.aimem, key, store.OfferRequest{
 		SessionID: e.lead.sess.ID, Generation: e.lead.sess.Generation, WorkerAgentID: e.worker.agent.ID,
 		Task: e.task(taskID), ExpectedRevision: 3, BaseCommit: "base-1", Branch: "work/" + taskID,
-		Process: coordPin, ExpiresAt: time.Now().Add(time.Hour)})
+		Repository: coordRepo, Process: coordPin, ExpiresAt: time.Now().Add(time.Hour)})
 }
 
 func (e *coordEnv) last(t *testing.T) seenFact {
@@ -686,7 +692,7 @@ func TestCoordinationEndToEnd(t *testing.T) {
 
 	c, err := s.ClaimTask(ctx, e.indep.caller, e.aimem, "claim", store.ClaimRequest{SessionID: e.indep.sess.ID,
 		Generation: e.indep.sess.Generation, Task: e.task("task-2"), ExpectedRevision: 3, BaseCommit: "base-1",
-		Branch: "work/task-2", Process: coordPin, InstructionDigest: coordPin.InstructionDigest})
+		Branch: "work/task-2", Repository: coordRepo, Process: coordPin, InstructionDigest: coordPin.InstructionDigest})
 	if err != nil {
 		t.Fatalf("claim: %v (refused %v)", err, e.aimem.refused)
 	}
@@ -753,7 +759,7 @@ func TestCoordinationRefusals(t *testing.T) {
 		e.aimem.current.Commit = "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b"
 		c, err := e.store.ClaimTask(ctx, e.indep.caller, e.aimem, "claim", store.ClaimRequest{SessionID: e.indep.sess.ID,
 			Generation: e.indep.sess.Generation, Task: e.task("task-2"), ExpectedRevision: 3, BaseCommit: "base-1",
-			Branch: "work/task-2", Process: coordPin, InstructionDigest: coordPin.InstructionDigest})
+			Branch: "work/task-2", Repository: coordRepo, Process: coordPin, InstructionDigest: coordPin.InstructionDigest})
 		var refusal *store.ReservationRefusal
 		if !errors.As(err, &refusal) || refusal.Code != "process_mismatch" || c.State != store.AttemptClosed {
 			t.Fatalf("claim under a moved selection: %+v, %v", c, err)

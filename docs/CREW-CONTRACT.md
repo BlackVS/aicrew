@@ -466,7 +466,9 @@ begin needs an `Idempotency-Key`; settle does not.
     worker. The body carries:
     - `worker_agent_id`;
     - `task`, as `hub_id`, `project_id` and `task_id`;
-    - `expected_revision`, `base_commit` and `branch`;
+    - `expected_revision`;
+    - `repository`, as `kind`, `url`, `access`, `default_branch`,
+      `base_commit` and `branch` ("The attempt's repository");
     - `process`, as `repo`, `commit` and `manifest`;
     - `instruction_digest` and `expires_at`;
     - `dependency_evidence?`: `[{task_id, state, revision}]`, the
@@ -483,8 +485,9 @@ begin needs an `Idempotency-Key`; settle does not.
     empty or `{}`.
   - `POST /v1/crew/attempts/claim`: an independent member claims a task in
     a project its team's hub grants for itself. The body carries `task`,
-    `expected_revision`, `base_commit`, `branch`, `process` and
-    `instruction_digest`, all the claimer's ("Process pins"). The claim's
+    `expected_revision`, `repository` ("The attempt's repository"),
+    `process` and `instruction_digest`, all the claimer's ("Process
+    pins"). The claim's
     fact carries the pin. `Location` names the new attempt.
   - `/{id}/release`: the holder of a stopped attempt, after its own
     confirmation, releases the task. The body is `{target, blocker?}`, with
@@ -637,8 +640,9 @@ begin needs an `Idempotency-Key`; settle does not.
     this step;
   - `409 task_busy`: this service already has an open attempt on the task,
     in any team;
-  - `409 project_not_granted` and the retryable `503 hub_unavailable` at
-    an offer or a claim ("Teams, projects and roles");
+  - `409 project_not_granted`, `409 repository_mismatch` and the retryable
+    `503 hub_unavailable` at an offer or a claim ("Teams, projects and
+    roles", "The attempt's repository");
   - `409` for `agent_busy`, `attempt_state`, `offer_expired`,
     `offer_declined`, `offer_stale`, `instruction_mismatch`,
     `delivery_unconfirmed`, `supersede_limit` and `step_settled`;
@@ -833,10 +837,46 @@ working outside aicrew is arbitrated by the aimem reservation alone.
 ## Attempts and the aimem reservation
 
 An attempt is aicrew's execution record for one task and one worker. It holds
-the task reference, worker agent, offering coordinator (if any), state,
-explicit base commit and branch, process pin (below), result reference, and
-the aimem reservation ID and fence last confirmed by a receipt. The attempt
-is never a second task authority: aimem decides who holds the task.
+the task reference, worker agent, offering coordinator (if any), state, its
+repository (below), process pin (below), result reference, and the aimem
+reservation ID and fence last confirmed by a receipt. The attempt is never a
+second task authority: aimem decides who holds the task.
+
+### The attempt's repository
+
+An offer and an independent claim name the repository the work happens in,
+as `repository: {kind, url, access, default_branch, base_commit, branch}`.
+- `kind` (`github`, `gitea` or `gitlab`), the https clone `url` and
+  `access` (`read` or `write`) are the hub's, bound to the task's project
+  (`aimem project repo set`). The offer's or claim's live team read
+  compares them with the hub's answer: another value, or a project the hub
+  binds no repository to, is `409 repository_mismatch`, and nothing begins.
+- `default_branch` and `base_commit` are the offering coordinator's (or the
+  claimer's), read from the forge with its own credential; `branch` follows
+  the attempt-branch rule.
+
+All six are recorded on the attempt when it is created and never change for
+its lifetime: a repository the hub binds later changes nothing recorded, and
+the next offer must name the new one. The attempt's view and the offer's
+announcement carry them.
+
+### Blocked attempts
+
+An open attempt is **blocked** while its team's hub no longer grants the
+attempt's project (`grant_revoked`), or holds no enabled profile for the team
+(`profile_disabled`). The block is a condition beside the attempt's state,
+`blocked: {reason, since}` in its view, not a state of its own:
+- aicrewd sets and clears it from every team read it records, at offers,
+  claims and the refresh ("Teams, projects and roles"); a read that fails
+  changes nothing;
+- each block and each end of one is announced to the team with a lifecycle
+  message, so the coordinator and the worker are told;
+- a read that grants the project again ends the block, and so does the
+  attempt's closure;
+- every step of the attempt's state goes on as before: aimem decides each
+  of the team's operations, and aicrewd never releases or touches the hold.
+  The operator re-grants, or the attempt is closed under the coordination
+  contract's rules.
 
 ### Ordering across the two stores
 
@@ -1105,10 +1145,12 @@ Each team has one durable, ordered message log with a monotonic sequence.
   transition they announce. Each names the attempt it announces
   (`attempt_id`), so a worker learns an offer's attempt ID from its own
   inbox, with nothing relayed; a member's own message names none. The
-  offer's announcement also carries the offer (`offer`: `base_commit`,
-  `branch`, `process {repo, commit, manifest}`, `instruction_digest` and
-  `expires_at`), from which the worker verifies the pin and starts its
-  worktree; no other message carries one.
+  offer's announcement also carries the offer (`offer`: `repository
+  {kind, url, access, default_branch, base_commit, branch}`, `process
+  {repo, commit, manifest}`, `instruction_digest` and `expires_at`), from
+  which the worker verifies the pin and starts its worktree in the
+  repository; no other message carries one. The announcements of a block
+  and of its end ("Blocked attempts") name the attempt and its task.
 - **Reading over the session API.** A member reads its inbox with
   `GET /v1/crew/inbox` and acknowledges with `POST /v1/crew/inbox/ack`, as
   its session token's session and generation ("Client session API"); its

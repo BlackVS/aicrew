@@ -23,14 +23,16 @@ import (
 // aimem; InstructionDigest is the digest of the instructions the claimer
 // verified, which must be the pinned process's.
 type ClaimRequest struct {
-	SessionID         string         `json:"session_id"`
-	Generation        int64          `json:"generation"`
-	Task              TaskRef        `json:"task"`
-	ExpectedRevision  int64          `json:"expected_revision"`
-	BaseCommit        string         `json:"base_commit"`
-	Branch            string         `json:"branch"`
-	Process           TrustedProcess `json:"process"`
-	InstructionDigest string         `json:"instruction_digest"`
+	SessionID        string  `json:"session_id"`
+	Generation       int64   `json:"generation"`
+	Task             TaskRef `json:"task"`
+	ExpectedRevision int64   `json:"expected_revision"`
+	BaseCommit       string  `json:"base_commit"`
+	Branch           string  `json:"branch"`
+	// Repository is where the work happens, as OfferRequest's.
+	Repository        AttemptRepository `json:"repository"`
+	Process           TrustedProcess    `json:"process"`
+	InstructionDigest string            `json:"instruction_digest"`
 }
 
 const opClaimTask = "attempt.claim"
@@ -41,6 +43,9 @@ func (r ClaimRequest) validate() error {
 	}
 	if !validRefs(r.Task.HubID, r.Task.ProjectID, r.Task.TaskID, r.BaseCommit, r.Branch) {
 		return fmt.Errorf("%w: a claim needs a task, a base commit and a branch", ErrInvalid)
+	}
+	if !r.Repository.valid() {
+		return fmt.Errorf("%w: a claim needs its repository: kind (github, gitea or gitlab), an https clone URL, access (read or write) and the default branch", ErrInvalid)
 	}
 	if !r.Process.valid() || !validRefs(r.InstructionDigest) {
 		return fmt.Errorf("%w: a claim needs the process pin in the hub selection's forms (a Git URL, the full commit, a relative manifest path) and the digest of the verified instructions", ErrInvalid)
@@ -108,13 +113,15 @@ func claimCommand(c Caller, key string, in ClaimRequest, proof *string) command 
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO attempts (id, team_id, task_hub_id, task_project_id, task_id, worker_agent_id, origin,
 			        coordinator_agent_id, coordinator_session_id, coordinator_generation, state,
-			        base_commit, branch, process_repository, process_commit, process_manifest, instruction_digest,
+			        base_commit, branch, repository_kind, repository_url, repository_access, default_branch,
+			        process_repository, process_commit, process_manifest, instruction_digest,
 			        offer_expires_at, task_revision, pending_op, pending_key, pending_from, intents,
 			        worker_session_id, worker_generation, revision, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, 'claim', NULL, '', 0, 'claiming', ?, ?, ?, ?, ?, ?, '', ?, ?, ?, 'closed', 1,
+			 VALUES (?, ?, ?, ?, ?, ?, 'claim', NULL, '', 0, 'claiming', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, 'closed', 1,
 			         ?, ?, 1, ?, ?)`,
 			id, sess.TeamID, in.Task.HubID, in.Task.ProjectID, in.Task.TaskID, c.id,
-			in.BaseCommit, in.Branch, in.Process.Identity.Repository, in.Process.Identity.Commit,
+			in.BaseCommit, in.Branch, in.Repository.Kind, in.Repository.URL, in.Repository.Access, in.Repository.DefaultBranch,
+			in.Process.Identity.Repository, in.Process.Identity.Commit,
 			in.Process.Identity.Manifest, in.Process.InstructionDigest,
 			in.ExpectedRevision, string(ReservationClaim), requestKey(id, ReservationClaim, 1),
 			sess.ID, sess.Generation, at, at); err != nil {

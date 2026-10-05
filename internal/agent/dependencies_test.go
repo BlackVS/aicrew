@@ -42,7 +42,7 @@ func (s *stepEnv) setDependencies(t *testing.T, deps []string, states map[string
 func (s *stepEnv) offerBody(t *testing.T, extra map[string]any) json.RawMessage {
 	t.Helper()
 	body := map[string]any{"worker_agent_id": s.coordSess.AgentID, "task": s.task(), "expected_revision": 3,
-		"base_commit": "base-1", "branch": "work/task-1", "process": testProcess, "instruction_digest": testDigest,
+		"repository": testRepository, "process": testProcess, "instruction_digest": testDigest,
 		"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}
 	for k, v := range extra {
 		body[k] = v

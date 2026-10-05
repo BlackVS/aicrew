@@ -493,9 +493,21 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 		PRIMARY KEY (team_id, hub_id, project_id)
 	)`
 
+// dropAttemptRepository takes a store back to v23.
+func dropAttemptRepository(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	for _, col := range []string{"repository_kind", "repository_url", "repository_access", "default_branch",
+		"blocked_reason", "blocked_since"} {
+		if _, err := raw.Exec(`ALTER TABLE attempts DROP COLUMN ` + col); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // dropTeamGrants takes a store back to v22.
 func dropTeamGrants(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropAttemptRepository(t, raw)
 	for _, stmt := range []string{`DROP TABLE team_grants`, `ALTER TABLE teams DROP COLUMN grants_state`,
 		`ALTER TABLE teams DROP COLUMN grants_read_at`, teamProjectsV1} {
 		if _, err := raw.Exec(stmt); err != nil {
@@ -544,6 +556,38 @@ func TestMigrationV22AddsTheTeamHub(t *testing.T) {
 	}
 	if after != before || before == 0 || named != 0 {
 		t.Fatalf("after v22: %d teams (was %d), %d naming a hub or a registration", after, before, named)
+	}
+}
+
+// Schema v24 adds the repository and the block to a populated v23 store's
+// attempts: every attempt is kept, naming no repository and not blocked.
+func TestMigrationV24AddsTheAttemptRepository(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM attempts`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropAttemptRepository(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 23`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v23 store: %v", err)
+	}
+	defer s2.Close()
+	var after, named int
+	if err := s2.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(repository_url, '')) + COUNT(NULLIF(blocked_reason, '')) FROM attempts`).
+		Scan(&after, &named); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || before == 0 || named != 0 {
+		t.Fatalf("after v24: %d attempts (was %d), %d naming a repository or a block", after, before, named)
 	}
 }
 

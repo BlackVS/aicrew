@@ -254,7 +254,8 @@ func TestReplayAfterResumeRechecksAuthority(t *testing.T) {
 		e := newClaimStopEnv(t)
 		wb, _ := e.s.AuthenticateSessionToken(ctx, e.workerTok)
 		in := OfferInput{WorkerAgentID: wb.AgentID, Task: TaskRef{HubID: "hub-test", ProjectID: "project-t", TaskID: "task-1"},
-			ExpectedRevision: 3, BaseCommit: "base-1", Branch: "work/task-1", Process: testPin, ExpiresAt: e.now.Add(time.Hour)}
+			ExpectedRevision: 3, BaseCommit: "base-1", Branch: "work/task-1", Repository: testRepository, Process: testPin,
+			ExpiresAt: e.now.Add(time.Hour)}
 		a, st, err := e.s.BeginOfferWithToken(ctx, "offer-1", e.leadTok, in)
 		if err != nil {
 			t.Fatal(err)

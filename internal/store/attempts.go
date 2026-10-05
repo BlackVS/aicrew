@@ -182,16 +182,22 @@ type Attempt struct {
 	// RecoveredBy, RecoveredFence and RecoveredAt are the read scope's
 	// closure evidence for an attempt closed as recovered (b3b): how aimem
 	// closed this exact reservation, at which fence, and when.
-	RecoveredBy      string         `json:"recovered_by,omitempty"`
-	RecoveredFence   string         `json:"recovered_fence,omitempty"`
-	RecoveredAt      string         `json:"recovered_at,omitempty"`
-	TerminalEvidence string         `json:"terminal_evidence,omitempty"`
-	State            AttemptState   `json:"state"`
-	CloseReason      string         `json:"close_reason,omitempty"`
-	Declined         bool           `json:"declined"`
-	BaseCommit       string         `json:"base_commit"`
-	Branch           string         `json:"branch"`
-	Process          TrustedProcess `json:"process"`
+	RecoveredBy      string       `json:"recovered_by,omitempty"`
+	RecoveredFence   string       `json:"recovered_fence,omitempty"`
+	RecoveredAt      string       `json:"recovered_at,omitempty"`
+	TerminalEvidence string       `json:"terminal_evidence,omitempty"`
+	State            AttemptState `json:"state"`
+	CloseReason      string       `json:"close_reason,omitempty"`
+	Declined         bool         `json:"declined"`
+	BaseCommit       string       `json:"base_commit"`
+	Branch           string       `json:"branch"`
+	// Repository is where the attempt's work happens, recorded at its
+	// creation and never changed; empty for an attempt from before schema 24.
+	Repository AttemptRepository `json:"repository"`
+	// Blocked is set while the team's hub no longer grants the open
+	// attempt's project, or holds no enabled profile for the team.
+	Blocked *AttemptBlock  `json:"blocked,omitempty"`
+	Process TrustedProcess `json:"process"`
 	// ProcessVerifiedReceipt is the committed claim receipt under whose
 	// coordination fact aimem verified Process against the project's
 	// selection; empty while the pin is unverified input.
@@ -236,15 +242,19 @@ func (a Attempt) claimRef() string {
 // and the task reference come from a trusted internal caller that read them
 // from aimem; the store records them and does not re-read them.
 type OfferRequest struct {
-	SessionID        string         `json:"session_id"`
-	Generation       int64          `json:"generation"`
-	WorkerAgentID    string         `json:"worker_agent_id"`
-	Task             TaskRef        `json:"task"`
-	ExpectedRevision int64          `json:"expected_revision"`
-	BaseCommit       string         `json:"base_commit"`
-	Branch           string         `json:"branch"`
-	Process          TrustedProcess `json:"process"`
-	ExpiresAt        time.Time      `json:"expires_at"`
+	SessionID        string  `json:"session_id"`
+	Generation       int64   `json:"generation"`
+	WorkerAgentID    string  `json:"worker_agent_id"`
+	Task             TaskRef `json:"task"`
+	ExpectedRevision int64   `json:"expected_revision"`
+	BaseCommit       string  `json:"base_commit"`
+	Branch           string  `json:"branch"`
+	// Repository is where the work happens: kind, URL and access as the
+	// hub binds them (the service compares them with its live team read),
+	// and the default branch the base commit was read from.
+	Repository AttemptRepository `json:"repository"`
+	Process    TrustedProcess    `json:"process"`
+	ExpiresAt  time.Time         `json:"expires_at"`
 	// Dependencies is the evidence the offering member's client read of
 	// the task's dependencies before the offer (1aad G1): recorded in the
 	// offer's audit, never a reason the task is eligible. aimem decides
@@ -317,6 +327,9 @@ func (r OfferRequest) validate() error {
 	}
 	if !validRefs(r.Task.HubID, r.Task.ProjectID, r.Task.TaskID, r.BaseCommit, r.Branch) {
 		return fmt.Errorf("%w: an offer needs a task, a base commit and a branch", ErrInvalid)
+	}
+	if !r.Repository.valid() {
+		return fmt.Errorf("%w: an offer needs its repository: kind (github, gitea or gitlab), an https clone URL, access (read or write) and the default branch", ErrInvalid)
 	}
 	if !r.Process.valid() {
 		return fmt.Errorf("%w: an offer needs the process pin in the hub selection's forms (a Git URL, the full commit, a relative manifest path) and the instruction digest", ErrInvalid)
@@ -400,13 +413,15 @@ func offerCommand(c Caller, key string, in OfferRequest, proof *string) command 
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO attempts (id, team_id, task_hub_id, task_project_id, task_id, worker_agent_id, origin,
 			        coordinator_agent_id, coordinator_session_id, coordinator_generation, state,
-			        base_commit, branch, process_repository, process_commit, process_manifest, instruction_digest,
+			        base_commit, branch, repository_kind, repository_url, repository_access, default_branch,
+			        process_repository, process_commit, process_manifest, instruction_digest,
 			        offer_expires_at, task_revision, pending_op, pending_key, pending_from, intents,
 			        worker_session_id, worker_generation, worker_session_floor, revision, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, 'offer', ?, ?, ?, 'offering', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'closed', 1, ?, ?, ?, 1, ?, ?)`,
+			 VALUES (?, ?, ?, ?, ?, ?, 'offer', ?, ?, ?, 'offering', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'closed', 1, ?, ?, ?, 1, ?, ?)`,
 			id, sess.TeamID, in.Task.HubID, in.Task.ProjectID, in.Task.TaskID, in.WorkerAgentID,
 			sess.AgentID, sess.ID, sess.CoordinatorGeneration,
-			in.BaseCommit, in.Branch, in.Process.Identity.Repository, in.Process.Identity.Commit,
+			in.BaseCommit, in.Branch, in.Repository.Kind, in.Repository.URL, in.Repository.Access, in.Repository.DefaultBranch,
+			in.Process.Identity.Repository, in.Process.Identity.Commit,
 			in.Process.Identity.Manifest, in.Process.InstructionDigest,
 			formatTime(in.ExpiresAt), in.ExpectedRevision, string(ReservationClaim), requestKey(id, ReservationClaim, 1),
 			workerSession, workerGeneration, floor, at, at); err != nil {
@@ -1096,8 +1111,10 @@ func announceOffer(ctx context.Context, tx *sql.Tx, a Attempt, now time.Time) er
 	task := a.Task
 	_, err = postLifecycleMessage(ctx, tx, Message{TeamID: a.TeamID, Kind: KindLifecycle, SenderAgentID: a.CoordinatorAgentID,
 		Task: &task, AttemptID: a.ID, Text: fmt.Sprintf("%s offered task %s to %s.", from.Label, taskName(a.Task), to.Label),
-		Offer: &OfferDetail{BaseCommit: a.BaseCommit, Branch: a.Branch, InstructionDigest: a.Process.InstructionDigest,
-			ExpiresAt: a.OfferExpiresAt, Process: OfferProcess{Repo: a.Process.Identity.Repository,
+		Offer: &OfferDetail{Repository: OfferRepository{Kind: a.Repository.Kind, URL: a.Repository.URL,
+			Access: a.Repository.Access, DefaultBranch: a.Repository.DefaultBranch, BaseCommit: a.BaseCommit, Branch: a.Branch},
+			InstructionDigest: a.Process.InstructionDigest,
+			ExpiresAt:         a.OfferExpiresAt, Process: OfferProcess{Repo: a.Process.Identity.Repository,
 				Commit: a.Process.Identity.Commit, Manifest: a.Process.Identity.Manifest}}}, now)
 	return err
 }
@@ -1246,7 +1263,8 @@ const attemptColumns = `id, team_id, task_hub_id, task_project_id, task_id, work
 	pending_evidence, pending_message, accepted_result, accepted_by_session, accepted_by_generation, finalized_result,
 	terminal_evidence, stop, stop_by, stop_session, stop_reason, stop_at, origin, process_verified_receipt,
 	delivery_result, delivery_evidence, delivery_by_agent, delivery_by_session, delivery_by_generation, delivery_at,
-	recovered_by, recovered_fence, recovered_at, revision, created_at, updated_at`
+	recovered_by, recovered_fence, recovered_at, revision, created_at, updated_at,
+	repository_kind, repository_url, repository_access, default_branch, blocked_reason, blocked_since`
 
 func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 	var (
@@ -1254,6 +1272,7 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		state, op, from, phase    string
 		stop, stopAt, origin      string
 		deliveryAt                string
+		blockedReason, blockedAt  string
 		declined                  int
 		expires, created, updated string
 	)
@@ -1267,9 +1286,17 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		&a.AcceptedResult, &a.AcceptedBySession, &a.AcceptedByGeneration, &a.FinalizedResult,
 		&a.TerminalEvidence, &stop, &a.StopBy, &a.StopSession, &a.StopReason, &stopAt, &origin, &a.ProcessVerifiedReceipt,
 		&a.DeliveryResult, &a.DeliveryEvidence, &a.DeliveryByAgent, &a.DeliveryBySession, &a.DeliveryByGeneration, &deliveryAt,
-		&a.RecoveredBy, &a.RecoveredFence, &a.RecoveredAt, &a.Revision, &created, &updated)
+		&a.RecoveredBy, &a.RecoveredFence, &a.RecoveredAt, &a.Revision, &created, &updated,
+		&a.Repository.Kind, &a.Repository.URL, &a.Repository.Access, &a.Repository.DefaultBranch, &blockedReason, &blockedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Attempt{}, fmt.Errorf("attempt %s: %w", id, ErrNotFound)
+	}
+	if blockedReason != "" && AttemptState(state) != AttemptClosed {
+		since, err := parseTime(blockedAt)
+		if err != nil {
+			return Attempt{}, err
+		}
+		a.Blocked = &AttemptBlock{Reason: blockedReason, Since: since}
 	}
 	if err != nil {
 		return Attempt{}, fmt.Errorf("read attempt: %w", err)

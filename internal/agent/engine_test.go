@@ -71,6 +71,11 @@ type crewOptions struct {
 	shortHome bool
 }
 
+// testRepository is the repository the hub binds to project-t, as the
+// tests' offers and claims name it.
+var testRepository = map[string]string{"kind": "gitea", "url": "https://git.example.test/crew/project-t.git",
+	"access": "write", "default_branch": "main", "base_commit": "base-1", "branch": "work/task-1"}
+
 // grantingHub is the team's hub: it grants every team project-t.
 type grantingHub struct{}
 
@@ -80,7 +85,8 @@ func (grantingHub) Register(context.Context, string, string) (hubteams.Registrat
 	return hubteams.Registration{}, errors.New("not used")
 }
 func (grantingHub) ReadTeam(_ context.Context, id string) (hubteams.Team, error) {
-	return hubteams.Team{TeamID: id, TeamName: "crew", Enabled: true, Projects: []hubteams.Project{{Project: "project-t"}}}, nil
+	return hubteams.Team{TeamID: id, TeamName: "crew", Enabled: true, Projects: []hubteams.Project{{Project: "project-t",
+		Repository: &hubteams.Repository{Kind: "gitea", URL: testRepository["url"], Access: "write"}}}}, nil
 }
 func (grantingHub) ReadTeams(context.Context) ([]hubteams.Team, error) { return nil, nil }
 
@@ -112,7 +118,7 @@ func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
 		t.Fatal(err)
 	}
 	if o.steps {
-		read := store.TeamGrantsRead{State: store.GrantsEnabled, At: time.Now(),
+		read := store.TeamGrantsRead{HubID: "hub-test", State: store.GrantsEnabled, At: time.Now(),
 			Grants: []store.TeamGrant{{HubID: "hub-test", ProjectID: "project-t"}}}
 		if _, err := st.RecordTeamGrants(ctx, store.ReconcilerCaller(), tm.ID, read); err != nil {
 			t.Fatal(err)

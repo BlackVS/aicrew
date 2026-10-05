@@ -114,6 +114,10 @@ type grantingHub struct {
 	grants []string
 	down   bool
 	reads  int
+	// listed are the teams a list of the hub's teams names; repoURL, when
+	// set, is the URL the hub binds to every granted project.
+	listed  []string
+	repoURL string
 }
 
 func (h *grantingHub) set(down bool, grants ...string) {
@@ -125,8 +129,12 @@ func (h *grantingHub) set(down bool, grants ...string) {
 func (h *grantingHub) team(id string) hubteams.Team {
 	t := hubteams.Team{TeamID: id, TeamName: "crew", Enabled: true, Projects: []hubteams.Project{}}
 	for _, p := range h.grants {
+		url := "https://git.example.test/crew/" + p + ".git"
+		if h.repoURL != "" {
+			url = h.repoURL
+		}
 		t.Projects = append(t.Projects, hubteams.Project{Project: p,
-			Repository: &hubteams.Repository{Kind: "git", URL: "https://git.example.test/" + p + ".git", Host: "git.example.test", Access: "write"}})
+			Repository: &hubteams.Repository{Kind: "gitea", URL: url, Host: "git.example.test", Access: "write"}})
 	}
 	return t
 }
@@ -152,7 +160,11 @@ func (h *grantingHub) ReadTeams(_ context.Context) ([]hubteams.Team, error) {
 	if h.down {
 		return nil, &hubteams.Error{Code: hubteams.CodeUnavailable}
 	}
-	return nil, nil
+	var out []hubteams.Team
+	for _, id := range h.listed {
+		out = append(out, h.team(id))
+	}
+	return out, nil
 }
 
 func (h *grantingHub) readCount() int {
@@ -377,19 +389,19 @@ func TestLiveGrantWithoutTheHub(t *testing.T) {
 		return tm.ID
 	}
 	task := store.TaskRef{HubID: "hub-a", ProjectID: "docs", TaskID: "task-1"}
-	if code := e.srv.liveGrant(ctx, team("bare", ""), task); code != "project_not_granted" {
+	if _, code := e.srv.liveGrant(ctx, team("bare", ""), task); code != "project_not_granted" {
 		t.Fatalf("a team without a hub: %q", code)
 	}
 	main := team("main-crew", "main")
-	if code := e.srv.liveGrant(ctx, main, task); code != "" {
+	if _, code := e.srv.liveGrant(ctx, main, task); code != "" {
 		t.Fatalf("the granted project: %q", code)
 	}
 	other := task
 	other.HubID = "hub-b"
-	if code := e.srv.liveGrant(ctx, main, other); code != "project_not_granted" {
+	if _, code := e.srv.liveGrant(ctx, main, other); code != "project_not_granted" {
 		t.Fatalf("a task on another hub: %q", code)
 	}
-	if code := e.srv.liveGrant(ctx, team("lab-crew", "noread"), other); code != "hub_unavailable" {
+	if _, code := e.srv.liveGrant(ctx, team("lab-crew", "noread"), other); code != "hub_unavailable" {
 		t.Fatalf("a hub without team.read: %q", code)
 	}
 }
@@ -398,7 +410,7 @@ func TestLiveGrantWithoutTheHub(t *testing.T) {
 // granted projects of a listed team, nothing for a team the hub does not
 // list. A hub that does not answer keeps the snapshot.
 func TestRefreshGrants(t *testing.T) {
-	hub := &listingHub{grantingHub: grantingHub{grants: []string{"docs"}}}
+	hub := &grantingHub{grants: []string{"docs"}}
 	e := setupAPI(t, WithHub("main", "hub-a", hub))
 	ctx := context.Background()
 	op := mustOperator(t)
@@ -439,25 +451,6 @@ func mustOperator(t *testing.T) store.Caller {
 		t.Fatal(err)
 	}
 	return op
-}
-
-// listingHub lists the teams in listed, each granted the hub's grants.
-type listingHub struct {
-	grantingHub
-	listed []string
-}
-
-func (h *listingHub) ReadTeams(ctx context.Context) ([]hubteams.Team, error) {
-	if _, err := h.grantingHub.ReadTeams(ctx); err != nil {
-		return nil, err
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	var out []hubteams.Team
-	for _, id := range h.listed {
-		out = append(out, h.team(id))
-	}
-	return out, nil
 }
 
 // aicrew team register --hub names the hub of a team created before teams
@@ -505,5 +498,89 @@ func TestGrantsReadSkipsUnusableProjects(t *testing.T) {
 		if _, ok := grantsRead("hub-a", hubteams.Team{}, &hubteams.Error{Code: code}, time.Now()); ok {
 			t.Fatalf("%s was taken for an answer", code)
 		}
+	}
+}
+
+// An offer or a claim names the repository the hub binds to the task's
+// project: another kind, URL or access, or a project the hub binds no
+// repository to, is refused repository_mismatch and nothing begins.
+func TestStepsNameTheHubsRepository(t *testing.T) {
+	e := setupCoordination(t)
+	expires := time.Now().Add(time.Hour)
+	for name, change := range map[string]func(map[string]string){
+		"kind":   func(r map[string]string) { r["kind"] = "github" },
+		"url":    func(r map[string]string) { r["url"] = "https://git.example.test/crew/other.git" },
+		"access": func(r map[string]string) { r["access"] = "read" },
+	} {
+		body := e.offerBody("task-1", expires)
+		repo := repositoryJSON("task-1")
+		change(repo)
+		body["repository"] = repo
+		refused(t, e.call(t, e.lead.token, AttemptsPath, "offer-"+name, body), http.StatusConflict, "repository_mismatch")
+		claim := e.claimBody("task-2")
+		claim["repository"] = repo
+		refused(t, e.call(t, e.indep.token, ClaimPath, "claim-"+name, claim), http.StatusConflict, "repository_mismatch")
+	}
+	// A body in the shape before the repository object is refused as such.
+	old := e.offerBody("task-1", expires)
+	delete(old, "repository")
+	old["base_commit"], old["branch"] = "base-1", "work/task-1"
+	refused(t, e.call(t, e.lead.token, AttemptsPath, "offer-old", old), http.StatusBadRequest, "invalid_request")
+
+	// The hub changes the project's repository: the running attempt keeps
+	// what it recorded, and the next offer must name the new repository.
+	id, _ := e.offerAndSettle(t, "offer-1", "task-1", expires)
+	moved := "https://git.example.test/crew/project-example-2.git"
+	e.hub.mu.Lock()
+	e.hub.repoURL = moved
+	e.hub.mu.Unlock()
+	refused(t, e.call(t, e.lead.token, AttemptsPath, "offer-3", e.offerBody("task-3", expires)), http.StatusConflict, "repository_mismatch")
+	a, err := e.store.GetAttempt(context.Background(), id)
+	if err != nil || a.Repository != coordRepo || a.BaseCommit != "base-1" || a.Branch != "work/task-1" {
+		t.Fatalf("the recorded repository after the hub moved it = %+v, %v", a.Repository, err)
+	}
+	claim := e.claimBody("task-3")
+	repo := repositoryJSON("task-3")
+	repo["url"] = moved
+	claim["repository"] = repo
+	got := e.call(t, e.indep.token, ClaimPath, "claim-3", claim)
+	if c, err := e.store.GetAttempt(context.Background(), attemptOf(t, got)); err != nil || c.Repository.URL != moved {
+		t.Fatalf("the claim after the move = %+v, %v", c.Repository, err)
+	}
+}
+
+// The refresh blocks the team's open attempt when the hub revokes its
+// project, tells the worker, and a re-grant clears the block; the attempt's
+// state and hold never change.
+func TestRefreshBlocksAndUnblocks(t *testing.T) {
+	e := setupCoordination(t)
+	ctx := context.Background()
+	id, _ := e.offerAndSettle(t, "offer-1", "task-1", time.Now().Add(time.Hour))
+	before, err := e.store.GetAttempt(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.hub.mu.Lock()
+	e.hub.listed, e.hub.grants = []string{e.team.ID}, nil
+	e.hub.mu.Unlock()
+	e.srv.refreshGrants(ctx)
+	a, err := e.store.GetAttempt(ctx, id)
+	if err != nil || a.Blocked == nil || a.Blocked.Reason != store.BlockedGrantRevoked || a.State != before.State ||
+		a.ReservationID != before.ReservationID {
+		t.Fatalf("after the revoke = %+v %+v, %v", a.Blocked, a.State, err)
+	}
+	told := false
+	for _, m := range inboxOf(t, e.get(t, e.worker.token, InboxPath)) {
+		if m.Kind == "lifecycle" && m.AttemptID == id && strings.Contains(m.Text, "is blocked") {
+			told = true
+		}
+	}
+	if !told {
+		t.Fatal("the worker was not told of the block")
+	}
+	e.hub.set(false, "project-example")
+	e.srv.refreshGrants(ctx)
+	if a, err := e.store.GetAttempt(ctx, id); err != nil || a.Blocked != nil {
+		t.Fatalf("after the re-grant = %+v, %v", a.Blocked, err)
 	}
 }

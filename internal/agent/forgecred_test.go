@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -279,9 +280,10 @@ func (b fakeBase) BranchHead(_ context.Context, _ string, _ forge.Kind, token, p
 	return "0123456789abcdef0123456789abcdef01234567", nil
 }
 
-// ResolveBase fills an empty base_commit from the repository's default
-// branch with the home's own credential, keeps a given one, and names a
-// host the home holds no credential for.
+// ResolveBase fills the body's repository from the forge with the home's
+// own credential: the URL and kind when absent, the default branch, and its
+// head as the base commit; it keeps what the body names, and names a host
+// the home holds no credential for.
 func TestResolveBase(t *testing.T) {
 	home, dir := t.TempDir(), t.TempDir()
 	f := newFakeForge()
@@ -296,19 +298,31 @@ func TestResolveBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, res, err := ResolveBase(context.Background(), home, fakeBase{"gh"}, "https://github.com/team/app.git",
-		[]byte(`{"branch":"feature-x","expected_revision":3}`))
-	var fields map[string]any
-	if err != nil || json.Unmarshal(body, &fields) != nil || fields["base_commit"] != "0123456789abcdef0123456789abcdef01234567" ||
-		fields["branch"] != "feature-x" || res.DefaultBranch != "main" || res.Kept {
+		[]byte(`{"repository":{"branch":"feature-x","access":"write"},"expected_revision":3}`))
+	var fields struct {
+		Repository map[string]any `json:"repository"`
+		Revision   int            `json:"expected_revision"`
+	}
+	if err != nil || json.Unmarshal(body, &fields) != nil || res.DefaultBranch != "main" || res.Kept || fields.Revision != 3 {
 		t.Fatalf("resolve: %s %+v %v", body, res, err)
+	}
+	want := map[string]any{"url": "https://github.com/team/app.git", "kind": "github", "access": "write", "default_branch": "main",
+		"base_commit": "0123456789abcdef0123456789abcdef01234567", "branch": "feature-x"}
+	if !reflect.DeepEqual(fields.Repository, want) {
+		t.Fatalf("repository = %v, want %v", fields.Repository, want)
 	}
 	if strings.Contains(string(body), `"gh"`) {
 		t.Fatal("the body carries the token")
 	}
-	kept, res, err := ResolveBase(context.Background(), home, fakeBase{"gh"}, "https://github.com/team/app",
-		[]byte(`{"base_commit":"ffffffffffffffffffffffffffffffffffffffff"}`))
-	if err != nil || !res.Kept || !strings.Contains(string(kept), "ffff") {
+	given := `{"repository":{"kind":"github","url":"https://github.com/team/app","default_branch":"trunk",` +
+		`"base_commit":"ffffffffffffffffffffffffffffffffffffffff"}}`
+	kept, res, err := ResolveBase(context.Background(), home, fakeBase{"gh"}, "https://github.com/team/app", []byte(given))
+	if err != nil || !res.Kept || string(kept) != given {
 		t.Fatalf("keep: %s %+v %v", kept, res, err)
+	}
+	if _, _, err := ResolveBase(context.Background(), home, fakeBase{"gh"}, "https://github.com/team/app",
+		[]byte(`{"repository":"https://github.com/team/app"}`)); err == nil {
+		t.Fatal("a repository that is not an object was taken")
 	}
 	if _, _, err := ResolveBase(context.Background(), home, fakeBase{"gh"}, "https://gitlab.example.org/team/app", nil); err == nil ||
 		!strings.Contains(err.Error(), "--cred gitlab.example.org=FILE") {

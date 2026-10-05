@@ -115,9 +115,15 @@ func (e *coordEnv) call(t *testing.T, token, path, key string, body any) reply {
 	return out
 }
 
+// repositoryJSON is the repository an offer or a claim of taskID names.
+func repositoryJSON(taskID string) map[string]string {
+	return map[string]string{"kind": coordRepo.Kind, "url": coordRepo.URL, "access": coordRepo.Access,
+		"default_branch": coordRepo.DefaultBranch, "base_commit": "base-1", "branch": "work/" + taskID}
+}
+
 func (e *coordEnv) offerBody(taskID string, expires time.Time) map[string]any {
 	return map[string]any{"worker_agent_id": e.worker.agent.ID, "task": e.task(taskID), "expected_revision": 3,
-		"base_commit": "base-1", "branch": "work/" + taskID,
+		"repository": repositoryJSON(taskID),
 		"process": map[string]string{"repo": coordPin.Identity.Repository, "commit": coordPin.Identity.Commit,
 			"manifest": coordPin.Identity.Manifest},
 		"instruction_digest": coordPin.InstructionDigest, "expires_at": expires.UTC().Format(time.RFC3339Nano)}
@@ -476,7 +482,7 @@ func TestStepRouteRefusals(t *testing.T) {
 }
 
 func (e *coordEnv) claimBody(taskID string) map[string]any {
-	return map[string]any{"task": e.task(taskID), "expected_revision": 3, "base_commit": "base-1", "branch": "work/" + taskID,
+	return map[string]any{"task": e.task(taskID), "expected_revision": 3, "repository": repositoryJSON(taskID),
 		"process": map[string]string{"repo": coordPin.Identity.Repository, "commit": coordPin.Identity.Commit,
 			"manifest": coordPin.Identity.Manifest},
 		"instruction_digest": coordPin.InstructionDigest}

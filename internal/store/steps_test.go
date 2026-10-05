@@ -570,7 +570,8 @@ func TestStepOperationsRecheckTheToken(t *testing.T) {
 	p.enter("e-worker", worker, tm.ID)
 	token := sec.Token.Reveal()
 	in := OfferInput{WorkerAgentID: worker.ID, Task: TaskRef{HubID: "hub-test", ProjectID: "project-t", TaskID: "task-1"},
-		ExpectedRevision: 3, BaseCommit: "base-1", Branch: "work/task-1", Process: testPin, ExpiresAt: now.Add(time.Hour)}
+		ExpectedRevision: 3, BaseCommit: "base-1", Branch: "work/task-1", Repository: testRepository, Process: testPin,
+		ExpiresAt: now.Add(time.Hour)}
 	a, st, err := s.BeginOfferWithToken(ctx, "offer-1", token, in)
 	if err != nil || st.CoordinationProof == "" || a.CoordinatorSessionID != entry.Session.ID {
 		t.Fatalf("begin offer: %+v %+v %v", a, st, err)
@@ -613,7 +614,8 @@ func TestStepWritesRecheckTheToken(t *testing.T) {
 	token, alive := sec.Token.Reveal(), *now
 	die := func() { *now = entry.Token.ExpiresAt }
 	in := OfferInput{WorkerAgentID: worker.ID, Task: TaskRef{HubID: "hub-test", ProjectID: "project-t", TaskID: "task-1"},
-		ExpectedRevision: 3, BaseCommit: "base-1", Branch: "work/task-1", Process: testPin, ExpiresAt: now.Add(time.Hour)}
+		ExpectedRevision: 3, BaseCommit: "base-1", Branch: "work/task-1", Repository: testRepository, Process: testPin,
+		ExpiresAt: now.Add(time.Hour)}
 	a, st, err := s.BeginOfferWithToken(ctx, "offer-1", token, in)
 	if err != nil {
 		t.Fatal(err)

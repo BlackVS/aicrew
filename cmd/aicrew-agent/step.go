@@ -26,9 +26,10 @@ const stepUsage = `usage: aicrew-agent step OP [--home DIR] [--attempt ID] [--ta
       decline review stop confirm-stop confirm-delivery
       recover pending
   --home defaults to $` + agent.HomeEnv + `, which the launcher gives its client.
-  --repository (offer and claim): fill the body's base_commit, when it has
-  none, with the head of the repository's default branch, read through the
-  forge with this home's own credential for its host.`
+  --repository (offer and claim): fill the body's repository object: its
+  url and kind when the body names none, the default branch, and that
+  branch's head as base_commit when it has none, read through the forge
+  with this home's own credential for its host.`
 
 // newForge is the forge client step reads with; tests replace it.
 var newForge = func() agent.BaseAPI { return forge.NewClient() }
@@ -46,7 +47,7 @@ func step(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	attempt := fs.String("attempt", "", "the attempt's ID")
 	task := fs.String("task", "", "the aimem task's ID")
 	body := fs.String("body", "", "the step's JSON body, or - to read it from stdin")
-	repository := fs.String("repository", "", "offer and claim: resolve base_commit from this repository's default branch")
+	repository := fs.String("repository", "", "offer and claim: fill the body's repository from this clone URL's forge")
 	if err := fs.Parse(args[1:]); err != nil || *home == "" || fs.NArg() != 0 {
 		fmt.Fprintln(stderr, stepUsage)
 		return exitUsage

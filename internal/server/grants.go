@@ -15,50 +15,51 @@ import (
 const GrantsRefresh = time.Minute
 
 // liveGrant reads the team's grants from its hub, once, and answers whether
-// the hub grants the team the task's project: "" when it does, or the
-// refusal: project_not_granted, or hub_unavailable when the hub did not
-// answer. The read also refreshes the team's snapshot, which the step's own
+// the hub grants the team the task's project: the grant and "" when it does,
+// or the refusal: project_not_granted, or hub_unavailable when the hub did
+// not answer. The read also refreshes the team's snapshot, which the step's own
 // transaction then checks. The snapshot is never the answer: a hub that
 // does not answer refuses the step.
-func (s *Server) liveGrant(ctx context.Context, teamID string, task store.TaskRef) string {
+func (s *Server) liveGrant(ctx context.Context, teamID string, task store.TaskRef) (store.TeamGrant, string) {
+	var none store.TeamGrant
 	t, err := s.store.GetTeam(ctx, teamID)
 	if err != nil {
-		return refusalCode(err)
+		return none, refusalCode(err)
 	}
 	b, configured := s.hubs[t.Hub]
 	switch {
 	case t.Hub == "":
-		return "project_not_granted" // a team that names no hub is granted nothing
+		return none, "project_not_granted" // a team that names no hub is granted nothing
 	case !configured || b.teams == nil || !b.teams.CanRead():
 		s.log.Warn("team read: the team's hub has no team.read credential", "team_id", t.ID, "hub", t.Hub)
-		return "hub_unavailable"
+		return none, "hub_unavailable"
 	case task.HubID != b.id:
-		return "project_not_granted"
+		return none, "project_not_granted"
 	}
 	at := time.Now()
 	team, err := b.teams.ReadTeam(ctx, t.ID)
 	read, ok := grantsRead(b.id, team, err, at)
 	if !ok {
 		s.log.Warn("team read", "team_id", t.ID, "hub", t.Hub, "code", hubteams.Code(err))
-		return "hub_unavailable"
+		return none, "hub_unavailable"
 	}
 	if _, err := s.store.RecordTeamGrants(ctx, store.ReconcilerCaller(), t.ID, read); err != nil {
 		s.log.Error("record a team's grants", "team_id", t.ID, "err", err)
-		return "hub_unavailable"
+		return none, "hub_unavailable"
 	}
 	for _, g := range read.Grants {
 		if g.ProjectID == task.ProjectID {
-			return ""
+			return g, ""
 		}
 	}
-	return "project_not_granted"
+	return none, "project_not_granted"
 }
 
 // grantsRead turns a team.read answer into the snapshot it records: the
 // granted projects of an enabled profile; nothing for a disabled or unknown
 // one. ok is false when the hub did not answer, or refused the read itself.
 func grantsRead(hubID string, team hubteams.Team, err error, at time.Time) (store.TeamGrantsRead, bool) {
-	read := store.TeamGrantsRead{At: at, Grants: []store.TeamGrant{}}
+	read := store.TeamGrantsRead{HubID: hubID, At: at, Grants: []store.TeamGrant{}}
 	switch hubteams.Code(err) {
 	case "":
 		if err != nil {

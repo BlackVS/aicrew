@@ -19,13 +19,15 @@ import (
 // against its current selection when the claim commits (D-b1(a)), and the
 // digest only has to match the worker's at acceptance (D-b1a-3).
 type OfferInput struct {
-	WorkerAgentID    string         `json:"worker_agent_id"`
-	Task             TaskRef        `json:"task"`
-	ExpectedRevision int64          `json:"expected_revision"`
-	BaseCommit       string         `json:"base_commit"`
-	Branch           string         `json:"branch"`
-	Process          TrustedProcess `json:"process"`
-	ExpiresAt        time.Time      `json:"expires_at"`
+	WorkerAgentID    string  `json:"worker_agent_id"`
+	Task             TaskRef `json:"task"`
+	ExpectedRevision int64   `json:"expected_revision"`
+	BaseCommit       string  `json:"base_commit"`
+	Branch           string  `json:"branch"`
+	// Repository is where the work happens (OfferRequest).
+	Repository AttemptRepository `json:"repository"`
+	Process    TrustedProcess    `json:"process"`
+	ExpiresAt  time.Time         `json:"expires_at"`
 	// Dependencies is the client's dependency evidence (OfferRequest).
 	Dependencies []DependencyEvidence `json:"dependency_evidence,omitempty"`
 }
@@ -129,7 +131,8 @@ func (s *Store) BeginOfferWithToken(ctx context.Context, key, token string, in O
 	var proof string
 	cmd, g := s.withToken(intentOnly(offerCommand(c, key, OfferRequest{SessionID: t.sessionID, Generation: t.generation,
 		WorkerAgentID: in.WorkerAgentID, Task: in.Task, ExpectedRevision: in.ExpectedRevision, BaseCommit: in.BaseCommit,
-		Branch: in.Branch, Process: in.Process, ExpiresAt: in.ExpiresAt, Dependencies: in.Dependencies}, &proof)), token, t)
+		Branch: in.Branch, Repository: in.Repository, Process: in.Process, ExpiresAt: in.ExpiresAt,
+		Dependencies: in.Dependencies}, &proof)), token, t)
 	return s.beginNew(ctx, c, cmd, &proof, FactOffer, t.sessionID, t.generation, g)
 }
 
@@ -196,12 +199,13 @@ func (s *Store) SettleWithToken(ctx context.Context, token string, reader Reserv
 // claim commits (C5-w2), and aicrew records it as verified only then
 // (D-b1b-1). The digest must match the pin's and is not authoritative.
 type ClaimInput struct {
-	Task              TaskRef        `json:"task"`
-	ExpectedRevision  int64          `json:"expected_revision"`
-	BaseCommit        string         `json:"base_commit"`
-	Branch            string         `json:"branch"`
-	Process           TrustedProcess `json:"process"`
-	InstructionDigest string         `json:"instruction_digest"`
+	Task              TaskRef           `json:"task"`
+	ExpectedRevision  int64             `json:"expected_revision"`
+	BaseCommit        string            `json:"base_commit"`
+	Branch            string            `json:"branch"`
+	Repository        AttemptRepository `json:"repository"`
+	Process           TrustedProcess    `json:"process"`
+	InstructionDigest string            `json:"instruction_digest"`
 }
 
 // BeginClaimWithToken begins an independent claim as the token's session,
@@ -214,7 +218,7 @@ func (s *Store) BeginClaimWithToken(ctx context.Context, key, token string, in C
 	var proof string
 	cmd, g := s.withToken(intentOnly(claimCommand(c, key, ClaimRequest{SessionID: t.sessionID, Generation: t.generation,
 		Task: in.Task, ExpectedRevision: in.ExpectedRevision, BaseCommit: in.BaseCommit, Branch: in.Branch,
-		Process: in.Process, InstructionDigest: in.InstructionDigest}, &proof)), token, t)
+		Repository: in.Repository, Process: in.Process, InstructionDigest: in.InstructionDigest}, &proof)), token, t)
 	return s.beginNew(ctx, c, cmd, &proof, FactIndependentClaim, t.sessionID, t.generation, g)
 }
 

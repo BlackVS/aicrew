@@ -154,6 +154,15 @@ func stepLine(s guideStep) string {
 		strings.ReplaceAll(s.Body, "\n", ""))
 }
 
+// FirstInstruction is the member's first turn under `aicrew-agent run`
+// (3a60): it names only files in the home and `aicrew-agent inbox`, never a
+// secret, a handle or an ID.
+func FirstInstruction() string {
+	return "Start your aicrew session. Read docs/START.md and docs/ROLES.md, then run `aicrew-agent inbox`. " +
+		"First say in one short message what you will do; then act on what you found, within your role only. " +
+		"If there is nothing to do, end your turn: the home's Stop hook wakes you when a message arrives."
+}
+
 // rolesMD is the managed docs/ROLES.md.
 func rolesMD() string {
 	var b strings.Builder

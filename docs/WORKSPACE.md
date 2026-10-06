@@ -293,6 +293,12 @@ and a refresh does not ask aicrewd. It teaches:
 Its operations are tested to be exactly the launcher's, and each example
 body to decode into aicrewd's body for its route.
 
+Under `aicrew-agent run`, a Claude Code member's first turn reads these two
+files: `run` passes the client a first instruction to read `docs/START.md`
+and `docs/ROLES.md`, then run `aicrew-agent inbox` and act on it within the
+member's role. The instruction is generated with ROLES.md and names nothing
+outside the home (`docs/DEVELOPMENT.md`, "Running aicrew-agent").
+
 ## Managed files and repeated setup
 
 | Class | Files | Setup may |

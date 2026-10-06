@@ -86,3 +86,22 @@ func TestRoleGuidanceTriage(t *testing.T) {
 		t.Error("the direct-write rule does not name triage as its exception")
 	}
 }
+
+// The first instruction names only the home's guidance files and
+// `aicrew-agent inbox`: no ID, URL, handle or secret, and no other command.
+func TestFirstInstructionNamesOnlyTheHome(t *testing.T) {
+	s := FirstInstruction()
+	for _, want := range []string{"docs/START.md", "docs/ROLES.md", "`aicrew-agent inbox`", "within your role"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the first instruction lacks %q", want)
+		}
+	}
+	for _, banned := range []string{"http", "aicrew-agent step", "session start", "token", "creds", "01a"} {
+		if strings.Contains(strings.ToLower(s), banned) {
+			t.Errorf("the first instruction names %q: %s", banned, s)
+		}
+	}
+	if strings.Count(s, "`") != 2 {
+		t.Errorf("the first instruction names a command besides aicrew-agent inbox: %s", s)
+	}
+}

@@ -313,8 +313,9 @@ func (h *harness) joinMember(mem *member) {
 	// The launcher's client is a stand-in that only keeps the session open:
 	// the scenarios drive the steps through its channel.
 	h.setClientCommand(mem, "/bin/sleep")
+	// The client is a stand-in, not Claude Code: no first instruction (-no-start).
 	mem.launcher = h.start("launcher-"+name, mem.env, mem.home, filepath.Join(h.bin, "aicrew-agent"),
-		"run", "-client", "claude", "-home", mem.home, "--", "86400")
+		"run", "-client", "claude", "-home", mem.home, "-no-start", "--", "86400")
 	h.waitFor(name+"'s step channel", 60*time.Second, func() bool {
 		r := h.run(mem.env, nil, filepath.Join(h.bin, "aicrew-agent"), "step", "pending", "-home", mem.home)
 		return r.code == 0

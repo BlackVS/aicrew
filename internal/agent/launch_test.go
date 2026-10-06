@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
@@ -474,5 +475,34 @@ func TestRunClientStopAsClientStarts(t *testing.T) {
 				t.Fatalf("the session after the stop: %+v, %v", sess, err)
 			}
 		})
+	}
+}
+
+// run gives Claude Code the first instruction ahead of the operator's own
+// arguments, which pass through unchanged; --no-start, and OpenCode, get
+// none (3a60).
+func TestClientArgs(t *testing.T) {
+	extra := []string{"--model", "haiku", "-p"}
+	for _, tc := range []struct {
+		client  string
+		noStart bool
+		extra   []string
+		want    []string
+	}{
+		{"claude", false, extra, append([]string{FirstInstruction()}, extra...)},
+		{"claude", false, nil, []string{FirstInstruction()}},
+		{"claude", true, extra, extra},
+		{"claude", true, nil, nil},
+		{"opencode", false, extra, extra},
+		{"opencode", false, nil, nil},
+	} {
+		got := ClientArgs(tc.client, tc.noStart, tc.extra)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("ClientArgs(%q, %v, %q) = %q, want %q", tc.client, tc.noStart, tc.extra, got, tc.want)
+		}
+	}
+	// The operator's slice is never written to.
+	if !reflect.DeepEqual(extra, []string{"--model", "haiku", "-p"}) {
+		t.Fatalf("the extra arguments changed: %q", extra)
 	}
 }

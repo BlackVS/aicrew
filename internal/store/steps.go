@@ -428,9 +428,17 @@ func (s *Store) settleStep(ctx context.Context, c Caller, reader ReservationRead
 	if final := last.Add(NoneFinalAfter); asked.Before(final) {
 		return a, Settlement{RetryAfter: max(final.Sub(s.now()), 0)}, nil
 	}
-	out, err := s.settleGuarded(ctx, c, a, callOutcome{kind: outcomeNotCommitted}, g)
+	o := callOutcome{kind: outcomeNotCommitted, reported: a.PendingRefusal}
+	if report.Outcome == HintRefused {
+		o.reported = report.Code
+	}
+	out, err := s.settleGuarded(ctx, c, a, o, g)
 	return out, Settlement{Settled: true, Outcome: string(outcomeNotCommitted)}, err
 }
+
+// RefusalTaskNotReady is aimem's refusal of a claim on a task that is not
+// READY (reservation.v1 §3): only the coordinator's triage changes that.
+const RefusalTaskNotReady = "task_not_ready"
 
 // voidStep ends the pending step's live proofs. Its audit record keeps the
 // member's report.
@@ -452,6 +460,11 @@ func (s *Store) voidStep(ctx context.Context, c Caller, a Attempt, report StepRe
 				`UPDATE coordination_proofs SET ended_at = ? WHERE attempt_id = ? AND request_key = ? AND ended_at = ''`,
 				formatTime(now), a.ID, a.PendingKey); err != nil {
 				return nil, fmt.Errorf("void step: %w", err)
+			}
+			if report.Outcome == HintRefused {
+				if err := updateAttempt(ctx, tx, a.ID, now, `pending_refusal = ?`, report.Code); err != nil {
+					return nil, fmt.Errorf("void step: %w", err)
+				}
 			}
 			return stepRef{a.ID, a.PendingKey}, nil
 		},

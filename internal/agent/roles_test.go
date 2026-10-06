@@ -64,3 +64,25 @@ func TestRoleGuidanceContent(t *testing.T) {
 		t.Error("ROLES.md points below for the digest, or shows a heredoc")
 	}
 }
+
+// Triage is the coordinator's (PILOT-1 §5): the coordinator's section names
+// the tools, the READY rule and both refusals; the other roles are told the
+// coordinator triages.
+func TestRoleGuidanceTriage(t *testing.T) {
+	md := rolesMD()
+	coord := md[strings.Index(md, "## Coordinator"):strings.Index(md, "## Worker")]
+	for _, s := range []string{"**Triage is yours alone.**", "`triage_task`", "`add_task_comment`", "BACKLOG",
+		"`task_not_ready`", "`task_held`", "never set DONE or CANCELLED"} {
+		if !strings.Contains(coord, s) {
+			t.Errorf("the coordinator's section lacks %q", s)
+		}
+	}
+	others := md[strings.Index(md, "## Worker"):]
+	if strings.Contains(others, "triage_task") || !strings.Contains(others, "You do not triage tasks") ||
+		!strings.Contains(others, "only the coordinator triages") {
+		t.Error("the worker and independent sections do not leave triage to the coordinator")
+	}
+	if !strings.Contains(md, "the coordinator's triage,\nbelow, is the one exception") {
+		t.Error("the direct-write rule does not name triage as its exception")
+	}
+}

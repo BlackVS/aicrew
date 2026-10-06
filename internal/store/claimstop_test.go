@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -160,6 +161,65 @@ func TestRefusedClaimStaysUnverified(t *testing.T) {
 	a, set, err := e.settle(t, e.indepTk, a, st, HintRefused)
 	if err != nil || !set.Settled || a.State != AttemptClosed || a.ProcessVerifiedReceipt != "" {
 		t.Fatalf("the refused claim settled: %+v %+v %v", a, set, err)
+	}
+}
+
+// An independent claim that aimem refused as task_not_ready closes with that
+// reason and tells the coordinator, who alone may triage the task, whether
+// the member or the reconciler settles it; another refusal closes with its
+// own reason and tells nobody.
+func TestClaimRefusedNotReadyTellsTheCoordinator(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		code       string
+		reconciled bool
+		told       bool
+	}{{RefusalTaskNotReady, false, true}, {RefusalTaskNotReady, true, true}, {"process_mismatch", false, false}} {
+		code, told := tc.code, tc.told
+		name := code
+		if tc.reconciled {
+			name += " reconciled"
+		}
+		t.Run(name, func(t *testing.T) {
+			e := newClaimStopEnv(t)
+			a, st, err := e.s.BeginClaimWithToken(ctx, "claim-1", e.indepTk, e.claimInput("task-1"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			refused := StepReport{Outcome: HintRefused, Code: code}
+			if _, set, err := e.s.SettleWithToken(ctx, e.indepTk, e.reader, a.ID, st.RequestKey, refused); err != nil || set.Settled {
+				t.Fatalf("the refusal reported: %+v %v", set, err)
+			}
+			*e.now = e.now.Add(NoneFinalAfter)
+			var set Settlement
+			if tc.reconciled {
+				a, set, err = e.s.ReconcileStep(ctx, e.reader, a.ID)
+			} else {
+				a, set, err = e.s.SettleWithToken(ctx, e.indepTk, e.reader, a.ID, st.RequestKey, refused)
+			}
+			if err != nil || !set.Settled || set.Outcome != "not_committed" || a.State != AttemptClosed ||
+				a.CloseReason != "claim "+code || a.LastRefusal != code {
+				t.Fatalf("the refused claim settled: %+v %+v %v", a, set, err)
+			}
+			lead, err := e.s.ReadInboxWithToken(ctx, e.leadTok, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !told {
+				if len(lead) != 0 {
+					t.Fatalf("the coordinator was told of a %s refusal: %+v", code, lead)
+				}
+				return
+			}
+			if len(lead) != 1 || lead[0].Kind != KindLifecycle || lead[0].AttemptID != a.ID ||
+				!strings.Contains(lead[0].Text, "task-1") || !strings.Contains(lead[0].Text, "not READY") ||
+				!strings.Contains(lead[0].Text, "triage_task") {
+				t.Fatalf("the coordinator's inbox: %+v", lead)
+			}
+			if own, err := e.s.ReadInboxWithToken(ctx, e.indepTk, 10); err != nil || len(own) != 0 {
+				t.Fatalf("the claimer's own inbox: %+v %v", own, err)
+			}
+		})
 	}
 }
 

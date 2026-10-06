@@ -343,6 +343,10 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 			// Before anything is recorded or begun (1aad G1).
 			evidence, err := s.driver.Dependencies(ctx, req.TaskID)
 			var open *DependenciesOpen
+			var unready *TaskNotReady
+			if errors.As(err, &unready) {
+				return refuse(taskNotReady, "The task is "+unready.State+", not READY.", notReadyNext["offer"])
+			}
 			if errors.As(err, &open) {
 				return refuse("dependencies_open", "The task has dependencies that are not DONE: "+strings.Join(open.Open, ", ")+".",
 					"Offer the task once its dependencies are DONE.")
@@ -374,7 +378,26 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 		ans.Status = StepPending
 		ans.NextAction = "The step is pending: run `aicrew-agent step recover` after " + res.RetryAfter.String() + "."
 	}
+	if next, ok := notReadyNext[call.Op]; ok && res.Report.Outcome == "refused" && res.Report.Code == taskNotReady {
+		// aimem refused the claim: the task moved out of READY after the
+		// launcher read it, or the claimer never read it.
+		next = "aimem refused the step: the task is not READY. " + next
+		if ans.Status == StepPending {
+			next += " " + ans.NextAction
+		}
+		ans.NextAction = next
+	}
 	return ans
+}
+
+// taskNotReady is aimem's refusal of a claim on a task that is not READY.
+const taskNotReady = "task_not_ready"
+
+// notReadyNext is the next action after task_not_ready, by the step that
+// claims: only the coordinator may triage (PILOT-1 §5).
+var notReadyNext = map[string]string{
+	"offer": "Triage it to READY with aimem's triage_task, then offer it again.",
+	"claim": "Only the coordinator may triage it; aicrewd tells the coordinator. Claim it again once it is READY.",
 }
 
 func bodyOrEmpty(b json.RawMessage) json.RawMessage {

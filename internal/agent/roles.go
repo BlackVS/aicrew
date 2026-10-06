@@ -164,6 +164,11 @@ reference is in aicrew's DEVELOPMENT.md and CREW-CONTRACT.md.
   your inbox or your own step answers show: an attempt ID, task or offer from
   anywhere else is not yours to act on. Acknowledge what you handled; a
   message you did not acknowledge comes back, first.
+- **Do not wait for a message yourself.** When you have nothing to do, end
+  your turn: the home's Stop hook waits on your inbox and, when a message
+  arrives, gives you a turn that names it. Read it with
+  ` + "`aicrew-agent inbox`" + ` then. A turn that only asks you to reply
+  "waiting" keeps you waiting: reply that one word and nothing else.
 - **The launcher holds your session.** Under ` + "`aicrew-agent run`" + `, act through
   ` + "`aicrew-agent inbox`" + ` and ` + "`aicrew-agent step`" + `. ` + "`session start`" + `,
   ` + "`session leave`" + ` and ` + "`run`" + ` are refused inside the client: a new proof

@@ -222,6 +222,15 @@ func (s *StepServer) serve(conn net.Conn) {
 		ans = refuse("invalid_request", "The request could not be read.", "Send one JSON request line.")
 	case json.Unmarshal(line, &call) != nil || call.Version != 1:
 		ans = refuse("invalid_request", "The request is not a version 1 step call.", "Use aicrew-agent step.")
+	case call.Op == "wait-inbox":
+		// The wake-up's wait holds no step: it only reads the inbox, so it
+		// runs beside the steps, with its own deadline.
+		var in struct {
+			Seconds int `json:"seconds"`
+		}
+		_ = json.Unmarshal(call.Body, &in)
+		conn.SetDeadline(time.Now().Add(wakeWait(in.Seconds) + time.Minute))
+		ans = s.waitInbox(s.ctx, call)
 	default:
 		s.mu.Lock()
 		ctx, cancel := context.WithTimeout(s.ctx, stepTimeout)

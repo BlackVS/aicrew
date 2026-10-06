@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"sort"
@@ -68,6 +69,7 @@ func (c *checker) checkInstallation(sel []string) {
 	}
 	if slices.Contains(sel, "claude") {
 		c.checkCarrier(".claude/settings.json", func(doc map[string]json.RawMessage) json.RawMessage { return doc["env"] })
+		c.checkWakeHook()
 		c.checkCarrier(".mcp.json (mcpServers.aimem)", func(doc map[string]json.RawMessage) json.RawMessage {
 			var servers map[string]struct {
 				Env json.RawMessage `json:"env"`
@@ -97,6 +99,26 @@ func (c *checker) checkCarrier(label string, env func(map[string]json.RawMessage
 				"%s.aicrew-new it writes", label, v[0], v[1], quoteArg(c.o.Home), file))
 			return
 		}
+	}
+}
+
+// checkWakeHook notes a home whose managed Claude Code settings do not hold
+// the wake-up's Stop hook as join writes it: the member then waits for a
+// human message after each turn. A notice, never a blocker.
+func (c *checker) checkWakeHook() {
+	raw, err := os.ReadFile(filepath.Join(c.o.Home, ".claude", "settings.json"))
+	var doc map[string]json.RawMessage
+	if err == nil {
+		_ = json.Unmarshal(raw, &doc)
+	}
+	want, _ := json.Marshal(wakeHooks(c.o.Home))
+	var got, exp any
+	_ = json.Unmarshal(doc["hooks"], &got)
+	_ = json.Unmarshal(want, &exp)
+	if !reflect.DeepEqual(got, exp) {
+		c.notice(fmt.Sprintf(".claude/settings.json does not hold the wake-up's Stop hook for this aicrew-agent, so "+
+			"the member waits for a human message after each turn: rerun `aicrew-agent join --home %s`, and merge "+
+			"any .claude/settings.json.aicrew-new it writes", quoteArg(c.o.Home)))
 	}
 }
 

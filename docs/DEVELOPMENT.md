@@ -789,6 +789,54 @@ member's user-level skills under it. It reports:
 `github.com/BlackVS/aicrew/internal/version.Override` with `-ldflags -X`;
 a source build reports `dev` and its commit.
 
+### Waking a member: the Stop hook
+
+A Claude Code member acts only when it has a turn. The home's managed
+`.claude/settings.json`, which `join` writes, installs a Stop hook. When the
+member's turn ends, the hook waits on its inbox, so a message that arrives
+during the wait gives the member its next turn (task `01a0d6d7-1aed`;
+`docs/CLIENT-WAKE-PROBE.md` measures the mechanism). This is not unattended
+operation: see "The idle gap" below, and the pilot criterion of two members
+handing off with no human message is still open.
+
+
+
+```json
+"hooks": {"Stop": [{"hooks": [{"type": "command",
+  "command": "\"/path/to/aicrew-agent\" wait-inbox --home \"/path/to/home\"", "timeout": 660}]}]}
+```
+
+- **When a turn ends**, Claude Code runs `aicrew-agent wait-inbox`, which
+  asks the home's launcher to wait on the member's inbox. The launcher polls
+  `GET /v1/crew/inbox/pending` every 3 s as its session; that route records
+  no delivery.
+- **A message waiting, or arriving during the wait,** blocks the stop. The
+  member gets a turn naming how many messages arrived, their kinds and ids,
+  and the next action: read them with `aicrew-agent inbox`, acknowledge,
+  and act within its role. The hint carries no message text. The inbox read
+  stays the only delivery, so a lost or repeated hint costs one extra read.
+- **Keep-alive.** When a wait ends with nothing pending, the hook blocks
+  once more with a turn that asks only for the word "waiting", so the next
+  turn end waits again. That costs one small model call per wait (10 minutes
+  by default). After `idle_hours` without a message in the same client
+  session, the hook lets the session stop, and the member is idle until
+  something else starts a turn. A new client session starts a new idle
+  period.
+- **Never a wedge.** With no launcher (a client started outside
+  `aicrew-agent run`), a closed session, or anything else failing, the hook
+  prints nothing and exits 0, and Claude Code lets the session stop. The
+  hook's timeout is a minute past the wait, so the hook always ends first.
+- **Settings**, in `agent.json`'s top-level `wake` object:
+  - `wait_seconds` (default 600, at most 1800);
+  - `keep_alive` (default `true`);
+  - `idle_hours` (default 8).
+
+  A rerun of `join` rewrites the hook's timeout from them. `check` gives a
+  notice when the settings do not hold the hook as `join` writes it.
+- **The idle gap.** Once the hook has let the session stop, it cannot wake
+  it. Waking an idle session needs a channel or the launcher owning the
+  terminal; both are later increments.
+
 ### Driving steps: `aicrew-agent step`
 
 The launcher drives every attempt step for its client, which never holds the

@@ -624,7 +624,7 @@ func TestExposureGuard(t *testing.T) {
 		"ReviewWithToken": true, "ConfirmDeliveryWithToken": true, "BeginFinalizeWithToken": true,
 		"BeginWorkWithToken": true, "SupersedeWorkWithToken": true,
 		// The member's inbox, as the token's session (pilot G1).
-		"ReadInboxWithToken": true, "AckWithToken": true,
+		"ReadInboxWithToken": true, "AckWithToken": true, "PendingInboxWithToken": true,
 		// Invitation redemption authenticates by the invitation code, which
 		// the store checks inside every command (1a81-3).
 		"BeginRedemption": true, "CompleteRedemption": true,
@@ -716,7 +716,7 @@ func TestRouteInventory(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{"GET /healthz", "GET /v1/admin/hub-credentials", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations",
-		"GET /v1/admin/team", "GET /v1/admin/teams", "GET /v1/crew/capabilities", "GET /v1/crew/inbox",
+		"GET /v1/admin/team", "GET /v1/admin/teams", "GET /v1/crew/capabilities", "GET /v1/crew/inbox", "GET /v1/crew/inbox/pending",
 		"GET /v1/crew/requirements", "GET /v1/crew/session",
 		"POST /v1/admin/hub-credentials", "POST /v1/admin/hub-credentials/revoke", "POST /v1/admin/hub-credentials/rotate",
 		"POST /v1/admin/introspection-credentials", "POST /v1/admin/introspection-credentials/revoke",

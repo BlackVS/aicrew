@@ -13,8 +13,11 @@ import (
 // attempt it announces, so a worker reads an offer's attempt ID here.
 
 const (
-	InboxPath    = "/v1/crew/inbox"
-	InboxAckPath = InboxPath + "/ack"
+	InboxPath = "/v1/crew/inbox"
+	// InboxPendingPath lists the unacknowledged messages without delivering
+	// them.
+	InboxPendingPath = InboxPath + "/pending"
+	InboxAckPath     = InboxPath + "/ack"
 
 	defaultInboxPage = 20
 	maxInboxPage     = 100
@@ -23,6 +26,22 @@ const (
 func (s *Server) registerInbox() {
 	s.handle(http.MethodGet, InboxPath, s.inbox)
 	s.handle(http.MethodPost, InboxAckPath, s.inboxAck)
+	s.handle(http.MethodGet, InboxPendingPath, s.inboxPending)
+}
+
+// inboxPending is GET /v1/crew/inbox/pending: the member's unacknowledged
+// messages by id and kind, without content and without recording a
+// delivery. The launcher's wake-up polls it; the inbox read stays the only
+// delivery.
+func (s *Server) inboxPending(w http.ResponseWriter, r *http.Request) {
+	pending, err := s.store.PendingInboxWithToken(r.Context(), sessionToken(r))
+	if err != nil {
+		s.refuseSession(w, r, refusalCode(err), false, 0)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Pending []store.PendingMessage `json:"pending"`
+	}{pending})
 }
 
 type inboxReply struct {

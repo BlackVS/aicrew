@@ -166,3 +166,44 @@ func sameRepository(got any, want map[string]string) bool {
 	}
 	return true
 }
+
+// The pending list names the member's unacknowledged messages by id and kind
+// without delivering them: a read afterwards still delivers each for the
+// first time, and once acknowledged they are no longer pending.
+func TestInboxPendingDeliversNothing(t *testing.T) {
+	e := setupCoordination(t)
+	e.offerAndSettle(t, "offer-1", "task-1", time.Now().Add(time.Hour))
+	pending := func() []map[string]any {
+		t.Helper()
+		got := e.get(t, e.worker.token, InboxPendingPath)
+		var out struct {
+			Pending []map[string]any `json:"pending"`
+		}
+		if got.status != http.StatusOK || json.Unmarshal([]byte(got.raw), &out) != nil {
+			t.Fatalf("pending: %d %s", got.status, got.raw)
+		}
+		return out.Pending
+	}
+	first := pending()
+	if len(first) == 0 || first[0]["kind"] != "lifecycle" || first[0]["id"] == "" {
+		t.Fatalf("pending = %v", first)
+	}
+	if again := pending(); len(again) != len(first) {
+		t.Fatalf("a second look changed the list: %v", again)
+	}
+	msgs := inboxOf(t, e.get(t, e.worker.token, InboxPath))
+	var ids []string
+	for _, m := range msgs {
+		if m.Deliveries != 1 {
+			t.Fatalf("the pending list delivered %s: %d deliveries", m.ID, m.Deliveries)
+		}
+		ids = append(ids, m.ID)
+	}
+	if got := e.call(t, e.worker.token, InboxAckPath, "ack-1", map[string]any{"ids": ids}); got.status != http.StatusOK {
+		t.Fatalf("ack: %d %s", got.status, got.raw)
+	}
+	if left := pending(); len(left) != 0 {
+		t.Fatalf("acknowledged messages are still pending: %v", left)
+	}
+	refused(t, e.get(t, "", InboxPendingPath), http.StatusUnauthorized, "invalid_token")
+}

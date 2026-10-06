@@ -372,6 +372,39 @@ func (s *Store) ReadInboxWithToken(ctx context.Context, token string, limit int)
 	return s.readInbox(ctx, c, t.sessionID, t.generation, limit, s.requireToken(token, t.sessionID, t.generation, nil))
 }
 
+// PendingMessage names one unacknowledged message waiting in a member's
+// inbox, without its content.
+type PendingMessage struct {
+	ID        string      `json:"id"`
+	Seq       int64       `json:"seq"`
+	Kind      MessageKind `json:"kind"`
+	AttemptID string      `json:"attempt_id,omitempty"`
+}
+
+// PendingInboxWithToken lists the token's member's unacknowledged visible
+// messages, oldest first and at most a page, as ReadInbox would deliver
+// them, without recording a delivery: a hint that something waits, which
+// only a read and an acknowledgement act on.
+func (s *Store) PendingInboxWithToken(ctx context.Context, token string) ([]PendingMessage, error) {
+	var out []PendingMessage
+	err := s.snapshot(ctx, func(q querier) error {
+		b, err := tokenBinding(ctx, q, token, s.now())
+		if err != nil {
+			return err
+		}
+		items, err := pendingMessages(ctx, q, b.TeamID, b.AgentID, maxInboxPage)
+		if err != nil {
+			return err
+		}
+		out = make([]PendingMessage, 0, len(items))
+		for _, it := range items {
+			out = append(out, PendingMessage{ID: it.ID, Seq: it.Seq, Kind: it.Kind, AttemptID: it.AttemptID})
+		}
+		return nil
+	})
+	return out, err
+}
+
 // readInbox is ReadInbox, with check run first inside its transaction.
 func (s *Store) readInbox(ctx context.Context, c Caller, sessionID string, generation int64, limit int,
 	check func(context.Context, *sql.Tx) error) ([]InboxItem, error) {

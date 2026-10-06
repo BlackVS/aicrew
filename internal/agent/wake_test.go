@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -130,7 +131,8 @@ func setWake(t *testing.T, home, wake string) {
 func TestClaudeSettingsCarryTheWakeHook(t *testing.T) {
 	home := t.TempDir()
 	old := selfExecutable
-	selfExecutable = func() string { return `C:\tools\aicrew-agent.exe` }
+	exe := filepath.Join(t.TempDir(), "tools", "aicrew-agent")
+	selfExecutable = func() string { return exe }
 	t.Cleanup(func() { selfExecutable = old })
 	var doc struct {
 		Hooks struct {
@@ -147,7 +149,8 @@ func TestClaudeSettingsCarryTheWakeHook(t *testing.T) {
 		t.Fatalf("settings: %v %s", err, claudeSettings(home))
 	}
 	h := doc.Hooks.Stop[0].Hooks[0]
-	if h.Type != "command" || !strings.HasPrefix(h.Command, `"C:/tools/aicrew-agent.exe" wait-inbox --home "`) ||
+	want := `"` + filepath.ToSlash(exe) + `" wait-inbox --home "` + filepath.ToSlash(home) + `"`
+	if h.Type != "command" || h.Command != want ||
 		h.Timeout != int(DefaultWakeWait/time.Second)+60 {
 		t.Fatalf("hook = %+v", h)
 	}

@@ -45,7 +45,12 @@ const claimExample = `{"task": {"hub_id": "HUB_ID", "project_id": "PROJECT_ID", 
 
 var guideRoles = []guideRole{
 	{Role: "coordinator", Intro: "You plan the team's work: you offer tasks to workers, review their results, and " +
-		"finalize them once their delivery is confirmed.",
+		"finalize them once their delivery is confirmed.\n\n" +
+		"**Triage is yours alone.** With aimem's `triage_task`, move a task of the team's projects between BACKLOG " +
+		"and READY and set its `next_action`; comment on it with `add_task_comment`. A task must be READY before " +
+		"you offer it: an offer of any other task is refused with `task_not_ready`, so assess it, triage it to READY, " +
+		"then offer it. Never triage a task under a hold (aimem answers `task_held`: withdraw the offer or wait for " +
+		"its release first), and never set DONE or CANCELLED that way. The task's history names you.",
 		Steps: []guideStep{
 			{"offer", "", offerExample, "Offer a task to a named worker. `expected_revision` is the task's current " +
 				"revision in aimem; `process` is the project's selected process (`aimem process show`), and " +
@@ -68,7 +73,8 @@ var guideRoles = []guideRole{
 				"worker to stop a running attempt. The worker confirms and releases the task."},
 		}},
 	{Role: "worker", Intro: "You take the tasks offered to you: you accept or decline them, do the work in your own " +
-		"worktree, submit the result, and finalize it once its delivery is confirmed.",
+		"worktree, submit the result, and finalize it once its delivery is confirmed. You do not triage tasks: " +
+		"the coordinator does.",
 		Steps: []guideStep{
 			{"accept", "--attempt ATTEMPT_ID --task TASK_ID", `{"instruction_digest": "sha256:DIGEST"}`, "Accept an " +
 				"offer from your inbox. Compute the digest yourself from the pin the offer names (see " +
@@ -86,7 +92,9 @@ var guideRoles = []guideRole{
 				"After confirming a stop, release the task: `READY`, or `BLOCKED` with a blocker."},
 		}},
 	{Role: "independent", Intro: "You choose your own tasks in the team's projects: you claim one, then work and " +
-		"finalize it as a worker does. A coordinator reviews and confirms its delivery.",
+		"finalize it as a worker does. A coordinator reviews and confirms its delivery. Claim only READY tasks: " +
+		"only the coordinator triages, and a claim of any other task is refused with `task_not_ready`, which " +
+		"aicrewd reports to the coordinator.",
 		Steps: []guideStep{
 			{"claim", "", claimExample, "Claim a task for yourself, with the project's selected process and " +
 				"its digest (see \"The instruction digest\" above). aimem checks the task's dependencies when it " +
@@ -154,7 +162,8 @@ func rolesMD() string {
 Your role is in ` + "`aicrew-agent session status`" + ` (coordinator, worker or independent);
 read the section for it, and the rules every member follows. Every
 transition goes through your launcher with ` + "`aicrew-agent step`" + `: never
-claim, edit or release an aimem task directly, and never use another
+claim, edit or release an aimem task directly (the coordinator's triage,
+below, is the one exception), and never use another
 credential or your personal context to get past a refusal. The full step
 reference is in aicrew's DEVELOPMENT.md and CREW-CONTRACT.md.
 

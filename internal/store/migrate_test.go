@@ -495,8 +495,17 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 	)`
 
 // dropAttemptRepository takes a store back to v23.
+// dropPendingRefusal takes a store back to v25.
+func dropPendingRefusal(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	if _, err := raw.Exec(`ALTER TABLE attempts DROP COLUMN pending_refusal`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func dropAttemptRepository(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropPendingRefusal(t, raw)
 	if _, err := raw.Exec(`DROP TABLE agent_capabilities`); err != nil {
 		t.Fatal(err)
 	}
@@ -560,6 +569,37 @@ func TestMigrationV22AddsTheTeamHub(t *testing.T) {
 	}
 	if after != before || before == 0 || named != 0 {
 		t.Fatalf("after v22: %d teams (was %d), %d naming a hub or a registration", after, before, named)
+	}
+}
+
+// Schema v26 adds the pending step's reported refusal to a populated v25
+// store's attempts: every attempt is kept, with none reported.
+func TestMigrationV26AddsThePendingRefusal(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM attempts`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropPendingRefusal(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 25`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v25 store: %v", err)
+	}
+	defer s2.Close()
+	var after, reported int
+	if err := s2.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(pending_refusal, '')) FROM attempts`).Scan(&after, &reported); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || before == 0 || reported != 0 {
+		t.Fatalf("after v26: %d attempts (was %d), %d with a reported refusal", after, before, reported)
 	}
 }
 

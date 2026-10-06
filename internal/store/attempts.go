@@ -162,15 +162,18 @@ type Attempt struct {
 	// was recorded). Only the next session may accept an offline offer.
 	WorkerSessionFloor int64 `json:"worker_session_floor"`
 	// The work lifecycle of a running attempt (work.go).
-	Phase                AttemptPhase `json:"phase,omitempty"`
-	PendingIntent        string       `json:"pending_intent,omitempty"`
-	PendingDetail        string       `json:"pending_detail,omitempty"`
-	PendingEvidence      string       `json:"pending_evidence,omitempty"`
-	PendingMessage       string       `json:"pending_message,omitempty"`
-	AcceptedResult       int64        `json:"accepted_result,omitempty"`
-	AcceptedBySession    string       `json:"accepted_by_session,omitempty"`
-	AcceptedByGeneration int64        `json:"accepted_by_generation,omitempty"`
-	FinalizedResult      int64        `json:"finalized_result,omitempty"`
+	Phase           AttemptPhase `json:"phase,omitempty"`
+	PendingIntent   string       `json:"pending_intent,omitempty"`
+	PendingDetail   string       `json:"pending_detail,omitempty"`
+	PendingEvidence string       `json:"pending_evidence,omitempty"`
+	PendingMessage  string       `json:"pending_message,omitempty"`
+	// PendingRefusal is aimem's refusal code the acting member reported for
+	// the pending step when it voided it.
+	PendingRefusal       string `json:"pending_refusal,omitempty"`
+	AcceptedResult       int64  `json:"accepted_result,omitempty"`
+	AcceptedBySession    string `json:"accepted_by_session,omitempty"`
+	AcceptedByGeneration int64  `json:"accepted_by_generation,omitempty"`
+	FinalizedResult      int64  `json:"finalized_result,omitempty"`
 	// The confirmed delivery of the accepted result (confirm.go): the
 	// result, its evidence (JSON), and who confirmed it when.
 	DeliveryResult       int64     `json:"delivery_result,omitempty"`
@@ -783,6 +786,10 @@ type callOutcome struct {
 	result  ReservationResult
 	refusal *ReservationRefusal
 	detail  string
+	// reported is aimem's refusal code as the acting member reported it,
+	// on a step the read scope settled as not committed: it names the
+	// reason, never the outcome.
+	reported string
 }
 
 // classify turns a reservation call's reply into a known or unknown outcome.
@@ -898,6 +905,7 @@ type settleInput struct {
 	Outcome    outcomeKind `json:"outcome"`
 	ReceiptID  string      `json:"receipt_id,omitempty"`
 	Refusal    string      `json:"refusal,omitempty"`
+	Reported   string      `json:"reported,omitempty"`
 	Detail     string      `json:"detail,omitempty"`
 }
 
@@ -913,7 +921,8 @@ func (s *Store) settle(ctx context.Context, c Caller, a Attempt, o callOutcome) 
 // settleGuarded is settle with g, if set, checked first inside the
 // command's transaction.
 func (s *Store) settleGuarded(ctx context.Context, c Caller, a Attempt, o callOutcome, g guard) (Attempt, error) {
-	in := settleInput{AttemptID: a.ID, PendingKey: a.PendingKey, Outcome: o.kind, ReceiptID: o.result.Receipt.ID, Detail: o.detail}
+	in := settleInput{AttemptID: a.ID, PendingKey: a.PendingKey, Outcome: o.kind, ReceiptID: o.result.Receipt.ID,
+		Reported: o.reported, Detail: o.detail}
 	if o.refusal != nil {
 		in.Refusal = o.refusal.Code
 	}
@@ -979,12 +988,21 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 		err = updateAttempt(ctx, tx, a.ID, now, `state = 'reconciling'`)
 	case outcomeRefused, outcomeNotCommitted:
 		reason := "not_committed"
-		if o.refusal != nil {
+		switch {
+		case o.refusal != nil:
 			reason = o.refusal.Code
+		case o.reported != "":
+			reason = o.reported
 		}
 		if a.PendingOp == ReservationClaim {
 			err = updateAttempt(ctx, tx, a.ID, now,
 				`state = 'closed', close_reason = ?, last_refusal = ?, `+clearPending, "claim "+reason, reason)
+			if err == nil && a.Origin == OriginClaim && reason == RefusalTaskNotReady {
+				// Only the coordinator may triage the task (PILOT-1 §11).
+				err = announce(ctx, tx, a, a.WorkerAgentID, "aimem refused %s's claim of task %s: the task is not READY. "+
+					"The coordinator triages it to READY with aimem's triage_task; then it can be claimed again.",
+					now, labelOf(a.WorkerAgentID), taskName(a.Task))
+			}
 		} else {
 			set := `state = ?, last_refusal = ?, ` + clearPending
 			if a.PendingOp == ReservationFinalize && a.Stop != StopNone {
@@ -1058,7 +1076,7 @@ func applyOutcome(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now
 
 // pendingColumnsCleared resets every pending-step column.
 const pendingColumnsCleared = `pending_op = '', pending_key = '', pending_from = '', pending_intent = '',
-	pending_detail = '', pending_evidence = '', pending_message = ''`
+	pending_detail = '', pending_evidence = '', pending_message = '', pending_refusal = ''`
 
 // recordStep keeps the known outcome of a pending step by its request key.
 func recordStep(ctx context.Context, tx *sql.Tx, a Attempt, o callOutcome, now time.Time) error {
@@ -1264,7 +1282,7 @@ const attemptColumns = `id, team_id, task_hub_id, task_project_id, task_id, work
 	terminal_evidence, stop, stop_by, stop_session, stop_reason, stop_at, origin, process_verified_receipt,
 	delivery_result, delivery_evidence, delivery_by_agent, delivery_by_session, delivery_by_generation, delivery_at,
 	recovered_by, recovered_fence, recovered_at, revision, created_at, updated_at,
-	repository_kind, repository_url, repository_access, default_branch, blocked_reason, blocked_since`
+	repository_kind, repository_url, repository_access, default_branch, blocked_reason, blocked_since, pending_refusal`
 
 func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 	var (
@@ -1287,7 +1305,8 @@ func getAttempt(ctx context.Context, q querier, id string) (Attempt, error) {
 		&a.TerminalEvidence, &stop, &a.StopBy, &a.StopSession, &a.StopReason, &stopAt, &origin, &a.ProcessVerifiedReceipt,
 		&a.DeliveryResult, &a.DeliveryEvidence, &a.DeliveryByAgent, &a.DeliveryBySession, &a.DeliveryByGeneration, &deliveryAt,
 		&a.RecoveredBy, &a.RecoveredFence, &a.RecoveredAt, &a.Revision, &created, &updated,
-		&a.Repository.Kind, &a.Repository.URL, &a.Repository.Access, &a.Repository.DefaultBranch, &blockedReason, &blockedAt)
+		&a.Repository.Kind, &a.Repository.URL, &a.Repository.Access, &a.Repository.DefaultBranch, &blockedReason, &blockedAt,
+		&a.PendingRefusal)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Attempt{}, fmt.Errorf("attempt %s: %w", id, ErrNotFound)
 	}

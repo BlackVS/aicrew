@@ -13,9 +13,11 @@ import (
 // connection. A dependency it cannot read counts as open: unknown is not
 // DONE. An open dependency refuses the offer locally, before any begin; a
 // task whose dependencies are all DONE is offered with the evidence of that
-// read, which aicrewd records in the offer's audit. The read only avoids a
-// useless offer: it never makes a task eligible, and aimem's refusal of the
-// claim stays authoritative.
+// read, which aicrewd records in the offer's audit. The same read refuses a
+// task that is not READY (PILOT-1 §5): aimem would refuse the offer's claim
+// with task_not_ready and spend its proof. The read only avoids a useless
+// offer: it never makes a task eligible, and aimem's refusal of the claim
+// stays authoritative.
 
 // DependencyEvidence is one dependency as the driver read it.
 type DependencyEvidence struct {
@@ -34,13 +36,25 @@ func (e *DependenciesOpen) Error() string {
 	return "the task has open dependencies: " + strings.Join(e.Open, ", ")
 }
 
-// Dependencies reads taskID's dependencies over the member's aimem
-// connection and returns their evidence, or *DependenciesOpen.
+// TaskNotReady refuses an offer whose task is not READY.
+type TaskNotReady struct {
+	State string
+}
+
+func (e *TaskNotReady) Error() string { return "the task is " + e.State + ", not READY" }
+
+// Dependencies reads taskID and its dependencies over the member's aimem
+// connection and returns their evidence, *TaskNotReady, or
+// *DependenciesOpen.
 func (d *Driver) Dependencies(ctx context.Context, taskID string) ([]DependencyEvidence, error) {
 	file := d.Session.stepAimemFile()
 	task, err := d.Aimem.GetTask(ctx, file, taskID)
 	if err != nil {
 		return nil, &DependenciesOpen{Open: []string{taskID + " (the offered task is unreadable)"}}
+	}
+	var state string
+	if json.Unmarshal(task.Fields["state"], &state) != nil || state != "READY" {
+		return nil, &TaskNotReady{State: orUnknown(state)}
 	}
 	var ids []string
 	if raw := task.Fields["dependencies"]; len(raw) > 0 && string(raw) != "null" {

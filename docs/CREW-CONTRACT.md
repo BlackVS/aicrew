@@ -1216,6 +1216,20 @@ references and receipt, and never a secret, session handle or proof.
     offer's audit. A recovered offer resends the evidence it began with.
 
   That read never makes a task eligible: aimem's refusal at the claim wins.
+- A coordinated or independent claim needs the task READY, and only the
+  coordinator triages, with aimem's `triage_task` (PILOT-1-FOLLOWUPS §5).
+  The same read before an offer refuses a task in any other state locally,
+  with `task_not_ready` and that next action, before anything is recorded
+  or begun. When aimem itself refuses a claim with `task_not_ready`:
+  - the step's answer names the refusal and the triage next action;
+  - the step settles as not committed, as every refused step does. The
+    attempt's `close_reason` and `last_refusal` name the refusal code the
+    acting member reported when it voided the step (`claim task_not_ready`),
+    whether the member or the reconciler settles it. That code names the
+    reason; the read scope still decides the outcome;
+  - an independent claim closed this way posts a lifecycle message to the
+    team. Its claimer is the actor, so the coordinator receives it and the
+    claimer does not.
 - A reference to another hub is display-only and can never satisfy a claim.
 - Removing a project from the team does not release running work; it blocks
   new offers for that project and leaves existing attempts to be finished or

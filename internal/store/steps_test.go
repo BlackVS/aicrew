@@ -346,9 +346,10 @@ func TestSettleNeverTrustsTheReport(t *testing.T) {
 }
 
 // A refused or unknown outcome voids the step: its proof ends at once, and
-// the step settles as not committed only NoneFinalAfter later.
+// the step settles as not committed only NoneFinalAfter later, closed with
+// the refusal the member reported as its reason.
 func TestSettleVoidsAndWaits(t *testing.T) {
-	for _, hint := range []StepHint{HintRefused, HintUnknown} {
+	for hint, reason := range map[StepHint]string{HintRefused: "claim coordination_rejected", HintUnknown: "claim not_committed"} {
 		t.Run(string(hint), func(t *testing.T) {
 			e := newStepEnv(t)
 			a, st := e.begin(t, "offer", "task-1")
@@ -365,7 +366,7 @@ func TestSettleVoidsAndWaits(t *testing.T) {
 			}
 			e.advance(time.Second)
 			got, set, err = e.settle(t, a, st, hint)
-			if err != nil || !set.Settled || got.State != AttemptClosed || got.CloseReason != "claim not_committed" ||
+			if err != nil || !set.Settled || got.State != AttemptClosed || got.CloseReason != reason ||
 				busy(t, e.s, e.builder.agent.ID) {
 				t.Fatalf("settle once none is final: %+v %+v %v", got, set, err)
 			}

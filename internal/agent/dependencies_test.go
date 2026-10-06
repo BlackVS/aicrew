@@ -153,7 +153,8 @@ func TestOfferCarriesItsDependencyEvidence(t *testing.T) {
 	}
 
 	// A task with no dependencies is offered with empty evidence.
-	ev, err := s.d.Dependencies(context.Background(), "dep-a")
+	s.setDependencies(t, []string{}, nil, nil)
+	ev, err := s.d.Dependencies(context.Background(), "task-1")
 	if err != nil || ev == nil || len(ev) != 0 {
 		t.Fatalf("no dependencies: %v %v", ev, err)
 	}
@@ -203,6 +204,64 @@ func TestAimemRefusesAnOfferTheDriverReadAsReady(t *testing.T) {
 	}
 	if f := loadFakeReservations(s.root); f.Holds["task-1"] != nil && f.Holds["task-1"].Active {
 		t.Fatalf("aimem holds the refused offer's task: %+v", f.Holds["task-1"])
+	}
+}
+
+// setTaskState sets task-1's state in the fake aimem.
+func (s *stepEnv) setTaskState(t *testing.T, state string) {
+	t.Helper()
+	f := loadFakeReservations(s.root)
+	f.Tasks["task-1"].Content["state"], _ = json.Marshal(state)
+	f.save(s.root)
+}
+
+// An offer of a task that is not READY is refused before anything is
+// recorded or begun, naming the coordinator's triage; once the task is
+// triaged to READY, the same offer is begun (PILOT-1 §5).
+func TestOfferOfATaskNotReadyIsRefused(t *testing.T) {
+	s := setupOfferSteps(t)
+	var answers []byte
+	s.setTaskState(t, "BACKLOG")
+	ans := s.call(t, &answers, StepCall{Op: "offer", Body: s.offerBody(t, nil)})
+	if ans.OK || ans.Status != StepRefused || ans.Error == nil || ans.Error.Code != "task_not_ready" ||
+		!strings.Contains(ans.Error.Message, "BACKLOG") || !strings.Contains(ans.Error.NextAction, "triage_task") {
+		t.Fatalf("an offer of a BACKLOG task: %+v %+v", ans, ans.Error)
+	}
+	if pending, err := s.d.Pending(); err != nil || len(pending) != 0 {
+		t.Fatalf("a refused offer left a record: %v %v", pending, err)
+	}
+	if n := s.attemptsOfTask(t); n != 0 || len(s.mutations(t)) != 0 {
+		t.Fatalf("a refused offer began: %d attempts, calls %v", n, s.mutations(t))
+	}
+	s.setTaskState(t, "READY")
+	ans = s.call(t, &answers, StepCall{Op: "offer", Body: s.offerBody(t, nil)})
+	if r := stepResult(t, ans); !ans.OK || !r.Settled || r.Outcome != "committed" {
+		t.Fatalf("the offer after triage: %+v", ans)
+	}
+}
+
+// aimem's own task_not_ready (the task left READY after the launcher read
+// it) is named in the answer, with the triage the step's role may do; a
+// step still pending keeps its recover instruction.
+func TestAimemTaskNotReadyNamesTheTriage(t *testing.T) {
+	s := setupOfferSteps(t)
+	var answers []byte
+	s.setFault(t, "claim", "3:task_not_ready")
+	ans := s.call(t, &answers, StepCall{Op: "offer", Body: s.offerBody(t, nil)})
+	if r := stepResult(t, ans); ans.Status == StepDone || r.Report.Code != "task_not_ready" ||
+		!strings.Contains(ans.NextAction, "not READY") || !strings.Contains(ans.NextAction, "triage_task") ||
+		ans.Status != StepPending || !strings.Contains(ans.NextAction, "aicrew-agent step recover") {
+		t.Fatalf("an offer aimem refused as not READY: %+v %+v", ans, r)
+	}
+
+	c := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
+	c.serve(t)
+	c.setFault(t, "claim", "3:task_not_ready")
+	claim, _ := json.Marshal(c.claimBody())
+	ans = c.call(t, &answers, StepCall{Op: "claim", Body: claim})
+	if r := stepResult(t, ans); ans.Status == StepDone || r.Report.Code != "task_not_ready" ||
+		!strings.Contains(ans.NextAction, "Only the coordinator may triage") {
+		t.Fatalf("a claim aimem refused as not READY: %+v %+v", ans, r)
 	}
 }
 

@@ -46,10 +46,13 @@ func processForge(t *testing.T) (home, onMain, offBranch string, runner GitRunne
 	runner = func(ctx context.Context, dir string, env []string, args ...string) (string, error) {
 		calls = append(calls, append([]string{}, args...))
 		u := filepath.ToSlash(bare)
-		env = append(env, "GIT_CONFIG_COUNT=3",
+		gone := filepath.ToSlash(filepath.Join(dir, "gone.git"))
+		env = append(env, "GIT_CONFIG_COUNT=4",
 			"GIT_CONFIG_KEY_0=url."+u+".insteadOf", "GIT_CONFIG_VALUE_0=https://github.com/team/process",
 			"GIT_CONFIG_KEY_1=url."+u+".insteadOf", "GIT_CONFIG_VALUE_1=https://gitlab.example.org/team/process",
-			"GIT_CONFIG_KEY_2=protocol.version", "GIT_CONFIG_VALUE_2=2")
+			"GIT_CONFIG_KEY_2=protocol.version", "GIT_CONFIG_VALUE_2=2",
+			// A repository the forge refuses, without leaving the machine.
+			"GIT_CONFIG_KEY_3=url."+gone+".insteadOf", "GIT_CONFIG_VALUE_3=https://github.com/team/elsewhere")
 		return execGit(ctx, dir, env, args...)
 	}
 	return home, onMain, offBranch, runner, &calls

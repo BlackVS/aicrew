@@ -82,10 +82,7 @@ func Clone(ctx context.Context, o CloneOptions) (CloneReport, error) {
 	if abs, err := filepath.Abs(o.Home); err == nil {
 		o.Home = abs
 	}
-	if !strings.HasPrefix(o.Repository, "https://") {
-		return CloneReport{}, errors.New("--repository must be an https clone URL: the member's credential is an https token")
-	}
-	host, path, err := forge.Repository(o.Repository)
+	host, _, clone, err := homeClone(o.Home, o.Repository)
 	if err != nil {
 		return CloneReport{}, err
 	}
@@ -98,12 +95,6 @@ func Clone(ctx context.Context, o CloneOptions) (CloneReport, error) {
 	if !branchShape.MatchString(o.Branch) || strings.Contains(o.Branch, "..") || strings.HasSuffix(o.Branch, ".lock") ||
 		strings.HasSuffix(o.Branch, "/") {
 		return CloneReport{}, errors.New("--branch must be a branch name: letters, digits, '.', '_', '/' or '-'")
-	}
-	segs := strings.Split(path, "/")
-	for _, s := range segs {
-		if !segmentShape.MatchString(s) {
-			return CloneReport{}, fmt.Errorf("the repository path %q has a segment the home cannot use as a directory", path)
-		}
 	}
 	doc, _, err := readAgentDoc(o.Home)
 	if err != nil {
@@ -120,27 +111,14 @@ func Clone(ctx context.Context, o CloneOptions) (CloneReport, error) {
 		}
 	}
 	helper := credentialHelper(self, o.Home)
-	clone := filepath.Join(append([]string{o.Home, "repos", forge.Service(host)}, segs...)...)
 	worktree := filepath.Join(o.Home, "worktrees", o.Attempt)
 	rep := CloneReport{Clone: clone, Worktree: worktree, Branch: o.Branch, Base: o.Base, Host: host, Account: entry.Account}
 	if _, err := os.Stat(worktree); err == nil {
 		return rep, fmt.Errorf("worktrees/%s already exists: one worktree per attempt", o.Attempt)
 	}
 
-	if _, err := os.Stat(filepath.Join(clone, ".git")); err != nil {
-		if err := os.MkdirAll(filepath.Dir(clone), 0o755); err != nil {
-			return rep, err
-		}
-		fmt.Fprintf(o.Out, "Cloning %s into repos/%s.\n", o.Repository, filepath.ToSlash(strings.TrimPrefix(clone, filepath.Join(o.Home, "repos")+string(filepath.Separator))))
-		// The helper is given on the command line for the clone itself, and
-		// written to the clone's own configuration right after.
-		if _, err := o.Git(ctx, o.Home, gitEnv, "-c", "credential.helper=", "-c", "credential.helper="+helper,
-			"clone", "--no-checkout", "--", o.Repository, clone); err != nil {
-			return rep, fmt.Errorf("clone %s: %w", o.Repository, err)
-		}
-		rep.Cloned = true
-	} else if url, err := o.Git(ctx, clone, gitEnv, "config", "--get", "remote.origin.url"); err != nil || strings.TrimSpace(url) != o.Repository {
-		return rep, fmt.Errorf("repos/%s is a clone of another repository: move it, then clone again", strings.Join(segs, "/"))
+	if rep.Cloned, err = ensureClone(ctx, o.Git, o.Home, o.Repository, clone, helper, o.Out); err != nil {
+		return rep, err
 	}
 	if err := configureClone(ctx, o.Git, clone, helper, entry); err != nil {
 		return rep, err
@@ -162,6 +140,49 @@ func Clone(ctx context.Context, o CloneOptions) (CloneReport, error) {
 	return rep, nil
 }
 
+// homeClone is where the home keeps its clone of an https repository:
+// repos/<service>/<owner>/<name>.
+func homeClone(home, repository string) (host string, segs []string, clone string, err error) {
+	if !strings.HasPrefix(repository, "https://") {
+		return "", nil, "", errors.New("--repository must be an https clone URL: the member's credential is an https token")
+	}
+	host, path, err := forge.Repository(repository)
+	if err != nil {
+		return "", nil, "", err
+	}
+	segs = strings.Split(path, "/")
+	for _, s := range segs {
+		if !segmentShape.MatchString(s) {
+			return "", nil, "", fmt.Errorf("the repository path %q has a segment the home cannot use as a directory", path)
+		}
+	}
+	return host, segs, filepath.Join(append([]string{home, "repos", forge.Service(host)}, segs...)...), nil
+}
+
+// ensureClone makes a no-checkout clone of repository at clone unless one is
+// there, which must then be of the same repository. It reports whether it
+// cloned.
+func ensureClone(ctx context.Context, git GitRunner, home, repository, clone, helper string, out io.Writer) (bool, error) {
+	rel := filepath.ToSlash(strings.TrimPrefix(clone, filepath.Join(home, "repos")+string(filepath.Separator)))
+	if _, err := os.Stat(filepath.Join(clone, ".git")); err == nil {
+		if url, err := git(ctx, clone, gitEnv, "config", "--get", "remote.origin.url"); err != nil || strings.TrimSpace(url) != repository {
+			return false, fmt.Errorf("repos/%s is a clone of another repository: move it, then clone again", rel)
+		}
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(clone), 0o755); err != nil {
+		return false, err
+	}
+	fmt.Fprintf(out, "Cloning %s into repos/%s.\n", repository, rel)
+	// The helper is given on the command line for the clone itself, and
+	// written to the clone's own configuration right after.
+	if _, err := git(ctx, home, gitEnv, "-c", "credential.helper=", "-c", "credential.helper="+helper,
+		"clone", "--no-checkout", "--", repository, clone); err != nil {
+		return false, fmt.Errorf("clone %s: %w", repository, err)
+	}
+	return true, nil
+}
+
 // credentialHelper is the helper string git runs: a shell snippet naming
 // this executable and the home, in forward slashes for git's own shell.
 func credentialHelper(self, home string) string {
@@ -174,13 +195,23 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''
 // configureClone writes the clone's own credential helper (resetting any
 // inherited one) and the member's commit identity.
 func configureClone(ctx context.Context, git GitRunner, clone, helper string, e forgeEntry) error {
-	steps := [][]string{
+	return gitConfig(ctx, git, clone, append(helperSteps(helper),
+		[]string{"config", "--local", "user.name", e.CommitName},
+		[]string{"config", "--local", "user.email", e.CommitEmail}))
+}
+
+// helperSteps reset a clone's inherited credential helpers and name ours.
+func helperSteps(helper string) [][]string {
+	return [][]string{
 		{"config", "--local", "--unset-all", "credential.helper"},
 		{"config", "--local", "--add", "credential.helper", ""},
 		{"config", "--local", "--add", "credential.helper", helper},
-		{"config", "--local", "user.name", e.CommitName},
-		{"config", "--local", "user.email", e.CommitEmail},
 	}
+}
+
+// gitConfig runs the configuration steps in clone; the first is an unset,
+// which may find nothing.
+func gitConfig(ctx context.Context, git GitRunner, clone string, steps [][]string) error {
 	for i, s := range steps {
 		if _, err := git(ctx, clone, gitEnv, s...); err != nil && i != 0 { // nothing to unset is fine
 			return fmt.Errorf("configure the clone: git %s: %w", strings.Join(s[:3], " "), err)

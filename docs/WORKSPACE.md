@@ -228,7 +228,9 @@ Each path segment may contain only letters, digits, `.`, `_` and `-`; any
 other character rejects the key rather than being rewritten. Keys are compared
 case-insensitively, so two keys that differ only by case are refused as a
 collision on every platform. A clone under `repos/` is a clean source for
-worktrees. Agents do not edit, build or check out branches in it.
+worktrees. Agents do not edit, build or check out branches in it. A team's
+process repository is cloned there too, by `aicrew-agent digest`, to read
+the pinned manifest an offer's instruction digest is computed from.
 
 Work happens in a worktree:
 

@@ -1007,6 +1007,34 @@ It works with the member's own credential for the repository's host, which
   token. Until the attempt carries its repository (354c-1b), the repository,
   base and branch are given as flags.
 
+### An offer's instruction digest: `aicrew-agent digest`
+
+```sh
+aicrew-agent digest --repository https://github.com/team/process --commit 0123456789abcdef0123456789abcdef01234567 --manifest processes/delivery.yaml
+```
+
+It prints the instruction digest of a process pin: `sha256:` and the
+lowercase hex SHA-256 of the manifest's exact bytes at the pinned commit.
+A worker computes it to verify an offer before accepting, and a coordinator
+to make one.
+
+- **The clone** is the process repository's own clone under `repos/`, made
+  and reused as `aicrew-agent clone` makes one, with no checkout. The
+  command fetches it, and fetches the pinned commit by name when no branch
+  holds it.
+- **The credential helper** is the same per-clone helper. It answers with
+  the home's credential for the host when `join --cred` provisioned one,
+  and with nothing otherwise, so a public process repository needs no
+  credential. The worker never handles a token to verify an offer, and the
+  token never appears in a URL, a configuration, an argument or the output.
+- **Refusals.** An ssh pin (the home's credential is an https token), a
+  commit that is not a full commit ID, a manifest path that is not a clean
+  relative path, and a directory with no `agent.json` are refused before
+  anything is fetched. A refused fetch, a commit the repository lacks and a
+  manifest it lacks stop the command with that reason and no digest. The
+  worker then declines the offer.
+- `--json` adds the clone, the commit and the manifest.
+
 ### Reading the inbox: `aicrew-agent inbox`
 
 Offers, acceptances, submissions, stops and other lifecycle messages reach

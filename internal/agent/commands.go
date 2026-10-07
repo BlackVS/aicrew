@@ -58,7 +58,7 @@ var crewCommands = []crewCommand{
 			"1. Read the task with aimem's `get_task`. If it is not READY, triage it first (`/crew-triage`).\n" +
 			"2. Check that every dependency is DONE; the launcher refuses the offer otherwise.\n" +
 			"3. Read the project's selected process (`aimem process show`) and compute its instruction digest " +
-			"(`docs/ROLES.md`, \"The instruction digest\").\n" +
+			"with `aicrew-agent digest` (`docs/ROLES.md`, \"The instruction digest\").\n" +
 			"4. Name the project's repository as the hub binds it (`aimem project show`), or pass " +
 			"`--repository REPO_URL` to fill it from the forge.\n" +
 			"5. Send the offer with the step below, then tell the worker nothing else: the offer reaches its inbox.",
@@ -77,9 +77,10 @@ var crewCommands = []crewCommand{
 		Body: "Accept the offer on attempt $ARGUMENTS.\n\n" +
 			"1. Read the offer with `aicrew-agent inbox --json`: its repository, branch, base commit, process pin " +
 			"and instruction digest.\n" +
-			"2. Compute the digest yourself from the pin (`docs/ROLES.md`, \"The instruction digest\"); it must " +
-			"equal the offer's. If it does not, or the pinned process or its skills are not available to you, " +
-			"decline instead.\n" +
+			"2. Compute the digest yourself from the pin, with the offer's `process` fields: `aicrew-agent digest " +
+			"--repository PROCESS_REPO --commit PROCESS_COMMIT --manifest PROCESS_MANIFEST` (`docs/ROLES.md`, " +
+			"\"The instruction digest\"). It must equal the offer's. If it does not, if the command fails, or if " +
+			"the pinned process's skills are not available to you, decline instead.\n" +
 			"3. Accept with the step below, then start your worktree with `aicrew-agent clone`, from the offer's " +
 			"base commit on its branch.\n" +
 			"4. Only then acknowledge the offer's message: until you acknowledge it, `aicrew-agent inbox --json` " +

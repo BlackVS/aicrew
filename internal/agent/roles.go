@@ -77,8 +77,8 @@ var guideRoles = []guideRole{
 		"the coordinator does.",
 		Steps: []guideStep{
 			{"accept", "--attempt ATTEMPT_ID --task TASK_ID", `{"instruction_digest": "sha256:DIGEST"}`, "Accept an " +
-				"offer from your inbox. Compute the digest yourself from the pin the offer names (see " +
-				"\"The instruction digest\" above); it must " +
+				"offer from your inbox. Compute the digest yourself with `aicrew-agent digest` from the pin the " +
+				"offer names (see \"The instruction digest\" above); it must " +
 				"equal the offer's. Then start your worktree in the offer's `repository`: its `base_commit` on its `branch`."},
 			{"decline", "--attempt ATTEMPT_ID", "", "Decline an offer you cannot take, for example when the pinned " +
 				"process or its required skills are not available to you."},
@@ -200,12 +200,19 @@ reference is in aicrew's DEVELOPMENT.md and CREW-CONTRACT.md.
 - **Worktrees and handoff** follow ` + "`docs/START.md`" + `: one worktree per attempt
   under ` + "`worktrees/`" + `, from the offer's base commit; ` + "`docs/HANDOFF.md`" + ` is yours.
 - **The instruction digest** of a process pin is ` + "`sha256:`" + ` and the
-  lowercase hex SHA-256 of the manifest's exact bytes at the pinned commit,
-  from your clone of the process repository under ` + "`repos/`" + `:
+  lowercase hex SHA-256 of the manifest's exact bytes at the pinned commit.
+  Compute it with ` + "`aicrew-agent digest`" + `, which fetches the process
+  repository into ` + "`repos/`" + ` with your home's credential for its host, if
+  it holds one, and prints the digest:
 
   ` + "```sh" + `
-  echo "sha256:$(git -C repos/PROCESS show PROCESS_COMMIT:PROCESS_MANIFEST | sha256sum | cut -d' ' -f1)"
+  aicrew-agent digest --repository PROCESS_REPO --commit PROCESS_COMMIT --manifest PROCESS_MANIFEST
   ` + "```" + `
+
+  That is, on its clone ` + "`repos/SERVICE/OWNER/NAME`" + `:
+  ` + "`git cat-file blob PROCESS_COMMIT:PROCESS_MANIFEST | sha256sum`" + `.
+  If it fails, the pinned process is not available to you: never fetch the
+  repository another way, and never handle a credential for it.
 
 `)
 	for _, s := range commonSteps {

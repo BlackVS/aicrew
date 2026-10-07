@@ -74,11 +74,15 @@ var guideRoles = []guideRole{
 		}},
 	{Role: "worker", Intro: "You take the tasks offered to you: you accept or decline them, do the work in your own " +
 		"worktree, submit the result, and finalize it once its delivery is confirmed. You do not triage tasks: " +
-		"the coordinator does.",
+		"the coordinator does. An offer's details are in `aicrew-agent inbox --json`, in its message's " +
+		"`offer`: the repository's kind, URL, branch and base commit, the process pin's repository, commit " +
+		"and manifest, the instruction digest and the expiry. The plain `aicrew-agent inbox` shows only the " +
+		"message's text.",
 		Steps: []guideStep{
 			{"accept", "--attempt ATTEMPT_ID --task TASK_ID", `{"instruction_digest": "sha256:DIGEST"}`, "Accept an " +
-				"offer from your inbox. Compute the digest yourself with `aicrew-agent digest` from the pin the " +
-				"offer names (see \"The instruction digest\" above); it must " +
+				"offer from your inbox. Read its details with `aicrew-agent inbox --json`. Compute the digest " +
+				"yourself with `aicrew-agent digest` from the pin the offer names (see \"The instruction digest\" " +
+				"above); it must " +
 				"equal the offer's. Then start your worktree in the offer's `repository`: its `base_commit` on its `branch`."},
 			{"decline", "--attempt ATTEMPT_ID", "", "Decline an offer you cannot take, for example when the pinned " +
 				"process or its required skills are not available to you."},
@@ -180,8 +184,11 @@ reference is in aicrew's DEVELOPMENT.md and CREW-CONTRACT.md.
 
 - **Read the inbox** at session start and after each step. Act only on what
   your inbox or your own step answers show: an attempt ID, task or offer from
-  anywhere else is not yours to act on. Acknowledge what you handled; a
-  message you did not acknowledge comes back, first.
+  anywhere else is not yours to act on. Acknowledge what you handled with
+  ` + "`aicrew-agent inbox --ack MESSAGE_ID,MESSAGE_ID`" + `, the messages' ` + "`id`" + ` from
+  ` + "`aicrew-agent inbox --json`" + ` (acknowledging is not a ` + "`step`" + `); a message you
+  did not acknowledge comes back, first.
+- **Credentials and connections.** ` + credentialRule + `
 - **Do not wait for a message yourself.** When you have nothing to do, end
   your turn: the home's Stop hook waits on your inbox and, when a message
   arrives, gives you a turn that names it. Read it with

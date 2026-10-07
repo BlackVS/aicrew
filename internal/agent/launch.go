@@ -34,15 +34,21 @@ type Stdio struct {
 	Out, Err io.Writer
 }
 
-// ClientArgs are the arguments `run` starts client with (3a60). Claude Code
-// gets the first instruction as its initial prompt, ahead of the operator's
-// own arguments, unless noStart; OpenCode's first argument is a project
-// directory, so it gets none (1af8). extra is passed through unchanged.
-func ClientArgs(client string, noStart bool, extra []string) []string {
+// ClientArgs are the arguments `run` starts client with in home (3a60).
+// Claude Code gets the first instruction as its initial prompt, ahead of the
+// operator's own arguments, unless noStart: the managed /crew-start command
+// when the home holds it (ef73), else the instruction's text. OpenCode's
+// first argument is a project directory, so it gets none (1af8). extra is
+// passed through unchanged.
+func ClientArgs(client, home string, noStart bool, extra []string) []string {
 	if client != "claude" || noStart {
 		return extra
 	}
-	return append([]string{FirstInstruction()}, extra...)
+	first := FirstInstruction()
+	if HasCommand(home, "crew-start") {
+		first = "/crew-start"
+	}
+	return append([]string{first}, extra...)
 }
 
 // ScopedEnv returns env with SessionEnv set to path, replacing any value it

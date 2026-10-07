@@ -93,7 +93,7 @@ func runClient(ctx context.Context, args []string, stdio agent.Stdio, sigs <-cha
 		log.Error("client refused", "error", err.Error())
 		return exitFailed
 	}
-	code, err := agent.RunClient(ctx, e, agent.Client{Path: path, Args: agent.ClientArgs(*name, *noStart, fs.Args())}, stdio, sigs)
+	code, err := agent.RunClient(ctx, e, agent.Client{Path: path, Args: agent.ClientArgs(*name, cfg.Home, *noStart, fs.Args())}, stdio, sigs)
 	if rc := finish(log, err); rc != exitOK {
 		return rc
 	}

@@ -75,8 +75,9 @@ wakes and follows its role through managed commands, with no typed prompt.
 - **An offer needs the worker's forge capability** (#93). aicrewd refuses an
   offer `capability_missing` unless the worker's launcher reported the
   offer's repository at the offer's access. Give each worker its own forge
-  credential with `aicrew-agent join --cred HOST=FILE` (#88). Its launcher
-  reports what the credential can reach when its session starts.
+  credential: `aicrew-agent join --cred`, naming the forge's host and the
+  file holding the worker's token (#88). Its launcher reports what the
+  credential can reach when its session starts.
 - **The store moves from schema 21 to 26 on first start**, one way: 0.2.0
   refuses the migrated store. Back the store up before the upgrade.
 
@@ -111,11 +112,11 @@ wakes and follows its role through managed commands, with no typed prompt.
 
 ### Members' credentials and repositories
 
-- `aicrew-agent join --cred HOST=FILE` verifies each forge token
-  ("who am I"), writes it owner-only under `creds/` and records the
-  account, never the value. `check` verifies every credential and prints
-  the table. `step offer|claim --repository` fills an empty base commit
-  from the forge (#88).
+- `aicrew-agent join --cred`, given a forge's host and a token file,
+  verifies the token ("who am I"), writes it owner-only under `creds/` and
+  records the account, never the value. `check` verifies every credential
+  and prints the table. `step offer|claim --repository` fills an empty base
+  commit from the forge (#88).
 - `aicrew-agent clone` clones an attempt's repository into `repos/` and
   makes its worktree. The clone's own credential helper
   (`aicrew-agent git-credential`) answers git on a pipe, so the token never

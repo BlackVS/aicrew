@@ -488,7 +488,21 @@ no secret; other sections belong to onboarding:
   starts the client (from `PATH`, or `client_command` in the `aicrew`
   section) as its child in the agent home, with `AIMEM_TEAM_SESSION` set in
   that child's environment only; arguments after `--` go to the client.
-  When the client exits, it leaves and closes aimem's binding, exiting with
+- **The first turn.** For Claude Code, `run` passes a first instruction as
+  the client's initial prompt, ahead of the arguments after `--`. The
+  member's first turn then needs no typed message: it reads
+  `docs/START.md` and `docs/ROLES.md`, runs `aicrew-agent inbox`, says in
+  one short message what it will do, and acts within its role.
+  - The instruction names only those files and `aicrew-agent inbox`: no
+    secret, handle or ID.
+  - After that turn, the Stop hook ("Waking a member") wakes it on its
+    inbox.
+  - `--no-start` turns the instruction off. Use it for debugging, when you
+    pass the client your own prompt after `--` (for example `-- -p "..."`),
+    or when `client_command` is not Claude Code itself (the real-aimem
+    harness runs `/bin/sleep` as a stand-in client).
+  - OpenCode starts without one: its first argument is a project directory.
+- When the client exits, it leaves and closes aimem's binding, exiting with
   the client's code (128 plus the signal if a signal ended it), or 3 if
   open work kept the session. Before the client starts, Ctrl-C or SIGTERM
   stops the startup, including its retries, and leaves any session it

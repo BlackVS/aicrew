@@ -2,7 +2,7 @@
 // needs no operator authority: it proves the agent's aimem identity and
 // keeps the agent's team session through aicrewd's client session API.
 //
-//	aicrew-agent run --client claude|opencode --home DIR [-- ARGS]
+//	aicrew-agent run --client claude|opencode --home DIR [--no-start] [-- ARGS]
 //	                                        run the client in the team session, then leave
 //	aicrew-agent session start  --home DIR   enter or resume, then keep the session until interrupted
 //	aicrew-agent session status --home DIR   show the recorded session, without secrets
@@ -43,7 +43,7 @@ const (
 )
 
 const usage = `usage: aicrew-agent session start|status|leave --home DIR
-       aicrew-agent run --client claude|opencode --home DIR [-- CLIENT ARGS]
+       aicrew-agent run --client claude|opencode --home DIR [--no-start] [-- CLIENT ARGS]
        aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
        aicrew-agent inbox [--home DIR] [--limit N] [--ack ID,ID...] [--json]
        aicrew-agent wait-inbox [--home DIR]   (the Claude Code Stop hook join installs)
@@ -67,11 +67,15 @@ func runClient(ctx context.Context, args []string, stdio agent.Stdio, sigs <-cha
 	fs.SetOutput(stdio.Err)
 	name := fs.String("client", "", "the client to run: claude or opencode")
 	home := fs.String("home", "", "the agent home directory")
+	noStart := fs.Bool("no-start", false, "start Claude Code without the first instruction")
 	if err := fs.Parse(args); err != nil || *home == "" || !clients[*name] {
 		fmt.Fprintln(stdio.Err, usage)
 		return exitUsage
 	}
 	log := slog.New(slog.NewTextHandler(stdio.Err, nil))
+	if *name != "claude" && !*noStart {
+		log.Info("this client starts without a first instruction: type it", "client", *name)
+	}
 	cfg, err := agent.LoadConfig(*home)
 	if err != nil {
 		log.Error("configuration refused", "error", err.Error())
@@ -89,7 +93,7 @@ func runClient(ctx context.Context, args []string, stdio agent.Stdio, sigs <-cha
 		log.Error("client refused", "error", err.Error())
 		return exitFailed
 	}
-	code, err := agent.RunClient(ctx, e, agent.Client{Path: path, Args: fs.Args()}, stdio, sigs)
+	code, err := agent.RunClient(ctx, e, agent.Client{Path: path, Args: agent.ClientArgs(*name, *noStart, fs.Args())}, stdio, sigs)
 	if rc := finish(log, err); rc != exitOK {
 		return rc
 	}

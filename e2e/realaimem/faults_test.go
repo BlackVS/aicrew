@@ -516,8 +516,9 @@ func (h *harness) crashLauncher(mem *member) {
 // restartLauncher starts mem's launcher again: it resumes the recorded
 // session, under a new generation.
 func (h *harness) restartLauncher(mem *member) {
+	// The client is a stand-in, not Claude Code: no first instruction (-no-start).
 	mem.launcher = h.start("launcher-"+mem.name, mem.env, mem.home, filepath.Join(h.bin, "aicrew-agent"),
-		"run", "-client", "claude", "-home", mem.home, "--", "86400")
+		"run", "-client", "claude", "-home", mem.home, "-no-start", "--", "86400")
 	h.waitFor(mem.name+"'s step channel after the restart", 60*time.Second, func() bool {
 		r := h.run(mem.env, nil, filepath.Join(h.bin, "aicrew-agent"), "step", "pending", "-home", mem.home)
 		return r.code == 0

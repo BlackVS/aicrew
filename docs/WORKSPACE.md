@@ -315,7 +315,7 @@ outside the home (`docs/DEVELOPMENT.md`, "Running aicrew-agent").
 
 | Class | Files | Setup may |
 | --- | --- | --- |
-| Managed | `AGENTS.md`, `CLAUDE.md`, `docs/START.md`, `docs/ROLES.md`, `.claude/settings.json`, each client's `aimem` MCP entry, managed keys in `agent.json` | create; update only if unchanged since its last write |
+| Managed | `AGENTS.md`, `CLAUDE.md`, `docs/START.md`, `docs/ROLES.md`, `.claude/settings.json`, `.claude/commands/crew-*.md` (unless one would shadow the member's own command or skill, then reported and not written), each client's `aimem` MCP entry, managed keys in `agent.json` | create; update only if unchanged since its last write |
 | Agent-owned | `docs/HANDOFF.md`, other `docs/` notes | create once if missing; never change |
 | Protected | `creds/`, `aimem/` (its contents), `repos/`, `worktrees/`, `state/`, `logs/`, provider logins, unknown files | never change, move or delete |
 

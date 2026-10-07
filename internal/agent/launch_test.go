@@ -496,10 +496,20 @@ func TestClientArgs(t *testing.T) {
 		{"opencode", false, extra, extra},
 		{"opencode", false, nil, nil},
 	} {
-		got := ClientArgs(tc.client, tc.noStart, tc.extra)
+		got := ClientArgs(tc.client, t.TempDir(), tc.noStart, tc.extra)
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("ClientArgs(%q, %v, %q) = %q, want %q", tc.client, tc.noStart, tc.extra, got, tc.want)
 		}
+	}
+	// A home that holds the managed /crew-start command starts with it.
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, ".claude", "commands"), 0o755)
+	os.WriteFile(filepath.Join(home, ".claude", "commands", "crew-start.md"), []byte(commandMD(crewCommands[0])), 0o644)
+	if got := ClientArgs("claude", home, false, extra); !reflect.DeepEqual(got, append([]string{"/crew-start"}, extra...)) {
+		t.Errorf("a home with /crew-start: %q", got)
+	}
+	if got := ClientArgs("claude", home, true, extra); !reflect.DeepEqual(got, extra) {
+		t.Errorf("a home with /crew-start, --no-start: %q", got)
 	}
 	// The operator's slice is never written to.
 	if !reflect.DeepEqual(extra, []string{"--model", "haiku", "-p"}) {

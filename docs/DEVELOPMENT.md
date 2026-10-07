@@ -806,6 +806,40 @@ member's user-level skills under it. It reports:
 `github.com/BlackVS/aicrew/internal/version.Override` with `-ldflags -X`;
 a source build reports `dev` and its commit.
 
+### The member's commands
+
+`join` writes the team's recurring instructions into the home as Claude
+Code commands, so a member needs no typed prompt. They live in
+`.claude/commands/crew-*.md` and are managed files, under the same rerun
+rule as the guidance.
+
+| Command | Role | What it does |
+| --- | --- | --- |
+| `/crew-start` | every member | reads START.md, ROLES.md, `session status` and the inbox, then acts within the role |
+| `/crew-inbox` | every member | reads the inbox, acts on it, acknowledges what was handled |
+| `/crew-triage <task>` | coordinator | moves a task between BACKLOG and READY with aimem's `triage_task` |
+| `/crew-offer <task> <worker>` | coordinator | checks READY, dependencies and the pin, then offers |
+| `/crew-review <attempt>` | coordinator | reviews a submission against the frozen scope at level high, then the review step; stops before the human merge |
+| `/crew-accept <attempt>` | worker | checks the offer's pin and digest, accepts, clones |
+| `/crew-submit <attempt> <url>` | worker | submits the result |
+| `/crew-claim <task>` | independent | claims a READY task |
+| `/crew-handoff` | every member | writes `docs/HANDOFF.md` |
+
+- **Every role's commands are in every home**, as every role's section is
+  in ROLES.md: a member's role can change, and a rerun does not ask
+  aicrewd. A role's command checks `session status` first and stops in
+  another role.
+- **One source.** The steps a command teaches are rendered from the same
+  data as ROLES.md, and a test keeps them equal.
+- **Collisions.** Every name has the `crew-` prefix. `join` writes no
+  command that would shadow a Claude Code built-in, or a command or skill
+  of the same name of the member's own (`commands/<name>.md` or
+  `skills/<name>/` under `CLAUDE_CONFIG_DIR`, else `~/.claude`). It reports
+  the collision as `collision` in its plan, with an instruction.
+- **The first turn.** `run` starts Claude Code with `/crew-start` when the
+  home holds it, and with the instruction's text in a home joined before
+  the commands existed.
+
 ### Waking a member: the Stop hook
 
 A Claude Code member acts only when it has a turn. The home's managed

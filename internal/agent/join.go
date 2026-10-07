@@ -576,6 +576,10 @@ func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error)
 	}
 	fmt.Fprintln(j.deps.Out, "Planned changes:")
 	for _, c := range plan {
+		if c.Detail != "" {
+			fmt.Fprintf(j.deps.Out, "  %-9s %s (it would shadow %s)\n", c.Action, c.Path, c.Detail)
+			continue
+		}
 		fmt.Fprintf(j.deps.Out, "  %-9s %s\n", c.Action, c.Path)
 	}
 	replaced, err := applyFiles(o.Home, plan, rec)
@@ -594,6 +598,13 @@ func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error)
 	if replaced {
 		rep.Status = JoinRestartRequired
 		rep.Instruction = "managed guidance changed: restart any client already open in this home"
+	}
+	for _, c := range plan {
+		if c.Action == "collision" {
+			rep.Instruction = strings.TrimPrefix(rep.Instruction+"; ", "; ") + "a managed command was not written: " +
+				"it would shadow " + c.Detail + "; rename or remove that one, then rerun join"
+			break
+		}
 	}
 	for _, c := range plan {
 		if c.Action == "conflict" {

@@ -24,7 +24,7 @@ const LayoutVersion = 1
 
 // homeDirs are created when missing; privateDirs are also made owner-only.
 var (
-	homeDirs    = []string{"docs", "logs", "work", "repos", "worktrees", ".claude"}
+	homeDirs    = []string{"docs", "logs", "work", "repos", "worktrees", ".claude", ".claude/commands"}
 	privateDirs = []string{"creds", "state", aimemDirName}
 )
 
@@ -34,29 +34,34 @@ type homeFile struct {
 	path    string // slash-separated, relative to the home
 	content string
 	managed bool
+	// collision, when set, is what the file would shadow (a managed
+	// command, commands.go): it is never written.
+	collision string
 }
 
 // homeFiles are the managed client entry files, the home guidance and the
 // Claude Code settings carrying the home's aimem installation; a change to
 // one of them means an open client should restart.
 func homeFiles(home string) []homeFile {
-	return []homeFile{
-		{"AGENTS.md", agentsMD, true},
-		{"CLAUDE.md", claudeMD, true},
-		{"docs/START.md", startMD, true},
-		{"docs/ROLES.md", rolesMD(), true},
-		{"docs/HANDOFF.md", handoffMD, false},
-		{".claude/settings.json", claudeSettings(home), true},
-	}
+	return append([]homeFile{
+		{path: "AGENTS.md", content: agentsMD, managed: true},
+		{path: "CLAUDE.md", content: claudeMD, managed: true},
+		{path: "docs/START.md", content: startMD, managed: true},
+		{path: "docs/ROLES.md", content: rolesMD(), managed: true},
+		{path: "docs/HANDOFF.md", content: handoffMD},
+		{path: ".claude/settings.json", content: claudeSettings(home), managed: true},
+	}, commandFiles()...)
 }
 
 // FileChange is one planned or applied change to a home file.
 type FileChange struct {
 	Path string `json:"path"`
 	// Action is create, update, unchanged, conflict (the proposed version
-	// is written beside the file as <path>.aicrew-new) or kept (an
-	// agent-owned file that exists).
+	// is written beside the file as <path>.aicrew-new), kept (an
+	// agent-owned file that exists) or collision (a managed command that
+	// would shadow Detail; nothing is written).
 	Action string `json:"action"`
+	Detail string `json:"detail,omitempty"`
 }
 
 func digestOf(b []byte) string {
@@ -198,23 +203,27 @@ func makeLayout(home string) error {
 func planFiles(home string, recorded map[string]string) ([]FileChange, error) {
 	var plan []FileChange
 	for _, f := range homeFiles(home) {
+		if f.collision != "" {
+			plan = append(plan, FileChange{Path: f.path, Action: "collision", Detail: f.collision})
+			continue
+		}
 		cur, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(f.path)))
 		switch {
 		case errors.Is(err, os.ErrNotExist):
-			plan = append(plan, FileChange{f.path, "create"})
+			plan = append(plan, FileChange{Path: f.path, Action: "create"})
 			continue
 		case err != nil:
 			return nil, err
 		}
 		switch {
 		case !f.managed:
-			plan = append(plan, FileChange{f.path, "kept"})
+			plan = append(plan, FileChange{Path: f.path, Action: "kept"})
 		case bytes.Equal(cur, []byte(f.content)):
-			plan = append(plan, FileChange{f.path, "unchanged"})
+			plan = append(plan, FileChange{Path: f.path, Action: "unchanged"})
 		case recorded[f.path] == digestOf(cur):
-			plan = append(plan, FileChange{f.path, "update"})
+			plan = append(plan, FileChange{Path: f.path, Action: "update"})
 		default:
-			plan = append(plan, FileChange{f.path, "conflict"})
+			plan = append(plan, FileChange{Path: f.path, Action: "conflict"})
 		}
 	}
 	return plan, nil
@@ -246,6 +255,8 @@ func applyFiles(home string, plan []FileChange, rec map[string]string) (bool, er
 				return replaced, err
 			}
 			continue // the recorded digest stays the last managed write's
+		case "collision":
+			continue // never written, never recorded
 		}
 		if f.managed && c.Action != "kept" {
 			rec[f.path] = digestOf([]byte(f.content))
@@ -315,6 +326,10 @@ Repository instructions live in each repository, not here.
    project's tasks with aimem's task tools in team mode, and triages them as
    ` + "`docs/ROLES.md`" + ` says. A worker takes the project, the task and the
    repository from the offer, never from this list.
+9. **Your commands.** The home's ` + "`/crew-*`" + ` commands carry these steps: ` + "`/crew-start`" + `,
+   ` + "`/crew-inbox`" + `, ` + "`/crew-handoff`" + `; for a coordinator ` + "`/crew-triage`" + `, ` + "`/crew-offer`" + ` and
+   ` + "`/crew-review`" + `; for a worker ` + "`/crew-accept`" + ` and ` + "`/crew-submit`" + `; for an independent
+   member ` + "`/crew-claim`" + `.
 
 ` + managedNote
 

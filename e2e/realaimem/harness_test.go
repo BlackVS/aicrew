@@ -44,12 +44,13 @@ import (
 	"time"
 )
 
-// aimemPin is the aimem commit the harness builds (b4 decision D-b4-1):
-// aimem master after #176, past the v0.7.4 release. Beside every earlier
-// prerequisite (C5b, C6, C5-w3, `aimem hub credential`, the fixture's
-// corrected fences of #164, `hub add --ca-file` of #165) it carries team
-// registration and team read (#175): aicrewd names its own team profiles.
-const aimemPin = "935873dbf3808cd937d5ecc97ed292bbad5f9c9c"
+// aimemPin is the aimem commit the harness builds: the v0.9.0 release, which
+// internal/agent/supported.json names as both the minimum and the tested
+// aimem. Beside every earlier prerequisite (C5b, C6, C5-w3, `aimem hub
+// credential`, the fixture's corrected fences, `hub add --ca-file`, team
+// registration and team read) it carries aimem's own task_not_ready refusal
+// (#179), which the coordinator's triage answers.
+const aimemPin = "dddea22aa8f44223f0ede2cd372cdc75d03670bc"
 
 const (
 	serviceID = "aicrew-e2e"
@@ -222,7 +223,7 @@ func (h *harness) build(aimemSrc string) {
 	}
 	h.aimemV = aimemPin
 	// A source install stamps its version as aimem's release build does,
-	// with the commit's `git describe`: v0.7.4 at the pin, which
+	// with the commit's `git describe`: v0.9.0 at the pin, which
 	// aicrew-agent's dependency check reads as the supported release.
 	desc, err := exec.Command("git", "-C", aimemSrc, "describe", "--tags", aimemPin).Output()
 	if err != nil {

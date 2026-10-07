@@ -269,7 +269,7 @@ func (e *Engine) bind(ctx context.Context) error {
 // record saves the nonsecret recovery record of the held session.
 func (e *Engine) record(aimemFile string) error {
 	return SaveState(e.Cfg.Home, State{AgentID: e.Cfg.AgentID, TeamID: e.session.TeamID, ServiceID: e.serviceID,
-		HubID: e.hubID, SessionID: e.session.ID, AimemFile: aimemFile, UpdatedAt: e.Now().UTC()})
+		HubID: e.hubID, SessionID: e.session.ID, Role: e.session.Role, AimemFile: aimemFile, UpdatedAt: e.Now().UTC()})
 }
 
 // next is when the engine acts again, and whether that is a resume (before

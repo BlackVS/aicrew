@@ -275,6 +275,18 @@ Onboarding writes `docs/START.md` (managed). It tells the agent:
 5. How to verify readiness (versions, client, MCP and skills) and when to
    stop and ask instead of improvising.
 6. That `docs/ROLES.md` (managed) teaches its role.
+7. Where its team's projects are: `aicrew-agent session status` prints the
+   member's role and the team's projects. A coordinator lists their tasks
+   with aimem's task tools in team mode; a worker takes the project, the
+   task and the repository from the offer.
+
+The team's projects are recorded in `state/team.json` by the launcher at
+each session start, from aicrewd's `GET /v1/crew/projects` (every project
+the team's hub grants, including one with no repository bound). The record
+holds the read's time, the home's hub alias and each project's hub ID,
+project ID and repository (or `null`), and no secret. A grant the hub adds or removes shows at the next session start,
+with no `join` rerun. aicrewd stays the authority; the record is only as
+fresh as its read time.
 
 `docs/ROLES.md` holds the guidance every member follows and one section per
 role (coordinator, worker, independent), since a member's role can change

@@ -12,10 +12,14 @@ import (
 const (
 	RequirementsPath = "/v1/crew/requirements"
 	CapabilitiesPath = "/v1/crew/capabilities"
+	// ProjectsPath answers every project granted to the session's team
+	// (3a4b), with or without a repository.
+	ProjectsPath = "/v1/crew/projects"
 )
 
 func (s *Server) registerCapabilities() {
 	s.handle(http.MethodGet, RequirementsPath, s.requirements)
+	s.handle(http.MethodGet, ProjectsPath, s.teamProjects)
 	s.handle(http.MethodGet, CapabilitiesPath, s.teamCapabilities)
 	s.handle(http.MethodPost, CapabilitiesPath, s.reportCapabilities)
 }
@@ -30,6 +34,53 @@ type requirementView struct {
 		URL    string `json:"url"`
 		Access string `json:"access"`
 	} `json:"repository"`
+}
+
+// projectView is a project granted to the team, and the repository the hub
+// binds to it, or null when it binds none.
+type projectView struct {
+	HubID      string `json:"hub_id"`
+	ProjectID  string `json:"project_id"`
+	Repository *struct {
+		Kind   string `json:"kind"`
+		URL    string `json:"url"`
+		Access string `json:"access"`
+	} `json:"repository"`
+}
+
+// teamProjects is GET /v1/crew/projects: every project granted to the
+// token's team, read from the hub first as the requirements are. Members
+// read their team's projects here; they never edit them.
+func (s *Server) teamProjects(w http.ResponseWriter, r *http.Request) {
+	token := sessionToken(r)
+	b, err := s.store.AuthenticateSessionToken(r.Context(), token)
+	if err != nil {
+		s.refuseSession(w, r, refusalCode(err), false, 0)
+		return
+	}
+	if t, err := s.store.GetTeam(r.Context(), b.TeamID); err == nil && t.Hub != "" {
+		s.readTeam(r.Context(), t)
+	}
+	grants, err := s.store.TeamProjectsWithToken(r.Context(), token)
+	if err != nil {
+		s.refuseSession(w, r, refusalCode(err), false, 0)
+		return
+	}
+	out := struct {
+		Projects []projectView `json:"projects"`
+	}{Projects: []projectView{}}
+	for _, g := range grants {
+		v := projectView{HubID: g.HubID, ProjectID: g.ProjectID}
+		if g.Repository != nil {
+			v.Repository = &struct {
+				Kind   string `json:"kind"`
+				URL    string `json:"url"`
+				Access string `json:"access"`
+			}{g.Repository.Kind, g.Repository.URL, g.Repository.Access}
+		}
+		out.Projects = append(out.Projects, v)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // requirements is GET /v1/crew/requirements: the token's team's granted

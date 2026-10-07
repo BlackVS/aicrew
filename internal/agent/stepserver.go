@@ -415,6 +415,12 @@ func attemptIDShape(id string) bool {
 // channel.
 var ErrNoLauncher = errors.New("no aicrew-agent launcher serves this agent home; start the client with `aicrew-agent run`")
 
+// RecordTeam reads the team's projects as the launcher's session and
+// records them in the home (team.go).
+func (s *StepServer) RecordTeam(ctx context.Context) error {
+	return RecordTeam(ctx, s.home, s.driver.Session.stepHubAlias(), s.local, s.driver.Session.stepToken())
+}
+
 // ReportCapabilities verifies the team's requirements with the home's
 // credentials and reports them to aicrewd as the launcher's session.
 func (s *StepServer) ReportCapabilities(ctx context.Context) ([]CapabilityRow, error) {

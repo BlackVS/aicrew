@@ -523,8 +523,11 @@ no secret; other sections belong to onboarding:
   the session token's 8-hour ceiling. On SIGINT or SIGTERM it leaves, then
   runs `aimem team-session close`; a second interrupt stops it at once, and
   the next `start` resumes the session.
-- `session status` shows the recorded session and aimem's binding, without
-  secrets and without calling `aicrewd`.
+- `session status` shows the recorded session, the member's role, aimem's
+  binding and the team's projects as the launcher last read them
+  (`state/team.json`, WORKSPACE.md "Initial guidance"). It shows no secret
+  and does not call `aicrewd`. Inside a client that `run` started, `--home`
+  defaults to the launcher's home.
 - `session leave` proves afresh and resumes the recorded session, which
   fences any client still holding it, then leaves. It never enters the
   team: if the recorded session has already ended, it only closes aimem's

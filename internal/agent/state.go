@@ -14,12 +14,15 @@ import (
 // client resumes the session instead of starting another. It never holds a
 // token, receipt or handle.
 type State struct {
-	Version   int       `json:"version"`
-	AgentID   string    `json:"agent_id"`
-	TeamID    string    `json:"team_id"`
-	ServiceID string    `json:"service_id"`
-	HubID     string    `json:"hub_id"`
-	SessionID string    `json:"session_id"`
+	Version   int    `json:"version"`
+	AgentID   string `json:"agent_id"`
+	TeamID    string `json:"team_id"`
+	ServiceID string `json:"service_id"`
+	HubID     string `json:"hub_id"`
+	SessionID string `json:"session_id"`
+	// Role is the member's role in the team at the session's last entry or
+	// resume.
+	Role      string    `json:"role,omitempty"`
 	AimemFile string    `json:"aimem_session_file,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

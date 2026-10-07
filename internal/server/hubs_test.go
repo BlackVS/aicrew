@@ -118,6 +118,8 @@ type grantingHub struct {
 	// set, is the URL the hub binds to every granted project.
 	listed  []string
 	repoURL string
+	// bare are projects the hub grants with no repository bound.
+	bare []string
 }
 
 func (h *grantingHub) set(down bool, grants ...string) {
@@ -135,6 +137,9 @@ func (h *grantingHub) team(id string) hubteams.Team {
 		}
 		t.Projects = append(t.Projects, hubteams.Project{Project: p,
 			Repository: &hubteams.Repository{Kind: "gitea", URL: url, Host: "git.example.test", Access: "write"}})
+	}
+	for _, p := range h.bare {
+		t.Projects = append(t.Projects, hubteams.Project{Project: p})
 	}
 	return t
 }

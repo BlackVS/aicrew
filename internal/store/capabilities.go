@@ -177,6 +177,23 @@ func (s *Store) TeamCapabilitiesWithToken(ctx context.Context, token string) ([]
 // member's home: each granted project with the repository the hub binds to
 // it, from the team's grants snapshot.
 func (s *Store) RequirementsWithToken(ctx context.Context, token string) ([]TeamGrant, error) {
+	grants, err := s.TeamProjectsWithToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	out := []TeamGrant{}
+	for _, g := range grants {
+		if g.Repository != nil {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
+// TeamProjectsWithToken is every project granted to the token's team, from
+// the team's grants snapshot, whether or not the hub binds a repository to
+// it (3a4b): what a member learns of its team's projects.
+func (s *Store) TeamProjectsWithToken(ctx context.Context, token string) ([]TeamGrant, error) {
 	var out []TeamGrant
 	err := s.snapshot(ctx, func(q querier) error {
 		b, err := tokenBinding(ctx, q, token, s.now())
@@ -187,12 +204,7 @@ func (s *Store) RequirementsWithToken(ctx context.Context, token string) ([]Team
 		if err != nil {
 			return err
 		}
-		out = []TeamGrant{}
-		for _, g := range grants {
-			if g.Repository != nil {
-				out = append(out, g)
-			}
-		}
+		out = append([]TeamGrant{}, grants...)
 		return nil
 	})
 	return out, err

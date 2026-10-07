@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -155,5 +156,53 @@ func TestRefusedInsideLauncher(t *testing.T) {
 		if code != exitFailed || strings.Contains(errb.String(), "refused inside") {
 			t.Errorf("only %s set: exit %d, %s", only, code, errb.String())
 		}
+	}
+}
+
+// Inside a client run started, `session status` needs no --home: it prints
+// the role and the team's projects the launcher recorded (3a4b).
+func TestStatusInsideTheClientShowsRoleAndProjects(t *testing.T) {
+	home := t.TempDir()
+	cfg := `{"aicrew": {"url": "https://aicrew.example", "tls_trust_mode": "ca_dns", "tls_trust_value": "aicrew.example",
+		"agent_id": "agent-1", "team_id": "team-1", "aimem_command": "aimem-not-installed-here", "aimem_hub": "main"}}`
+	if err := os.WriteFile(filepath.Join(home, "agent.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.SaveState(home, agent.State{AgentID: "agent-1", TeamID: "team-1", SessionID: "sess-1",
+		Role: "coordinator"}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run(context.Background(), []string{"session", "status"}, &out, &errb, noEngine, launcherEnv(home)); code != exitOK ||
+		!strings.Contains(out.String(), `"role": "coordinator"`) || !strings.Contains(out.String(), `"team": null`) ||
+		!strings.Contains(out.String(), "not recorded yet") {
+		t.Fatalf("status before a team record: exit %d, %s %s", code, out.String(), errb.String())
+	}
+	var rec agent.TeamRecord
+	if err := json.Unmarshal([]byte(`{"hub_alias": "main", "projects": [
+		{"hub_id": "hub-1", "project_id": "aicrew", "repository": {"kind": "github", "url": "https://github.com/example/aicrew.git", "access": "write"}},
+		{"hub_id": "hub-1", "project_id": "docs", "repository": null}]}`), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.SaveTeam(home, rec); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run(context.Background(), []string{"session", "status"}, &out, &errb, noEngine, launcherEnv(home)); code != exitOK {
+		t.Fatalf("status: exit %d, %s", code, errb.String())
+	}
+	var view struct {
+		Role string            `json:"role"`
+		Team *agent.TeamRecord `json:"team"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &view); err != nil || view.Role != "coordinator" || view.Team == nil ||
+		view.Team.HubAlias != "main" || len(view.Team.Projects) != 2 || view.Team.Projects[0].ProjectID != "aicrew" ||
+		view.Team.Projects[0].Repository == nil || view.Team.Projects[0].Repository.Access != "write" ||
+		view.Team.Projects[1].ProjectID != "docs" || view.Team.Projects[1].Repository != nil {
+		t.Fatalf("status: %v %s", err, out.String())
+	}
+	// Outside a client, --home is still required.
+	if code := run(context.Background(), []string{"session", "status"}, &out, &errb, noEngine, noEnv); code != exitUsage {
+		t.Fatalf("status with no home: exit %d", code)
 	}
 }

@@ -98,6 +98,9 @@ func serveSteps(e *Engine) *StepServer {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), capabilityBudget)
 		defer cancel()
+		if err := s.RecordTeam(ctx); err != nil {
+			e.Log.Warn("the team's projects were not recorded", "error", err.Error())
+		}
 		if _, err := s.ReportCapabilities(ctx); err != nil {
 			e.Log.Warn("the capabilities were not reported", "error", err.Error())
 		}

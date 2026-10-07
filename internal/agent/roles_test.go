@@ -105,3 +105,16 @@ func TestFirstInstructionNamesOnlyTheHome(t *testing.T) {
 		t.Errorf("the first instruction names a command besides aicrew-agent inbox: %s", s)
 	}
 }
+
+// START.md tells a member where its team's projects are (3a4b): the
+// coordinator lists their tasks in team mode, the worker takes its project
+// and task from the offer.
+func TestStartNamesTheTeamsProjects(t *testing.T) {
+	for _, s := range []string{"8. **Your team's projects.**", "`aicrew-agent session status`", "your team's projects",
+		"A coordinator lists a\n   project's tasks with aimem's task tools in team mode",
+		"A worker takes the project, the task and the\n   repository from the offer"} {
+		if !strings.Contains(startMD, s) {
+			t.Errorf("START.md lacks %q", s)
+		}
+	}
+}

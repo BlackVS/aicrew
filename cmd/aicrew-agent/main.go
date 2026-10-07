@@ -5,7 +5,7 @@
 //	aicrew-agent run --client claude|opencode --home DIR [--no-start] [-- ARGS]
 //	                                        run the client in the team session, then leave
 //	aicrew-agent session start  --home DIR   enter or resume, then keep the session until interrupted
-//	aicrew-agent session status --home DIR   show the recorded session, without secrets
+//	aicrew-agent session status [--home DIR] show the recorded session, the role and the team's projects, without secrets
 //	aicrew-agent session leave  --home DIR   prove afresh, resume and leave
 //	aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
 //	                                        ask the running launcher for a step
@@ -42,7 +42,7 @@ const (
 	exitWorkKept = 3 // the session was kept: the member has open work
 )
 
-const usage = `usage: aicrew-agent session start|status|leave --home DIR
+const usage = `usage: aicrew-agent session start|status|leave --home DIR   (status: --home defaults to $AICREW_AGENT_HOME)
        aicrew-agent run --client claude|opencode --home DIR [--no-start] [-- CLIENT ARGS]
        aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
        aicrew-agent inbox [--home DIR] [--limit N] [--ack ID,ID...] [--json]
@@ -167,7 +167,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, build eng
 	}
 	fs := flag.NewFlagSet("aicrew-agent session "+verb, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	home := fs.String("home", "", "the agent home directory")
+	// Inside a client run started, status finds the launcher's home itself.
+	defaultHome := ""
+	if verb == "status" {
+		defaultHome = getenv(agent.HomeEnv)
+	}
+	home := fs.String("home", defaultHome, "the agent home directory")
 	if err := fs.Parse(args[2:]); err != nil || *home == "" || fs.NArg() != 0 {
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
@@ -229,7 +234,15 @@ func status(ctx context.Context, cfg agent.Config, stdout io.Writer, log *slog.L
 	}
 	a := agent.Serialize(agent.ExecAimem{Command: cfg.AimemCommand, Hub: cfg.AimemHub, Home: cfg.Home}, agent.LockDir(cfg.Home))
 	path, bound, err := a.Status(ctx, st.SessionID)
-	view := map[string]any{"session": st, "aimem_bound": bound}
+	view := map[string]any{"session": st, "role": st.Role, "aimem_bound": bound, "team": nil}
+	// The team's projects as the launcher read them at its session's start.
+	if team, ok, terr := agent.LoadTeam(cfg.Home); terr != nil {
+		view["team_error"] = terr.Error()
+	} else if ok {
+		view["team"] = team
+	} else {
+		view["team_note"] = "not recorded yet: the launcher records the team's projects shortly after its session starts"
+	}
 	if err != nil {
 		view["aimem_error"] = err.Error()
 	} else if bound {

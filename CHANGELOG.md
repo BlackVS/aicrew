@@ -67,8 +67,11 @@ wakes and follows its role through managed commands, with no typed prompt.
   `base_commit` and `branch`, all required. A top-level `base_commit` or
   `branch` is refused. `aicrew-agent step offer|claim --repository URL`
   fills them through the forge with the home's own credential. Repository
-  fields that
-  disagree with the hub's are refused `repository_mismatch`.
+  fields that disagree with the hub's are refused `repository_mismatch`.
+  An `aicrew-agent` before 0.3.0 sends the old body, so upgrade every
+  member's `aicrew-agent`. Then rerun `aicrew-agent join` in each home,
+  which refreshes its managed files under the digest rule (the Stop hook,
+  the `/crew-*` commands, START.md and ROLES.md).
 - **An offer needs the worker's forge capability** (#93). aicrewd refuses an
   offer `capability_missing` unless the worker's launcher reported the
   offer's repository at the offer's access. Give each worker its own forge

@@ -148,7 +148,12 @@ type stepSession interface {
 	stepToken() string
 	stepAimemFile() string
 	stepAgent() string
+	stepHubAlias() string
 }
+
+// stepHubAlias is the home's name for its team's hub; the configuration
+// never changes while the engine runs.
+func (e *Engine) stepHubAlias() string { return e.Cfg.AimemHub }
 
 func (e *Engine) stepToken() string {
 	e.live.RLock()

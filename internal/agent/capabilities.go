@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/BlackVS/aicrew/internal/forge"
 )
@@ -149,10 +150,13 @@ type SessionReader interface {
 	LocalStep(ctx context.Context, key, token, path string, body []byte) (json.RawMessage, error)
 }
 
-// ReportCapabilities reads the team's requirements, verifies them with the
-// home's credentials and reports the capabilities to aicrewd, all as the
-// session of token. It returns the rows of the check.
-func ReportCapabilities(ctx context.Context, home string, crew SessionReader, api AccessAPI, token string) ([]CapabilityRow, error) {
+// ReportCapabilities reads the team's requirements, records them in the home
+// as the team's projects (team.go), verifies them with the home's
+// credentials and reports the capabilities to aicrewd, all as the session of
+// token. It returns the rows of the check. A record that cannot be written
+// does not hold the report back; its error is returned with the report's.
+func ReportCapabilities(ctx context.Context, home, hubAlias string, crew SessionReader, api AccessAPI,
+	token string) ([]CapabilityRow, error) {
 	raw, err := crew.Read(ctx, token, requirementsPath)
 	if err != nil {
 		return nil, err
@@ -163,6 +167,10 @@ func ReportCapabilities(ctx context.Context, home string, crew SessionReader, ap
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, fmt.Errorf("the requirements: %w", err)
 	}
+	teamErr := SaveTeam(home, TeamRecord{ReadAt: time.Now().UTC(), HubAlias: hubAlias, Projects: req.Projects})
+	if teamErr != nil {
+		teamErr = fmt.Errorf("record the team's projects: %w", teamErr)
+	}
 	rows, caps := VerifyCapabilities(ctx, home, api, req.Projects)
 	body, err := json.Marshal(struct {
 		Capabilities []Capability `json:"capabilities"`
@@ -171,7 +179,7 @@ func ReportCapabilities(ctx context.Context, home string, crew SessionReader, ap
 		return nil, err
 	}
 	if _, err := crew.LocalStep(ctx, newKey("capabilities"), token, capabilitiesPath, body); err != nil {
-		return rows, err
+		return rows, errors.Join(err, teamErr)
 	}
-	return rows, nil
+	return rows, teamErr
 }

@@ -418,7 +418,7 @@ var ErrNoLauncher = errors.New("no aicrew-agent launcher serves this agent home;
 // ReportCapabilities verifies the team's requirements with the home's
 // credentials and reports them to aicrewd as the launcher's session.
 func (s *StepServer) ReportCapabilities(ctx context.Context) ([]CapabilityRow, error) {
-	return ReportCapabilities(ctx, s.home, s.local, newAccessAPI(), s.driver.Session.stepToken())
+	return ReportCapabilities(ctx, s.home, s.driver.Session.stepHubAlias(), s.local, newAccessAPI(), s.driver.Session.stepToken())
 }
 
 // CallStep sends one call to the launcher of home and returns its answer.

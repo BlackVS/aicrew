@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/BlackVS/aicrew/internal/forge"
+	"github.com/BlackVS/aicrew/internal/hubteams"
 	"github.com/BlackVS/aicrew/internal/store"
 )
 
@@ -144,4 +145,39 @@ func swapAccess(api AccessAPI) func() {
 	old := newAccessAPI
 	newAccessAPI = func() AccessAPI { return api }
 	return func() { newAccessAPI = old }
+}
+
+// The launcher records the team's projects in the home as it reads them
+// (3a4b), with the home's hub alias, and a grant the hub adds is recorded at
+// the next read.
+func TestLauncherRecordsTheTeamsProjects(t *testing.T) {
+	s := setupStepsWith(t, crewOptions{role: store.RoleCoordinator, steps: true, shortHome: true})
+	s.d.Session.(*Engine).Cfg.AimemHub = "main"
+	defer swapAccess(fakeAccess{})()
+	s.serve(t)
+	var answers []byte
+	if ans := s.call(t, &answers, StepCall{Op: "capabilities"}); !ans.OK {
+		t.Fatalf("capabilities: %+v", ans)
+	}
+	rec, ok, err := LoadTeam(s.cfg.Home)
+	if err != nil || !ok || rec.HubAlias != "main" || len(rec.Projects) != 1 ||
+		rec.Projects[0].HubID != "hub-test" || rec.Projects[0].ProjectID != "project-t" ||
+		rec.Projects[0].Repository.URL != testRepository["url"] || rec.ReadAt.IsZero() {
+		t.Fatalf("the team record: %+v %v %v", rec, ok, err)
+	}
+	old := hubProjects
+	hubProjects = func() []hubteams.Project {
+		return append(old(), hubteams.Project{Project: "project-u",
+			Repository: &hubteams.Repository{Kind: "gitea", URL: "https://git.example.test/crew/project-u.git", Access: "read"}})
+	}
+	defer func() { hubProjects = old }()
+	if ans := s.call(t, &answers, StepCall{Op: "capabilities"}); !ans.OK {
+		t.Fatalf("capabilities again: %+v", ans)
+	}
+	if rec, _, err := LoadTeam(s.cfg.Home); err != nil || len(rec.Projects) != 2 || rec.Projects[1].ProjectID != "project-u" {
+		t.Fatalf("the team record after a new grant: %+v %v", rec, err)
+	}
+	if st, ok, err := LoadState(s.cfg.Home); err != nil || !ok || st.Role != string(store.RoleCoordinator) {
+		t.Fatalf("the session record's role: %+v %v %v", st, ok, err)
+	}
 }

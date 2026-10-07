@@ -85,9 +85,15 @@ func (grantingHub) Register(context.Context, string, string) (hubteams.Registrat
 	return hubteams.Registration{}, errors.New("not used")
 }
 func (grantingHub) ReadTeam(_ context.Context, id string) (hubteams.Team, error) {
-	return hubteams.Team{TeamID: id, TeamName: "crew", Enabled: true, Projects: []hubteams.Project{{Project: "project-t",
-		Repository: &hubteams.Repository{Kind: "gitea", URL: testRepository["url"], Access: "write"}}}}, nil
+	return hubteams.Team{TeamID: id, TeamName: "crew", Enabled: true, Projects: hubProjects()}, nil
 }
+
+// hubProjects are the projects grantingHub grants; a test may change them.
+var hubProjects = func() []hubteams.Project {
+	return []hubteams.Project{{Project: "project-t",
+		Repository: &hubteams.Repository{Kind: "gitea", URL: testRepository["url"], Access: "write"}}}
+}
+
 func (grantingHub) ReadTeams(context.Context) ([]hubteams.Team, error) { return nil, nil }
 
 func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {

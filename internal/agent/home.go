@@ -309,6 +309,12 @@ Repository instructions live in each repository, not here.
    and ` + "`run`" + ` again.
 7. **Your role.** ` + "`docs/ROLES.md`" + ` teaches your role's steps, the inbox rule and
    how to write for others. Read it at the start of every session.
+8. **Your team's projects.** ` + "`aicrew-agent session status`" + ` prints your role and
+   your team's projects (hub, project and repository), as the launcher read
+   them from aicrewd when the session started. A coordinator lists a
+   project's tasks with aimem's task tools in team mode, and triages them as
+   ` + "`docs/ROLES.md`" + ` says. A worker takes the project, the task and the
+   repository from the offer, never from this list.
 
 ` + managedNote
 

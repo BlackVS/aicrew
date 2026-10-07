@@ -87,3 +87,36 @@ func TestOfferNeedsTheWorkersCapability(t *testing.T) {
 	report("write")
 	stepOf(t, e.call(t, e.lead.token, AttemptsPath, "offer-w", e.offerBody("task-1", expires)))
 }
+
+// A member reads every project granted to its team (3a4b): one the hub
+// grants without a repository too, with its repository null, which the
+// requirements leave out; and nothing without a valid session token.
+func TestTeamProjects(t *testing.T) {
+	e := setupCoordination(t)
+	e.hub.mu.Lock()
+	e.hub.bare = []string{"project-docs"}
+	e.hub.mu.Unlock()
+	got := e.get(t, e.worker.token, ProjectsPath)
+	var out struct {
+		Projects []projectView `json:"projects"`
+	}
+	if got.status != http.StatusOK || json.Unmarshal([]byte(got.raw), &out) != nil || len(out.Projects) != 2 {
+		t.Fatalf("projects: %d %s", got.status, got.raw)
+	}
+	byID := map[string]projectView{}
+	for _, p := range out.Projects {
+		byID[p.ProjectID] = p
+	}
+	if docs, ok := byID["project-docs"]; !ok || docs.HubID != coordHub || docs.Repository != nil ||
+		!strings.Contains(got.raw, `"repository":null`) {
+		t.Fatalf("the project without a repository: %s", got.raw)
+	}
+	if ex := byID["project-example"]; ex.Repository == nil || ex.Repository.Access != "write" {
+		t.Fatalf("the project with a repository: %s", got.raw)
+	}
+	req := e.get(t, e.worker.token, RequirementsPath)
+	if req.status != http.StatusOK || strings.Contains(req.raw, "project-docs") {
+		t.Fatalf("the requirements name a project without a repository: %s", req.raw)
+	}
+	refused(t, e.get(t, "", ProjectsPath), http.StatusUnauthorized, "invalid_token")
+}

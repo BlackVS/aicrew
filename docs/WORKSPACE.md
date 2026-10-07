@@ -281,10 +281,10 @@ Onboarding writes `docs/START.md` (managed). It tells the agent:
    task and the repository from the offer.
 
 The team's projects are recorded in `state/team.json` by the launcher at
-each session start, from the same read of aicrewd (the team's grants on its
-hub) that the capability report uses. The record holds the read's time, the
-home's hub alias and each project's hub ID, project ID and repository, and
-no secret. A grant the hub adds or removes shows at the next session start,
+each session start, from aicrewd's `GET /v1/crew/projects` (every project
+the team's hub grants, including one with no repository bound). The record
+holds the read's time, the home's hub alias and each project's hub ID,
+project ID and repository (or `null`), and no secret. A grant the hub adds or removes shows at the next session start,
 with no `join` rerun. aicrewd stays the authority; the record is only as
 fresh as its read time.
 

@@ -634,8 +634,9 @@ func TestExposureGuard(t *testing.T) {
 		"GetTeam": true, "ListTeams": true, "RecordTeamGrants": true,
 		// The member's requirements and capability reports, by its session
 		// token; and the worker's last report, a planning fact the offer's
-		// capability check reads (354c-2).
-		"RequirementsWithToken": true, "ReportCapabilitiesWithToken": true, "TeamCapabilitiesWithToken": true,
+		// capability check reads (354c-2). The team's projects, every grant,
+		// which the member records in its home (3a4b).
+		"RequirementsWithToken": true, "TeamProjectsWithToken": true, "ReportCapabilitiesWithToken": true, "TeamCapabilitiesWithToken": true,
 		"AgentCapabilities": true,
 	}
 	forbiddenPkg := map[string]bool{"AgentCaller": true, "OperatorCaller": true}
@@ -717,7 +718,7 @@ func TestRouteInventory(t *testing.T) {
 	sort.Strings(got)
 	want := []string{"GET /healthz", "GET /v1/admin/hub-credentials", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations",
 		"GET /v1/admin/team", "GET /v1/admin/teams", "GET /v1/crew/capabilities", "GET /v1/crew/inbox", "GET /v1/crew/inbox/pending",
-		"GET /v1/crew/requirements", "GET /v1/crew/session",
+		"GET /v1/crew/projects", "GET /v1/crew/requirements", "GET /v1/crew/session",
 		"POST /v1/admin/hub-credentials", "POST /v1/admin/hub-credentials/revoke", "POST /v1/admin/hub-credentials/rotate",
 		"POST /v1/admin/introspection-credentials", "POST /v1/admin/introspection-credentials/revoke",
 		"POST /v1/admin/introspection-credentials/rotate", "POST /v1/admin/invitations", "POST /v1/admin/invitations/revoke",

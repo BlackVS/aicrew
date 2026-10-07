@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,8 +11,9 @@ import (
 )
 
 // The team's projects in the home (3a4b). A member's session reads them from
-// aicrewd (the team's grants on its hub) at each session start; the launcher
-// records that answer here so the member finds its team's projects in its
+// aicrewd (GET /v1/crew/projects: every project the team's hub grants, with
+// or without a repository) at each session start; the launcher records that
+// answer here so the member finds its team's projects in its
 // home, through `aicrew-agent session status`, without asking the operator.
 // It holds no secret; aicrewd stays the authority, and the record is only as
 // fresh as its ReadAt.
@@ -23,7 +25,37 @@ type TeamRecord struct {
 	// HubAlias is the home's name for the team's hub (agent.json's
 	// aimem_hub), beside each project's hub ID.
 	HubAlias string        `json:"hub_alias,omitempty"`
-	Projects []Requirement `json:"projects"`
+	Projects []TeamProject `json:"projects"`
+}
+
+// TeamProject is one project granted to the team, with the repository the
+// hub binds to it, or none.
+type TeamProject struct {
+	HubID      string `json:"hub_id"`
+	ProjectID  string `json:"project_id"`
+	Repository *struct {
+		Kind   string `json:"kind"`
+		URL    string `json:"url"`
+		Access string `json:"access"`
+	} `json:"repository"`
+}
+
+const projectsPath = "/v1/crew/projects"
+
+// RecordTeam reads the team's projects as the session of token and records
+// them in home, with the home's hub alias.
+func RecordTeam(ctx context.Context, home, hubAlias string, crew SessionReader, token string) error {
+	raw, err := crew.Read(ctx, token, projectsPath)
+	if err != nil {
+		return err
+	}
+	var answer struct {
+		Projects []TeamProject `json:"projects"`
+	}
+	if err := json.Unmarshal(raw, &answer); err != nil {
+		return fmt.Errorf("the team's projects: %w", err)
+	}
+	return SaveTeam(home, TeamRecord{ReadAt: time.Now().UTC(), HubAlias: hubAlias, Projects: answer.Projects})
 }
 
 func teamPath(home string) string { return filepath.Join(home, "state", "team.json") }
@@ -32,7 +64,7 @@ func teamPath(home string) string { return filepath.Join(home, "state", "team.js
 func SaveTeam(home string, r TeamRecord) error {
 	r.Version = 1
 	if r.Projects == nil {
-		r.Projects = []Requirement{}
+		r.Projects = []TeamProject{}
 	}
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {

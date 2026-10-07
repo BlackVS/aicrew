@@ -178,9 +178,13 @@ func TestStatusInsideTheClientShowsRoleAndProjects(t *testing.T) {
 		!strings.Contains(out.String(), "not recorded yet") {
 		t.Fatalf("status before a team record: exit %d, %s %s", code, out.String(), errb.String())
 	}
-	p := agent.Requirement{HubID: "hub-1", ProjectID: "aicrew"}
-	p.Repository.Kind, p.Repository.URL, p.Repository.Access = "github", "https://github.com/example/aicrew.git", "write"
-	if err := agent.SaveTeam(home, agent.TeamRecord{HubAlias: "main", Projects: []agent.Requirement{p}}); err != nil {
+	var rec agent.TeamRecord
+	if err := json.Unmarshal([]byte(`{"hub_alias": "main", "projects": [
+		{"hub_id": "hub-1", "project_id": "aicrew", "repository": {"kind": "github", "url": "https://github.com/example/aicrew.git", "access": "write"}},
+		{"hub_id": "hub-1", "project_id": "docs", "repository": null}]}`), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.SaveTeam(home, rec); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -192,7 +196,9 @@ func TestStatusInsideTheClientShowsRoleAndProjects(t *testing.T) {
 		Team *agent.TeamRecord `json:"team"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &view); err != nil || view.Role != "coordinator" || view.Team == nil ||
-		view.Team.HubAlias != "main" || len(view.Team.Projects) != 1 || view.Team.Projects[0] != p {
+		view.Team.HubAlias != "main" || len(view.Team.Projects) != 2 || view.Team.Projects[0].ProjectID != "aicrew" ||
+		view.Team.Projects[0].Repository == nil || view.Team.Projects[0].Repository.Access != "write" ||
+		view.Team.Projects[1].ProjectID != "docs" || view.Team.Projects[1].Repository != nil {
 		t.Fatalf("status: %v %s", err, out.String())
 	}
 	// Outside a client, --home is still required.

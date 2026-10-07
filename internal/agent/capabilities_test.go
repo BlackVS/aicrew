@@ -147,35 +147,44 @@ func swapAccess(api AccessAPI) func() {
 	return func() { newAccessAPI = old }
 }
 
-// The launcher records the team's projects in the home as it reads them
-// (3a4b), with the home's hub alias, and a grant the hub adds is recorded at
-// the next read.
+// The launcher records every project granted to the team in the home
+// (3a4b), with the home's hub alias: one the hub grants without a
+// repository too, which the requirements leave out. A grant the hub adds is
+// recorded at the next read.
 func TestLauncherRecordsTheTeamsProjects(t *testing.T) {
+	ctx := context.Background()
 	s := setupStepsWith(t, crewOptions{role: store.RoleCoordinator, steps: true, shortHome: true})
 	s.d.Session.(*Engine).Cfg.AimemHub = "main"
 	defer swapAccess(fakeAccess{})()
-	s.serve(t)
-	var answers []byte
-	if ans := s.call(t, &answers, StepCall{Op: "capabilities"}); !ans.OK {
-		t.Fatalf("capabilities: %+v", ans)
+	srv := s.serve(t)
+	if err := srv.RecordTeam(ctx); err != nil {
+		t.Fatal(err)
 	}
 	rec, ok, err := LoadTeam(s.cfg.Home)
 	if err != nil || !ok || rec.HubAlias != "main" || len(rec.Projects) != 1 ||
 		rec.Projects[0].HubID != "hub-test" || rec.Projects[0].ProjectID != "project-t" ||
-		rec.Projects[0].Repository.URL != testRepository["url"] || rec.ReadAt.IsZero() {
+		rec.Projects[0].Repository == nil || rec.Projects[0].Repository.URL != testRepository["url"] || rec.ReadAt.IsZero() {
 		t.Fatalf("the team record: %+v %v %v", rec, ok, err)
 	}
 	old := hubProjects
-	hubProjects = func() []hubteams.Project {
-		return append(old(), hubteams.Project{Project: "project-u",
-			Repository: &hubteams.Repository{Kind: "gitea", URL: "https://git.example.test/crew/project-u.git", Access: "read"}})
-	}
+	hubProjects = func() []hubteams.Project { return append(old(), hubteams.Project{Project: "project-docs"}) }
 	defer func() { hubProjects = old }()
-	if ans := s.call(t, &answers, StepCall{Op: "capabilities"}); !ans.OK {
-		t.Fatalf("capabilities again: %+v", ans)
+	if err := srv.RecordTeam(ctx); err != nil {
+		t.Fatal(err)
 	}
-	if rec, _, err := LoadTeam(s.cfg.Home); err != nil || len(rec.Projects) != 2 || rec.Projects[1].ProjectID != "project-u" {
-		t.Fatalf("the team record after a new grant: %+v %v", rec, err)
+	rec, _, err = LoadTeam(s.cfg.Home)
+	byID := map[string]TeamProject{}
+	for _, p := range rec.Projects {
+		byID[p.ProjectID] = p
+	}
+	if docs, ok := byID["project-docs"]; err != nil || len(rec.Projects) != 2 || !ok || docs.Repository != nil ||
+		byID["project-t"].Repository == nil {
+		t.Fatalf("the team record after a grant without a repository: %+v %v", rec, err)
+	}
+	// The requirements still name only the projects a home must verify.
+	rows, err := srv.ReportCapabilities(ctx)
+	if err != nil || len(rows) != 1 || rows[0].Project != "project-t" {
+		t.Fatalf("the requirements' rows: %+v %v", rows, err)
 	}
 	if st, ok, err := LoadState(s.cfg.Home); err != nil || !ok || st.Role != string(store.RoleCoordinator) {
 		t.Fatalf("the session record's role: %+v %v %v", st, ok, err)

@@ -29,25 +29,29 @@ scripts/e2e-real-aimem.sh -aimem-src ../aimem -runs 3
   each run directory.
 - `-skip-faults` runs the skip-the-fault matrix instead (see "Faults").
 
-It needs Go 1.25 or later, git, tar, and network access the first time, to
-download both modules' dependencies. Windows is best effort and not wired
-yet: the harness skips there.
+It needs Go 1.26 or later (aimem v0.9.0 builds with the Go 1.26
+toolchain), git, tar, and network access the first time, to download both
+modules' dependencies. Windows is best effort and not wired yet: the
+harness skips there.
 
 ## The pin
 
 `aimemPin` in `e2e/realaimem/harness_test.go` is the aimem commit the
-harness builds: aimem master at 935873d, after aimem #176, past the
-v0.7.4 release that `internal/agent/supported.json` names. It carries every
-prerequisite (C5b, C6, C5-w3 and `aimem hub credential`), the reservation
-fixture's corrected fences, `hub add --ca-file` with token files, and team
-registration and team read (aimem #175), with which aicrewd names its own
-team profiles.
+harness builds: the v0.9.0 release (dddea22), which
+`internal/agent/supported.json` names as both the minimum and the tested
+aimem. It carries every prerequisite:
+- C5b, C6, C5-w3 and `aimem hub credential`;
+- the reservation fixture's corrected fences;
+- `hub add --ca-file` with token files;
+- team registration and team read (aimem #175), with which aicrewd names
+  its own team profiles;
+- aimem's own `task_not_ready` refusal (#179), which the coordinator's
+  triage answers.
 
 The build stamps the commit's `git describe` as aimem's version, as aimem's
-release build stamps the tag, so the version is `v0.7.4-8-g935873d`, which
-`aicrew-agent`'s dependency check reads as newer than the supported
-release. The source clone must hold the commit and the tag
-(`git fetch --tags`).
+release build stamps the tag. At the pin that is `v0.9.0`, which
+`aicrew-agent`'s dependency check reads as the supported release. The
+source clone must hold the commit and the tag (`git fetch --tags`).
 
 ## What a run sets up
 

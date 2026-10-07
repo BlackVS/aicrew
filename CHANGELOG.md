@@ -12,6 +12,158 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.3.0] - 2026-10-07
+
+The first pilot's follow-ups. A team now lives on its aimem hub: aicrewd
+registers it there, and its projects, their repositories and their process
+pins are the hub's grants, read live at every offer and claim. Each member
+works with its own forge credential, and a Claude Code member starts,
+wakes and follows its role through managed commands, with no typed prompt.
+
+### Breaking changes
+
+- **aimem 0.9.0 is required.** `internal/agent/supported.json` names 0.9.0
+  as both the minimum and the tested release, so `aicrew-agent check`
+  blocks a member below it. aicrew's own floor is aimem 0.8.0, for team
+  registration and read and the `task_not_ready` refusal. The hub must run
+  0.9.0 too.
+- **aicrewd.json names its hubs in `aimem_hubs`, and a team's hub serves its
+  projects** (#90, #91).
+  - The single `aimem` block of 0.2.0 is still read, as the hub `default`,
+    with a warning, and is removed in 0.4.0. It has no `hub_id`, so no team
+    can name it.
+  - Since a team's projects are now its hub's grants, offers and claims on
+    such a configuration are refused (`project_not_granted`).
+  - `aicrew team projects`, the `--project` flag and
+    `POST /v1/admin/team/projects` are removed: aicrew keeps no project
+    list of its own.
+
+  Upgrade steps:
+  1. On the hub, as its admin, read the hub's ID beside aicrewd's service:
+     `aimem identity peer list`.
+  2. Issue aicrewd's two new peer credentials, each to a new owner-only
+     file on the aicrewd host:
+     - `aimem identity cred issue --peer SERVICE_ID --operation team.register --expires 90d --output team-register.secret`
+     - `aimem identity cred issue --peer SERVICE_ID --operation team.read --expires 90d --output team-read.secret`
+  3. In `aicrewd.json`, replace the `aimem` block with one `aimem_hubs`
+     entry. It keeps the block's `base_url`, `tls_trust_mode`,
+     `tls_trust_value`, `redemption_token_file` and `read_token_file`, and
+     adds:
+     - `name`, the alias teams name the hub by;
+     - `hub_id`, from step 1;
+     - `team_register_token_file` and `team_read_token_file`, from step 2.
+
+     A file holding both forms is refused. Restart aicrewd.
+  4. Register each existing team on its hub:
+     `aicrew team register --team-name TEAM --hub NAME`. `aicrew team show`
+     prints the registration's outcome.
+  5. On the hub, grant each team its projects by name:
+     `aimem identity team grant --peer SERVICE_ID --team-name TEAM --project PROJECT`.
+     Each granted project needs its repository (`aimem project repo set`) and
+     its selected process. `aicrew team show` lists the grants aicrewd
+     read.
+- **An offer and a claim carry their repository** (#92). The step body's
+  `repository` holds `kind`, `url`, `access`, `default_branch`,
+  `base_commit` and `branch`, all required. A top-level `base_commit` or
+  `branch` is refused. `aicrew-agent step offer|claim --repository URL`
+  fills them through the forge with the home's own credential. Repository
+  fields that
+  disagree with the hub's are refused `repository_mismatch`.
+- **An offer needs the worker's forge capability** (#93). aicrewd refuses an
+  offer `capability_missing` unless the worker's launcher reported the
+  offer's repository at the offer's access. Give each worker its own forge
+  credential with `aicrew-agent join --cred HOST=FILE` (#88). Its launcher
+  reports what the credential can reach when its session starts.
+- **The store moves from schema 21 to 26 on first start**, one way: 0.2.0
+  refuses the migrated store. Back the store up before the upgrade.
+
+### Deprecated, removed in 0.4.0
+
+- `aicrew introspection-credential` and `/v1/admin/introspection-credentials`:
+  use `aicrew hub-credential` and `/v1/admin/hub-credentials` (#87).
+- `--secret-file`, `--code-file` and `--file` for the secrets `aicrew`
+  writes: use `--output FILE|-` (#87).
+- The single `aimem` block of `aicrewd.json`: use `aimem_hubs` (#90).
+
+### Teams on their hub
+
+- aicrewd names its hubs (`aimem_hubs`) and redeems each proof with the hub
+  its challenge names. `aicrew team create --hub NAME` registers the team
+  on that hub under its name (aimem's `team.register`), again on rename.
+  `aicrew team register` retries a refused or unreachable registration
+  (#90).
+- A team's projects are the grants its hub gives the team's profile, read
+  through `team.read` at every offer and independent claim, and refreshed
+  once a minute. An ungranted project is refused `project_not_granted`, and
+  an unreachable hub `hub_unavailable` (#91).
+- The repository travels with the attempt and is recorded with it. A grant
+  the hub revokes mid-attempt marks the attempt `blocked` and messages both
+  members; a re-grant clears it (#92).
+- Members report their forge capabilities through their launcher. An offer
+  checks the worker's, and `GET /v1/crew/capabilities` lists them (#93).
+- A task that is not READY is refused by name (`task_not_ready`), whether
+  aicrewd's own check or aimem's refusal answers. The coordinator triages
+  with aimem's `triage_task`. An independent claim of a non-READY task is
+  closed and announced to the team (#96).
+
+### Members' credentials and repositories
+
+- `aicrew-agent join --cred HOST=FILE` verifies each forge token
+  ("who am I"), writes it owner-only under `creds/` and records the
+  account, never the value. `check` verifies every credential and prints
+  the table. `step offer|claim --repository` fills an empty base commit
+  from the forge (#88).
+- `aicrew-agent clone` clones an attempt's repository into `repos/` and
+  makes its worktree. The clone's own credential helper
+  (`aicrew-agent git-credential`) answers git on a pipe, so the token never
+  appears in a URL, a configuration, an argument or the output. Commits
+  carry the member's forge identity (#89).
+- `aicrew-agent digest` fetches an offer's pinned process repository through
+  the same helper and prints its instruction digest, so a worker verifies
+  an offer without handling a credential (#100).
+
+### Claude Code members
+
+- A Stop hook (`aicrew-agent wait-inbox`) wakes a member whose inbox
+  changes. `GET /v1/crew/inbox/pending` lists unacknowledged messages
+  without delivering them. Keep-alive and idle bounds are in `agent.json`
+  `wake` (#95).
+- `run` starts a Claude Code member on its first action, with no typed
+  prompt; `--no-start` turns that first instruction off (#97).
+- A member finds its role and its team's projects in its home:
+  `session status` prints both, from `state/team.json`, which the launcher
+  writes from `GET /v1/crew/projects` (#98).
+- `join` writes managed `/crew-*` commands for every role (start, inbox,
+  triage, offer, review, accept, submit, claim, handoff), rendered from
+  ROLES.md's steps. It refuses and reports any that would shadow a
+  built-in or the member's own command or skill. `run` starts with
+  `/crew-start` (#99).
+- `session start`, `session leave` and `run` are refused inside a launched
+  client, whose launcher holds the session (#86).
+- The guidance's safety rule forbids:
+  - reading `creds/`;
+  - putting a credential anywhere;
+  - changing git's global or system configuration;
+  - weakening TLS.
+
+  A failed clone or fetch is stopped and reported. ROLES.md and the
+  commands also name `inbox --ack` and `inbox --json` (#101).
+
+### Operator console
+
+- `aicrew hub-credential` replaces `introspection-credential`. Every secret
+  `aicrew` writes takes `--output FILE|-` and never reaches a terminal.
+  `--team-name` works wherever `--team` does. The docs write flags as
+  `--name` (#87).
+
+### Records
+
+- The first pilot's follow-up proposal is recorded in
+  `docs/proposals/PILOT-1-FOLLOWUPS.md` (#85).
+- The client observation and wake-up probe is recorded in
+  `docs/CLIENT-WAKE-PROBE.md` (#94).
+- The real-aimem end-to-end harness builds the aimem v0.9.0 release.
+
 ## [0.2.0] - 2026-10-03
 
 The pilot's release. aicrewd is now the only process that opens the store:

@@ -118,3 +118,55 @@ func TestStartNamesTheTeamsProjects(t *testing.T) {
 		}
 	}
 }
+
+// The home's safety rule closes every command and is one of ROLES.md's
+// rules: no credential handling, no change to git's global or system
+// configuration, no weakened TLS, and a refused or failed clone or fetch is
+// reported, not worked around (01a116bd-cee3). The member acknowledges with
+// `inbox --ack` (01a116bd-cef0), and a worker finds an offer's details in
+// `inbox --json` (01a1125b-cb45).
+func TestGuidanceSafetyAckAndOfferTexts(t *testing.T) {
+	for _, want := range []string{"Never read `creds/`", "git's global or system configuration",
+		"`http.sslVerify`", "`GIT_SSL_NO_VERIFY`", "a clone or a fetch is refused or fails, stop and report it",
+		"never work around it"} {
+		if !strings.Contains(credentialRule, want) {
+			t.Errorf("the safety rule does not say %q", want)
+		}
+	}
+	md := rolesMD()
+	if !strings.Contains(md, "- **Credentials and connections.** "+credentialRule) {
+		t.Error("ROLES.md's member rules do not carry the safety rule")
+	}
+	for _, c := range crewCommands {
+		if !strings.Contains(commandMD(c), credentialRule) {
+			t.Errorf("/%s does not end with the safety rule", c.Name)
+		}
+	}
+
+	ack := "`aicrew-agent inbox --ack MESSAGE_ID"
+	if !strings.Contains(md, ack) || !strings.Contains(md, "acknowledging is not a `step`") {
+		t.Error("ROLES.md's member rules do not name inbox --ack")
+	}
+	for _, c := range crewCommands {
+		if (c.Name == "crew-accept" || c.Name == "crew-inbox") &&
+			(!strings.Contains(c.Body, ack) || !strings.Contains(c.Body, "acknowledging is not a `step`")) {
+			t.Errorf("/%s does not name inbox --ack", c.Name)
+		}
+	}
+
+	var worker guideRole
+	for _, r := range guideRoles {
+		if r.Role == "worker" {
+			worker = r
+		}
+	}
+	if !strings.Contains(worker.Intro, "An offer's details are in `aicrew-agent inbox --json`") ||
+		!strings.Contains(worker.Intro, "only the message's text") {
+		t.Errorf("the worker section does not say where an offer's details are: %q", worker.Intro)
+	}
+	for _, s := range worker.Steps {
+		if s.Op == "accept" && !strings.Contains(s.What, "Read its details with `aicrew-agent inbox --json`") {
+			t.Errorf("the accept step does not name inbox --json: %q", s.What)
+		}
+	}
+}

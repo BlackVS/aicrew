@@ -39,9 +39,10 @@ var crewCommands = []crewCommand{
 		Ops: []string{"inbox"}},
 	{Name: "crew-inbox", Desc: "Read your aicrew inbox, act on it within your role, and acknowledge what you handled",
 		Body: "Run `aicrew-agent inbox`. Act only on what it shows, within your role and your accepted attempt. " +
-			"Acknowledge each message you handled; an offer is handled once you accepted or declined it, since the " +
-			"inbox shows only unacknowledged messages. An offer's repository, branch, base commit and process pin " +
-			"are in `aicrew-agent inbox --json`.",
+			"Acknowledge each message you handled with `aicrew-agent inbox --ack MESSAGE_ID,MESSAGE_ID`, the " +
+			"messages' `id` from `aicrew-agent inbox --json` (acknowledging is not a `step`); an offer is handled " +
+			"once you accepted or declined it, since the inbox shows only unacknowledged messages. An offer's " +
+			"repository, branch, base commit and process pin are in `aicrew-agent inbox --json`.",
 		Ops: []string{"inbox"}},
 	{Name: "crew-triage", Role: "coordinator", Hint: "<task id>",
 		Desc: "Coordinator: triage an aimem task between BACKLOG and READY",
@@ -83,8 +84,9 @@ var crewCommands = []crewCommand{
 			"the pinned process's skills are not available to you, decline instead.\n" +
 			"3. Accept with the step below, then start your worktree with `aicrew-agent clone`, from the offer's " +
 			"base commit on its branch.\n" +
-			"4. Only then acknowledge the offer's message: until you acknowledge it, `aicrew-agent inbox --json` " +
-			"keeps showing it.",
+			"4. Only then acknowledge the offer's message with `aicrew-agent inbox --ack MESSAGE_ID`, the " +
+			"message's `id` from `aicrew-agent inbox --json` (acknowledging is not a `step`): until you " +
+			"acknowledge it, the inbox keeps showing it.",
 		Ops: []string{"accept", "decline"}},
 	{Name: "crew-submit", Role: "worker", Hint: "<attempt id> <pull request url>",
 		Desc: "Worker: submit your result for the coordinator's review",
@@ -146,12 +148,15 @@ func commandMD(c crewCommand) string {
 	return b.String()
 }
 
-// credentialRule closes every command: the ef73 smoke run showed a member
-// with broad tool access reach for a credential file when a clone was
-// refused.
+// credentialRule closes every command and is one of ROLES.md's rules: smoke
+// runs showed a member with broad tool access reach for a credential file
+// when a clone was refused (ef73), and turn off TLS verification in git's
+// global configuration when one failed (6006).
 const credentialRule = "Never read `creds/`, and never put a credential into a command, URL, environment " +
-	"variable or git configuration. When an access is refused, stop and report it (an offer you cannot " +
-	"verify is declined); never work around it."
+	"variable or git configuration. Never change git's global or system configuration, and never weaken " +
+	"TLS verification (`http.sslVerify`, `GIT_SSL_NO_VERIFY` or an unverified connection). When an access, " +
+	"a clone or a fetch is refused or fails, stop and report it (an offer you cannot verify is declined); " +
+	"never work around it."
 
 func commandPath(name string) string { return ".claude/commands/" + name + ".md" }
 

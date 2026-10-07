@@ -839,6 +839,17 @@ rule as the guidance.
 - **The first turn.** `run` starts Claude Code with `/crew-start` when the
   home holds it, and with the instruction's text in a home joined before
   the commands existed.
+- **The safety rule** closes every command and is one of ROLES.md's member
+  rules, from one constant. It forbids:
+  - reading `creds/`;
+  - putting a credential into a command, URL, environment variable or git
+    configuration;
+  - changing git's global or system configuration;
+  - weakening TLS verification.
+
+  A refused or failed access, clone or fetch is reported, never worked
+  around. Smoke runs with broad tool access showed a member doing both
+  things the rule forbids, until the rule named them.
 
 ### Waking a member: the Stop hook
 

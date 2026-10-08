@@ -120,7 +120,8 @@ func bootPs1(home, binDir, tmp string) bootRun {
 	return func(t *testing.T, rel, tag string) (string, int) {
 		t.Helper()
 		script := filepath.Join(t.TempDir(), "run.ps1")
-		text := extractFrom(t, "boot.ps1", "install-agent") +
+		// As the script does before its install step.
+		text := "$ErrorActionPreference = 'Stop'\n" + extractFrom(t, "boot.ps1", "install-agent") +
 			fmt.Sprintf("Install-Agent '%s' '%s' '%s'\n", tag, fileURL(rel), binDir)
 		if err := os.WriteFile(script, []byte(text), 0o600); err != nil {
 			t.Fatal(err)

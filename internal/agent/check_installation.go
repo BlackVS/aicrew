@@ -70,6 +70,7 @@ func (c *checker) checkInstallation(sel []string) {
 	if slices.Contains(sel, "claude") {
 		c.checkCarrier(".claude/settings.json", func(doc map[string]json.RawMessage) json.RawMessage { return doc["env"] })
 		c.checkWakeHook()
+		c.checkDenyRules()
 		c.checkCarrier(".mcp.json (mcpServers.aimem)", func(doc map[string]json.RawMessage) json.RawMessage {
 			var servers map[string]struct {
 				Env json.RawMessage `json:"env"`
@@ -119,6 +120,34 @@ func (c *checker) checkWakeHook() {
 		c.notice(fmt.Sprintf(".claude/settings.json does not hold the wake-up's Stop hook for this aicrew-agent, so "+
 			"the member waits for a human message after each turn: rerun `aicrew-agent join --home %s`, and merge "+
 			"any .claude/settings.json.aicrew-new it writes", quoteArg(c.o.Home)))
+	}
+}
+
+// checkDenyRules notes a home whose managed Claude Code settings lack any
+// of the deny rules join writes: the client would then let the member read
+// the home's credentials or weaken git's TLS through the tools those rules
+// name. A notice, as for the Stop hook.
+func (c *checker) checkDenyRules() {
+	raw, err := os.ReadFile(filepath.Join(c.o.Home, ".claude", "settings.json"))
+	var doc struct {
+		Permissions struct {
+			Deny []string `json:"deny"`
+		} `json:"permissions"`
+	}
+	if err == nil {
+		_ = json.Unmarshal(raw, &doc)
+	}
+	var missing []string
+	for _, r := range denyRules() {
+		if !slices.Contains(doc.Permissions.Deny, r) {
+			missing = append(missing, r)
+		}
+	}
+	if len(missing) > 0 {
+		c.notice(fmt.Sprintf(".claude/settings.json lacks %d of the %d managed deny rules (first: %s), so Claude Code "+
+			"would let the member read the home's credentials or weaken git's TLS through its tools: rerun "+
+			"`aicrew-agent join --home %s`, and merge any .claude/settings.json.aicrew-new it writes",
+			len(missing), len(denyRules()), missing[0], quoteArg(c.o.Home)))
 	}
 }
 

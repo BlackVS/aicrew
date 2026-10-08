@@ -80,11 +80,40 @@ func checkProbeEnv(env []string, home string) []string {
 }
 
 // claudeSettings is the home's managed .claude/settings.json: the home's
-// aimem installation, and the Stop hook that wakes the member when its inbox
-// changes (task 01a0d6d7-1aed).
+// aimem installation, the Stop hook that wakes the member when its inbox
+// changes (task 01a0d6d7-1aed), and the deny rules.
 func claudeSettings(home string) string {
-	b, _ := json.MarshalIndent(map[string]any{"env": aimemVarMap(home), "hooks": wakeHooks(home)}, "", "  ")
+	b, _ := json.MarshalIndent(map[string]any{"env": aimemVarMap(home), "hooks": wakeHooks(home),
+		"permissions": map[string]any{"deny": denyRules()}}, "", "  ")
 	return string(b) + "\n"
+}
+
+// denyPatterns are what a member's shell commands never name: the home's
+// credential files and aimem's hub file, git's global and system
+// configuration, and TLS verification switches. Nothing in a member's role
+// needs them: aicrew-agent and aimem read the credentials, and aicrew-agent
+// writes every git setting a clone needs into that clone.
+var denyPatterns = []string{
+	"*creds/*", `*creds\*`, "*aimem/hub.json*", `*aimem\hub.json*`,
+	"*config --global*", "*config --system*",
+	"*sslVerify*", "*sslverify*", "*GIT_SSL_NO_VERIFY*",
+}
+
+// denyRules is the managed permissions.deny list (task 01a1171d-c51c), in
+// Claude Code's rule syntax: Read and Edit rules anchored at the home (a
+// leading "/" is relative to the settings' project), and each pattern for
+// the Bash and PowerShell tools, where "*" matches any text. Claude Code
+// refuses a denied call whatever the model decides and whatever the
+// permission mode; it stops an accidental violation through these tools,
+// not a determined bypass through another command.
+func denyRules() []string {
+	rules := []string{"Read(/creds/**)", "Edit(/creds/**)", "Read(/aimem/hub.json)", "Edit(/aimem/hub.json)"}
+	for _, tool := range []string{"Bash", "PowerShell"} {
+		for _, p := range denyPatterns {
+			rules = append(rules, tool+"("+p+")")
+		}
+	}
+	return rules
 }
 
 // selfExecutable is the aicrew-agent the hook runs: the one writing the

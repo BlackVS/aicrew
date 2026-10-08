@@ -967,7 +967,8 @@ bin/aicrew-agent join --home ~/aicrew/agents/builder    # rerun: refresh and che
   provisioning created it; the individual aimem credential stays there, in
   aimem's own storage.
 - It writes the managed `.claude/settings.json` (`env`: the home's
-  `AIMEM_STATE_DIR` and `AIMEM_SOCKET`, absolute), under the same digest
+  `AIMEM_STATE_DIR` and `AIMEM_SOCKET`, absolute; the Stop hook; and the
+  `permissions.deny` list, WORKSPACE.md "Deny rules"), under the same digest
   rule as the guidance files.
 
 ### Checking dependencies and clients: `aicrew-agent check`
@@ -1009,7 +1010,8 @@ member's user-level skills under it. It reports:
       that name another installation, reported by name only;
     - an aimem MCP server at user scope, or at local scope for the home, in
       Claude Code's `.claude.json`;
-    - a socket path over the Unix limit.
+    - a socket path over the Unix limit;
+    - a `.claude/settings.json` that lacks a managed deny rule.
 - **The client wiring.** One MCP entry per selected client, inside the
   home only: `.mcp.json` `mcpServers.aimem` for Claude Code, and
   `opencode.json` `mcp.aimem` for OpenCode, both running

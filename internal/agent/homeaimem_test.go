@@ -249,3 +249,29 @@ func TestCheckForeignInstallation(t *testing.T) {
 }
 
 func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
+
+// The managed settings carry the deny rules exactly. They were verified
+// against Claude Code 2.1.294: each is refused with the rules and done
+// without them (PR evidence). Changing one needs that smoke again.
+func TestClaudeSettingsCarryTheDenyRules(t *testing.T) {
+	var doc struct {
+		Permissions struct {
+			Deny []string `json:"deny"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal([]byte(claudeSettings(t.TempDir())), &doc); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"Read(/creds/**)", "Edit(/creds/**)", "Read(/aimem/hub.json)", "Edit(/aimem/hub.json)",
+		"Bash(*creds/*)", `Bash(*creds\*)`, "Bash(*aimem/hub.json*)", `Bash(*aimem\hub.json*)`,
+		"Bash(*config --global*)", "Bash(*config --system*)",
+		"Bash(*sslVerify*)", "Bash(*sslverify*)", "Bash(*GIT_SSL_NO_VERIFY*)",
+		"PowerShell(*creds/*)", `PowerShell(*creds\*)`, "PowerShell(*aimem/hub.json*)", `PowerShell(*aimem\hub.json*)`,
+		"PowerShell(*config --global*)", "PowerShell(*config --system*)",
+		"PowerShell(*sslVerify*)", "PowerShell(*sslverify*)", "PowerShell(*GIT_SSL_NO_VERIFY*)",
+	}
+	if strings.Join(doc.Permissions.Deny, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("deny = %q", doc.Permissions.Deny)
+	}
+}

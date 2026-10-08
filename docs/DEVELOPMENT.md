@@ -79,8 +79,12 @@ The end-to-end runs against a real aimem are not part of these checks:
 - `cmd/aicrewd`: the aicrew HTTPS service (below).
 - `cmd/aicrew`: the operator's command line (below).
 - `cmd/aicrew-agent`: an agent's client; it holds no store (below).
-- `internal/server`: the service's configuration, TLS listener, request
-  bounds, logging and routes, including aimem's session introspection.
+- `internal/server`: the service's TLS listener, request bounds, logging
+  and routes, including aimem's session introspection.
+- `internal/svcconfig`: `aicrewd.json`: its shape, the checks that need no
+  aimem client, and its rewriting by `aicrewd config migrate` and
+  `aicrew hub add`. It links no store, so `aicrew` can use it; `aicrewd`
+  adds its client checks on top.
 - `internal/store`: the aicrew coordination store. It is internal and has
   no MCP surface; only `aicrewd` exposes anything over the network.
   See the package documentation for the rules it enforces.
@@ -217,10 +221,10 @@ aicrewd would read the result as the original with the block moved.
 A file already in the `aimem_hubs` form, or with no hub, is left as it is:
 a second run changes nothing. Flags are refused on such a file.
 
-Each run names the fields still to supply and where each comes from:
-- a hub's `hub_id` (`aimem identity peer list` on the hub);
-- its `team_register_token_file` and `team_read_token_file`
-  (`aimem identity cred issue … --operation team.register` or `team.read`).
+Each run names the fields still to supply: a hub's `hub_id`, and its
+`team_register_token_file` and `team_read_token_file`. `aicrew hub add`
+(below) sets all three from the directory `aimem identity peer provision`
+wrote.
 
 It also reminds the operator that `service_id` must be the peer ID the hub
 lists for this service, which migrate cannot check.
@@ -231,6 +235,48 @@ Exit status:
   set, so do not restart it yet;
 - `1`: refused, and nothing was written;
 - `2`: a usage error.
+
+### Binding a hub: `aicrew hub add`
+
+```sh
+aicrew hub add NAME --config aicrewd.json --base-url URL \
+  --tls-trust-mode ca_dns|spki_sha256 --tls-trust-value VALUE --cred-dir DIR
+```
+
+It runs on the machine that runs aicrewd, and edits `aicrewd.json`
+directly; it does not call aicrewd.
+
+`DIR` is the directory `aimem identity peer provision` wrote on the hub's
+side, then carried to this machine. Its files have fixed names:
+- `aimem-hub-id`: the hub's ID, one UUID in lowercase on one line. A
+  missing, empty, multi-line or other file is refused by name.
+- `aimem-redeem.token`, `aimem-read.token`, `aimem-team-register.token`
+  and `aimem-team-read.token`: the four peer credentials. Each must be
+  readable by its owner only and hold one peer credential alone on one
+  line. Two files holding the same credential are refused. A credential is
+  never printed.
+
+Before writing anything, it checks the hub live. It reads this service's
+teams with the team.read credential, under the given trust binding and the
+file's `service_id`. A refusal is reported with the hub's code and what to
+do about it, for example `peer_forbidden` (check `service_id` against
+`aimem identity peer list`) or `hub_unavailable` (check the URL, the trust
+binding and the network).
+
+Then it writes the `aimem_hubs` entry for `NAME`:
+- every path is absolute;
+- an entry of that name is replaced in place, and any other name is
+  appended;
+- only one hub may serve the reservation read scope. When another hub
+  already has a `read_token_file`, the entry gets none, and the command
+  says so.
+
+The file is checked, written and kept as `aicrewd config migrate` does: a
+read-back check, an atomic replace with the file's mode, and the previous
+file kept as `aicrewd.json.<UTC time>.bak`. A legacy `aimem` block is
+refused; run `aicrewd config migrate` first. Restart aicrewd to apply the
+change. If another hub still lacks its `hub_id`, the command names that
+hub and exits 3, as migrate does: do not restart aicrewd yet.
 
 The service logs JSON lines to stderr: each request's method, matched route,
 status and duration, never its headers, body, query or raw path. A request
@@ -352,8 +398,8 @@ export AICREW_OPERATOR_TOKEN_FILE="$HOME/.config/aicrew/operator.token"
 ```
 
 A refusal prints the service's code and message and exits 1; a usage error
-exits 2. `aicrew operator-token new` and `aicrew version` take no
-connection.
+exits 2. `aicrew hub add`, `aicrew operator-token new` and `aicrew version`
+take no connection.
 
 Both tools read a flag as `--name` or `-name` (Go's flag package); the
 documentation writes `--`.

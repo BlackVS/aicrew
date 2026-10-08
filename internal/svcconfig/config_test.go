@@ -1,4 +1,4 @@
-package server
+package svcconfig
 
 import (
 	"os"
@@ -6,13 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/BlackVS/aicrew/internal/svcconfig"
-)
-
-const (
-	maxConfigBytes         = svcconfig.MaxConfigBytes
-	defaultShutdownTimeout = svcconfig.DefaultShutdownTimeout
 )
 
 const validConfig = `{"store_path":"/var/lib/aicrew/aicrew.db","listen_addr":"127.0.0.1:8443",
@@ -24,7 +17,7 @@ func TestParseConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ServiceID != "aicrew-example" || time.Duration(c.ShutdownTimeout) != defaultShutdownTimeout {
+	if c.ServiceID != "aicrew-example" || time.Duration(c.ShutdownTimeout) != DefaultShutdownTimeout {
 		t.Fatalf("config = %+v", c)
 	}
 	c, err = ParseConfig([]byte(strings.Replace(validConfig, "}", `,"shutdown_timeout":"30s"}`, 1)))
@@ -72,7 +65,7 @@ func TestLoadConfig(t *testing.T) {
 		t.Fatal("a missing config file was accepted")
 	}
 	big := filepath.Join(dir, "big.json")
-	if err := os.WriteFile(big, []byte(strings.Repeat(" ", maxConfigBytes+1)), 0o600); err != nil {
+	if err := os.WriteFile(big, []byte(strings.Repeat(" ", MaxConfigBytes+1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadConfig(big); err == nil || !strings.Contains(err.Error(), "larger") {
@@ -107,47 +100,34 @@ func TestConfigAimem(t *testing.T) {
 	}
 }
 
-// svcconfig's offline checks, which the operator's commands rely on before
-// they write, accept no configuration with a hub that aicrewd's client
-// checks refuse.
-func TestConfigParityWithClients(t *testing.T) {
+// A service ID of "." or ".." is refused with a hub, as every aimem client
+// refuses it, and accepted without one, as before.
+func TestConfigDotServiceID(t *testing.T) {
+	for _, id := range []string{".", ".."} {
+		raw := strings.Replace(validConfig, `"aicrew-example"`, `"`+id+`"`, 1)
+		if _, err := ParseConfig([]byte(raw)); err != nil {
+			t.Errorf("%q without a hub: %v", id, err)
+		}
+		if _, err := ParseConfig([]byte(strings.Replace(withAimem(validAimem), `"aicrew-example"`, `"`+id+`"`, 1))); err == nil || !strings.Contains(err.Error(), "service_id") {
+			t.Errorf("%q with a hub: %v", id, err)
+		}
+	}
+}
+
+// A read credential file that is the redemption file under another name is
+// refused, as the reader refuses it.
+func TestConfigReadFileIsRedemptionFile(t *testing.T) {
 	dir := t.TempDir()
 	red := filepath.Join(dir, "redemption.token")
 	if err := os.WriteFile(red, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(dir, "linked.token")
-	linked := os.Link(red, link) == nil
-	hub := func(fields string) string {
-		return strings.Replace(validConfig, "}", `,"aimem_hubs":[{"name":"main","hub_id":"hub-1",`+fields+`}]}`, 1)
+	link := filepath.Join(dir, "read.token")
+	if err := os.Link(red, link); err != nil {
+		t.Skipf("no hard link here: %v", err)
 	}
-	origin := `"base_url":"https://hub.example:8443","tls_trust_mode":"ca_dns","tls_trust_value":"hub.example"`
-	cases := map[string]string{
-		"valid":                 hub(origin + `,"redemption_token_file":"/r"`),
-		"plain http":            hub(strings.Replace(origin, "https", "http", 1) + `,"redemption_token_file":"/r"`),
-		"path":                  hub(strings.Replace(origin, "8443", "8443/x", 1) + `,"redemption_token_file":"/r"`),
-		"user info":             hub(strings.Replace(origin, "https://", "https://u@", 1) + `,"redemption_token_file":"/r"`),
-		"query":                 hub(strings.Replace(origin, "8443", "8443?q", 1) + `,"redemption_token_file":"/r"`),
-		"other host":            hub(strings.Replace(origin, `"hub.example"`, `"other.example"`, 1) + `,"redemption_token_file":"/r"`),
-		"bad pin":               hub(`"base_url":"https://hub.example","tls_trust_mode":"spki_sha256","tls_trust_value":"sha256-x","redemption_token_file":"/r"`),
-		"no redemption file":    hub(origin + `,"redemption_token_file":""`),
-		"read is redemption":    hub(origin + `,"redemption_token_file":"/r","read_token_file":"/r"`),
-		"team files the same":   hub(origin + `,"redemption_token_file":"/r","team_register_token_file":"/t","team_read_token_file":"/t"`),
-		"service id dot":        strings.Replace(hub(origin+`,"redemption_token_file":"/r"`), `"aicrew-example"`, `"."`, 1),
-		"service id dot-dot":    strings.Replace(hub(origin+`,"redemption_token_file":"/r"`), `"aicrew-example"`, `".."`, 1),
-		"legacy service id dot": strings.Replace(withAimem(validAimem), `"aicrew-example"`, `"."`, 1),
-	}
-	if linked {
-		cases["read is a link to redemption"] = hub(origin + `,"redemption_token_file":"` + filepath.ToSlash(red) + `","read_token_file":"` + filepath.ToSlash(link) + `"`)
-	}
-	for name, raw := range cases {
-		_, offline := svcconfig.ParseConfig([]byte(raw))
-		_, full := ParseConfig([]byte(raw))
-		if offline == nil && full != nil {
-			t.Errorf("%s: svcconfig accepts what aicrewd refuses: %v", name, full)
-		}
-		if name == "valid" && full != nil {
-			t.Errorf("valid: %v", full)
-		}
+	section := strings.Replace(validAimem, `"/etc/aicrew/redemption.token"}`, `"`+filepath.ToSlash(red)+`","read_token_file":"`+filepath.ToSlash(link)+`"}`, 1)
+	if _, err := ParseConfig([]byte(withAimem(section))); err == nil || !strings.Contains(err.Error(), "read_token_file") {
+		t.Fatalf("got %v", err)
 	}
 }

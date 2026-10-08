@@ -9,6 +9,7 @@
 //	aicrew hub-credential revoke --id ID
 //	aicrew invitation issue|list|revoke ... (see invitation.go)
 //	aicrew team create|list|show|projects|rename ... (see team.go)
+//	aicrew hub add NAME ... (see hub.go)
 //	aicrew operator-token new --output PATH|-
 //	aicrew version [--json]
 //
@@ -16,7 +17,7 @@
 // Its name before 0.3.0, introspection-credential, still works for one
 // release, with a notice, and is removed in 0.4.0.
 //
-// Every command but operator-token and version takes the connection flags
+// Every command but hub, operator-token and version takes the connection flags
 // (conn.go). --operations names what the new credential permits,
 // comma-separated: introspection (identity.v1 session introspection),
 // coordination (coordination.v1 facts), or both, which is the default.
@@ -37,6 +38,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/BlackVS/aicrew/internal/opapi"
 	"github.com/BlackVS/aicrew/internal/opclient"
@@ -55,6 +57,7 @@ const usage = `usage:
   aicrew hub-credential revoke --id ID
   aicrew invitation issue|list|revoke ...   (run "aicrew invitation" for its usage)
   aicrew team create|list|show|projects|rename ...   (run "aicrew team" for its usage)
+  aicrew hub add NAME ...   (run "aicrew hub" for its usage)
   aicrew operator-token new --output PATH|-
   aicrew version [--json]
 ` + connUsage
@@ -66,6 +69,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) >= 1 && args[0] == "team" {
 		return runTeam(ctx, args[1:], stdout, stderr)
+	}
+	if len(args) >= 1 && args[0] == "hub" {
+		return runHub(ctx, args[1:], stdout, stderr, time.Now())
 	}
 	if len(args) >= 1 && args[0] == "operator-token" {
 		return runOperatorToken(args[1:], stdout, stderr)

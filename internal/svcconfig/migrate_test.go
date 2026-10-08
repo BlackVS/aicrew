@@ -1,4 +1,4 @@
-package server
+package svcconfig
 
 import (
 	"bytes"
@@ -176,7 +176,7 @@ func TestMigrateNoHub(t *testing.T) {
 
 // A refused migration writes nothing: no copy, no change.
 func TestMigrateRefusals(t *testing.T) {
-	if raw := oversizedLegacy(); len(raw) != maxConfigBytes {
+	if raw := oversizedLegacy(); len(raw) != MaxConfigBytes {
 		t.Fatalf("oversizedLegacy is %d bytes", len(raw))
 	} else if _, err := ParseConfig([]byte(raw)); err != nil {
 		t.Fatalf("oversizedLegacy is refused as input: %v", err)
@@ -194,6 +194,8 @@ func TestMigrateRefusals(t *testing.T) {
 		{"bad name", legacyConfig, MigrateOptions{Name: "Main Hub"}, "aimem_hubs[0].name"},
 		{"bad hub id", legacyConfig, MigrateOptions{HubID: "a hub"}, "aimem_hubs[0].hub_id"},
 		{"bad service id", legacyConfig, MigrateOptions{ServiceID: "a service"}, "service_id"},
+		{"service id dot", legacyConfig, MigrateOptions{HubID: "hub-1", ServiceID: "."}, "service_id"},
+		{"service id dot-dot", legacyConfig, MigrateOptions{HubID: "hub-1", ServiceID: ".."}, "service_id"},
 		{"same team files", legacyConfig, MigrateOptions{TeamRegisterTokenFile: "/t", TeamReadTokenFile: "/t"}, "aimem_hubs[0]"},
 		{"empty aimem_hubs after", strings.Replace(legacyConfig, `"operator_token_file"`, `"aimem_hubs": [], "operator_token_file"`, 1),
 			MigrateOptions{}, "given together"},
@@ -203,7 +205,7 @@ func TestMigrateRefusals(t *testing.T) {
 			MigrateOptions{}, "given together"},
 		{"null aimem_hubs before", strings.Replace(legacyConfig, `"aimem":`, `"aimem_hubs": null, "aimem":`, 1),
 			MigrateOptions{}, "given together"},
-		{"result over the size limit", oversizedLegacy(), MigrateOptions{HubID: "hub-1"}, "migrated config would be refused: it is larger than"},
+		{"result over the size limit", oversizedLegacy(), MigrateOptions{HubID: "hub-1"}, "rewritten config would be refused: it is larger than"},
 		{"AIMEM_HUBS empty after", strings.Replace(legacyConfig, `"operator_token_file"`, `"AIMEM_HUBS": [], "operator_token_file"`, 1),
 			MigrateOptions{}, "given together"},
 		{"Aimem_Hubs null before", strings.Replace(legacyConfig, `"aimem":`, `"Aimem_Hubs": null, "aimem":`, 1),
@@ -233,21 +235,23 @@ func TestMigrateRefusals(t *testing.T) {
 	}
 }
 
-// An existing copy under the same time is never overwritten.
+// An existing copy under the same time is never overwritten: the next
+// free name is taken.
 func TestMigrateKeepsAnExistingCopy(t *testing.T) {
 	path := writeConfig(t, legacyConfig)
 	backup := path + ".20261008T043000Z.bak"
 	if err := os.WriteFile(backup, []byte("older"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := MigrateConfig(path, MigrateOptions{Now: migrateNow}); err == nil {
-		t.Fatal("migrated over an existing copy")
+	r, err := MigrateConfig(path, MigrateOptions{Now: migrateNow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Backup != path+".20261008T043000Z-2.bak" || string(mustRead(t, r.Backup)) != legacyConfig {
+		t.Fatalf("backup = %s", r.Backup)
 	}
 	if got, _ := os.ReadFile(backup); string(got) != "older" {
 		t.Fatal("the existing copy changed")
-	}
-	if got, _ := os.ReadFile(path); string(got) != legacyConfig {
-		t.Fatal("the file changed")
 	}
 }
 
@@ -317,7 +321,7 @@ func TestMigrateThroughALinkedDirectory(t *testing.T) {
 // limit, written compactly, whose migrated, indented form is over it.
 func oversizedLegacy() string {
 	compact := strings.Join(strings.Fields(legacyConfig), "")
-	grow := maxConfigBytes - len(compact)
+	grow := MaxConfigBytes - len(compact)
 	return strings.Replace(compact, "aicrew.db", strings.Repeat("a", len("aicrew.db")+grow), 1)
 }
 

@@ -20,6 +20,7 @@ type setupHub struct {
 	registers  int
 	grants     map[string][]string
 	down       bool
+	disabled   bool
 }
 
 func newSetupHub() *setupHub {
@@ -48,7 +49,10 @@ func (h *setupHub) ReadTeam(_ context.Context, id string) (hubteams.Team, error)
 	if !ok {
 		return hubteams.Team{}, &hubteams.Error{Code: "not_found"}
 	}
-	t := hubteams.Team{TeamID: id, TeamName: name, Enabled: true, Projects: []hubteams.Project{}}
+	t := hubteams.Team{TeamID: id, TeamName: name, Enabled: !h.disabled, Projects: []hubteams.Project{}}
+	if h.disabled {
+		return t, nil
+	}
 	for _, p := range h.grants[name] {
 		pr := hubteams.Project{Project: p}
 		if p != "bare" {
@@ -152,5 +156,30 @@ func TestTeamSetupUsage(t *testing.T) {
 		if r := cli(t, args...); r.code != 2 {
 			t.Errorf("%v: exit %d, want 2", args, r.code)
 		}
+	}
+}
+
+// A team aicrewd holds as registered that the hub no longer knows is
+// registered again before its grants are reported; a disabled profile is
+// reported as the problem, with no grant command.
+func TestTeamSetupHubForgotOrDisabled(t *testing.T) {
+	hub := newSetupHub()
+	serve(t, server.WithHub("main", "hub-a", hub))
+	cli(t, "team", "setup", "crew", "--hub", "main", "--project", "app")
+	hub.mu.Lock()
+	hub.registered = map[string]string{}
+	hub.grants["crew"] = []string{"app"}
+	hub.mu.Unlock()
+	r := cli(t, "team", "setup", "crew", "--hub", "main", "--project", "app")
+	if r.code != 0 || !strings.Contains(r.stdout, "the hub does not know team crew: registering it again") ||
+		!strings.Contains(r.stdout, "granted: app") || hub.registerCount() != 2 {
+		t.Fatalf("forgotten: exit %d, %d registrations\n%s%s", r.code, hub.registerCount(), r.stdout, r.stderr)
+	}
+	hub.mu.Lock()
+	hub.disabled = true
+	hub.mu.Unlock()
+	r = cli(t, "team", "setup", "crew", "--hub", "main", "--project", "app")
+	if r.code != 1 || !strings.Contains(r.stderr, "disabled team crew's profile") || strings.Contains(r.stdout, "aimem identity team grant") {
+		t.Fatalf("disabled: exit %d\n%s%s", r.code, r.stdout, r.stderr)
 	}
 }

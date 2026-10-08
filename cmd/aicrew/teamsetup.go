@@ -76,6 +76,25 @@ func runTeamSetup(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if err := cl.Post(ctx, opapi.TeamGrantsPath, opapi.TeamGrantsRequest{ID: t.ID}, &g); err != nil {
 		return failed(stderr, err)
 	}
+	if g.GrantsState == "not_registered" {
+		// aicrewd's record says registered, but the hub no longer knows the
+		// team: register it again, then read again.
+		fmt.Fprintf(stdout, "the hub does not know team %s: registering it again\n", t.Name)
+		if _, code := register(ctx, cl, t, *hub, stdout, stderr); code != 0 {
+			return code
+		}
+		if err := cl.Post(ctx, opapi.TeamGrantsPath, opapi.TeamGrantsRequest{ID: t.ID}, &g); err != nil {
+			return failed(stderr, err)
+		}
+	}
+	switch g.GrantsState {
+	case "disabled":
+		fmt.Fprintf(stderr, "aicrew: the hub has disabled team %s's profile, so it grants nothing: its admin enables it on the hub, then run this again\n", g.Name)
+		return 1
+	case "not_registered":
+		fmt.Fprintf(stderr, "aicrew: the hub still does not know team %s after its registration: run this again\n", g.Name)
+		return 1
+	}
 	return reportGrants(stdout, g, projects)
 }
 
@@ -107,10 +126,22 @@ func setupRegistered(ctx context.Context, cl *opclient.Client, name, hub string,
 		fmt.Fprintf(stdout, "team %s is already registered on hub %s\n", t.Name, hub)
 		return t, 0
 	default:
-		if err := cl.Post(ctx, opapi.TeamRegisterPath, opapi.TeamRegisterRequest{ID: t.ID, Hub: hub}, &t); err != nil {
-			return t, failed(stderr, err)
-		}
+		return register(ctx, cl, t, hub, stdout, stderr)
 	}
+	return registered(t, hub, stdout, stderr)
+}
+
+// register registers t on hub and reports the outcome.
+func register(ctx context.Context, cl *opclient.Client, t opapi.Team, hub string, stdout, stderr io.Writer) (opapi.Team, int) {
+	if err := cl.Post(ctx, opapi.TeamRegisterPath, opapi.TeamRegisterRequest{ID: t.ID, Hub: hub}, &t); err != nil {
+		return t, failed(stderr, err)
+	}
+	return registered(t, hub, stdout, stderr)
+}
+
+// registered reports t's registration on hub: code 0 when it is registered,
+// else 1 with the hub's code and what to do.
+func registered(t opapi.Team, hub string, stdout, stderr io.Writer) (opapi.Team, int) {
 	r := t.Registration
 	switch {
 	case r == nil:
@@ -131,8 +162,10 @@ func reportGrants(stdout io.Writer, g opapi.TeamGrants, projects []string) int {
 	for _, gr := range g.Grants {
 		granted[gr.ProjectID] = gr
 	}
-	if g.GrantsState == "disabled" {
-		fmt.Fprintf(stdout, "the hub has disabled team %s's profile: no project is granted until its admin enables it\n", g.Name)
+	// The grant names the team as the hub registered it.
+	teamName := g.Name
+	if g.Registration != nil && g.Registration.Name != "" {
+		teamName = g.Registration.Name
 	}
 	var missing []string
 	for _, p := range projects {
@@ -164,7 +197,7 @@ func reportGrants(stdout io.Writer, g opapi.TeamGrants, projects []string) int {
 	}
 	fmt.Fprintf(stdout, "not granted yet; on the hub, as its admin, run:\n")
 	for _, p := range missing {
-		fmt.Fprintf(stdout, "  aimem identity team grant --peer %s --team-name %s --project %s\n", g.ServiceID, g.Name, p)
+		fmt.Fprintf(stdout, "  aimem identity team grant --peer %s --team-name %s --project %s\n", g.ServiceID, teamName, p)
 	}
 	fmt.Fprintf(stdout, "then run this command again to check\n")
 	return exitIncomplete

@@ -490,7 +490,10 @@ bin/aicrew team rename   --team-name crew --expect-revision N --name crew-2
     for example `peer_forbidden` (check `service_id` in `aicrewd.json`
     against `aimem identity peer list`) or `team_name_taken`. It exits 1;
   - it then reads the team's grants from the hub live
-    (`POST /v1/admin/team/grants`, not the minute's snapshot);
+    (`POST /v1/admin/team/grants`, not the minute's snapshot). If the hub no
+    longer knows a team aicrewd holds as registered, it registers the team
+    again and reads once more. A disabled profile grants nothing, so it is
+    reported as the problem, with exit 1 and no grant command;
   - each `--project` the hub grants is listed, with a note when the hub
     binds it no repository or process. For each one it does not grant yet,
     it prints the exact command the hub's admin runs,

@@ -5,8 +5,10 @@ implements the home layout, `agent.json`, the managed files and the rerun
 rules; `aicrew-agent check` (1a81-5a) the client wiring and the readiness
 check (DEVELOPMENT, "Joining a team" and "Checking dependencies and
 clients"). Repositories, worktrees and credential files are not implemented
-yet, and no installer is defined. The member's aimem installation in the
-home follows decision D-STORE (2026-10-02).
+yet. The `aicrew-agent` binary is installed by the release's one-liners
+(`boot.sh`, `boot.ps1`; DEVELOPMENT, "Installing and upgrading"), which
+create no home: `join` does. The member's aimem installation in the home
+follows decision D-STORE (2026-10-02).
 Updated 2026-10-02.
 
 This document fixes where an aicrew agent keeps its configuration,

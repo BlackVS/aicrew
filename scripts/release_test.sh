@@ -23,20 +23,27 @@ chmod +x "$work/bin/gh"
 export PATH="$work/bin:$PATH"
 
 # A scratch origin and clone: main has a CHANGELOG with [1.0.0] and tag
-# v1.0.0, a tag without a section (v1.1.0), a tag whose installer pins
-# another release (v1.2.0), and a tag off main (v2.0.0).
+# v1.0.0, a tag without a section (v1.1.0), tags whose installers pin
+# another release (v1.2.0: all three; v1.3.0: boot.ps1 alone), and a tag
+# off main (v2.0.0).
 git init -q --bare "$work/origin.git"
 git clone -q "$work/origin.git" "$work/repo" 2>/dev/null
 cd "$work/repo"
-git config user.email t@example.invalid; git config user.name t
+git config user.email t@example.invalid; git config user.name t; git config core.safecrlf false
 git checkout -q -b main
 printf 'Required Notice: Copyright (c) example\n\nterms\n' > LICENSE
 printf '# Changelog\n\n## [Unreleased]\n\n## [1.0.0] - 2026-10-01\n\n- first release\n' > CHANGELOG.md
 printf '#!/usr/bin/env bash\nRELEASE=v1.0.0\n' > install-aicrewd.sh
+printf '#!/usr/bin/env bash\nRELEASE=v1.0.0\n' > boot.sh
+printf "\$release = 'v1.0.0'\r\n" > boot.ps1
 git add . && git commit -q -m one && git tag v1.0.0
 echo two > two && git add two && git commit -q -m two && git tag v1.1.0
 printf '# Changelog\n\n## [1.2.0] - 2026-10-02\n\n- unpinned\n\n## [1.0.0] - 2026-10-01\n\n- first release\n' > CHANGELOG.md
 git add . && git commit -q -m three && git tag v1.2.0
+printf '# Changelog\n\n## [1.3.0] - 2026-10-03\n\n- boot.ps1 unpinned\n\n## [1.0.0] - 2026-10-01\n\n- first release\n' > CHANGELOG.md
+printf '#!/usr/bin/env bash\nRELEASE=v1.3.0\n' > install-aicrewd.sh
+printf '#!/usr/bin/env bash\nRELEASE=v1.3.0\n' > boot.sh
+git add . && git commit -q -m four && git tag v1.3.0
 git push -q origin main --tags
 git checkout -q -b side && echo side > side && git add side && git commit -q -m side && git tag v2.0.0
 git push -q origin side v2.0.0
@@ -65,6 +72,7 @@ expect fail "no CHANGELOG section"            "has no [1.1.0] section"    -- bas
 expect ok   "no section, dry run"             "a dry run goes on"         -- bash "$script" check v1.1.0 --dry-run
 expect fail "the installer pins another"      "does not pin v1.2.0"       -- bash "$script" check v1.2.0
 expect ok   "another pin, dry run"            "does not pin v1.2.0"       -- bash "$script" check v1.2.0 --dry-run
+expect fail "boot.ps1 pins another"           "boot.ps1 at"               -- bash "$script" check v1.3.0
 expect fail "a tag that does not exist"       "never creates one"         -- bash "$script" check v3.0.0
 expect ok   "a missing tag, dry run"          "a dry run of main's tip"   -- bash "$script" check v3.0.0 --dry-run
 expect fail "the release exists"              "already exists"            -- env GH_RELEASES=v1.0.0 bash "$script" check v1.0.0

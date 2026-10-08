@@ -35,7 +35,7 @@ type svc struct {
 	pin       string
 }
 
-func serve(t *testing.T) *svc {
+func serve(t *testing.T, opts ...server.Option) *svc {
 	t.Helper()
 	dir := t.TempDir()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -72,7 +72,7 @@ func serve(t *testing.T) *svc {
 	t.Cleanup(func() { st.Close() })
 	srv, err := server.New(server.Config{StorePath: filepath.Join(dir, "aicrew.db"), ListenAddr: "127.0.0.1:0",
 		TLSCertFile: certFile, TLSKeyFile: keyFile, ServiceID: "aicrew-test", ShutdownTimeout: server.Duration(5 * time.Second),
-		OperatorTokenFile: tokenFile}, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		OperatorTokenFile: tokenFile}, st, slog.New(slog.NewTextHandler(io.Discard, nil)), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}

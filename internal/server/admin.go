@@ -69,6 +69,7 @@ func (s *Server) registerAdmin() {
 	s.handle(http.MethodGet, opapi.TeamPath, s.operator("team.show", s.showTeam))
 	s.handle(http.MethodPost, opapi.TeamRenamePath, s.operator("team.rename", s.renameTeam))
 	s.handle(http.MethodPost, opapi.TeamRegisterPath, s.operator("team.register", s.registerTeamRoute))
+	s.handle(http.MethodPost, opapi.TeamGrantsPath, s.operator("team.grants", s.readTeamGrants))
 	s.handle(http.MethodGet, opapi.InvitationsPath, s.operator("invitation.list", s.listInvitations))
 	s.handle(http.MethodPost, opapi.InvitationsPath, s.operator("invitation.issue", s.issueInvitation))
 	s.handle(http.MethodPost, opapi.InvitationRevokePath, s.operator("invitation.revoke", s.revokeInvitation))
@@ -425,6 +426,12 @@ func registrationOutcome(code, name string) (string, string) {
 		return code, "the hub's operator disabled this team's profile: re-enable it on the hub, then run aicrew team register"
 	case hubteams.CodeUnavailable, "rate_limited", "request_in_progress", "identity_unavailable":
 		return hubteams.CodeUnavailable, "the hub did not answer: run aicrew team register later"
+	case "peer_forbidden", "peer_unknown":
+		return code, "the hub does not know this service's team.register credential as this service_id's: " +
+			"check service_id in aicrewd.json against aimem identity peer list, then run aicrew team register"
+	case "peer_unauthenticated":
+		return code, "the hub does not accept the team.register credential: it is not the hub's, or it is revoked; " +
+			"provision the peer again (aimem identity peer provision), then run aicrew team register"
 	case "":
 		return "failed", "the registration failed: run aicrew team register"
 	}
@@ -462,6 +469,45 @@ func (s *Server) registerTeamRoute(w http.ResponseWriter, r *http.Request, op st
 	t = s.registerTeam(r.Context(), op, t)
 	writeJSON(w, http.StatusOK, teamOf(t))
 	return "registered", t.ID
+}
+
+// readTeamGrants is POST /v1/admin/team/grants: read the team's grants from
+// its hub now, record them as the minute's refresh would, and answer the
+// team with this service's ID. A hub that does not answer, or refuses the
+// read, is refused hub_unavailable with the hub's code.
+func (s *Server) readTeamGrants(w http.ResponseWriter, r *http.Request, _ store.Caller) (string, string) {
+	var req opapi.TeamGrantsRequest
+	if !adminBody(w, r, &req) {
+		return opapi.CodeInvalid, ""
+	}
+	t, err := s.store.GetTeam(r.Context(), req.ID)
+	if err != nil {
+		return adminFail(w, err), ""
+	}
+	b, ok := s.hubs[t.Hub]
+	if t.Hub == "" || !ok || b.teams == nil || !b.teams.CanRead() {
+		adminRefuse(w, http.StatusConflict, opapi.CodeInvalid,
+			"the team names no hub with a team.read credential (aimem_hubs[].team_read_token_file)")
+		return opapi.CodeInvalid, t.ID
+	}
+	team, err := b.teams.ReadTeam(r.Context(), t.ID)
+	read, answered := grantsRead(b.id, team, err, time.Now())
+	if !answered {
+		code := hubteams.Code(err)
+		if code == "" {
+			code = hubteams.CodeUnavailable
+		}
+		adminRefuse(w, http.StatusServiceUnavailable, opapi.CodeHubUnavailable, "the hub did not answer the team read ("+code+")")
+		return opapi.CodeHubUnavailable, t.ID
+	}
+	if _, err := s.store.RecordTeamGrants(r.Context(), store.ReconcilerCaller(), t.ID, read); err != nil {
+		return adminFail(w, err), t.ID
+	}
+	if t, err = s.store.GetTeam(r.Context(), t.ID); err != nil {
+		return adminFail(w, err), req.ID
+	}
+	writeJSON(w, http.StatusOK, opapi.TeamGrants{Team: teamOf(t), ServiceID: s.cfg.ServiceID})
+	return "read", t.ID
 }
 
 func (s *Server) showTeam(w http.ResponseWriter, r *http.Request, _ store.Caller) (string, string) {

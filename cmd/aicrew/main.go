@@ -8,7 +8,7 @@
 //	aicrew hub-credential list   [--hub HUB]
 //	aicrew hub-credential revoke --id ID
 //	aicrew invitation issue|list|revoke ... (see invitation.go)
-//	aicrew team create|list|show|projects|rename ... (see team.go)
+//	aicrew team create|list|show|rename|register|setup ... (see team.go, teamsetup.go)
 //	aicrew hub add NAME ... (see hub.go)
 //	aicrew operator-token new --output PATH|-
 //	aicrew version [--json]
@@ -56,7 +56,7 @@ const usage = `usage:
   aicrew hub-credential list   [--hub HUB]
   aicrew hub-credential revoke --id ID
   aicrew invitation issue|list|revoke ...   (run "aicrew invitation" for its usage)
-  aicrew team create|list|show|projects|rename ...   (run "aicrew team" for its usage)
+  aicrew team create|list|show|rename|register|setup ...   (run "aicrew team" for its usage)
   aicrew hub add NAME ...   (run "aicrew hub" for its usage)
   aicrew operator-token new --output PATH|-
   aicrew version [--json]

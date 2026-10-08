@@ -72,8 +72,8 @@ func TestAdminRefusesEveryOtherCredential(t *testing.T) {
 	}
 	wrong, _ := optoken.Generate()
 	routes := adminRoutes(e.srv)
-	if len(routes) != 16 { // 12, and the four credential routes under their names before 0.3.0
-		t.Fatalf("%d operator routes, want 16", len(routes))
+	if len(routes) != 17 { // 13, and the four credential routes under their names before 0.3.0
+		t.Fatalf("%d operator routes, want 17", len(routes))
 	}
 	before, _ := e.store.ListTeams(context.Background())
 	for _, cred := range []struct{ name, token string }{{"none", ""}, {"wrong", wrong},

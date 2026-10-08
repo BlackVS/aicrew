@@ -589,3 +589,34 @@ func TestRefreshBlocksAndUnblocks(t *testing.T) {
 		t.Fatalf("after the re-grant = %+v, %v", a.Blocked, err)
 	}
 }
+
+// POST /v1/admin/team/grants reads the team's grants from its hub now,
+// records them and answers with the service ID; a team with no hub is
+// refused, and a hub that does not answer is refused hub_unavailable with
+// its code.
+func TestTeamGrantsReadLive(t *testing.T) {
+	hub := &grantingHub{}
+	e := setupAPI(t, WithHub("main", "hub-a", hub))
+	tok := e.opToken
+	adminRefused(t, e.admin(t, http.MethodPost, opapi.TeamGrantsPath, tok, opapi.TeamGrantsRequest{ID: e.teamID}, nil),
+		http.StatusConflict, opapi.CodeInvalid)
+	if _, err := e.store.SetTeamHub(context.Background(), mustOperator(t), "hub-key", e.teamID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	hub.set(false, "docs")
+	var g opapi.TeamGrants
+	if got := e.admin(t, http.MethodPost, opapi.TeamGrantsPath, tok, opapi.TeamGrantsRequest{ID: e.teamID}, &g); got.status != http.StatusOK ||
+		g.ServiceID != "aicrew-test" || len(g.Grants) != 1 || g.Grants[0].ProjectID != "docs" || g.GrantsState != store.GrantsEnabled {
+		t.Fatalf("read: %d %s", got.status, got.raw)
+	}
+	stored, err := e.store.GetTeam(context.Background(), e.teamID)
+	if err != nil || len(stored.Grants) != 1 {
+		t.Fatalf("the read was not recorded: %+v %v", stored, err)
+	}
+	hub.set(true)
+	got := e.admin(t, http.MethodPost, opapi.TeamGrantsPath, tok, opapi.TeamGrantsRequest{ID: e.teamID}, nil)
+	adminRefused(t, got, http.StatusServiceUnavailable, opapi.CodeHubUnavailable)
+	if !strings.Contains(string(got.raw), hubteams.CodeUnavailable) {
+		t.Fatalf("the hub's code is not named: %s", got.raw)
+	}
+}

@@ -21,6 +21,7 @@ const teamUsage = `usage:
   aicrew team show     (--team TEAM | --team-name NAME)
   aicrew team rename   (--team TEAM | --team-name NAME) --expect-revision N --name NAME
   aicrew team register (--team TEAM | --team-name NAME) [--hub ALIAS]
+  aicrew team setup    TEAM --hub ALIAS --project PROJECT [--project PROJECT ...]
 ` + connUsage
 
 // projectsRemoved explains the project list of earlier releases.
@@ -53,6 +54,9 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	verb := args[0]
+	if verb == "setup" {
+		return runTeamSetup(ctx, args[1:], stdout, stderr)
+	}
 	fs := flag.NewFlagSet("aicrew team "+verb, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cn := addConn(fs)

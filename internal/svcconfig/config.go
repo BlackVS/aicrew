@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -213,6 +214,10 @@ func (c Config) validate() error {
 	if c.Aimem != nil && len(c.AimemHubs) > 0 {
 		return errors.New("config: aimem and aimem_hubs are given together; move the aimem block into aimem_hubs")
 	}
+	if len(c.Hubs()) > 0 && (c.ServiceID == "." || c.ServiceID == "..") {
+		// Every aimem client puts the service ID in a URL path segment.
+		return errors.New("config: service_id must not be \".\" or \"..\" when an aimem hub is configured")
+	}
 	names, ids, readers := map[string]bool{}, map[string]bool{}, ""
 	for i, h := range c.Hubs() {
 		at := fmt.Sprintf("aimem_hubs[%d]", i)
@@ -247,7 +252,7 @@ func (c Config) validate() error {
 				return fmt.Errorf("config: %s.read_token_file: only one hub serves the reservation read scope (%s does)", at, readers)
 			}
 			readers = h.Name
-			if filepath.Clean(h.ReadTokenFile) == filepath.Clean(h.RedemptionTokenFile) {
+			if samePath(h.ReadTokenFile, h.RedemptionTokenFile) {
 				return fmt.Errorf("config: %s.read_token_file is the redemption credential's file; aimem issues a separate reservation.read credential", at)
 			}
 		}
@@ -262,3 +267,14 @@ func (c Config) validate() error {
 
 // hubNameShape is a hub's alias.
 var hubNameShape = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+
+// samePath reports whether a and b name the same file, by path or, when both
+// exist, by identity: the reader's rule for its two credential files.
+func samePath(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ia, errA := os.Stat(a)
+	ib, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(ia, ib)
+}

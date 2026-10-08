@@ -99,3 +99,35 @@ func TestConfigAimem(t *testing.T) {
 		}
 	}
 }
+
+// A service ID of "." or ".." is refused with a hub, as every aimem client
+// refuses it, and accepted without one, as before.
+func TestConfigDotServiceID(t *testing.T) {
+	for _, id := range []string{".", ".."} {
+		raw := strings.Replace(validConfig, `"aicrew-example"`, `"`+id+`"`, 1)
+		if _, err := ParseConfig([]byte(raw)); err != nil {
+			t.Errorf("%q without a hub: %v", id, err)
+		}
+		if _, err := ParseConfig([]byte(strings.Replace(withAimem(validAimem), `"aicrew-example"`, `"`+id+`"`, 1))); err == nil || !strings.Contains(err.Error(), "service_id") {
+			t.Errorf("%q with a hub: %v", id, err)
+		}
+	}
+}
+
+// A read credential file that is the redemption file under another name is
+// refused, as the reader refuses it.
+func TestConfigReadFileIsRedemptionFile(t *testing.T) {
+	dir := t.TempDir()
+	red := filepath.Join(dir, "redemption.token")
+	if err := os.WriteFile(red, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "read.token")
+	if err := os.Link(red, link); err != nil {
+		t.Skipf("no hard link here: %v", err)
+	}
+	section := strings.Replace(validAimem, `"/etc/aicrew/redemption.token"}`, `"`+filepath.ToSlash(red)+`","read_token_file":"`+filepath.ToSlash(link)+`"}`, 1)
+	if _, err := ParseConfig([]byte(withAimem(section))); err == nil || !strings.Contains(err.Error(), "read_token_file") {
+		t.Fatalf("got %v", err)
+	}
+}

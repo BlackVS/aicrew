@@ -194,6 +194,8 @@ func TestMigrateRefusals(t *testing.T) {
 		{"bad name", legacyConfig, MigrateOptions{Name: "Main Hub"}, "aimem_hubs[0].name"},
 		{"bad hub id", legacyConfig, MigrateOptions{HubID: "a hub"}, "aimem_hubs[0].hub_id"},
 		{"bad service id", legacyConfig, MigrateOptions{ServiceID: "a service"}, "service_id"},
+		{"service id dot", legacyConfig, MigrateOptions{HubID: "hub-1", ServiceID: "."}, "service_id"},
+		{"service id dot-dot", legacyConfig, MigrateOptions{HubID: "hub-1", ServiceID: ".."}, "service_id"},
 		{"same team files", legacyConfig, MigrateOptions{TeamRegisterTokenFile: "/t", TeamReadTokenFile: "/t"}, "aimem_hubs[0]"},
 		{"empty aimem_hubs after", strings.Replace(legacyConfig, `"operator_token_file"`, `"aimem_hubs": [], "operator_token_file"`, 1),
 			MigrateOptions{}, "given together"},

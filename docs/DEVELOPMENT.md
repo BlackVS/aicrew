@@ -189,8 +189,8 @@ an address; it holds no secret itself:
   claim, and refreshes every team's grants snapshot once a minute; without
   it, offers and claims of that hub's teams are refused `hub_unavailable`.
 - The single `aimem` block of earlier releases, without `name` or
-  `hub_id`, is still read for this release, as the hub `default`, and logs
-  a warning; a configuration with both forms is refused. Move it into
+  `hub_id`, is still read until 0.5.0 removes it, as the hub `default`,
+  and logs a warning; a configuration with both forms is refused. Move it into
   `aimem_hubs` with `aicrewd config migrate` (below): a team cannot name
   that hub (`--hub`) because it has no hub ID.
 - Keep the TLS key readable only by the service's account.
@@ -300,7 +300,7 @@ On a Debian or Ubuntu host, usually the aimem hub's own, aicrewd is
 installed and upgraded with the release's one-liner, run as root:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.3.0/install-aicrewd.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.4.0/install-aicrewd.sh | bash
 ```
 
 It replaces the manual steps: downloading, checking the sums, copying the
@@ -419,8 +419,8 @@ in `internal/opapi`:
 | `POST /v1/admin/invitations/revoke` | revoke: `{"id"}` |
 
 The credential routes are also served under their names before 0.3.0,
-`/v1/admin/introspection-credentials` (and `/rotate`, `/revoke`), for one
-release; they are removed in 0.4.0.
+`/v1/admin/introspection-credentials` (and `/rotate`, `/revoke`), until
+0.5.0 removes them.
 
 **The operator credential.**
 - **Required on every route.** Every route requires
@@ -518,8 +518,8 @@ where `--output` names, and never to a terminal:
 The output is checked before anything is issued, so a refused output issues
 nothing; if the secret cannot be written, what was just issued is revoked.
 
-**Names before 0.3.0.** These keep working for one release, each with a
-one-line notice, and are removed in 0.4.0: the command
+**Names before 0.3.0.** These keep working, each with a one-line notice,
+until 0.5.0 removes them: the command
 `introspection-credential` (now `hub-credential`), its API routes (above),
 and the flags `-secret-file`, `-code-file` and `-file` (now `--output`).
 
@@ -681,13 +681,13 @@ release's one-liner, from any directory, as the member's own user:
 - Linux and macOS:
 
   ```sh
-  curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.3.0/boot.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.4.0/boot.sh | bash
   ```
 
 - Windows:
 
   ```powershell
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.3.0/boot.ps1 | iex"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.4.0/boot.ps1 | iex"
   ```
 
 It replaces copying the binary by hand. Each script installs the release it

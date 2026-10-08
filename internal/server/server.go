@@ -18,6 +18,7 @@ import (
 	"github.com/BlackVS/aicrew/internal/reconcile"
 	"github.com/BlackVS/aicrew/internal/store"
 	"github.com/BlackVS/aicrew/internal/verifier"
+	"github.com/BlackVS/aicrew/internal/version"
 )
 
 // Bounds of every request.
@@ -271,7 +272,7 @@ func requestPath(r *http.Request) string {
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version.Get().Version})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

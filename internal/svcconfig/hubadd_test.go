@@ -253,3 +253,58 @@ func TestAddHubProbeRefused(t *testing.T) {
 		t.Fatal("written after a refused probe")
 	}
 }
+
+// migrate -cred-dir completes a legacy block from a provisioned directory:
+// the hub ID and the two team files come from it, checked as hub add checks
+// them; a bad directory, or the directory beside the values it names, is
+// refused and nothing is written.
+func TestMigrateFromCredDir(t *testing.T) {
+	path := writeConfig(t, legacyConfig)
+	dir := credDir(t)
+	r, err := MigrateConfig(path, MigrateOptions{Now: migrateNow, CredDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Migrated || len(r.Missing) != 0 || r.Incomplete() {
+		t.Fatalf("report = %+v", r)
+	}
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := c.AimemHubs[0]
+	if h.HubID != testHubID || h.TeamRegisterTokenFile != filepath.Join(dir, TeamRegisterTokenFile) ||
+		h.TeamReadTokenFile != filepath.Join(dir, TeamReadTokenFile) || h.RedemptionTokenFile != "/etc/aicrew/aimem-redemption.token" {
+		t.Fatalf("migrated = %+v", h)
+	}
+
+	bad := credDir(t)
+	writePrivate(t, filepath.Join(bad, HubIDFile), "not a uuid\n")
+	missing := credDir(t)
+	os.Remove(filepath.Join(missing, TeamReadTokenFile))
+	for _, tc := range []struct {
+		name string
+		opt  MigrateOptions
+		want string
+	}{
+		{"bad hub id", MigrateOptions{CredDir: bad}, HubIDFile},
+		{"missing file", MigrateOptions{CredDir: missing}, TeamReadTokenFile},
+		{"with a hub id", MigrateOptions{CredDir: dir, HubID: testHubID}, "give it alone"},
+		{"with a team file", MigrateOptions{CredDir: dir, TeamReadTokenFile: "/t"}, "give it alone"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeConfig(t, legacyConfig)
+			tc.opt.Now = migrateNow
+			if _, err := MigrateConfig(path, tc.opt); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an error naming %q", err, tc.want)
+			}
+			if got, _ := os.ReadFile(path); string(got) != legacyConfig || len(dirNames(t, path)) != 1 {
+				t.Fatal("the file changed")
+			}
+		})
+	}
+	// On a file already migrated the directory is a flag like any other.
+	if _, err := MigrateConfig(path, MigrateOptions{Now: migrateNow, CredDir: dir}); err == nil || !strings.Contains(err.Error(), "no aimem block") {
+		t.Fatalf("migrated file: %v", err)
+	}
+}

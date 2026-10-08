@@ -14,18 +14,52 @@ import (
 // started with yet.
 const exitIncomplete = 3
 
-// configCommand answers `aicrewd config migrate`; ok is false for any other
-// command line.
+// configCommand answers `aicrewd config migrate` and `aicrewd config show`;
+// ok is false for any other command line.
 func configCommand(args []string, stdout, stderr io.Writer, now time.Time) (int, bool) {
 	if len(args) == 0 || args[0] != "config" {
 		return 0, false
 	}
-	if len(args) < 2 || args[1] != "migrate" {
-		fmt.Fprintln(stderr, "usage: aicrewd config migrate -config PATH [-name NAME] [-hub-id ID]\n"+
-			"         [-team-register-token-file FILE] [-team-read-token-file FILE] [-service-id ID]")
-		return 2, true
+	switch {
+	case len(args) >= 2 && args[1] == "migrate":
+		return migrate(args[2:], stdout, stderr, now), true
+	case len(args) >= 2 && args[1] == "show":
+		return show(args[2:], stdout, stderr), true
 	}
-	return migrate(args[2:], stdout, stderr, now), true
+	fmt.Fprintln(stderr, "usage: aicrewd config migrate -config PATH [-name NAME] [-hub-id ID]\n"+
+		"         [-team-register-token-file FILE] [-team-read-token-file FILE] [-service-id ID]\n"+
+		"         [-cred-dir DIR]\n"+
+		"       aicrewd config show -config PATH")
+	return 2, true
+}
+
+// show prints what an installer needs of a configuration, one name=value
+// per line, so that it parses no JSON: the store, the listen address, the
+// service ID, and whether the file still has the aimem block of 0.2.0. A
+// file aicrewd refuses for any other reason than a missing hub_id is
+// refused.
+func show(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("aicrewd config show", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	path := fs.String("config", "", "path to aicrewd's JSON configuration file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *path == "" || fs.NArg() != 0 {
+		fs.Usage()
+		return 2
+	}
+	c, err := svcconfig.ShowConfig(*path)
+	if err != nil {
+		fmt.Fprintf(stderr, "aicrewd config show: %v\n", err)
+		return 1
+	}
+	legacy := "no"
+	if c.Aimem != nil {
+		legacy = "yes"
+	}
+	fmt.Fprintf(stdout, "store_path=%s\nlisten_addr=%s\nservice_id=%s\nlegacy_aimem_block=%s\n", c.StorePath, c.ListenAddr, c.ServiceID, legacy)
+	return 0
 }
 
 func migrate(args []string, stdout, stderr io.Writer, now time.Time) int {
@@ -38,6 +72,7 @@ func migrate(args []string, stdout, stderr io.Writer, now time.Time) int {
 	fs.StringVar(&opt.TeamRegisterTokenFile, "team-register-token-file", "", "the file holding the team.register credential")
 	fs.StringVar(&opt.TeamReadTokenFile, "team-read-token-file", "", "the file holding the team.read credential")
 	fs.StringVar(&opt.ServiceID, "service-id", "", "a new service_id, the peer ID the hub lists for this service")
+	fs.StringVar(&opt.CredDir, "cred-dir", "", "the directory aimem identity peer provision wrote: the hub ID and the two team credential files come from it")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

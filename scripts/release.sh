@@ -80,6 +80,13 @@ check)
     $dry || fail "CHANGELOG.md has no [${TAG#v}] section at $(git rev-parse --short HEAD): the release-preparation PR writes it"
     echo "::warning::CHANGELOG.md has no [${TAG#v}] section (a dry run goes on)"
   fi
+  # The one-liner fetches install-aicrewd.sh from this tag, and the script
+  # installs the release it pins: a tag it does not pin would install
+  # another release.
+  if [ -f install-aicrewd.sh ] && ! grep -qx "RELEASE=$TAG" install-aicrewd.sh; then
+    $dry || fail "install-aicrewd.sh at $(git rev-parse --short HEAD) does not pin $TAG: the release-preparation PR bumps its RELEASE"
+    echo "::warning::install-aicrewd.sh does not pin $TAG (a dry run goes on)"
+  fi
   if ! $dry && gh release view "$TAG" >/dev/null 2>&1; then
     fail "release $TAG already exists"
   fi

@@ -43,7 +43,9 @@ the supported release.
      ```
 
      It writes the four peer credentials and `aimem-hub-id`. A rerun issues
-     only what is missing.
+     only what is missing. For a self-signed aicrewd certificate (the
+     installer's `AICREW_DOMAIN`), use `--peer-trust-pin sha256-…` in place
+     of `--peer-trust-dns`.
   3. **aicrewd.** On the hub host, as root, run the hub one-liner:
 
      ```sh
@@ -51,8 +53,10 @@ the supported release.
      ```
 
      - A configuration that still has the single `aimem` block of 0.2.0
-       needs `AICREW_CRED_DIR=DIR`. The installer migrates a scratch copy
-       first and refuses, with nothing changed, if it would not complete.
+       needs the provisioned directory, given to `bash`:
+       `curl -fsSL …/v0.4.0/install-aicrewd.sh | AICREW_CRED_DIR=DIR bash`.
+       The installer migrates a scratch copy first and refuses, with
+       nothing changed, if it would not complete.
      - It then copies the configuration and the store beside themselves,
        keeps the previous binaries as `.prev`, and swaps the binaries.
      - It runs `aicrewd config migrate -cred-dir DIR`, then waits for health

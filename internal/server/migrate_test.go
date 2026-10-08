@@ -272,3 +272,21 @@ func mustRead(t *testing.T, path string) []byte {
 	}
 	return raw
 }
+
+// A path through a linked directory is migrated as given: the copy is named
+// beside that path, not beside the directory's target.
+func TestMigrateThroughALinkedDirectory(t *testing.T) {
+	target := writeConfig(t, legacyConfig)
+	linkDir := filepath.Join(t.TempDir(), "conf")
+	if err := os.Symlink(filepath.Dir(target), linkDir); err != nil {
+		t.Skipf("no symbolic link here: %v", err)
+	}
+	path := filepath.Join(linkDir, "aicrewd.json")
+	r, err := MigrateConfig(path, MigrateOptions{Now: migrateNow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Backup != path+".20261008T043000Z.bak" {
+		t.Fatalf("backup = %s", r.Backup)
+	}
+}

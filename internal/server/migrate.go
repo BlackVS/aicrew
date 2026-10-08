@@ -73,9 +73,10 @@ func (r MigrateReport) Incomplete() bool {
 // any other reason than a missing hub_id is refused, and nothing is
 // written. A symbolic link is followed: the file it names is migrated.
 func MigrateConfig(path string, opt MigrateOptions) (MigrateReport, error) {
-	path, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return MigrateReport{}, fmt.Errorf("open config: %w", err)
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if path, err = filepath.EvalSymlinks(path); err != nil {
+			return MigrateReport{}, fmt.Errorf("open config: %w", err)
+		}
 	}
 	raw, info, err := readConfigFile(path)
 	if err != nil {

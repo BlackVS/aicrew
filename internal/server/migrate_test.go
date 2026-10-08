@@ -204,6 +204,14 @@ func TestMigrateRefusals(t *testing.T) {
 		{"null aimem_hubs before", strings.Replace(legacyConfig, `"aimem":`, `"aimem_hubs": null, "aimem":`, 1),
 			MigrateOptions{}, "given together"},
 		{"result over the size limit", oversizedLegacy(), MigrateOptions{HubID: "hub-1"}, "migrated config would be refused: it is larger than"},
+		{"AIMEM_HUBS empty after", strings.Replace(legacyConfig, `"operator_token_file"`, `"AIMEM_HUBS": [], "operator_token_file"`, 1),
+			MigrateOptions{}, "given together"},
+		{"Aimem_Hubs null before", strings.Replace(legacyConfig, `"aimem":`, `"Aimem_Hubs": null, "aimem":`, 1),
+			MigrateOptions{}, "given together"},
+		{"aimem and AIMEM", strings.Replace(legacyConfig, `"operator_token_file"`, `"AIMEM": {}, "operator_token_file"`, 1),
+			MigrateOptions{}, "given twice"},
+		{"base_url and BASE_URL", strings.Replace(legacyConfig, `"aimem": {`, `"aimem": {"BASE_URL": "https://other.example", `, 1),
+			MigrateOptions{}, "given twice"},
 		{"aimem twice", strings.Replace(legacyConfig, `"operator_token_file"`, `"aimem": {}, "operator_token_file"`, 1),
 			MigrateOptions{}, `"aimem" is given twice`},
 		{"flags on a migrated file", strings.Replace(validConfig, `"operator_token_file"`, hubs+`"operator_token_file"`, 1),
@@ -245,7 +253,7 @@ func TestMigrateKeepsAnExistingCopy(t *testing.T) {
 
 // The migrated file is the same JSON whatever the input's layout.
 func TestMigratedIsIndented(t *testing.T) {
-	out, err := migrated([]byte(strings.Join(strings.Fields(legacyConfig), "")), MigrateOptions{})
+	out, err := migrated([]byte(strings.Join(strings.Fields(legacyConfig), "")), MigrateOptions{Name: LegacyHubName})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,4 +319,22 @@ func oversizedLegacy() string {
 	compact := strings.Join(strings.Fields(legacyConfig), "")
 	grow := maxConfigBytes - len(compact)
 	return strings.Replace(compact, "aicrew.db", strings.Repeat("a", len("aicrew.db")+grow), 1)
+}
+
+// A member is matched regardless of case, as aicrewd's decoder matches it:
+// an upper-case aimem block is the block, and it is migrated.
+func TestMigrateMatchesNamesRegardlessOfCase(t *testing.T) {
+	raw := strings.Replace(strings.Replace(legacyConfig, `"aimem":`, `"AIMEM":`, 1), `"service_id":`, `"Service_ID":`, 1)
+	path := writeConfig(t, raw)
+	r, err := MigrateConfig(path, MigrateOptions{Now: migrateNow, HubID: "hub-1", ServiceID: "aicrew-main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := decodeConfig(mustRead(t, path))
+	if err != nil || !r.Migrated || c.Aimem != nil || len(c.AimemHubs) != 1 || c.AimemHubs[0].HubID != "hub-1" || c.ServiceID != "aicrew-main" {
+		t.Fatalf("migrated = %+v, %v", c, err)
+	}
+	if keys := strings.Join(topKeys(t, mustRead(t, path)), ","); strings.Contains(keys, "AIMEM") || strings.Count(strings.ToLower(keys), "service_id") != 1 {
+		t.Fatalf("keys = %s", keys)
+	}
 }

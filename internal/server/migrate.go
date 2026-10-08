@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"time"
 )
 
@@ -95,6 +97,16 @@ func MigrateConfig(path string, opt MigrateOptions) (MigrateReport, error) {
 		}
 		return report(c), nil
 	}
+	if opt.Name == "" {
+		opt.Name = LegacyHubName
+	}
+	for _, f := range []*string{&opt.TeamRegisterTokenFile, &opt.TeamReadTokenFile} {
+		if *f != "" {
+			if *f, err = filepath.Abs(*f); err != nil {
+				return MigrateReport{}, err
+			}
+		}
+	}
 	out, err := migrated(raw, opt)
 	if err != nil {
 		return MigrateReport{}, err
@@ -108,6 +120,18 @@ func MigrateConfig(path string, opt MigrateOptions) (MigrateReport, error) {
 	nc, err := parsePending(out)
 	if err != nil {
 		return MigrateReport{}, fmt.Errorf("the migrated config would be refused: %w", err)
+	}
+	// aicrewd must read the new file as the old one with the block moved:
+	// a member the text rewrite missed would otherwise change what it reads.
+	want := c
+	want.Aimem = nil
+	want.AimemHubs = []AimemHub{{Name: opt.Name, HubID: opt.HubID, AimemConfig: *c.Aimem,
+		TeamRegisterTokenFile: opt.TeamRegisterTokenFile, TeamReadTokenFile: opt.TeamReadTokenFile}}
+	if opt.ServiceID != "" {
+		want.ServiceID = opt.ServiceID
+	}
+	if !reflect.DeepEqual(nc, want) {
+		return MigrateReport{}, errors.New("the migrated config would not read as the original with its aimem block moved; move the block by hand")
 	}
 	backup := path + "." + opt.Now.UTC().Format("20060102T150405Z") + ".bak"
 	if err := writeBackup(backup, raw, info.Mode().Perm()); err != nil {
@@ -194,12 +218,8 @@ func migrated(raw []byte, opt MigrateOptions) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: aimem: %w", err)
 	}
-	name := opt.Name
-	if name == "" {
-		name = LegacyHubName
-	}
 	var entry jsonObject
-	entry.add("name", name)
+	entry.add("name", opt.Name)
 	if opt.HubID != "" {
 		entry.add("hub_id", opt.HubID)
 	}
@@ -208,14 +228,9 @@ func migrated(raw []byte, opt MigrateOptions) ([]byte, error) {
 		{"team_register_token_file", opt.TeamRegisterTokenFile},
 		{"team_read_token_file", opt.TeamReadTokenFile},
 	} {
-		if f.path == "" {
-			continue
+		if f.path != "" {
+			entry.add(f.key, f.path)
 		}
-		abs, err := filepath.Abs(f.path)
-		if err != nil {
-			return nil, err
-		}
-		entry.add(f.key, abs)
 	}
 	hubs, err := json.Marshal([]json.RawMessage{entry.encode()})
 	if err != nil {
@@ -248,16 +263,14 @@ func decodeJSONObject(raw []byte) (jsonObject, error) {
 		return nil, errors.New("a JSON object expected")
 	}
 	var o jsonObject
-	seen := map[string]bool{}
 	for dec.More() {
 		t, err := dec.Token()
 		if err != nil {
 			return nil, err
 		}
-		if seen[t.(string)] {
-			return nil, fmt.Errorf("%q is given twice", t)
+		if o.get(t.(string)) != nil {
+			return nil, fmt.Errorf("%q is given twice (names are matched regardless of case)", t)
 		}
-		seen[t.(string)] = true
 		var v json.RawMessage
 		if err := dec.Decode(&v); err != nil {
 			return nil, err
@@ -267,9 +280,11 @@ func decodeJSONObject(raw []byte) (jsonObject, error) {
 	return o, nil
 }
 
+// get and replace match a key regardless of case, as encoding/json matches
+// a member to a Config field.
 func (o jsonObject) get(key string) json.RawMessage {
 	for _, m := range o {
-		if m.key == key {
+		if strings.EqualFold(m.key, key) {
 			return m.value
 		}
 	}
@@ -283,7 +298,7 @@ func (o *jsonObject) add(key, value string) {
 
 func (o jsonObject) replace(key, newKey string, value json.RawMessage) {
 	for i := range o {
-		if o[i].key == key {
+		if strings.EqualFold(o[i].key, key) {
 			o[i] = jsonMember{newKey, value}
 		}
 	}

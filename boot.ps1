@@ -44,6 +44,15 @@ function Get-AgentVersion([string]$Exe) {
   } catch {}
   return ''
 }
+# Get-Sha256 hashes through .NET: Get-FileHash lives in a module that a
+# powershell.exe started from PowerShell 7 may not find (it inherits
+# PSModulePath).
+function Get-Sha256([string]$Path) {
+  $sha = [Security.Cryptography.SHA256]::Create()
+  $f = [IO.File]::OpenRead($Path)
+  try { return (($sha.ComputeHash($f) | ForEach-Object { $_.ToString('x2') }) -join '') }
+  finally { $f.Dispose(); $sha.Dispose() }
+}
 function Install-Agent([string]$Tag, [string]$DlBase, [string]$BinDir) {
   $exe = Join-Path $BinDir 'aicrew-agent.exe'
   $asset = 'aicrew-agent-windows-amd64.exe'
@@ -69,7 +78,7 @@ function Install-Agent([string]$Tag, [string]$DlBase, [string]$BinDir) {
       $f = $_ -split '\s+'
       if ($f.Count -ge 2 -and ($f[1] -eq $asset -or $f[1] -eq "*$asset")) { $f[0].ToLower() }
     } | Select-Object -First 1
-    $got = (Get-FileHash $dl -Algorithm SHA256).Hash.ToLower()
+    $got = Get-Sha256 $dl
     if (-not $want -or $want -ne $got) {
       $shown = if ($want) { $want } else { 'absent' }
       throw "checksum mismatch for $asset (want $shown, got $got); refusing it. Nothing changed."

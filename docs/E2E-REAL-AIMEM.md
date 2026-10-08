@@ -29,7 +29,7 @@ scripts/e2e-real-aimem.sh -aimem-src ../aimem -runs 3
   each run directory.
 - `-skip-faults` runs the skip-the-fault matrix instead (see "Faults").
 
-It needs Go 1.26 or later (aimem v0.9.0 builds with the Go 1.26
+It needs Go 1.26 or later (aimem v0.9.2 builds with the Go 1.26
 toolchain), git, tar, and network access the first time, to download both
 modules' dependencies. Windows is best effort and not wired yet: the
 harness skips there.
@@ -37,7 +37,7 @@ harness skips there.
 ## The pin
 
 `aimemPin` in `e2e/realaimem/harness_test.go` is the aimem commit the
-harness builds: the v0.9.0 release (dddea22), which
+harness builds: the v0.9.2 release (4eae00c), which
 `internal/agent/supported.json` names as both the minimum and the tested
 aimem. It carries every prerequisite:
 - C5b, C6, C5-w3 and `aimem hub credential`;
@@ -46,10 +46,13 @@ aimem. It carries every prerequisite:
 - team registration and team read (aimem #175), with which aicrewd names
   its own team profiles;
 - aimem's own `task_not_ready` refusal (#179), which the coordinator's
-  triage answers.
+  triage answers;
+- `aimem identity peer provision`, which registers the peer and writes its
+  four credentials and the hub's ID (`aimem-hub-id`) into one directory,
+  the directory aicrew's operator commands read.
 
 The build stamps the commit's `git describe` as aimem's version, as aimem's
-release build stamps the tag. At the pin that is `v0.9.0`, which
+release build stamps the tag. At the pin that is `v0.9.2`, which
 `aicrew-agent`'s dependency check reads as the supported release. The
 source clone must hold the commit and the tag (`git fetch --tags`).
 
@@ -69,20 +72,36 @@ Every listener is on 127.0.0.1.
    under the run's CA (`SSL_CERT_FILE`).
 2. **The hub, following aimem's pilot runbook:**
    - `tasks on` and `process select`;
-   - aicrew registered as the identity peer, with the hub ID read back;
-   - the identity.redeem, reservation.read, team.register and team.read
-     credentials.
+   - aicrew provisioned as the identity peer with
+     `aimem identity peer provision --output-dir`: the identity.redeem,
+     reservation.read, team.register and team.read credentials and the hub's
+     ID in one directory. The run fails unless the hub ID there is the one
+     the peer list shows.
 3. **aicrew.**
-   - aicrewd starts with its operator credential and the hub as a named
-     block of `aimem_hubs`, pointing at the hub through the fault proxy.
-     The operator administers it with `aicrew` through the operator API
-     while it runs.
-   - The team, created with `aicrew team create --hub`: aicrewd registers
-     it on the hub (team.register), and the run fails unless the team comes
-     back `registered`.
-   - The team's grant on the hub, by the name aicrewd registered
-     (`aimem identity team grant --team-name`): the team's only project
-     set, which aicrewd reads live at every offer and claim (team.read).
+   - aicrewd's configuration is built with the operator commands, from
+     the 0.2.0 shape an upgraded hub has:
+     - it starts with the single `aimem` block;
+     - `aicrewd config migrate -cred-dir` moves it into `aimem_hubs`, with
+       the hub's ID and the team credential files from the provisioned
+       directory, and must report nothing still to supply;
+     - `aicrew hub add --cred-dir` then binds the hub again in place, after
+       its live team read against the real hub.
+
+     The run checks the result: one `aimem_hubs` entry, the hub's ID, and
+     all four files from the directory. aicrewd then starts with its
+     operator credential, pointing at the hub through the fault proxy. The
+     operator administers it with `aicrew` through the operator API while it
+     runs.
+   - The team, by `aicrew team setup --hub --project`:
+     - the first run registers the team on the hub (team.register) and must
+       exit 3, printing exactly one grant command, by the name aicrewd
+       registered;
+     - the hub's admin runs that command as printed;
+     - the second run must find the team already registered and the project
+       granted, read live (team.read), and exit 0.
+
+     The team's only project is what aicrewd reads at every offer and
+     claim.
    - The hub's outbound credential, issued with `aicrew hub-credential
      issue`.
    - One invitation per member, issued with `aicrew invitation issue`.

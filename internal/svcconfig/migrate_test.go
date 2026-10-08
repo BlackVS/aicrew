@@ -1,4 +1,4 @@
-package server
+package svcconfig
 
 import (
 	"bytes"
@@ -176,7 +176,7 @@ func TestMigrateNoHub(t *testing.T) {
 
 // A refused migration writes nothing: no copy, no change.
 func TestMigrateRefusals(t *testing.T) {
-	if raw := oversizedLegacy(); len(raw) != maxConfigBytes {
+	if raw := oversizedLegacy(); len(raw) != MaxConfigBytes {
 		t.Fatalf("oversizedLegacy is %d bytes", len(raw))
 	} else if _, err := ParseConfig([]byte(raw)); err != nil {
 		t.Fatalf("oversizedLegacy is refused as input: %v", err)
@@ -317,7 +317,7 @@ func TestMigrateThroughALinkedDirectory(t *testing.T) {
 // limit, written compactly, whose migrated, indented form is over it.
 func oversizedLegacy() string {
 	compact := strings.Join(strings.Fields(legacyConfig), "")
-	grow := maxConfigBytes - len(compact)
+	grow := MaxConfigBytes - len(compact)
 	return strings.Replace(compact, "aicrew.db", strings.Repeat("a", len("aicrew.db")+grow), 1)
 }
 

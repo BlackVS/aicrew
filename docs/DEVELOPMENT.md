@@ -79,8 +79,12 @@ The end-to-end runs against a real aimem are not part of these checks:
 - `cmd/aicrewd`: the aicrew HTTPS service (below).
 - `cmd/aicrew`: the operator's command line (below).
 - `cmd/aicrew-agent`: an agent's client; it holds no store (below).
-- `internal/server`: the service's configuration, TLS listener, request
-  bounds, logging and routes, including aimem's session introspection.
+- `internal/server`: the service's TLS listener, request bounds, logging
+  and routes, including aimem's session introspection.
+- `internal/svcconfig`: `aicrewd.json`: its shape, the checks that need no
+  aimem client, and its rewriting by `aicrewd config migrate` and
+  `aicrew hub add`. It links no store, so `aicrew` can use it; `aicrewd`
+  adds its client checks on top.
 - `internal/store`: the aicrew coordination store. It is internal and has
   no MCP surface; only `aicrewd` exposes anything over the network.
   See the package documentation for the rules it enforces.

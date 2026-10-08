@@ -1,4 +1,4 @@
-package server
+package svcconfig
 
 import (
 	"bytes"
@@ -111,8 +111,8 @@ func MigrateConfig(path string, opt MigrateOptions) (MigrateReport, error) {
 	if err != nil {
 		return MigrateReport{}, err
 	}
-	if len(out) > maxConfigBytes {
-		return MigrateReport{}, fmt.Errorf("the migrated config would be refused: it is larger than %d bytes", maxConfigBytes)
+	if len(out) > MaxConfigBytes {
+		return MigrateReport{}, fmt.Errorf("the migrated config would be refused: it is larger than %d bytes", MaxConfigBytes)
 	}
 	if _, err := decodeJSONObject(out); err != nil {
 		return MigrateReport{}, fmt.Errorf("the migrated config would be refused: %w", err)
@@ -155,12 +155,12 @@ func readConfigFile(path string) ([]byte, os.FileInfo, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("read config: %w", err)
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(f, MaxConfigBytes+1))
 	if err != nil {
 		return nil, nil, fmt.Errorf("read config: %w", err)
 	}
-	if len(raw) > maxConfigBytes {
-		return nil, nil, fmt.Errorf("config is larger than %d bytes", maxConfigBytes)
+	if len(raw) > MaxConfigBytes {
+		return nil, nil, fmt.Errorf("config is larger than %d bytes", MaxConfigBytes)
 	}
 	return raw, info, nil
 }

@@ -374,7 +374,7 @@ func (s *Server) bindHubs() error {
 		if cfg.Aimem != nil {
 			at = "aimem"
 		}
-		v, err := verifier.New(h.verifierConfig(cfg.ServiceID))
+		v, err := verifier.New(verifierConfig(h.AimemConfig, cfg.ServiceID))
 		if err != nil {
 			return fmt.Errorf("%s: %w", at, err)
 		}
@@ -383,7 +383,7 @@ func (s *Server) bindHubs() error {
 		}
 		verifiers[h.HubID] = v
 		if h.ReadTokenFile != "" {
-			r, err := aimemread.New(h.readerConfig(cfg.ServiceID))
+			r, err := aimemread.New(readerConfig(h.AimemConfig, cfg.ServiceID))
 			if err != nil {
 				return fmt.Errorf("%s: %w", at, err)
 			}
@@ -398,7 +398,7 @@ func (s *Server) bindHubs() error {
 			s.loop = reconcile.New(s.store, scope, s.log)
 		}
 		b := hubBinding{id: h.HubID}
-		if tc, ok := h.teamsConfig(cfg.ServiceID); ok {
+		if tc, ok := h.TeamsConfig(cfg.ServiceID); ok {
 			c, err := hubteams.New(tc)
 			if err != nil {
 				return fmt.Errorf("%s: %w", at, err)

@@ -1,4 +1,4 @@
-package server
+package svcconfig
 
 import (
 	"os"
@@ -6,13 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/BlackVS/aicrew/internal/svcconfig"
-)
-
-const (
-	maxConfigBytes         = svcconfig.MaxConfigBytes
-	defaultShutdownTimeout = svcconfig.DefaultShutdownTimeout
 )
 
 const validConfig = `{"store_path":"/var/lib/aicrew/aicrew.db","listen_addr":"127.0.0.1:8443",
@@ -24,7 +17,7 @@ func TestParseConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ServiceID != "aicrew-example" || time.Duration(c.ShutdownTimeout) != defaultShutdownTimeout {
+	if c.ServiceID != "aicrew-example" || time.Duration(c.ShutdownTimeout) != DefaultShutdownTimeout {
 		t.Fatalf("config = %+v", c)
 	}
 	c, err = ParseConfig([]byte(strings.Replace(validConfig, "}", `,"shutdown_timeout":"30s"}`, 1)))
@@ -72,7 +65,7 @@ func TestLoadConfig(t *testing.T) {
 		t.Fatal("a missing config file was accepted")
 	}
 	big := filepath.Join(dir, "big.json")
-	if err := os.WriteFile(big, []byte(strings.Repeat(" ", maxConfigBytes+1)), 0o600); err != nil {
+	if err := os.WriteFile(big, []byte(strings.Repeat(" ", MaxConfigBytes+1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadConfig(big); err == nil || !strings.Contains(err.Error(), "larger") {

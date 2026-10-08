@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/BlackVS/aicrew/internal/server"
+	"github.com/BlackVS/aicrew/internal/svcconfig"
 )
 
 // exitIncomplete is migrate's exit status for a file aicrewd still refuses
@@ -32,8 +32,8 @@ func migrate(args []string, stdout, stderr io.Writer, now time.Time) int {
 	fs := flag.NewFlagSet("aicrewd config migrate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	path := fs.String("config", "", "path to aicrewd's JSON configuration file")
-	opt := server.MigrateOptions{Now: now}
-	fs.StringVar(&opt.Name, "name", "", "the hub's alias in aimem_hubs (default \""+server.LegacyHubName+"\")")
+	opt := svcconfig.MigrateOptions{Now: now}
+	fs.StringVar(&opt.Name, "name", "", "the hub's alias in aimem_hubs (default \""+svcconfig.LegacyHubName+"\")")
 	fs.StringVar(&opt.HubID, "hub-id", "", "the hub's ID, as `aimem identity peer list` shows it")
 	fs.StringVar(&opt.TeamRegisterTokenFile, "team-register-token-file", "", "the file holding the team.register credential")
 	fs.StringVar(&opt.TeamReadTokenFile, "team-read-token-file", "", "the file holding the team.read credential")
@@ -45,7 +45,7 @@ func migrate(args []string, stdout, stderr io.Writer, now time.Time) int {
 		fs.Usage()
 		return 2
 	}
-	r, err := server.MigrateConfig(*path, opt)
+	r, err := svcconfig.MigrateConfig(*path, opt)
 	if err != nil {
 		fmt.Fprintf(stderr, "aicrewd config migrate: %v; nothing was written\n", err)
 		return 1

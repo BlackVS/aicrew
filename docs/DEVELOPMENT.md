@@ -207,8 +207,10 @@ atomically, with its mode (and, on Unix, its owner and group). The previous
 file is kept beside it as `aicrewd.json.<UTC time>.bak`. A symbolic link is
 followed: the file it names is migrated, and the link stays.
 
-The input must be a configuration aicrewd accepts. The result is checked
-the same way before anything is written. A refusal writes nothing.
+The input must be a configuration aicrewd accepts. The result is checked,
+with its size, the same way before anything is written. A refusal writes
+nothing. An `aimem_hubs` member beside the block, even an empty one, is
+refused.
 
 A file already in the `aimem_hubs` form, or with no hub, is left as it is:
 a second run changes nothing. Flags are refused on such a file.

@@ -176,6 +176,11 @@ func TestMigrateNoHub(t *testing.T) {
 
 // A refused migration writes nothing: no copy, no change.
 func TestMigrateRefusals(t *testing.T) {
+	if raw := oversizedLegacy(); len(raw) != maxConfigBytes {
+		t.Fatalf("oversizedLegacy is %d bytes", len(raw))
+	} else if _, err := ParseConfig([]byte(raw)); err != nil {
+		t.Fatalf("oversizedLegacy is refused as input: %v", err)
+	}
 	hubs := `"aimem_hubs":[{"name":"main","hub_id":"hub-1","base_url":"https://aimem.example:8443",
 		"tls_trust_mode":"ca_dns","tls_trust_value":"aimem.example","redemption_token_file":"/etc/aicrew/r.token"}],`
 	for _, tc := range []struct {
@@ -190,6 +195,15 @@ func TestMigrateRefusals(t *testing.T) {
 		{"bad hub id", legacyConfig, MigrateOptions{HubID: "a hub"}, "aimem_hubs[0].hub_id"},
 		{"bad service id", legacyConfig, MigrateOptions{ServiceID: "a service"}, "service_id"},
 		{"same team files", legacyConfig, MigrateOptions{TeamRegisterTokenFile: "/t", TeamReadTokenFile: "/t"}, "aimem_hubs[0]"},
+		{"empty aimem_hubs after", strings.Replace(legacyConfig, `"operator_token_file"`, `"aimem_hubs": [], "operator_token_file"`, 1),
+			MigrateOptions{}, "given together"},
+		{"empty aimem_hubs before", strings.Replace(legacyConfig, `"aimem":`, `"aimem_hubs": [], "aimem":`, 1),
+			MigrateOptions{}, "given together"},
+		{"null aimem_hubs after", strings.Replace(legacyConfig, `"operator_token_file"`, `"aimem_hubs": null, "operator_token_file"`, 1),
+			MigrateOptions{}, "given together"},
+		{"null aimem_hubs before", strings.Replace(legacyConfig, `"aimem":`, `"aimem_hubs": null, "aimem":`, 1),
+			MigrateOptions{}, "given together"},
+		{"result over the size limit", oversizedLegacy(), MigrateOptions{HubID: "hub-1"}, "migrated config would be refused: it is larger than"},
 		{"aimem twice", strings.Replace(legacyConfig, `"operator_token_file"`, `"aimem": {}, "operator_token_file"`, 1),
 			MigrateOptions{}, `"aimem" is given twice`},
 		{"flags on a migrated file", strings.Replace(validConfig, `"operator_token_file"`, hubs+`"operator_token_file"`, 1),
@@ -289,4 +303,12 @@ func TestMigrateThroughALinkedDirectory(t *testing.T) {
 	if r.Backup != path+".20261008T043000Z.bak" {
 		t.Fatalf("backup = %s", r.Backup)
 	}
+}
+
+// oversizedLegacy is a legacy configuration exactly at aicrewd's size
+// limit, written compactly, whose migrated, indented form is over it.
+func oversizedLegacy() string {
+	compact := strings.Join(strings.Fields(legacyConfig), "")
+	grow := maxConfigBytes - len(compact)
+	return strings.Replace(compact, "aicrew.db", strings.Repeat("a", len("aicrew.db")+grow), 1)
 }

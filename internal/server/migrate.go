@@ -99,6 +99,12 @@ func MigrateConfig(path string, opt MigrateOptions) (MigrateReport, error) {
 	if err != nil {
 		return MigrateReport{}, err
 	}
+	if len(out) > maxConfigBytes {
+		return MigrateReport{}, fmt.Errorf("the migrated config would be refused: it is larger than %d bytes", maxConfigBytes)
+	}
+	if _, err := decodeJSONObject(out); err != nil {
+		return MigrateReport{}, fmt.Errorf("the migrated config would be refused: %w", err)
+	}
 	nc, err := parsePending(out)
 	if err != nil {
 		return MigrateReport{}, fmt.Errorf("the migrated config would be refused: %w", err)
@@ -178,6 +184,11 @@ func migrated(raw []byte, opt MigrateOptions) ([]byte, error) {
 	top, err := decodeJSONObject(raw)
 	if err != nil {
 		return nil, err
+	}
+	if top.get("aimem_hubs") != nil {
+		// Even an empty or null aimem_hubs would be a second member of that
+		// name, and the later one wins when aicrewd reads the file.
+		return nil, errors.New("config: aimem and aimem_hubs are given together; remove the empty aimem_hubs or move the aimem block into it")
 	}
 	block, err := decodeJSONObject(top.get("aimem"))
 	if err != nil {

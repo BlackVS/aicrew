@@ -24,6 +24,7 @@ const (
 	TeamPath             = "/v1/admin/team"                   // GET show (?id=)
 	TeamRenamePath       = "/v1/admin/team/rename"            // POST
 	TeamRegisterPath     = "/v1/admin/team/register"          // POST
+	TeamGrantsPath       = "/v1/admin/team/grants"            // POST: read the team's grants live
 	InvitationsPath      = "/v1/admin/invitations"            // GET list (?team=), POST issue
 	InvitationRevokePath = "/v1/admin/invitations/revoke"     // POST
 
@@ -54,6 +55,9 @@ const (
 	CodeRotateNeedsOne   = "rotate_needs_one_active"
 	CodeInvitationFinal  = "invitation_final"
 	CodeInternal         = "internal_error"
+	// CodeHubUnavailable is a hub that did not answer a live read, or
+	// refused it; the message names the hub's code.
+	CodeHubUnavailable = "hub_unavailable"
 )
 
 // CredentialRequest issues or rotates an introspection credential. An empty
@@ -156,6 +160,18 @@ type TeamRequest struct {
 type TeamRegisterRequest struct {
 	ID  string `json:"id"`
 	Hub string `json:"hub,omitempty"`
+}
+
+// TeamGrantsRequest reads a team's grants from its hub, live.
+type TeamGrantsRequest struct {
+	ID string `json:"id"`
+}
+
+// TeamGrants is a team as a live read of its hub left it, with the service
+// ID the hub knows this service by: the peer a grant names.
+type TeamGrants struct {
+	Team
+	ServiceID string `json:"service_id"`
 }
 
 // TeamRenameRequest renames a team.

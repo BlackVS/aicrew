@@ -313,6 +313,7 @@ in `internal/opapi`:
 | `GET /v1/admin/team?id=TEAM` | show a team and its members |
 | `POST /v1/admin/team/rename` | `{"team_id", "expected_revision", "name"}` |
 | `POST /v1/admin/team/register` | `{"id", "hub"}`: register the team on its hub again; `hub` names the hub of a team that names none |
+| `POST /v1/admin/team/grants` | `{"id"}`: read the team's grants from its hub now and record them; answers the team and this service's `service_id`, or `hub_unavailable` with the hub's code |
 | `GET /v1/admin/invitations?team=TEAM` | list invitations (metadata, with each team's ID and name) |
 | `POST /v1/admin/invitations` | issue: `{"purpose", "team_id", "role", "hub_id", "label", "agent_id", "expected_user_id", "ttl"}`; the answer carries the code, once |
 | `POST /v1/admin/invitations/revoke` | revoke: `{"id"}` |
@@ -472,6 +473,7 @@ command prints the team as JSON; `list` adds each team's member count and
 `show` its current members.
 
 ```sh
+bin/aicrew team setup    crew --hub main --project PROJECT [--project PROJECT ...]
 bin/aicrew team create   --name crew --hub main
 bin/aicrew team register --team-name crew [--hub main]
 bin/aicrew team list
@@ -479,6 +481,23 @@ bin/aicrew team show     --team-name crew
 bin/aicrew team rename   --team-name crew --expect-revision N --name crew-2
 ```
 
+- `setup` puts a team on its hub with its projects, in one command, and can
+  be run again:
+  - it creates the team on `--hub` when no team has the name, or registers
+    an existing one there unless it is already registered. A team on
+    another hub is refused, since a team keeps its hub;
+  - a refused registration is reported with the hub's code and what to do,
+    for example `peer_forbidden` (check `service_id` in `aicrewd.json`
+    against `aimem identity peer list`) or `team_name_taken`. It exits 1;
+  - it then reads the team's grants from the hub live
+    (`POST /v1/admin/team/grants`, not the minute's snapshot);
+  - each `--project` the hub grants is listed, with a note when the hub
+    binds it no repository or process. For each one it does not grant yet,
+    it prints the exact command the hub's admin runs,
+    `aimem identity team grant --peer SERVICE_ID --team-name TEAM --project PROJECT`,
+    and exits 3;
+  - run again once the grants exist, it registers nothing again, reports
+    every project granted and exits 0.
 - Wherever a command takes `--team`, the team's ID, it takes `--team-name`
   instead: one or the other, never both. A name that no team has fails
   before anything changes. Team names are unique.

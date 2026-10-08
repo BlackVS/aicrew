@@ -2,7 +2,7 @@
 # aicrew-agent installer for Linux and macOS: installs or upgrades the
 # member's aicrew-agent, from any directory:
 #
-#   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.3.0/boot.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.4.0/boot.sh | bash
 #
 # It installs the release this script was fetched from (RELEASE below):
 # aicrew-agent for this platform, checked against that release's
@@ -21,7 +21,7 @@ set -euo pipefail
 
 # The release this script installs. Bumped together with the CHANGELOG
 # when a release is cut (internal/installer checks they agree).
-RELEASE=v0.3.0
+RELEASE=v0.4.0
 
 command -v curl >/dev/null 2>&1 || { echo "ERROR: 'curl' is required." >&2; exit 1; }
 REPO=${AICREW_REPO:-BlackVS/aicrew}

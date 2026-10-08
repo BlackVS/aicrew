@@ -366,8 +366,8 @@ func (s *Server) bindHubs() error {
 		return nil
 	}
 	if cfg.Aimem != nil {
-		s.log.Warn("aicrewd.json: the aimem block is read as aimem_hubs[" + LegacyHubName + "] for this release " +
-			"and is removed in 0.4.0; move it into aimem_hubs with its name and hub_id")
+		s.log.Warn("aicrewd.json: the aimem block is read as aimem_hubs[" + LegacyHubName + "] until " +
+			"0.5.0 removes it; move it into aimem_hubs with its name and hub_id")
 	}
 	verifiers := hubVerifier{}
 	for i, h := range hubs {

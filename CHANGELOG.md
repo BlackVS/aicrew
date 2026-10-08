@@ -12,6 +12,159 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.4.0] - 2026-10-08
+
+Product tooling for setting up and upgrading aicrew, with no hand edits:
+- operator commands that move and bind a hub in `aicrewd.json` and set up a
+  team on its hub;
+- a one-line installer and upgrader for aicrewd on the hub host;
+- one-liners for each member's `aicrew-agent`.
+
+aimem 0.9.2, whose `aimem identity peer provision` these commands read, is
+the supported release.
+
+### Breaking changes
+
+- **aimem 0.9.2 is required** (#109). `internal/agent/supported.json` names
+  0.9.2 as both the minimum and the tested release, so `aicrew-agent check`
+  blocks a member below it. The hub must run 0.9.2 too: the operator
+  commands read the directory its `aimem identity peer provision` writes.
+
+  Upgrade steps, all with product commands and one-liners:
+  1. **The hub's aimem.** Upgrade it to 0.9.2 with aimem's own hub
+     one-liner, from its v0.9.2 tag. Upgrade each member's aimem with
+     aimem's member installer.
+  2. **aicrewd's peer.** On the hub, as its admin, provision aicrewd's peer
+     into a directory:
+
+     ```sh
+     aimem identity peer provision SERVICE_ID --endpoint https://AICREWD_HOST:PORT/v1/crew/introspect \
+       --peer-trust-dns --output-dir DIR --hub HUB_URL --admin-token-file FILE
+     ```
+
+     It writes the four peer credentials and `aimem-hub-id`. A rerun issues
+     only what is missing.
+  3. **aicrewd.** On the hub host, as root, run the hub one-liner:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.4.0/install-aicrewd.sh | bash
+     ```
+
+     - A configuration that still has the single `aimem` block of 0.2.0
+       needs `AICREW_CRED_DIR=DIR`. The installer migrates a scratch copy
+       first and refuses, with nothing changed, if it would not complete.
+     - It then copies the configuration and the store beside themselves,
+       keeps the previous binaries as `.prev`, and swaps the binaries.
+     - It runs `aicrewd config migrate -cred-dir DIR`, then waits for health
+       at 0.4.0. If the new release does not come up, it rolls back.
+     - The installer expects its own layout under the service user
+       (`AICREW_HUB_USER`, default `sessiond`): `~/aicrew/bin`,
+       `~/aicrew/etc/aicrewd.json` and `~/aicrew/lib`.
+  4. **A hub already in `aimem_hubs`, or credentials reprovisioned.** As the
+     service user, bind the hub from the directory and restart:
+
+     ```sh
+     aicrew hub add NAME --config ~/aicrew/etc/aicrewd.json --base-url HUB_URL \
+       --tls-trust-mode ca_dns --tls-trust-value HUB_HOST --cred-dir DIR
+     systemctl --user restart aicrewd
+     ```
+
+  5. **Each team.** Set it up on its hub:
+
+     ```sh
+     aicrew team setup TEAM --hub NAME --project PROJECT [--project PROJECT...]
+     ```
+
+     Run each grant command it prints on the hub, as printed, then run
+     `team setup` again until it exits 0 with every project granted.
+  6. **Each member.** Upgrade `aicrew-agent` with the member one-liner, as
+     the member's user:
+     - Linux and macOS:
+
+       ```sh
+       curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.4.0/boot.sh | bash
+       ```
+
+     - Windows:
+
+       ```powershell
+       powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.4.0/boot.ps1 | iex"
+       ```
+
+     Then rerun `aicrew-agent join --home HOME` in each home, so its Stop
+     hook names the installed binary.
+
+### Deprecated, removal moved to 0.5.0
+
+0.3.0 announced the removal of these in 0.4.0. It moves to 0.5.0:
+- `aicrew introspection-credential` and `/v1/admin/introspection-credentials`:
+  use `aicrew hub-credential` and `/v1/admin/hub-credentials`;
+- `--secret-file`, `--code-file` and `--file`: use `--output FILE|-`;
+- the single `aimem` block of `aicrewd.json`: use `aimem_hubs`.
+
+The block is what `aicrewd config migrate` and the hub installer read when
+they upgrade a 0.2.0 or 0.3.0 host, so it stays readable for this release.
+The notices, the warning and the docs now say 0.5.0.
+
+When 0.5.0 removes the block from aicrewd's startup, `aicrewd config
+migrate` must keep reading the legacy shape through its own raw-JSON path,
+so that an old host can still be migrated.
+
+### Operator commands
+
+- `aicrewd config migrate` rewrites the single `aimem` block into one
+  `aimem_hubs` entry:
+  - every other field keeps its value and place;
+  - the previous file is kept as `aicrewd.json.<UTC time>.bak`;
+  - a second run changes nothing.
+
+  It names each field still to supply, and exits 3 while a hub has no
+  `hub_id` (#103). `-cred-dir DIR` takes the hub ID and the team credential
+  files from a provisioned directory (#106).
+- `aicrew hub add NAME --cred-dir DIR` binds a hub in `aicrewd.json` from the
+  directory `aimem identity peer provision` wrote. It reads the hub ID from
+  `aimem-hub-id`, checks the four credential files, and reads the hub's
+  teams live before anything is written (#104).
+- `aicrew team setup TEAM --hub NAME --project P...` creates the team and
+  registers it on its hub, reads its grants live, and prints the exact grant
+  command for each project still missing. A refusal is reported with the
+  hub's code and its remedy. A rerun after the grants exist changes nothing
+  and exits 0 (#105). The live read is the new operator route
+  `POST /v1/admin/team/grants`.
+- `aicrewd config show` prints a configuration's store, listen address,
+  service ID and whether it still has the `aimem` block (#106).
+
+### Installers
+
+- `install-aicrewd.sh`, the hub one-liner, installs and upgrades aicrewd and
+  `aicrew` under the service user (#106):
+  - the binaries are checked against the release's `SHA256SUMS`;
+  - a fresh install needs `AICREW_TLS_CERT` and `AICREW_TLS_KEY`, or
+    `AICREW_DOMAIN`. It has `aicrew operator-token new` write the operator
+    credential, writes the configuration and the user unit, and prints what
+    remains to supply;
+  - an upgrade is checked first and rolls back if the new release does not
+    answer health at its version.
+
+  `/healthz` now answers the running version.
+- `boot.sh` and `boot.ps1`, the member one-liners, install or upgrade
+  `aicrew-agent`, checked against `SHA256SUMS` (#107):
+  - it goes to `~/.local/bin`, or to `%LOCALAPPDATA%\aicrew\bin` on Windows,
+    where that directory is added to the user's PATH;
+  - the same release is reported current and left alone;
+  - on Windows a running binary is renamed aside;
+  - nothing is written outside the bin directory.
+- The release check refuses a tag that `install-aicrewd.sh`, `boot.sh` or
+  `boot.ps1` does not pin (#106, #107).
+
+### Records
+
+- The real-aimem end-to-end harness builds the aimem v0.9.2 release. It now
+  sets aicrew up only with the operator commands above: peer provision,
+  config migrate, hub add and team setup (#109).
+- The custom review guide records that a failed Windows copy leaves no
+  destination file, so `boot.ps1`'s rollback rename is safe (#108).
+
 ## [0.3.0] - 2026-10-07
 
 The first pilot's follow-ups. A team now lives on its aimem hub: aicrewd

@@ -75,17 +75,9 @@ func (r MigrateReport) Incomplete() bool {
 // any other reason than a missing hub_id is refused, and nothing is
 // written. A symbolic link is followed: the file it names is migrated.
 func MigrateConfig(path string, opt MigrateOptions) (MigrateReport, error) {
-	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		if path, err = filepath.EvalSymlinks(path); err != nil {
-			return MigrateReport{}, fmt.Errorf("open config: %w", err)
-		}
-	}
-	raw, info, err := readConfigFile(path)
+	path, raw, info, err := openForEdit(path)
 	if err != nil {
 		return MigrateReport{}, err
-	}
-	if !info.Mode().IsRegular() {
-		return MigrateReport{}, errors.New("config is not a regular file")
 	}
 	c, err := parsePending(raw)
 	if err != nil {
@@ -111,15 +103,9 @@ func MigrateConfig(path string, opt MigrateOptions) (MigrateReport, error) {
 	if err != nil {
 		return MigrateReport{}, err
 	}
-	if len(out) > MaxConfigBytes {
-		return MigrateReport{}, fmt.Errorf("the migrated config would be refused: it is larger than %d bytes", MaxConfigBytes)
-	}
-	if _, err := decodeJSONObject(out); err != nil {
-		return MigrateReport{}, fmt.Errorf("the migrated config would be refused: %w", err)
-	}
-	nc, err := parsePending(out)
+	nc, err := checkEdited(out)
 	if err != nil {
-		return MigrateReport{}, fmt.Errorf("the migrated config would be refused: %w", err)
+		return MigrateReport{}, err
 	}
 	// aicrewd must read the new file as the old one with the block moved:
 	// a member the text rewrite missed would otherwise change what it reads.
@@ -133,11 +119,8 @@ func MigrateConfig(path string, opt MigrateOptions) (MigrateReport, error) {
 	if !reflect.DeepEqual(nc, want) {
 		return MigrateReport{}, errors.New("the migrated config would not read as the original with its aimem block moved; move the block by hand")
 	}
-	backup := path + "." + opt.Now.UTC().Format("20060102T150405Z") + ".bak"
-	if err := writeBackup(backup, raw, info.Mode().Perm()); err != nil {
-		return MigrateReport{}, err
-	}
-	if err := replaceFile(path, out, info); err != nil {
+	backup, err := commitEdit(path, raw, out, info, opt.Now)
+	if err != nil {
 		return MigrateReport{}, err
 	}
 	r := report(nc)
@@ -187,15 +170,15 @@ func report(c Config) MigrateReport {
 	for i, h := range c.AimemHubs {
 		at := fmt.Sprintf("aimem_hubs[%d]", i)
 		if h.HubID == "" {
-			r.Missing = append(r.Missing, MissingField{at + ".hub_id", "the hub's ID, as `aimem identity peer list` shows it on the hub", true})
+			r.Missing = append(r.Missing, MissingField{at + ".hub_id", "`aicrew hub add " + h.Name + " --cred-dir DIR ...` sets it from the directory `aimem identity peer provision` wrote", true})
 		}
 		if h.TeamRegisterTokenFile == "" {
 			r.Missing = append(r.Missing, MissingField{at + ".team_register_token_file",
-				"a file holding the credential from `aimem identity cred issue --peer SERVICE_ID --operation team.register`", false})
+				"`aicrew hub add " + h.Name + " --cred-dir DIR ...` sets it, with the hub's other credentials", false})
 		}
 		if h.TeamReadTokenFile == "" {
 			r.Missing = append(r.Missing, MissingField{at + ".team_read_token_file",
-				"a file holding the credential from `aimem identity cred issue --peer SERVICE_ID --operation team.read`", false})
+				"`aicrew hub add " + h.Name + " --cred-dir DIR ...` sets it, with the hub's other credentials", false})
 		}
 	}
 	return r
@@ -241,12 +224,7 @@ func migrated(raw []byte, opt MigrateOptions) ([]byte, error) {
 		v, _ := json.Marshal(opt.ServiceID)
 		top.replace("service_id", "service_id", v)
 	}
-	var buf bytes.Buffer
-	if err := json.Indent(&buf, top.encode(), "", "  "); err != nil {
-		return nil, err
-	}
-	buf.WriteByte('\n')
-	return buf.Bytes(), nil
+	return indent(top.encode())
 }
 
 // jsonObject is a JSON object's members in their order.
@@ -320,18 +298,30 @@ func (o jsonObject) encode() json.RawMessage {
 	return b.Bytes()
 }
 
-// writeBackup creates path, which must not exist, holding raw.
-func writeBackup(path string, raw []byte, perm os.FileMode) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
-	if err != nil {
-		return fmt.Errorf("keep the previous config: %w", err)
+// writeBackup creates a new file holding raw, named stem.bak, or stem-2.bak
+// and so on when that exists; an existing copy is never overwritten. It
+// returns the name.
+func writeBackup(stem string, raw []byte, perm os.FileMode) (string, error) {
+	for n := 1; n <= 100; n++ {
+		path := stem + ".bak"
+		if n > 1 {
+			path = fmt.Sprintf("%s-%d.bak", stem, n)
+		}
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("keep the previous config: %w", err)
+		}
+		_, werr := f.Write(raw)
+		if err := errors.Join(werr, f.Close()); err != nil {
+			os.Remove(path)
+			return "", fmt.Errorf("keep the previous config: %w", err)
+		}
+		return path, nil
 	}
-	_, werr := f.Write(raw)
-	if err := errors.Join(werr, f.Close()); err != nil {
-		os.Remove(path)
-		return fmt.Errorf("keep the previous config: %w", err)
-	}
-	return nil
+	return "", fmt.Errorf("keep the previous config: %s.bak and 99 more copies exist", stem)
 }
 
 // replaceFile replaces path with data atomically, keeping the mode and, where

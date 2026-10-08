@@ -24,15 +24,17 @@ import (
 //  1. TLS: the run's CA, a leaf for the hub and one for aicrewd;
 //  2. the hub, terminating TLS itself;
 //  3. the project (tasks on, process selected, its repository bound);
-//  4. aicrew registered as the identity peer, with the hub's ID read back;
-//  5. aicrew's four aimem credentials (identity.redeem, reservation.read,
-//     team.register, team.read);
-//  6. aicrewd, started with that hub as a named aimem block, and through
-//     its operator API with `aicrew`: the team on that hub, which aicrewd
-//     registers there (team.register), and the hub's outbound credential
-//     (introspection and coordination);
-//  7. the team's grant, by the name aicrewd registered: the team's only
-//     project set, which aicrewd reads live at every offer and claim;
+//  4. and 5. aicrew provisioned as the identity peer (aimem identity peer
+//     provision): its four aimem credentials (identity.redeem,
+//     reservation.read, team.register, team.read) and the hub's ID in one
+//     directory;
+//  6. aicrewd's configuration by the operator commands, from the 0.2.0
+//     aimem block: aicrewd config migrate -cred-dir, then aicrew hub add;
+//     aicrewd started on it;
+//  7. the team by aicrew team setup: registered on that hub (team.register),
+//     the grant it prints run by the hub's admin, and setup run again
+//     finding the project granted, read live (team.read); then the hub's
+//     outbound credential (introspection and coordination);
 //  8. the members' aimem users and tokens, and their aicrew invitations;
 //  9. the reconciliation loop, and the peer check end to end;
 //  10. each member's aimem client, `aicrew-agent join`, and its launcher.
@@ -87,32 +89,40 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	h.must(host, nil, h.aimem(), "project", "repo", "set", "--project", projectID, "--kind", repoKind, "--url", h.forge.repoURL(),
 		"--access", "write")
 
-	// 4. The peer, and the hub's ID.
-	h.must(host, nil, h.identity("peer", "register", serviceID,
-		"--endpoint", h.aicrewdProxy.url+"/v1/crew/introspect", "--peer-trust-pin", h.aicrewdPin)...)
-	list := h.must(host, nil, h.identity("peer", "list")...)
-	m := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(serviceID) + `\s+enabled\s+hub\s+(\S+)`).FindStringSubmatch(list)
-	if m == nil {
-		t.Fatalf("the hub's ID is not in the peer list:\n%s", list)
-	}
-	h.hubID = m[1]
-
-	// 5. aicrew's aimem credentials, one per operation.
+	// 4 and 5. The peer, provisioned in one command: the hub registers it
+	// and writes its four credentials (identity.redeem, reservation.read,
+	// team.register, team.read) and the hub's ID into one directory, as
+	// aicrew's operator commands read them (aicrew hub add --cred-dir).
 	aDir := h.mkdir(filepath.Join(h.root, "aicrewd"))
 	h.storePath = filepath.Join(aDir, "aicrew.db")
-	redeem, read := filepath.Join(aDir, "redeem.secret"), filepath.Join(aDir, "read.secret")
-	register, teamRead := filepath.Join(aDir, "team-register.secret"), filepath.Join(aDir, "team-read.secret")
-	for op, file := range map[string]string{"identity.redeem": redeem, "reservation.read": read, "team.register": register,
-		"team.read": teamRead} {
-		h.must(host, nil, h.identity("cred", "issue", serviceID, "--expires", "30d", "--output", file, "--operation", op)...)
+	credDir := filepath.Join(aDir, "aimem-creds")
+	h.must(host, nil, h.identity("peer", "provision", serviceID,
+		"--endpoint", h.aicrewdProxy.url+"/v1/crew/introspect", "--peer-trust-pin", h.aicrewdPin,
+		"--output-dir", credDir, "--expires", "30d")...)
+	redeem, read := filepath.Join(credDir, "aimem-redeem.token"), filepath.Join(credDir, "aimem-read.token")
+	register, teamRead := filepath.Join(credDir, "aimem-team-register.token"), filepath.Join(credDir, "aimem-team-read.token")
+	for _, file := range []string{redeem, read, register, teamRead} {
 		h.knowSecretFile(file)
 	}
+	idFile, err := os.ReadFile(filepath.Join(credDir, "aimem-hub-id"))
+	if err != nil {
+		t.Fatalf("peer provision wrote no hub ID: %v", err)
+	}
+	h.hubID = strings.TrimSpace(string(idFile))
+	list := h.must(host, nil, h.identity("peer", "list")...)
+	if m := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(serviceID) + `\s+enabled\s+hub\s+(\S+)`).FindStringSubmatch(list); m == nil || m[1] != h.hubID {
+		t.Fatalf("the hub ID provision wrote (%s) is not the peer list's:\n%s", h.hubID, list)
+	}
 
-	// 6. aicrewd starts with the hub as a named aimem block; aicrewd reaches
-	// the hub through the fault proxy too (F6 holds its reads back), and the
-	// proxy presents the hub's own run key. The operator administers through
-	// its API, with `aicrew`, while it runs: the team on that hub, then
-	// aimem's introspection credential.
+	// 6. aicrewd's configuration, by the operator commands, starting from the
+	// shape of 0.2.0 an upgraded hub has: the single aimem block, which
+	// `aicrewd config migrate -cred-dir` moves into aimem_hubs with the hub's
+	// ID and the team credentials from the directory, and which
+	// `aicrew hub add` then binds again in place, after its live team read.
+	// aicrewd reaches the hub through the fault proxy too (F6 holds its
+	// reads back), and the proxy presents the hub's own run key. The
+	// operator administers through its API, with `aicrew`, while it runs:
+	// the team on that hub, then aimem's introspection credential.
 	aEnv := h.isolatedEnv(aDir)
 	opToken, err := optoken.Generate()
 	if err != nil {
@@ -123,39 +133,39 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 		t.Fatal(err)
 	}
 	h.knowSecretFile(opFile)
-	cfg := map[string]any{
+	legacy := map[string]any{
 		"store_path": h.storePath, "listen_addr": fmt.Sprintf("127.0.0.1:%d", h.aicrewdPort),
 		"tls_cert_file": aCert, "tls_key_file": aKey, "service_id": serviceID, "operator_token_file": opFile,
-		"aimem_hubs": []map[string]any{{"name": hubName, "hub_id": h.hubID, "base_url": h.hubProxy.url,
-			"tls_trust_mode": "spki_sha256", "tls_trust_value": h.hubPin, "redemption_token_file": redeem,
-			"read_token_file": read, "team_register_token_file": register, "team_read_token_file": teamRead}},
+		"aimem": map[string]any{"base_url": h.hubProxy.url, "tls_trust_mode": "spki_sha256", "tls_trust_value": h.hubPin,
+			"redemption_token_file": redeem, "read_token_file": read},
 	}
 	cfgPath := filepath.Join(aDir, "aicrewd.json")
-	h.startAicrewd(aEnv, aDir, cfgPath, cfg)
+	raw, _ := json.MarshalIndent(legacy, "", "  ")
+	h.writePrivate(cfgPath, raw)
+	out := h.must(aEnv, nil, filepath.Join(h.bin, "aicrewd"), "config", "migrate", "-config", cfgPath,
+		"-name", hubName, "-cred-dir", credDir)
+	if !strings.Contains(out, "the aimem block is now an aimem_hubs entry") || strings.Contains(out, "Still to supply") {
+		t.Fatalf("aicrewd config migrate did not complete the hub:\n%s", out)
+	}
+	out = h.must(aEnv, nil, filepath.Join(h.bin, "aicrew"), "hub", "add", hubName, "--config", cfgPath,
+		"--base-url", h.hubProxy.url, "--tls-trust-mode", "spki_sha256", "--tls-trust-value", h.hubPin, "--cred-dir", credDir)
+	if !strings.Contains(out, "Restart aicrewd") {
+		t.Fatalf("aicrew hub add:\n%s", out)
+	}
+	h.checkBoundHub(cfgPath, credDir)
+	h.launchAicrewd(aEnv, aDir, cfgPath)
 	opEnv := append(append([]string{}, aEnv...), "AICREW_URL="+h.aicrewdURL, "AICREW_TLS_TRUST_MODE=spki_sha256",
 		"AICREW_TLS_TRUST_VALUE="+h.aicrewdPin, "AICREW_OPERATOR_TOKEN_FILE="+opFile)
 	h.checkIsolated(opEnv)
-	var team struct {
-		ID           string `json:"id"`
-		Registration *struct {
-			State string `json:"state"`
-		} `json:"registration"`
-	}
-	if err := json.Unmarshal([]byte(h.must(opEnv, nil, filepath.Join(h.bin, "aicrew"), "team", "create",
-		"-name", "e2e", "-hub", hubName)), &team); err != nil || team.ID == "" {
-		t.Fatalf("aicrew team create printed no team: %v", err)
-	}
-	if team.Registration == nil || team.Registration.State != "registered" {
-		t.Fatalf("aicrewd did not register the team on the hub: %+v", team.Registration)
-	}
-	h.teamID = team.ID
+
+	// 7. The team, by `aicrew team setup`: it creates and registers the team
+	// on that hub, and prints the one grant the hub's admin still has to
+	// give, by the name aicrewd registered; the admin runs exactly that
+	// command, and setup run again finds every project granted.
+	h.setupTeam(opEnv, host)
 	h.must(opEnv, nil, filepath.Join(h.bin, "aicrew"), "hub-credential", "issue",
 		"-hub", h.hubID, "--output", introFile)
 	h.knowSecretFile(introFile)
-
-	// 7. The team's grant: the profile is the one aicrewd registered, named
-	// by the team's name within the peer.
-	h.must(host, nil, h.identity("team", "grant", "--peer", serviceID, "--team-name", "e2e", "--project", projectID)...)
 
 	// 8. The members' users, tokens and invitations.
 	var mems []*member
@@ -168,7 +178,7 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 		b, _ := os.ReadFile(h.aicrewdLog)
 		return bytes.Contains(b, []byte("reconcile: started"))
 	})
-	out := h.must(host, nil, h.identity("peer", "check", serviceID)...)
+	out = h.must(host, nil, h.identity("peer", "check", serviceID)...)
 	if !strings.Contains(out, "introspection works") {
 		t.Fatalf("the hub's introspection of aicrewd: %s", out)
 	}
@@ -179,13 +189,74 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	}
 }
 
-// startAicrewd writes aicrewd's configuration and starts it, waiting for its
-// listener.
-func (h *harness) startAicrewd(env []string, dir, cfgPath string, cfg map[string]any) {
+// checkBoundHub checks the hub the operator commands bound in cfgPath: one
+// aimem_hubs entry, no aimem block, the hub's ID and all four credential
+// files from credDir.
+func (h *harness) checkBoundHub(cfgPath, credDir string) {
 	h.t.Helper()
-	raw, _ := json.MarshalIndent(cfg, "", "  ")
-	os.Remove(cfgPath)
-	h.writePrivate(cfgPath, raw)
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	var c struct {
+		Aimem     json.RawMessage `json:"aimem"`
+		AimemHubs []struct {
+			Name                  string `json:"name"`
+			HubID                 string `json:"hub_id"`
+			RedemptionTokenFile   string `json:"redemption_token_file"`
+			ReadTokenFile         string `json:"read_token_file"`
+			TeamRegisterTokenFile string `json:"team_register_token_file"`
+			TeamReadTokenFile     string `json:"team_read_token_file"`
+		} `json:"aimem_hubs"`
+	}
+	if err := json.Unmarshal(raw, &c); err != nil || c.Aimem != nil || len(c.AimemHubs) != 1 {
+		h.t.Fatalf("aicrewd.json after migrate and hub add (%v):\n%s", err, raw)
+	}
+	hb := c.AimemHubs[0]
+	if hb.Name != hubName || hb.HubID != h.hubID || hb.RedemptionTokenFile != filepath.Join(credDir, "aimem-redeem.token") ||
+		hb.ReadTokenFile != filepath.Join(credDir, "aimem-read.token") ||
+		hb.TeamRegisterTokenFile != filepath.Join(credDir, "aimem-team-register.token") ||
+		hb.TeamReadTokenFile != filepath.Join(credDir, "aimem-team-read.token") {
+		h.t.Fatalf("the bound hub: %+v", hb)
+	}
+}
+
+// setupTeam sets up the team e2e on the hub with `aicrew team setup`: the
+// first run registers it and prints the grant still to give, which the
+// hub's admin runs as printed; the second finds the project granted.
+func (h *harness) setupTeam(opEnv, host []string) {
+	t := h.t
+	t.Helper()
+	aicrew := filepath.Join(h.bin, "aicrew")
+	r := h.run(opEnv, nil, aicrew, "team", "setup", "e2e", "--hub", hubName, "--project", projectID)
+	grant := regexp.MustCompile(`(?m)^\s*aimem identity team grant (.+)$`).FindAllStringSubmatch(r.stdout, -1)
+	if r.code != 3 || !strings.Contains(r.stdout, "team e2e is registered on hub "+hubName) || len(grant) != 1 {
+		t.Fatalf("aicrew team setup, first run: exit %d\n%s%s", r.code, r.stdout, r.stderr)
+	}
+	want := "--peer " + serviceID + " --team-name e2e --project " + projectID
+	if grant[0][1] != want {
+		t.Fatalf("team setup prints the grant %q, want %q", grant[0][1], want)
+	}
+	h.must(host, nil, h.identity(append([]string{"team", "grant"}, strings.Fields(grant[0][1])...)...)...)
+	r = h.run(opEnv, nil, aicrew, "team", "setup", "e2e", "--hub", hubName, "--project", projectID)
+	if r.code != 0 || !strings.Contains(r.stdout, "team e2e is already registered on hub "+hubName) ||
+		!strings.Contains(r.stdout, "granted: "+projectID) || !strings.Contains(r.stdout, "every project is granted") ||
+		strings.Contains(r.stdout, "aimem identity team grant") {
+		t.Fatalf("aicrew team setup, second run: exit %d\n%s%s", r.code, r.stdout, r.stderr)
+	}
+	var team struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(h.must(opEnv, nil, aicrew, "team", "show", "-team-name", "e2e")), &team); err != nil || team.ID == "" {
+		t.Fatalf("aicrew team show printed no team: %v", err)
+	}
+	h.teamID = team.ID
+}
+
+// launchAicrewd starts aicrewd on the configuration at cfgPath, waiting for
+// its listener.
+func (h *harness) launchAicrewd(env []string, dir, cfgPath string) {
+	h.t.Helper()
 	h.aicrewdProc = h.start("aicrewd", env, dir, filepath.Join(h.bin, "aicrewd"), "-config", cfgPath)
 	h.aicrewdLog = h.aicrewdProc.log
 	h.waitFor("aicrewd's listener", 30*time.Second, func() bool {

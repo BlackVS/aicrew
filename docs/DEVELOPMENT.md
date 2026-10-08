@@ -100,8 +100,9 @@ The end-to-end runs against a real aimem are not part of these checks:
   readable by its owner only, and checks that an existing secret file is
   private (mode bits on Unix, the effective DACL on Windows).
   `privatefiletest` weakens a file for tests only.
-- `internal/installer`: no code; the tests of `install-aicrewd.sh`, the hub
-  installer at the repository's root (below).
+- `internal/installer`: no code; the tests of the installers at the
+  repository's root: `install-aicrewd.sh` for the hub, `boot.sh` and
+  `boot.ps1` for a member's `aicrew-agent` (below).
 
 ## Running aicrewd
 
@@ -372,8 +373,8 @@ Other knobs:
 The script never writes a credential or a secret value itself.
 `internal/installer` checks that `RELEASE` and every documented one-liner
 name the newest CHANGELOG release, and runs the upgrade transaction in bash
-against real builds. The release check refuses a tag that the script does
-not pin.
+against real builds. The release check refuses a tag that any installer
+does not pin.
 
 The service logs JSON lines to stderr: each request's method, matched route,
 status and duration, never its headers, body, query or raw path. A request
@@ -671,6 +672,60 @@ bin/aicrew invitation revoke --id INVITATION
 authority: it proves the agent's aimem identity and keeps the agent's team
 session through `aicrewd`'s client session API (`docs/CREW-CONTRACT.md`,
 "Client session API").
+
+### Installing and upgrading: `boot.sh` and `boot.ps1`
+
+On a member's machine, `aicrew-agent` is installed and upgraded with the
+release's one-liner, from any directory, as the member's own user:
+
+- Linux and macOS:
+
+  ```sh
+  curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.3.0/boot.sh | bash
+  ```
+
+- Windows:
+
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.3.0/boot.ps1 | iex"
+  ```
+
+It replaces copying the binary by hand. Each script installs the release it
+pins (`RELEASE=` or `$release`), which is the release of the tag it is
+fetched from:
+- it downloads `aicrew-agent` for the platform and refuses it unless its
+  SHA-256 is listed in the release's `SHA256SUMS`;
+- it installs it as `~/.local/bin/aicrew-agent` on Linux and macOS, or as
+  `%LOCALAPPDATA%\aicrew\bin\aicrew-agent.exe` on Windows, where the
+  directory is added to the user's `PATH` when it is missing;
+- an installed `aicrew-agent` that already reports the release is left
+  alone, and the script says it is current. An older one is replaced, and
+  both versions are printed;
+- on Windows a running `aicrew-agent.exe` (a launcher or a Stop hook) keeps
+  its file: the old file is renamed aside to `aicrew-agent.exe.old-<UTC
+  time>`, and a later run removes it.
+
+The one-liner installs the binary and nothing else. It creates no agent
+home, does not join, touches no client settings, and writes no file outside
+the bin directory, whatever directory it runs from. `join` writes the
+home's Stop hook with the absolute path of the `aicrew-agent` that ran it.
+So after a first install, or after moving from a copied binary, run
+`aicrew-agent join --home HOME` again for each home, so its hook names the
+installed binary. Upgrades keep the path, and the hooks keep working.
+
+Knobs:
+- `AICREW_BIN_DIR`: another bin directory, for example to upgrade a binary
+  where it already is;
+- `AICREW_VERSION`: another release than the pinned one;
+- `AICREW_REPO`: a fork.
+
+`internal/installer` checks both pins and the documented one-liners against
+the CHANGELOG, and runs both scripts' install step against a local release:
+a fresh install, the same release, a refused hash, and an upgrade while the
+old binary is running. The release check refuses a tag either script does
+not pin.
+
+For development, build it from source:
 
 ```sh
 CGO_ENABLED=0 go build -o bin/aicrew-agent ./cmd/aicrew-agent

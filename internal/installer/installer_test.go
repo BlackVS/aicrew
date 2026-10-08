@@ -52,26 +52,34 @@ func newestRelease(t *testing.T) string {
 	return "v" + m[1]
 }
 
-// The installer installs the release named in its RELEASE line, and that is
-// the newest release in the CHANGELOG: rolling the CHANGELOG into a version
-// without bumping the pin fails here (and the release workflow refuses the
-// tag).
+// Each installer installs the release named in its release line, and that
+// is the newest release in the CHANGELOG: rolling the CHANGELOG into a
+// version without bumping a pin fails here (and the release workflow
+// refuses the tag).
 func TestScriptPinsTheNewestRelease(t *testing.T) {
-	m := regexp.MustCompile(`(?m)^RELEASE=(\S+)$`).FindAllStringSubmatch(read(t, script), -1)
-	if len(m) != 1 {
-		t.Fatalf("%s: want exactly one release pin, found %d", script, len(m))
-	}
-	if want := newestRelease(t); m[0][1] != want {
-		t.Fatalf("%s pins %s; the newest CHANGELOG release is %s", script, m[0][1], want)
+	want := newestRelease(t)
+	for file, re := range map[string]*regexp.Regexp{
+		script:     regexp.MustCompile(`(?m)^RELEASE=(\S+)$`),
+		"boot.sh":  regexp.MustCompile(`(?m)^RELEASE=(\S+)$`),
+		"boot.ps1": regexp.MustCompile(`(?m)^\$release = '([^']+)'$`),
+	} {
+		m := re.FindAllStringSubmatch(read(t, file), -1)
+		if len(m) != 1 {
+			t.Errorf("%s: want exactly one release pin, found %d", file, len(m))
+			continue
+		}
+		if m[0][1] != want {
+			t.Errorf("%s pins %s; the newest CHANGELOG release is %s", file, m[0][1], want)
+		}
 	}
 }
 
-// The documented one-liners fetch the installer from the pinned release
+// The documented one-liners fetch each installer from the pinned release
 // tag, never from a branch, so the script and the binaries it installs come
 // from the same release.
 func TestOneLinersNameTheReleaseTag(t *testing.T) {
 	want := newestRelease(t)
-	files := []string{"README.md", script}
+	files := []string{"README.md", script, "boot.sh", "boot.ps1"}
 	docs, err := filepath.Glob(filepath.Join(repoRoot, "docs", "*.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -80,40 +88,54 @@ func TestOneLinersNameTheReleaseTag(t *testing.T) {
 		rel, _ := filepath.Rel(repoRoot, d)
 		files = append(files, rel)
 	}
-	url := regexp.MustCompile(`raw\.githubusercontent\.com/BlackVS/aicrew/([^/\s]+)/install-aicrewd\.sh`)
+	url := regexp.MustCompile(`raw\.githubusercontent\.com/BlackVS/aicrew/([^/\s]+)/(install-aicrewd\.sh|boot\.sh|boot\.ps1)`)
 	seen := map[string]bool{}
 	for _, f := range files {
 		if _, err := os.Stat(filepath.Join(repoRoot, f)); err != nil {
 			continue
 		}
 		for _, m := range url.FindAllStringSubmatch(read(t, f), -1) {
-			seen[f] = true
+			seen[f+" "+m[2]] = true
 			if m[1] != want {
-				t.Errorf("%s fetches install-aicrewd.sh from %q; want the release tag %s", f, m[1], want)
+				t.Errorf("%s fetches %s from %q; want the release tag %s", f, m[2], m[1], want)
 			}
 		}
 	}
-	if !seen[script] || !seen[filepath.Join("docs", "DEVELOPMENT.md")] {
-		t.Fatalf("the one-liner is missing from %s or docs/DEVELOPMENT.md (found in %v)", script, seen)
+	dev := filepath.Join("docs", "DEVELOPMENT.md")
+	for _, k := range []string{script + " " + script, "boot.sh boot.sh", "boot.ps1 boot.ps1",
+		dev + " " + script, dev + " boot.sh", dev + " boot.ps1"} {
+		if !seen[k] {
+			t.Errorf("no one-liner %q (found %v)", k, seen)
+		}
 	}
 }
 
-// The release workflow's check refuses a tag the installer does not pin
+// The release workflow's check refuses a tag an installer does not pin
 // (scripts/release_test.sh runs the refusal).
 func TestReleaseCheckRefusesAnotherPin(t *testing.T) {
-	if !strings.Contains(read(t, "scripts/release.sh"), `grep -qx "RELEASE=$TAG" install-aicrewd.sh`) {
-		t.Fatal("scripts/release.sh does not check that install-aicrewd.sh pins the tag")
+	rel := read(t, "scripts/release.sh")
+	for _, check := range []string{`for f in install-aicrewd.sh boot.sh`, `grep -qx "RELEASE=$TAG" "$f"`, `grep -qx "\$release = '$TAG'"`} {
+		if !strings.Contains(rel, check) {
+			t.Errorf("scripts/release.sh does not check the installers' pins (%s)", check)
+		}
 	}
 }
 
-// extract returns the installer's text between the BEGIN and END markers.
+// extract returns the hub installer's text between the BEGIN and END
+// markers.
 func extract(t *testing.T, name string) string {
 	t.Helper()
-	s := read(t, script)
+	return extractFrom(t, script, name)
+}
+
+// extractFrom returns file's text between the BEGIN and END markers.
+func extractFrom(t *testing.T, file, name string) string {
+	t.Helper()
+	s := read(t, file)
 	begin, end := "# BEGIN "+name+"\n", "# END "+name+"\n"
 	i, j := strings.Index(s, begin), strings.Index(s, end)
 	if i < 0 || j < i {
-		t.Fatalf("%s has no %s between markers", script, name)
+		t.Fatalf("%s has no %s between markers", file, name)
 	}
 	return s[i : j+len(end)]
 }
@@ -145,11 +167,31 @@ func bash(t *testing.T, text string, env ...string) (string, int) {
 	return string(out), 0
 }
 
-// The whole script parses.
+// The whole shell scripts parse.
 func TestScriptParses(t *testing.T) {
 	shellOnly(t)
-	if out, code := bash(t, "bash -n "+filepath.Join(repoRoot, script)); code != 0 {
-		t.Fatalf("bash -n: %s", out)
+	for _, f := range []string{script, "boot.sh"} {
+		if out, code := bash(t, "bash -n "+filepath.Join(repoRoot, f)); code != 0 {
+			t.Errorf("bash -n %s: %s", f, out)
+		}
+	}
+}
+
+// The whole boot.ps1 parses.
+func TestBootPs1Parses(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("boot.ps1 runs on Windows")
+	}
+	path, err := filepath.Abs(filepath.Join(repoRoot, "boot.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := `$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($env:SCRIPT, [ref]$null, [ref]$e); ` +
+		`if ($e) { $e | ForEach-Object { $_.ToString() }; exit 1 }`
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", check)
+	cmd.Env = append(os.Environ(), "SCRIPT="+path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("boot.ps1 does not parse: %v\n%s", err, out)
 	}
 }
 

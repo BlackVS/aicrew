@@ -181,9 +181,52 @@ an address; it holds no secret itself:
 - The single `aimem` block of earlier releases, without `name` or
   `hub_id`, is still read for this release, as the hub `default`, and logs
   a warning; a configuration with both forms is refused. Move it into
-  `aimem_hubs`: a team cannot name that hub (`--hub`) because it has no
-  hub ID.
+  `aimem_hubs` with `aicrewd config migrate` (below): a team cannot name
+  that hub (`--hub`) because it has no hub ID.
 - Keep the TLS key readable only by the service's account.
+
+### Moving the aimem block: `aicrewd config migrate`
+
+```sh
+aicrewd config migrate -config aicrewd.json [-name NAME] [-hub-id ID] \
+  [-team-register-token-file FILE] [-team-read-token-file FILE] [-service-id ID]
+```
+
+It rewrites a configuration's single `aimem` block as one `aimem_hubs`
+entry, in the block's place:
+- the entry's `name` is `-name`, or `default`, the name the block is read
+  under today;
+- the block's five fields move as they are: `base_url`, `tls_trust_mode`,
+  `tls_trust_value`, `redemption_token_file` and `read_token_file`;
+- `-hub-id` and the two team credential files are added when given, the
+  files as absolute paths;
+- `-service-id` replaces `service_id`.
+
+Every other field keeps its value and its place. The file is replaced
+atomically, with its mode (and, on Unix, its owner and group). The previous
+file is kept beside it as `aicrewd.json.<UTC time>.bak`. A symbolic link is
+followed: the file it names is migrated, and the link stays.
+
+The input must be a configuration aicrewd accepts. The result is checked
+the same way before anything is written. A refusal writes nothing.
+
+A file already in the `aimem_hubs` form, or with no hub, is left as it is:
+a second run changes nothing. Flags are refused on such a file.
+
+Each run names the fields still to supply and where each comes from:
+- a hub's `hub_id` (`aimem identity peer list` on the hub);
+- its `team_register_token_file` and `team_read_token_file`
+  (`aimem identity cred issue … --operation team.register` or `team.read`).
+
+It also reminds the operator that `service_id` must be the peer ID the hub
+lists for this service, which migrate cannot check.
+
+Exit status:
+- `0`: the file is complete, and aicrewd can be restarted with it;
+- `3`: a hub still has no `hub_id`. aicrewd refuses the file until it is
+  set, so do not restart it yet;
+- `1`: refused, and nothing was written;
+- `2`: a usage error.
 
 The service logs JSON lines to stderr: each request's method, matched route,
 status and duration, never its headers, body, query or raw path. A request

@@ -4,6 +4,7 @@
 //
 //	aicrewd -config /path/to/aicrewd.json
 //	aicrewd -version [-json]
+//	aicrewd config migrate -config /path/to/aicrewd.json [flags]
 package main
 
 import (
@@ -15,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/BlackVS/aicrew/internal/server"
 	"github.com/BlackVS/aicrew/internal/store"
@@ -23,6 +25,9 @@ import (
 
 func main() {
 	if code, ok := versionFlag(os.Args[1:], os.Stdout, os.Stderr); ok {
+		os.Exit(code)
+	}
+	if code, ok := configCommand(os.Args[1:], os.Stdout, os.Stderr, time.Now()); ok {
 		os.Exit(code)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

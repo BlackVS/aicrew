@@ -100,6 +100,8 @@ The end-to-end runs against a real aimem are not part of these checks:
   readable by its owner only, and checks that an existing secret file is
   private (mode bits on Unix, the effective DACL on Windows).
   `privatefiletest` weakens a file for tests only.
+- `internal/installer`: no code; the tests of `install-aicrewd.sh`, the hub
+  installer at the repository's root (below).
 
 ## Running aicrewd
 
@@ -111,6 +113,9 @@ not run behind a TLS-terminating proxy. Its routes are listed below.
 CGO_ENABLED=0 go build -o bin/aicrewd ./cmd/aicrewd
 bin/aicrewd -config aicrewd.json
 ```
+
+On a hub host, aicrewd is installed and upgraded with the release's
+one-liner instead (`install-aicrewd.sh`, below).
 
 The configuration file is JSON with no unknown fields. It names files and
 an address; it holds no secret itself:
@@ -193,7 +198,8 @@ an address; it holds no secret itself:
 
 ```sh
 aicrewd config migrate -config aicrewd.json [-name NAME] [-hub-id ID] \
-  [-team-register-token-file FILE] [-team-read-token-file FILE] [-service-id ID]
+  [-team-register-token-file FILE] [-team-read-token-file FILE] [-service-id ID] \
+  [-cred-dir DIR]
 ```
 
 It rewrites a configuration's single `aimem` block as one `aimem_hubs`
@@ -204,6 +210,10 @@ entry, in the block's place:
   `tls_trust_value`, `redemption_token_file` and `read_token_file`;
 - `-hub-id` and the two team credential files are added when given, the
   files as absolute paths;
+- `-cred-dir DIR` takes the hub ID and the two team credential files from
+  the directory `aimem identity peer provision` wrote, checked as
+  `aicrew hub add` checks them. It replaces `-hub-id` and the two file
+  flags, and cannot be given with them. The installer passes it;
 - `-service-id` replaces `service_id`.
 
 Every other field keeps its value and its place. The file is replaced
@@ -235,6 +245,11 @@ Exit status:
   set, so do not restart it yet;
 - `1`: refused, and nothing was written;
 - `2`: a usage error.
+
+`aicrewd config show -config PATH` reads a configuration as migrate does (a
+hub may still lack its `hub_id`). It prints `store_path`, `listen_addr`,
+`service_id` and `legacy_aimem_block` (`yes` or `no`), one `name=value` per
+line, so that the installer parses no JSON.
 
 ### Binding a hub: `aicrew hub add`
 
@@ -278,6 +293,88 @@ refused; run `aicrewd config migrate` first. Restart aicrewd to apply the
 change. If another hub still lacks its `hub_id`, the command names that
 hub and exits 3, as migrate does: do not restart aicrewd yet.
 
+### Installing and upgrading on a hub host: `install-aicrewd.sh`
+
+On a Debian or Ubuntu host, usually the aimem hub's own, aicrewd is
+installed and upgraded with the release's one-liner, run as root:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.3.0/install-aicrewd.sh | bash
+```
+
+It replaces the manual steps: downloading, checking the sums, copying the
+binaries, editing `aicrewd.json` and restarting. The script installs the
+release it pins (`RELEASE=`), which is the release of the tag it is fetched
+from. It downloads `aicrewd` and `aicrew` for the host's architecture and
+refuses either one unless its SHA-256 is listed in the release's
+`SHA256SUMS`.
+
+Everything goes under the service user (`AICREW_HUB_USER`, default
+`sessiond`, the aimem hub's user), with systemd linger:
+- `~/aicrew/bin`: `aicrewd` and `aicrew`;
+- `~/aicrew/etc`: `aicrewd.json` and `operator.token`;
+- `~/aicrew/lib`: the store, `aicrew.db`;
+- `~/.config/systemd/user/aicrewd.service`: written only when there is no
+  unit yet.
+
+**A fresh install** needs a TLS certificate, given by either:
+- `AICREW_TLS_CERT` and `AICREW_TLS_KEY`: the absolute paths of existing
+  files the service user can read;
+- `AICREW_DOMAIN`: a host name, for which the script generates a
+  self-signed certificate into `~/aicrew/etc/tls`, as aimem's installer
+  does for `AIMEM_DOMAIN`.
+
+With neither, the install is refused before anything changes.
+
+The script then:
+1. has `aicrew operator-token new` write the operator credential to
+   `~/aicrew/etc/operator.token`. This happens on a fresh install only. The
+   script never reads the file; it is the `--token-file` of the operator's
+   `aicrew` commands on this host;
+2. writes `aicrewd.json` with `service_id` (`AICREW_SERVICE_ID`, default
+   `aicrew-service`), `listen_addr` (`AICREW_LISTEN`, default
+   `0.0.0.0:9443`), the certificate, the store and the operator token, and
+   no hub;
+3. starts aicrewd and waits until `/healthz` answers at the release;
+4. prints what remains: provision the service on the aimem hub
+   (`aimem identity peer provision`), bind the hub with `aicrew hub add`,
+   and restart.
+
+**An upgrade** is the newer release's one-liner, run again on the host:
+1. Before anything changes, the new `aicrewd config show` reads the
+   configuration.
+   - A configuration that still has the single `aimem` block of 0.2.0 must
+     be moved into `aimem_hubs`. That needs `AICREW_CRED_DIR`, the directory
+     `aimem identity peer provision` wrote, from which
+     `aicrewd config migrate -cred-dir` takes the hub ID and the two team
+     credential files, checked as `aicrew hub add` checks them.
+   - The migration runs first on a scratch copy. If `AICREW_CRED_DIR` is
+     unset, fails a check, or the copy would not migrate completely, the
+     script refuses with nothing changed. It prints the two steps:
+     provision on the hub, then rerun with the directory.
+   - A configuration already in the `aimem_hubs` form needs no directory.
+2. It stops aicrewd and copies the configuration and the store (with its
+   `-wal` and `-shm` files) beside themselves as `<file>.backup-<UTC time>`.
+   The previous binaries are kept as `aicrewd.prev` and `aicrew.prev`.
+3. It swaps the binaries, migrates the configuration if needed, starts the
+   service, and waits for `/healthz` at the new version
+   (`AICREW_UPGRADE_WAIT` seconds, default 30).
+4. If the new release does not come up, the rollback puts back the previous
+   binaries, the configuration copy and the store copy. The store the
+   failed run left is kept as `<store>.failed-<UTC time>`.
+
+Other knobs:
+- `AICREW_VERSION`: install a release other than the pinned one;
+- `AICREW_REPO`: install from a fork;
+- `AICREW_PREBUILT_DIR`: a directory holding `aicrewd` and `aicrew` to
+  install instead of downloading.
+
+The script never writes a credential or a secret value itself.
+`internal/installer` checks that `RELEASE` and every documented one-liner
+name the newest CHANGELOG release, and runs the upgrade transaction in bash
+against real builds. The release check refuses a tag that the script does
+not pin.
+
 The service logs JSON lines to stderr: each request's method, matched route,
 status and duration, never its headers, body, query or raw path. A request
 body is capped at 64 KiB and headers at 16 KiB; the server also sets
@@ -285,7 +382,9 @@ read-header, read, write and idle timeouts. On SIGINT or SIGTERM it stops
 accepting connections, lets requests in flight finish within
 `shutdown_timeout`, closes the store and exits 0.
 
-Besides `GET /healthz`, it serves aimem's session introspection,
+`GET /healthz` answers `{"status":"ok","version":"vX.Y.Z"}`, the running
+release, which the installer waits for. Besides it, aicrewd serves aimem's
+session introspection,
 `POST /v1/crew/introspect` (`docs/CREW-CONTRACT.md`, "Session
 introspection"). Aimem registers this service with the route's full https
 URL, the service ID and the TLS trust binding of this certificate. It also

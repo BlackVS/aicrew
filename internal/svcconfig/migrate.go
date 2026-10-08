@@ -24,12 +24,17 @@ type MigrateOptions struct {
 	TeamReadTokenFile     string
 	// ServiceID replaces service_id when set.
 	ServiceID string
+	// CredDir, when set, is the directory aimem identity peer provision
+	// wrote: the hub ID and the two team credential files come from it,
+	// checked as aicrew hub add checks them, in place of HubID and the two
+	// team files.
+	CredDir string
 	// Now stamps the copy of the previous file.
 	Now time.Time
 }
 
 func (o MigrateOptions) any() bool {
-	return o.Name != "" || o.HubID != "" || o.TeamRegisterTokenFile != "" || o.TeamReadTokenFile != "" || o.ServiceID != ""
+	return o.Name != "" || o.HubID != "" || o.TeamRegisterTokenFile != "" || o.TeamReadTokenFile != "" || o.ServiceID != "" || o.CredDir != ""
 }
 
 // MigrateReport is what a migration did and what it leaves to the operator.
@@ -92,6 +97,16 @@ func MigrateConfig(path string, opt MigrateOptions) (MigrateReport, error) {
 	if opt.Name == "" {
 		opt.Name = LegacyHubName
 	}
+	if opt.CredDir != "" {
+		if opt.HubID != "" || opt.TeamRegisterTokenFile != "" || opt.TeamReadTokenFile != "" {
+			return MigrateReport{}, errors.New("the provisioned directory names the hub ID and the team credential files: give it alone, without them")
+		}
+		h, err := provisioned(HubRequest{CredDir: opt.CredDir})
+		if err != nil {
+			return MigrateReport{}, err
+		}
+		opt.HubID, opt.TeamRegisterTokenFile, opt.TeamReadTokenFile = h.HubID, h.TeamRegisterTokenFile, h.TeamReadTokenFile
+	}
 	for _, f := range []*string{&opt.TeamRegisterTokenFile, &opt.TeamReadTokenFile} {
 		if *f != "" {
 			if *f, err = filepath.Abs(*f); err != nil {
@@ -126,6 +141,16 @@ func MigrateConfig(path string, opt MigrateOptions) (MigrateReport, error) {
 	r := report(nc)
 	r.Migrated, r.Backup = true, backup
 	return r, nil
+}
+
+// ShowConfig reads the configuration at path as migrate does: a hub may
+// still lack its hub_id, and any other refusal is aicrewd's.
+func ShowConfig(path string) (Config, error) {
+	raw, _, err := readConfigFile(path)
+	if err != nil {
+		return Config{}, err
+	}
+	return parsePending(raw)
 }
 
 func readConfigFile(path string) ([]byte, os.FileInfo, error) {

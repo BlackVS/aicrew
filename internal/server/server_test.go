@@ -29,6 +29,7 @@ import (
 
 	"github.com/BlackVS/aicrew/internal/optoken"
 	"github.com/BlackVS/aicrew/internal/store"
+	"github.com/BlackVS/aicrew/internal/version"
 )
 
 // testCert writes a self-signed certificate for 127.0.0.1 and its key, and
@@ -259,7 +260,7 @@ func (r *running) raw(t *testing.T, method, target string) (int, string) {
 // a redirect.
 func TestRoutes(t *testing.T) {
 	r := start(t, nil)
-	if code, body := r.do(t, http.MethodGet, "/healthz", nil); code != http.StatusOK || strings.TrimSpace(body) != `{"status":"ok"}` {
+	if code, body := r.do(t, http.MethodGet, "/healthz", nil); code != http.StatusOK || strings.TrimSpace(body) != `{"status":"ok","version":"`+version.Get().Version+`"}` {
 		t.Fatalf("GET /healthz = %d %q", code, body)
 	}
 	for _, method := range []string{http.MethodHead, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions} {

@@ -5,6 +5,7 @@
 //	aicrewd -config /path/to/aicrewd.json
 //	aicrewd -version [-json]
 //	aicrewd config migrate -config /path/to/aicrewd.json [flags]
+//	aicrewd config show -config /path/to/aicrewd.json
 package main
 
 import (

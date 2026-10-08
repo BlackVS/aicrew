@@ -67,3 +67,35 @@ func TestConfigMigrate(t *testing.T) {
 		t.Fatal("-config is taken for a config command")
 	}
 }
+
+// config show prints the store, the listen address and whether the aimem
+// block of 0.2.0 is still there; a hub without its hub_id is shown, any
+// other refusal exits 1.
+func TestConfigShow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aicrewd.json")
+	if err := os.WriteFile(path, []byte(legacyConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := "store_path=/var/lib/aicrew/aicrew.db\nlisten_addr=127.0.0.1:8443\nservice_id=aicrew-example\nlegacy_aimem_block=yes\n"
+	if code, out, errOut := runConfig(t, "config", "show", "-config", path); code != 0 || out != want {
+		t.Fatalf("legacy: exit %d:\n%s%s", code, out, errOut)
+	}
+	if code, _, _ := runConfig(t, "config", "migrate", "-config", path); code != exitIncomplete {
+		t.Fatalf("migrate: exit %d", code)
+	}
+	want = strings.Replace(want, "=yes", "=no", 1)
+	if code, out, errOut := runConfig(t, "config", "show", "-config", path); code != 0 || out != want {
+		t.Fatalf("pending hub: exit %d:\n%s%s", code, out, errOut)
+	}
+	if err := os.WriteFile(path, []byte(`{"store_path": 1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := runConfig(t, "config", "show", "-config", path); code != 1 {
+		t.Fatalf("refused file: exit %d", code)
+	}
+	for _, args := range [][]string{{"config", "show"}, {"config", "show", "-config", path, "extra"}, {"config", "other"}} {
+		if code, _, _ := runConfig(t, args...); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+}

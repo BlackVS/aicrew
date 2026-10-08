@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"regexp"
 	"strconv"
 	"time"
@@ -143,23 +142,23 @@ var serviceIDShape = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 // LoadConfig reads and checks the configuration file at path. Unknown fields
 // are refused. Errors name the field at fault, never a file's content.
 func LoadConfig(path string) (Config, error) {
-	f, err := os.Open(path)
+	raw, _, err := readConfigFile(path)
 	if err != nil {
-		return Config{}, fmt.Errorf("open config: %w", err)
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
-	if err != nil {
-		return Config{}, fmt.Errorf("read config: %w", err)
-	}
-	if len(raw) > maxConfigBytes {
-		return Config{}, fmt.Errorf("config is larger than %d bytes", maxConfigBytes)
+		return Config{}, err
 	}
 	return ParseConfig(raw)
 }
 
 // ParseConfig decodes and checks one configuration object.
 func ParseConfig(raw []byte) (Config, error) {
+	c, err := decodeConfig(raw)
+	if err != nil {
+		return Config{}, err
+	}
+	return c, c.validate()
+}
+
+func decodeConfig(raw []byte) (Config, error) {
 	var c Config
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -172,7 +171,7 @@ func ParseConfig(raw []byte) (Config, error) {
 	if c.ShutdownTimeout == 0 {
 		c.ShutdownTimeout = Duration(defaultShutdownTimeout)
 	}
-	return c, c.validate()
+	return c, nil
 }
 
 func (c Config) validate() error {

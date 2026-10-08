@@ -34,3 +34,31 @@ just-issued credential, for example) runs on a delivery that succeeded.
 `cmd/aicrew/secretout.go` (`syncRegular`) and its tests
 `TestCredentialOutputRealPipe` and `TestCredentialOutputPipedProcess` hold
 this rule.
+
+### A failed Windows copy leaves no destination (observed 2026-10-08, PR #107)
+
+`Copy-Item` (Windows PowerShell 5.1, Windows 11) that fails mid-way leaves
+no destination file: the copy preallocates the destination at the full
+length, and on the failure Windows removes it.
+
+Probe (task 01a11bf2-5df1, a disposable temporary directory, no installed
+agent, PATH or shared storage):
+1. A 64 MiB source file. A second handle holds a byte-range lock on its
+   second half, so the copy's reads there fail.
+2. `aicrew-agent.exe` is renamed aside first, then `Copy-Item` copies the
+   source to it, as `boot.ps1` swaps a running binary.
+3. Another runspace polls the destination's size during the copy.
+
+What it showed:
+- the copy failed with `IOException` ("another process has locked a
+  portion of the file");
+- the destination had existed at its full 64 MiB during the copy;
+- after the failure it did not exist;
+- the rollback's `Rename-Item` of the old file back to
+  `aicrew-agent.exe` succeeded, and the old content was in place.
+
+Consequence for review: the hypothesis that a failed copy in `boot.ps1`
+leaves a partial `aicrew-agent.exe` that blocks the rename back
+(`boot.ps1`, the `catch` after `Copy-Item`) is REJECTED-RUNTIME. Do not add
+a removal of the destination before the rename for it. A finding about
+another failure kind must bring its own probe.

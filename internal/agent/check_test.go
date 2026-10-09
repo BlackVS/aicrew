@@ -914,3 +914,29 @@ func TestCheckHonorsClaudeConfigDir(t *testing.T) {
 		t.Fatalf("clientEnv: %v", env)
 	}
 }
+
+// check notes a home whose settings lack a managed deny rule, as join's
+// rerun would restore it, and is quiet on the managed file.
+func TestCheckDenyRules(t *testing.T) {
+	e := setupCheck(t, readyTools, "aimem", "claude")
+	e.installSkills(t, "1.26.1", "oh-code-review")
+	if rep := e.check(t, "claude"); hasNotice(rep, "deny rules") {
+		t.Fatalf("the managed settings: %+v", rep.Notices)
+	}
+	path := filepath.Join(e.home, ".claude", "settings.json")
+	var doc map[string]any
+	_ = json.Unmarshal([]byte(claudeSettings(e.home)), &doc)
+	deny := doc["permissions"].(map[string]any)["deny"].([]any)
+	for name, edit := range map[string]func(){
+		"shortened": func() { doc["permissions"].(map[string]any)["deny"] = deny[1:] },
+		"missing":   func() { delete(doc, "permissions") },
+	} {
+		edit()
+		raw, _ := json.Marshal(doc)
+		os.WriteFile(path, raw, 0o644)
+		if rep := e.check(t, "claude"); !hasNotice(rep, "managed deny rules") || !hasNotice(rep, "join --home") {
+			t.Fatalf("%s: %+v", name, rep.Notices)
+		}
+		_ = json.Unmarshal([]byte(claudeSettings(e.home)), &doc)
+	}
+}

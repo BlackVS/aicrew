@@ -44,7 +44,8 @@ is also independent of the model and client, both of which may change.
   CLAUDE.md          managed entry file for Claude Code; imports AGENTS.md
   agent.json         nonsecret configuration
   .mcp.json          Claude Code's project MCP file; one managed aimem entry
-  .claude/settings.json  managed; points every Claude Code session here at aimem/
+  .claude/settings.json  managed; points every Claude Code session here at aimem/,
+                         wakes the member (Stop hook), denies credential reads and TLS weakening
   aimem/             the member's aimem installation; owner-only, secret
   creds/             credential material only
   docs/              agent guidance and handoff
@@ -133,6 +134,29 @@ survey, the options and the decision (D-STORE) are recorded in
      start**: each aimem call, each client probe and the launched client.
      It replaces any inherited value, so the member sets nothing in its
      shell.
+- **Deny rules.** The managed `.claude/settings.json` also carries a
+  `permissions.deny` list (task 01a1171d-c51c). Claude Code refuses a call
+  those rules match, whatever the model decides and whatever the permission
+  mode:
+  - the Read and Edit tools on `creds/**` and `aimem/hub.json` (which also
+    covers Write and Claude Code's own file searches);
+  - any Bash or PowerShell command naming `creds/` or `aimem/hub.json`
+    (with either slash);
+  - `config --global` and `config --system`;
+  - `sslVerify`, `sslverify` or `GIT_SSL_NO_VERIFY`.
+
+  Nothing in a member's role needs these. `aicrew-agent clone`, `digest`,
+  `join --cred` and aimem read the credentials, and `aicrew-agent` writes
+  every git setting a clone needs into that clone. The list is part of the
+  managed file: a `join` rerun refreshes it, a local edit gets
+  `.aicrew-new`, and `check` notes a settings file that lacks a managed
+  rule.
+
+  **Its limit:** the rules match command text. They stop an accidental
+  violation through the tools they name, as the texts' own rule asks. They
+  do not stop a determined bypass through a command they do not name, such
+  as a script that opens the file. Isolating the credentials from each
+  other stays an OS account per member (aimem's PILOT-HUB-RUNBOOK).
 - **Mismatches.** `check` blocks when a carrier file disagrees with the
   home. It reports, without blocking:
   - `AIMEM_*` values in the environment or in `~/.config/aimem/env` that

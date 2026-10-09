@@ -94,7 +94,8 @@ func TestRoleGuidanceTriage(t *testing.T) {
 // The coordinator does not talk to a human (D2, docs/DESIGN-CONTROL-PLANE.md
 // section 7.5): its section names what it escalates, by OPERATOR-SEAT's
 // categories as aicrewd checks them, how, the comment mirror, carrying on
-// meanwhile and the answer's message. No other section mentions escalating.
+// meanwhile and the answer's message. The worker's and the independent
+// member's sections do not mention escalating.
 func TestRoleGuidanceEscalation(t *testing.T) {
 	all := slices.Concat(escalationFloor, escalationAlways, escalationOwn)
 	if !slices.Equal(all, store.EscalationCategories) {
@@ -103,7 +104,7 @@ func TestRoleGuidanceEscalation(t *testing.T) {
 	md := rolesMD()
 	coord := md[strings.Index(md, "## Coordinator"):strings.Index(md, "## Worker")]
 	for _, s := range []string{"**You do not talk to a human.**",
-		"where this guidance says to ask the operator, you escalate instead",
+		"where a rule of every member says to turn to your coordinator, you escalate instead",
 		codeList(escalationFloor), codeList(escalationAlways), codeList(escalationOwn), "most restrictive",
 		"cannot classify with confidence is escalated", `echo '{"task": {`, "| aicrew-agent escalate --body -",
 		"`[escalation.request ID]`", "`add_task_comment`", "`task_held`", "carry on with other work",
@@ -116,8 +117,29 @@ func TestRoleGuidanceEscalation(t *testing.T) {
 	if strings.Contains(strings.ToLower(md[strings.Index(md, "## Worker"):]), "escalat") {
 		t.Error("the worker's or the independent member's section mentions escalating")
 	}
-	if strings.Contains(strings.ToLower(md[:strings.Index(md, "## Coordinator")]), "escalat") {
-		t.Error("the rules every member follows mention escalating")
+}
+
+// A member refused role_forbidden or attempt_forbidden turns to its
+// coordinator, never to a human (01a12168-3131): with a running attempt by
+// the work step's block, and without one, with no member-to-coordinator
+// message in aicrew yet, by its handoff. No section of ROLES.md tells a
+// member to ask the operator or a human.
+func TestRoleGuidanceForbiddenTurnsToTheCoordinator(t *testing.T) {
+	md := rolesMD()
+	common := strings.Join(strings.Fields(md[:strings.Index(md, "## Coordinator")]), " ")
+	for _, s := range []string{"the step is not yours: stop, and turn to your coordinator, never to a human.",
+		"With a running attempt, report it with the `work` step's `block` and the refusal as its reason",
+		"Without one, aicrew has no message from a member to its coordinator yet: write the refusal in `docs/HANDOFF.md` and end your turn.",
+		"A coordinator escalates instead"} {
+		if !strings.Contains(common, s) {
+			t.Errorf("the rules every member follows lack %q", s)
+		}
+	}
+	flat := strings.ToLower(strings.Join(strings.Fields(md), " "))
+	for _, banned := range []string{"ask the operator", "ask a human", "ask the human", "tell the operator", "ask a person"} {
+		if strings.Contains(flat, banned) {
+			t.Errorf("ROLES.md tells a member to %q", banned)
+		}
 	}
 }
 

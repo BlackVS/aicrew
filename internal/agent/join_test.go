@@ -1032,32 +1032,42 @@ func TestJoinAddsRoleGuidance(t *testing.T) {
 // under the managed-file rules (D2): the coordinator's escalation guidance
 // reaches a home made before it.
 func TestJoinRefreshesRoleGuidance(t *testing.T) {
-	e := setupJoin(t)
-	code := e.invite(t, "inv-1", store.RoleCoordinator)
-	e.join(t, e.opts(), &recCrew{}, activeAimem(), code)
-	path := func(p string) string { return filepath.Join(e.home, filepath.FromSlash(p)) }
+	// The releases before: without the coordinator's escalation guidance
+	// (D2), and with the shared rule that sent a refused member to the
+	// operator (01a12168-3131).
+	current := rolesMD()
+	forbidden := current[strings.Index(current, "the step is not yours: stop, and turn") : strings.Index(current, "(its section, below).")+len("(its section, below).")]
+	for name, older := range map[string]string{
+		"before the escalation guidance": strings.Replace(current, "\n\n"+escalationRule, "", 1),
+		"before the coordinator rule":    strings.Replace(current, forbidden, "the step is not yours: stop and ask the operator.", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if older == current {
+				t.Fatal("the fixture is the current text")
+			}
+			e := setupJoin(t)
+			code := e.invite(t, "inv-1", store.RoleCoordinator)
+			e.join(t, e.opts(), &recCrew{}, activeAimem(), code)
+			path := func(p string) string { return filepath.Join(e.home, filepath.FromSlash(p)) }
+			os.WriteFile(path("docs/ROLES.md"), []byte(older), 0o644)
+			doc := readJSON(t, path("agent.json"))
+			doc["managed"].(map[string]any)["docs/ROLES.md"] = digestOf([]byte(older))
+			raw, _ := json.Marshal(doc)
+			os.WriteFile(path("agent.json"), raw, 0o644)
 
-	older := strings.Replace(rolesMD(), "\n\n"+escalationRule, "", 1)
-	if older == rolesMD() {
-		t.Fatal("the fixture did not remove the escalation guidance")
-	}
-	os.WriteFile(path("docs/ROLES.md"), []byte(older), 0o644)
-	doc := readJSON(t, path("agent.json"))
-	doc["managed"].(map[string]any)["docs/ROLES.md"] = digestOf([]byte(older))
-	raw, _ := json.Marshal(doc)
-	os.WriteFile(path("agent.json"), raw, 0o644)
-
-	rep, _ := e.join(t, JoinOptions{Home: e.home}, &recCrew{}, activeAimem())
-	action := ""
-	for _, c := range rep.Changes {
-		if c.Path == "docs/ROLES.md" {
-			action = c.Action
-		}
-	}
-	if action != "update" {
-		t.Fatalf("an unedited earlier ROLES.md: %q, want update (%+v)", action, rep.Changes)
-	}
-	if b, _ := os.ReadFile(path("docs/ROLES.md")); string(b) != rolesMD() {
-		t.Fatal("the rerun did not write the current ROLES.md")
+			rep, _ := e.join(t, JoinOptions{Home: e.home}, &recCrew{}, activeAimem())
+			action := ""
+			for _, c := range rep.Changes {
+				if c.Path == "docs/ROLES.md" {
+					action = c.Action
+				}
+			}
+			if action != "update" {
+				t.Fatalf("an unedited earlier ROLES.md: %q, want update (%+v)", action, rep.Changes)
+			}
+			if b, _ := os.ReadFile(path("docs/ROLES.md")); string(b) != current {
+				t.Fatal("the rerun did not write the current ROLES.md")
+			}
+		})
 	}
 }

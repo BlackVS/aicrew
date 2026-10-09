@@ -171,6 +171,21 @@ no fault armed.
   - The next offer to the worker is refused `capability_missing`, naming
     the forge's host and `write`, and nothing begins.
   - Restored and checked again, the offer commits.
+- **B1. Board wake (A1).** aicrewd reads the hub's board feed with the
+  `board.read` credential `aicrew hub add` bound from the provision
+  directory.
+  - A task created in BACKLOG wakes no one.
+  - Moved to READY by the hub's admin, the task reaches the coordinator's
+    inbox as a `board.changed` message within a tick. The Stop hook's
+    `wait-inbox` blocks on it, and the message names the task and the
+    change.
+  - The coordinator offers the task, and the worker accepts. aicrew's own
+    offer and accept are not announced.
+  - aicrewd restarts, and nothing is announced again.
+  - The hub's admin cancels the task while the worker holds it
+    (`reservation recover cancel`). The coordinator gets exactly one
+    announcement naming the change, and aicrewd closes the attempt as
+    recovered.
 
 Each scenario asserts both stores: aicrew's attempts, audit and capacity,
 read-only; and aimem's tasks, holds and receipts, through admin reads.

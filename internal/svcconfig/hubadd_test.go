@@ -18,12 +18,12 @@ func credential(n byte) string {
 }
 
 // credDir writes what aimem identity peer provision writes: the hub ID and
-// four private credential files, each different.
+// five private credential files, each different.
 func credDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	writePrivate(t, filepath.Join(dir, HubIDFile), testHubID+"\n")
-	for i, name := range []string{RedemptionTokenFile, ReadTokenFile, TeamRegisterTokenFile, TeamReadTokenFile} {
+	for i, name := range []string{RedemptionTokenFile, ReadTokenFile, TeamRegisterTokenFile, TeamReadTokenFile, BoardReadTokenFile} {
 		writePrivate(t, filepath.Join(dir, name), credential(byte(i+1))+"\n")
 	}
 	return dir
@@ -75,7 +75,8 @@ func TestAddHub(t *testing.T) {
 	want := AimemHub{Name: "main", HubID: testHubID, AimemConfig: AimemConfig{BaseURL: "https://hub.example:8443",
 		TLSTrustMode: "ca_dns", TLSTrustValue: "hub.example",
 		RedemptionTokenFile: filepath.Join(dir, RedemptionTokenFile), ReadTokenFile: filepath.Join(dir, ReadTokenFile)},
-		TeamRegisterTokenFile: filepath.Join(dir, TeamRegisterTokenFile), TeamReadTokenFile: filepath.Join(dir, TeamReadTokenFile)}
+		TeamRegisterTokenFile: filepath.Join(dir, TeamRegisterTokenFile), TeamReadTokenFile: filepath.Join(dir, TeamReadTokenFile),
+		BoardReadTokenFile: filepath.Join(dir, BoardReadTokenFile)}
 	if r.Hub != want || r.Index != 0 || r.Updated || r.ReadScope != "" || len(r.Pending) != 0 || r.Backup != path+".20261008T043000Z.bak" {
 		t.Fatalf("report = %+v", r)
 	}
@@ -194,6 +195,11 @@ func TestAddHubRefusals(t *testing.T) {
 			writePrivate(t, filepath.Join(dir, HubIDFile), strings.ToUpper(testHubID)+"\n")
 		}, nil, "does not hold a hub ID"},
 		{"no read credential", validConfig, func(t *testing.T, dir string) { os.Remove(filepath.Join(dir, ReadTokenFile)) }, nil, ReadTokenFile},
+		{"provisioned before 0.10.0", validConfig, func(t *testing.T, dir string) { os.Remove(filepath.Join(dir, BoardReadTokenFile)) }, nil,
+			BoardReadTokenFile + " is missing: the directory was provisioned before aimem 0.10.0; run aimem identity peer provision again"},
+		{"same board credential", validConfig, func(t *testing.T, dir string) {
+			writePrivate(t, filepath.Join(dir, BoardReadTokenFile), credential(4)+"\n")
+		}, nil, "hold the same credential"},
 		{"readable credential", validConfig, func(t *testing.T, dir string) {
 			if err := privatefiletest.Expose(filepath.Join(dir, TeamReadTokenFile)); err != nil {
 				t.Fatal(err)

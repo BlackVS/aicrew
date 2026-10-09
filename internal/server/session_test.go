@@ -646,6 +646,9 @@ func TestExposureGuard(t *testing.T) {
 		"AgentCapabilities": true,
 		// The coordinator's escalation, by its session token (5598).
 		"RaiseEscalationWithToken": true,
+		// The hubs' board feeds, read and recorded as aicrewd's reconciler
+		// (5570); the store refuses every other caller.
+		"BoardCursor": true, "RecordBoardPage": true, "ResetBoardCursor": true,
 	}
 	// wrapperOnly are the store calls only the wrapper makes.
 	wrapperOnly := map[string]bool{"AuthenticateArchitect": true}

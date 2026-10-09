@@ -51,6 +51,11 @@ type Server struct {
 	// grantsEvery is how often the grants snapshot is refreshed
 	// (GrantsRefresh; tests shorten it).
 	grantsEvery time.Duration
+	// boardEvery is how often the hubs' board feeds are read (BoardTick;
+	// tests shorten it), and boardPaused when each hub may be read again
+	// after it asked to wait (board.go; the board loop's alone).
+	boardEvery  time.Duration
+	boardPaused map[string]time.Time
 	// reader is aimem's read scope for settling member-driven steps; nil
 	// when no read credential is configured, so those steps stay pending.
 	reader store.ReservationReader
@@ -158,6 +163,12 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		refreshed := make(chan struct{})
 		go func() { s.runGrants(grantsCtx); close(refreshed) }()
 		defer func() { stopGrants(); <-refreshed }()
+	}
+	if s.readsBoard() {
+		boardCtx, stopBoard := context.WithCancel(ctx)
+		read := make(chan struct{})
+		go func() { s.runBoard(boardCtx); close(read) }()
+		defer func() { stopBoard(); <-read }()
 	}
 	served := make(chan error, 1)
 	go func() { served <- s.http.Serve(tls.NewListener(ln, s.tls)) }()
@@ -363,6 +374,7 @@ func (s *Server) bindHubs() error {
 	hubs := cfg.Hubs()
 	s.hubs = map[string]hubBinding{}
 	s.grantsEvery = GrantsRefresh
+	s.boardEvery = BoardTick
 	if len(hubs) == 0 {
 		return nil
 	}
@@ -409,6 +421,10 @@ func (s *Server) bindHubs() error {
 				return fmt.Errorf("%s: team credentials: %w", at, err)
 			}
 			b.teams = c
+		}
+		if h.BoardReadTokenFile == "" && cfg.Aimem == nil {
+			s.log.Warn(at + ": no board_read_token_file: this hub's board changes wake no coordinator; run aimem " +
+				"identity peer provision again on the hub (aimem 0.10.0 or later), then aicrew hub add with its directory")
 		}
 		s.hubs[h.Name] = b
 	}

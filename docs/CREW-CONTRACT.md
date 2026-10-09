@@ -1265,6 +1265,59 @@ message, so it is delivered with the answer or not at all.
 
 The audit records the request and the answer, as every command.
 
+## Board changes
+
+A member acts when a message lands in its inbox. So that a task that
+becomes READY on the board wakes the coordinator, aicrewd reads each hub's
+board feed (aimem's `board.read`, identity.v1 "Board feed";
+`docs/DESIGN-CONTROL-PLANE.md`, A1). It announces the changes a
+coordinator must react to as `board.changed` messages
+(DEVELOPMENT, "Board wake").
+
+**The read.**
+- **The credential:** a hub's `board.read` peer credential
+  (`board_read_token_file`).
+- **When:** every reconcile tick, from the cursor aicrewd stored, at most 4
+  pages a tick.
+- **Recording:** each page is recorded in one transaction: its
+  announcements, and the cursor to read on from. The page is recorded only
+  if the stored cursor is still the one it was read from. So a change is
+  announced once, across restarts, and two reads never both record.
+
+**What is announced.** For each change of a task, to each team granted the
+task's project on that hub:
+- the change is announced when the task became READY, or when the team
+  has an attempt for the task (offered, running, or closed);
+- a change one of aicrew's own steps made is not announced: an attempt of
+  the task recorded that revision when its step settled;
+- a project's changes from before aicrewd first saw it granted are
+  history, and are not announced. That is aicrewd's first read, which has
+  no cursor, a project granted later, and the whole feed after a hub
+  restore (`cursor_ahead`), when the cursor is dropped.
+
+**The message.** It is a lifecycle message of the team, to the team's
+active coordinators at that moment.
+- **What it names:** the project and the task.
+- **What it carries:** `board {revision, from, to, at,
+  required_capability}`: the revision that set the state, the state before
+  it (`""` for the task's creation), the state it set, that revision's time
+  on the hub, and the task's required capability then, if it has one.
+- **Its text** is built from those fields alone, never from the task's
+  content: "Task T of project P moved from BACKLOG to READY on the board
+  (revision R)." When the team has an attempt for the task, the text adds
+  "The team has an attempt for it."
+- **Visibility:** as every message that names a project, it is visible
+  while the team's grants snapshot holds the project.
+- **What wakes the coordinator:** the current keep-alive loop wakes it on
+  this message, as on any other. Once headless turns exist, the message
+  starts its turn (A3).
+
+**Limits.**
+- A change made in a project before aicrewd first sees it granted is not
+  announced.
+- A step whose settlement lands after the tick that read its change can be
+  announced once, which is harmless.
+
 ## Cross-project references
 
 - A team may span several projects on one hub. Multi-hub teams are out of

@@ -1,9 +1,11 @@
-// Package hubteams is aicrewd's client of the hub's two team operations for
-// this peer (aimem DESIGN-AIFORGE-IDENTITY-WIRE, "Team registration and read";
-// docs/proposals/PILOT-1-FOLLOWUPS.md, sections 2.2 and 2.3):
+// Package hubteams is aicrewd's client of the hub's team operations and
+// board feed for this peer (aimem DESIGN-AIFORGE-IDENTITY-WIRE, "Team
+// registration and read" and "Board feed"; docs/proposals/PILOT-1-FOLLOWUPS.md,
+// sections 2.2 and 2.3; docs/DESIGN-CONTROL-PLANE.md, A1):
 //
 //	PUT /v1/identity/peers/{service_id}/team-registrations/{team_id}  team.register
 //	GET /v1/identity/peers/{service_id}/team-reads[/{team_id}]         team.read
+//	GET /v1/identity/peers/{service_id}/board-changes                  board.read
 //
 // Each operation has its own peer credential, read from its own private file
 // on every call. The transport is the read scope's (package aimemread): one
@@ -66,6 +68,8 @@ var (
 		"team_name_taken":      false,
 		"profile_disabled":     false,
 		"not_found":            false,
+		"invalid_cursor":       false,
+		"cursor_ahead":         false,
 		"rate_limited":         true,
 		"request_in_progress":  true,
 		"identity_unavailable": true,
@@ -98,14 +102,15 @@ func Code(err error) string {
 	return ""
 }
 
-// Config names the hub, how to trust it, and the two credential files. A
-// client with only one of the files can do only that operation.
+// Config names the hub, how to trust it, and the credential files. A client
+// without one of the files cannot do that operation.
 type Config struct {
 	BaseURL           string
 	ServiceID         string
 	TLSMode, TLSValue string
 	RegisterTokenFile string // the team.register credential
 	ReadTokenFile     string // the team.read credential
+	BoardTokenFile    string // the board.read credential
 }
 
 // Client calls the hub's team operations for one peer.
@@ -128,11 +133,15 @@ func newClient(cfg Config, roots *x509.CertPool) (*Client, error) {
 	if !validID(cfg.ServiceID) {
 		return nil, errors.New("hub teams: the service ID is not a valid identity.v1 ID")
 	}
-	if cfg.RegisterTokenFile == "" && cfg.ReadTokenFile == "" {
-		return nil, errors.New("hub teams: neither a team.register nor a team.read credential file is configured")
+	if cfg.RegisterTokenFile == "" && cfg.ReadTokenFile == "" && cfg.BoardTokenFile == "" {
+		return nil, errors.New("hub teams: no team.register, team.read or board.read credential file is configured")
 	}
-	if cfg.RegisterTokenFile != "" && cfg.RegisterTokenFile == cfg.ReadTokenFile {
-		return nil, errors.New("hub teams: team.register and team.read are separate credentials; name two files")
+	files := map[string]bool{}
+	for _, f := range []string{cfg.RegisterTokenFile, cfg.ReadTokenFile, cfg.BoardTokenFile} {
+		if f != "" && files[f] {
+			return nil, errors.New("hub teams: team.register, team.read and board.read are separate credentials; name a file for each")
+		}
+		files[f] = true
 	}
 	trust := tlstrust.Binding{Mode: cfg.TLSMode, Value: cfg.TLSValue}
 	if err := trust.Check(u.Hostname()); err != nil {
@@ -147,15 +156,16 @@ func newClient(cfg Config, roots *x509.CertPool) (*Client, error) {
 
 func validID(id string) bool { return idShape.MatchString(id) && id != "." && id != ".." }
 
-// CanRegister and CanRead report which operations the client has a
-// credential for.
-func (c *Client) CanRegister() bool { return c.cfg.RegisterTokenFile != "" }
-func (c *Client) CanRead() bool     { return c.cfg.ReadTokenFile != "" }
+// CanRegister, CanRead and CanReadBoard report which operations the client
+// has a credential for.
+func (c *Client) CanRegister() bool  { return c.cfg.RegisterTokenFile != "" }
+func (c *Client) CanRead() bool      { return c.cfg.ReadTokenFile != "" }
+func (c *Client) CanReadBoard() bool { return c.cfg.BoardTokenFile != "" }
 
 // CheckCredentials reads each configured bearer as a call would. Its errors
 // name the file, never the content.
 func (c *Client) CheckCredentials() error {
-	for _, f := range []string{c.cfg.RegisterTokenFile, c.cfg.ReadTokenFile} {
+	for _, f := range []string{c.cfg.RegisterTokenFile, c.cfg.ReadTokenFile, c.cfg.BoardTokenFile} {
 		if f == "" {
 			continue
 		}
@@ -265,6 +275,79 @@ func (c *Client) ReadTeams(ctx context.Context) ([]Team, error) {
 		}
 	}
 	return all.Teams, nil
+}
+
+// BoardChange is one entry of the board feed: the revision that set a
+// task's state, the state before it ("" for the task's creation), the state
+// it set, that revision's time and the task's required capability then.
+type BoardChange struct {
+	Project            string    `json:"project"`
+	TaskID             string    `json:"task_id"`
+	Revision           int64     `json:"revision"`
+	From               string    `json:"from"`
+	To                 string    `json:"to"`
+	At                 time.Time `json:"at"`
+	RequiredCapability string    `json:"required_capability"`
+}
+
+// BoardPage is one read of the board feed: its changes, the cursor to read
+// on from, and whether a granted project has changes past it.
+type BoardPage struct {
+	Changes []BoardChange `json:"changes"`
+	Cursor  string        `json:"cursor"`
+	More    bool          `json:"more"`
+}
+
+// MaxBoardPage is the most changes one read asks for: the hub's own bound.
+const MaxBoardPage = 500
+
+// maxBoardField bounds each of an entry's text fields; the hub's required
+// capability is at most 256 bytes, and a cursor is opaque but small.
+const maxBoardField = 4096
+
+// stateShape is a task state's name. A state aimem adds later still reads,
+// so a new state cannot stop the feed.
+var stateShape = regexp.MustCompile(`^[A-Z][A-Z_]{0,31}$`)
+
+// ReadBoard reads the task state changes of the projects granted to the
+// peer's enabled teams, from cursor ("" for each project's first change),
+// at most limit of them. A cursor the hub cannot decode is invalid_cursor; a
+// cursor past the feed, after the hub's state was restored, is cursor_ahead.
+func (c *Client) ReadBoard(ctx context.Context, cursor string, limit int) (BoardPage, error) {
+	if !c.CanReadBoard() {
+		return BoardPage{}, &Error{Code: "no_credential", Reason: "board_credential"}
+	}
+	if limit < 1 || limit > MaxBoardPage || len(cursor) > maxBoardField {
+		return BoardPage{}, &Error{Code: "invalid_request", Reason: "board_query"}
+	}
+	q := url.Values{"limit": {strconv.Itoa(limit)}}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	var p BoardPage
+	if err := c.call(ctx, http.MethodGet, "board-changes?"+q.Encode(), c.cfg.BoardTokenFile, nil, &p); err != nil {
+		return BoardPage{}, err
+	}
+	if !p.valid(limit) {
+		return BoardPage{}, unavailable("answer")
+	}
+	return p, nil
+}
+
+// valid is a page the feed's contract allows: a cursor, at most limit
+// entries, each naming its project, task, revision, the state it set and
+// its time.
+func (p BoardPage) valid(limit int) bool {
+	if p.Cursor == "" || len(p.Cursor) > maxBoardField || p.Changes == nil || len(p.Changes) > limit {
+		return false
+	}
+	for _, ch := range p.Changes {
+		if !validID(ch.Project) || !validID(ch.TaskID) || ch.Revision < 1 || !stateShape.MatchString(ch.To) ||
+			(ch.From != "" && !stateShape.MatchString(ch.From)) || ch.At.IsZero() || len(ch.RequiredCapability) > maxBoardField {
+			return false
+		}
+	}
+	return true
 }
 
 // valid is an answer the hub's contract allows: an ID, a name, projects

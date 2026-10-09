@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 27
+const schemaVersion = 28
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -219,7 +219,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
 		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21,
-		schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27}
+		schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -413,6 +413,28 @@ var schemaV5 = []string{
 // (pilot G2): the base commit, branch, process pin, instruction digest and
 // expiry, as JSON, so the worker starts its worktree and verifies the pin
 // from its own inbox. Every other message carries none.
+// schemaV28 adds the board feed's state (docs/DESIGN-CONTROL-PLANE.md, A1):
+// each hub's cursor, stored with the announcements it led to; each granted
+// project's first sight, before which its changes are history; the board
+// change a board.changed announcement carries, as JSON; and the task
+// revision each committed step made, by which a change is known as
+// aicrew's own. Earlier steps record none (0).
+var schemaV28 = []string{
+	`ALTER TABLE attempt_steps ADD COLUMN task_revision INTEGER NOT NULL DEFAULT 0`,
+	`CREATE TABLE board_cursors (
+		hub_id     TEXT PRIMARY KEY,
+		cursor     TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE board_projects (
+		hub_id     TEXT NOT NULL,
+		project_id TEXT NOT NULL,
+		since      TEXT NOT NULL,
+		PRIMARY KEY (hub_id, project_id)
+	)`,
+	`ALTER TABLE messages ADD COLUMN board TEXT NOT NULL DEFAULT ''`,
+}
+
 // schemaV27 adds escalations (docs/DESIGN-CONTROL-PLANE.md, section 7.5):
 // the coordinator's requests and their one answer each, the architect
 // credentials that may read and answer them, and the answered escalation an

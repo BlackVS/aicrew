@@ -101,7 +101,8 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 		"--output-dir", credDir, "--expires", "30d")...)
 	redeem, read := filepath.Join(credDir, "aimem-redeem.token"), filepath.Join(credDir, "aimem-read.token")
 	register, teamRead := filepath.Join(credDir, "aimem-team-register.token"), filepath.Join(credDir, "aimem-team-read.token")
-	for _, file := range []string{redeem, read, register, teamRead} {
+	board := filepath.Join(credDir, "aimem-board-read.token")
+	for _, file := range []string{redeem, read, register, teamRead, board} {
 		h.knowSecretFile(file)
 	}
 	idFile, err := os.ReadFile(filepath.Join(credDir, "aimem-hub-id"))
@@ -191,7 +192,7 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 }
 
 // checkBoundHub checks the hub the operator commands bound in cfgPath: one
-// aimem_hubs entry, no aimem block, the hub's ID and all four credential
+// aimem_hubs entry, no aimem block, the hub's ID and all five credential
 // files from credDir.
 func (h *harness) checkBoundHub(cfgPath, credDir string) {
 	h.t.Helper()
@@ -208,6 +209,7 @@ func (h *harness) checkBoundHub(cfgPath, credDir string) {
 			ReadTokenFile         string `json:"read_token_file"`
 			TeamRegisterTokenFile string `json:"team_register_token_file"`
 			TeamReadTokenFile     string `json:"team_read_token_file"`
+			BoardReadTokenFile    string `json:"board_read_token_file"`
 		} `json:"aimem_hubs"`
 	}
 	if err := json.Unmarshal(raw, &c); err != nil || c.Aimem != nil || len(c.AimemHubs) != 1 {
@@ -217,7 +219,8 @@ func (h *harness) checkBoundHub(cfgPath, credDir string) {
 	if hb.Name != hubName || hb.HubID != h.hubID || hb.RedemptionTokenFile != filepath.Join(credDir, "aimem-redeem.token") ||
 		hb.ReadTokenFile != filepath.Join(credDir, "aimem-read.token") ||
 		hb.TeamRegisterTokenFile != filepath.Join(credDir, "aimem-team-register.token") ||
-		hb.TeamReadTokenFile != filepath.Join(credDir, "aimem-team-read.token") {
+		hb.TeamReadTokenFile != filepath.Join(credDir, "aimem-team-read.token") ||
+		hb.BoardReadTokenFile != filepath.Join(credDir, "aimem-board-read.token") {
 		h.t.Fatalf("the bound hub: %+v", hb)
 	}
 }

@@ -61,6 +61,10 @@ type AimemHub struct {
 	// and team.read peer credentials, each separate from the others.
 	TeamRegisterTokenFile string `json:"team_register_token_file,omitempty"`
 	TeamReadTokenFile     string `json:"team_read_token_file,omitempty"`
+	// BoardReadTokenFile holds the board.read peer credential, with which
+	// aicrewd reads the board feed and wakes the coordinators (A1). Without
+	// it the hub's board changes wake nobody.
+	BoardReadTokenFile string `json:"board_read_token_file,omitempty"`
 }
 
 // LegacyHubName is the name the single block before 0.3.0 is read under.
@@ -78,14 +82,15 @@ func (c Config) Hubs() []AimemHub {
 	return nil
 }
 
-// TeamsConfig is the hub's team.register and team.read client
-// configuration, or false when it has neither credential.
+// TeamsConfig is the hub's team.register, team.read and board.read client
+// configuration, or false when it has none of the credentials.
 func (h AimemHub) TeamsConfig(serviceID string) (hubteams.Config, bool) {
-	if h.TeamRegisterTokenFile == "" && h.TeamReadTokenFile == "" {
+	if h.TeamRegisterTokenFile == "" && h.TeamReadTokenFile == "" && h.BoardReadTokenFile == "" {
 		return hubteams.Config{}, false
 	}
 	return hubteams.Config{BaseURL: h.BaseURL, ServiceID: serviceID, TLSMode: h.TLSTrustMode, TLSValue: h.TLSTrustValue,
-		RegisterTokenFile: h.TeamRegisterTokenFile, ReadTokenFile: h.TeamReadTokenFile}, true
+		RegisterTokenFile: h.TeamRegisterTokenFile, ReadTokenFile: h.TeamReadTokenFile,
+		BoardTokenFile: h.BoardReadTokenFile}, true
 }
 
 // AimemConfig is how aicrew reaches aimem to redeem proof receipts

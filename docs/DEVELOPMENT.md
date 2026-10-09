@@ -193,6 +193,11 @@ an address; it holds no secret itself:
   With `team.read`, aicrewd reads the team's grants at every offer and
   claim, and refreshes every team's grants snapshot once a minute; without
   it, offers and claims of that hub's teams are refused `hub_unavailable`.
+- `board_read_token_file` is optional too. It holds the `board.read`
+  credential (aimem 0.10.0 and later), its own file, checked like the
+  others. With it, aicrewd reads the hub's board feed and wakes the
+  coordinators on board changes ("Board wake", below). Without it, aicrewd
+  logs a warning at start and the hub's board changes wake no one.
 - The single `aimem` block of earlier releases, without `name` or
   `hub_id`, is still read until 0.5.0 removes it, as the hub `default`,
   and logs a warning; a configuration with both forms is refused. Move it into
@@ -216,10 +221,11 @@ entry, in the block's place:
   `tls_trust_value`, `redemption_token_file` and `read_token_file`;
 - `-hub-id` and the two team credential files are added when given, the
   files as absolute paths;
-- `-cred-dir DIR` takes the hub ID and the two team credential files from
-  the directory `aimem identity peer provision` wrote, checked as
-  `aicrew hub add` checks them. It replaces `-hub-id` and the two file
-  flags, and cannot be given with them. The installer passes it;
+- `-cred-dir DIR` takes the hub ID, the two team credential files and the
+  `board.read` credential (`board_read_token_file`) from the directory
+  `aimem identity peer provision` wrote, checked as `aicrew hub add` checks
+  them. It replaces `-hub-id` and the two file flags, and cannot be given
+  with them. The installer passes it;
 - `-service-id` replaces `service_id`.
 
 Every other field keeps its value and its place. The file is replaced
@@ -271,11 +277,17 @@ directly; it does not call aicrewd.
 side, then carried to this machine. Its files have fixed names:
 - `aimem-hub-id`: the hub's ID, one UUID in lowercase on one line. A
   missing, empty, multi-line or other file is refused by name.
-- `aimem-redeem.token`, `aimem-read.token`, `aimem-team-register.token`
-  and `aimem-team-read.token`: the four peer credentials. Each must be
-  readable by its owner only and hold one peer credential alone on one
-  line. Two files holding the same credential are refused. A credential is
-  never printed.
+- `aimem-redeem.token`, `aimem-read.token`, `aimem-team-register.token`,
+  `aimem-team-read.token` and `aimem-board-read.token`: the five peer
+  credentials. Each must be readable by its owner only and hold one peer
+  credential alone on one line. Two files holding the same credential are
+  refused. A credential is never printed.
+- A directory provisioned before aimem 0.10.0 has no
+  `aimem-board-read.token`, and is refused with what to do: run
+  `aimem identity peer provision` again with the same arguments. That
+  rerun issues only the missing `board.read` credential and keeps every
+  other file. Then run `aicrew hub add` again with the directory: it
+  updates the entry in place, and aicrewd reads the board after a restart.
 
 Before writing anything, it checks the hub live. It reads this service's
 teams with the team.read credential, under the given trust binding and the
@@ -573,6 +585,31 @@ and closes as recovered the attempts whose reservation aimem closed outside
 aicrew, reading at most 30 times a minute (`docs/CREW-CONTRACT.md`,
 "Reconciliation by aicrewd"). It logs each recovered closure. Without the
 read credential the loop does not run.
+
+### Board wake
+
+With a hub's `board_read_token_file` configured, and a team on that hub,
+aicrewd reads the hub's board feed (aimem's `board.read`) at the same
+15-second tick. A tick reads at most 4 pages of 500 changes, so a backlog
+is read over several ticks and the reads stay far below the credential's
+60 a minute. Each page is recorded in one transaction with the
+announcements it leads to and the cursor to read on from
+(`docs/CREW-CONTRACT.md`, "Board changes"):
+- **What wakes a coordinator:** a task of a project the team is granted
+  that becomes READY, or that changes state on the board while the team has
+  an attempt for it. The coordinator receives a `board.changed` lifecycle
+  message, and the Stop hook wakes it as for any message.
+- **What is skipped:** a change one of aicrew's own steps made. Each
+  committed step keeps the task revision it made.
+- **History:** a project's changes from before aicrewd first saw it
+  granted are read and announced to no one. That covers aicrewd's first
+  read, which starts at the board's first change, and a project granted
+  later.
+- **A restored hub:** a hub that answers `cursor_ahead` or
+  `invalid_cursor` has the cursor dropped. The feed is read again from its
+  start, as history.
+- **A hub that asks to wait:** it is not read again before the time it
+  named.
 
 ## Teams
 

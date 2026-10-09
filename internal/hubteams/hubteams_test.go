@@ -30,6 +30,7 @@ const (
 	teamID      = "01a10828-0000-7000-8000-000000000001"
 	registerTok = "aimem_peer_" + "1111111111111111111111111111111111111111111111111111111111111111"
 	readTok     = "aimem_peer_" + "2222222222222222222222222222222222222222222222222222222222222222"
+	boardTok    = "aimem_peer_" + "3333333333333333333333333333333333333333333333333333333333333333"
 )
 
 func newCert(t *testing.T) tls.Certificate {
@@ -77,8 +78,8 @@ func (s *hub) client(t *testing.T) *Client {
 	t.Helper()
 	sum := sha256.Sum256(s.cert.Leaf.RawSubjectPublicKeyInfo)
 	dir := t.TempDir()
-	reg, read := filepath.Join(dir, "register.token"), filepath.Join(dir, "read.token")
-	for p, v := range map[string]string{reg: registerTok, read: readTok} {
+	reg, read, board := filepath.Join(dir, "register.token"), filepath.Join(dir, "read.token"), filepath.Join(dir, "board.token")
+	for p, v := range map[string]string{reg: registerTok, read: readTok, board: boardTok} {
 		f, err := privatefile.Create(p)
 		if err != nil {
 			t.Fatal(err)
@@ -87,7 +88,8 @@ func (s *hub) client(t *testing.T) *Client {
 		f.Close()
 	}
 	c, err := New(Config{BaseURL: s.srv.URL, ServiceID: service, TLSMode: "spki_sha256",
-		TLSValue: "sha256-" + base64.StdEncoding.EncodeToString(sum[:]), RegisterTokenFile: reg, ReadTokenFile: read})
+		TLSValue: "sha256-" + base64.StdEncoding.EncodeToString(sum[:]), RegisterTokenFile: reg, ReadTokenFile: read,
+		BoardTokenFile: board})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +175,81 @@ func TestRead(t *testing.T) {
 	}
 }
 
+// ReadBoard sends board.read's credential, the cursor and the limit under
+// this peer's path, and returns the page; the cursor refusals keep their
+// codes and are not retryable; a page that breaks the contract is
+// hub_unavailable.
+func TestReadBoard(t *testing.T) {
+	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	page := BoardPage{Cursor: "c2", More: true, Changes: []BoardChange{
+		{Project: "app", TaskID: "01a1-t1", Revision: 3, From: "BACKLOG", To: "READY", At: at},
+		{Project: "app", TaskID: "01a1-t2", Revision: 1, From: "", To: "READY", At: at, RequiredCapability: "ops: network-x"},
+	}}
+	var bad string
+	h := newHub(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/identity/peers/"+service+"/board-changes" ||
+			r.Header.Get("Authorization") != "Bearer "+boardTok || r.Header.Get(VersionHeader) != "1" {
+			refuse(w, http.StatusForbidden, "peer_forbidden")
+			return
+		}
+		switch r.URL.Query().Get("cursor") {
+		case "":
+			if r.URL.Query().Get("limit") != "500" {
+				refuse(w, http.StatusBadRequest, "invalid_request")
+				return
+			}
+			json.NewEncoder(w).Encode(page)
+		case "broken":
+			refuse(w, http.StatusBadRequest, "invalid_cursor")
+		case "ahead":
+			refuse(w, http.StatusConflict, "cursor_ahead")
+		case "bad":
+			w.Write([]byte(bad))
+		default:
+			json.NewEncoder(w).Encode(BoardPage{Cursor: r.URL.Query().Get("cursor"), Changes: []BoardChange{}})
+		}
+	})
+	c := h.client(t)
+	got, err := c.ReadBoard(context.Background(), "", MaxBoardPage)
+	if err != nil || got.Cursor != "c2" || !got.More || len(got.Changes) != 2 || got.Changes[1].RequiredCapability != "ops: network-x" ||
+		got.Changes[0].From != "BACKLOG" || !got.Changes[0].At.Equal(at) {
+		t.Fatalf("read board: %+v %v", got, err)
+	}
+	if got, err := c.ReadBoard(context.Background(), "c2", 10); err != nil || got.Cursor != "c2" || len(got.Changes) != 0 || got.More {
+		t.Fatalf("read on: %+v %v", got, err)
+	}
+	for cur, code := range map[string]string{"broken": "invalid_cursor", "ahead": "cursor_ahead"} {
+		_, err := c.ReadBoard(context.Background(), cur, 10)
+		var e *Error
+		if Code(err) != code || !errorAs(err, &e) || e.Retryable {
+			t.Errorf("%s: %v", cur, err)
+		}
+	}
+	for name, body := range map[string]string{
+		"no cursor":     `{"changes":[],"more":false}`,
+		"no changes":    `{"cursor":"x","more":false}`,
+		"no revision":   `{"cursor":"x","changes":[{"project":"app","task_id":"t","to":"READY","at":"2026-10-09T12:00:00Z"}]}`,
+		"bad state":     `{"cursor":"x","changes":[{"project":"app","task_id":"t","revision":1,"to":"ready","at":"2026-10-09T12:00:00Z"}]}`,
+		"no time":       `{"cursor":"x","changes":[{"project":"app","task_id":"t","revision":1,"to":"READY"}]}`,
+		"bad project":   `{"cursor":"x","changes":[{"project":"../x","task_id":"t","revision":1,"to":"READY","at":"2026-10-09T12:00:00Z"}]}`,
+		"over the page": `{"cursor":"x","changes":[{"project":"app","task_id":"t","revision":1,"to":"READY","at":"2026-10-09T12:00:00Z"},{"project":"app","task_id":"u","revision":1,"to":"READY","at":"2026-10-09T12:00:00Z"}]}`,
+	} {
+		bad = body
+		if _, err := c.ReadBoard(context.Background(), "bad", 1); Code(err) != CodeUnavailable || strings.Contains(err.Error(), boardTok) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	bad = `{"cursor":"x","changes":[{"project":"app","task_id":"t","revision":1,"from":"READY","to":"ON_HOLD","at":"2026-10-09T12:00:00Z"}]}`
+	if got, err := c.ReadBoard(context.Background(), "bad", 1); err != nil || got.Changes[0].To != "ON_HOLD" {
+		t.Errorf("a state aimem adds later: %+v %v", got, err)
+	}
+	for _, limit := range []int{0, MaxBoardPage + 1} {
+		if _, err := c.ReadBoard(context.Background(), "", limit); Code(err) != "invalid_request" {
+			t.Errorf("limit %d: %v", limit, err)
+		}
+	}
+}
+
 // Answers that break the contract, transport failures, redirects and
 // unknown codes are hub_unavailable; no error carries a bearer.
 func TestUnavailable(t *testing.T) {
@@ -240,6 +317,7 @@ func TestConfig(t *testing.T) {
 		"service":     func(c *Config) { c.ServiceID = "../x" },
 		"no files":    func(c *Config) { c.ReadTokenFile = "" },
 		"same file":   func(c *Config) { c.RegisterTokenFile = c.ReadTokenFile },
+		"same board":  func(c *Config) { c.BoardTokenFile = c.ReadTokenFile },
 		"wrong trust": func(c *Config) { c.TLSValue = "other.example" },
 	} {
 		c := ok
@@ -249,11 +327,19 @@ func TestConfig(t *testing.T) {
 		}
 	}
 	c, _ := New(ok)
-	if c.CanRegister() || !c.CanRead() {
+	if c.CanRegister() || !c.CanRead() || c.CanReadBoard() {
 		t.Fatal("capabilities")
 	}
 	if _, err := c.Register(context.Background(), teamID, "x"); Code(err) != "no_credential" {
 		t.Fatalf("register without a credential: %v", err)
+	}
+	if _, err := c.ReadBoard(context.Background(), "", 1); Code(err) != "no_credential" {
+		t.Fatalf("read the board without a credential: %v", err)
+	}
+	board := ok
+	board.ReadTokenFile, board.BoardTokenFile = "", "board.token"
+	if c, err := New(board); err != nil || !c.CanReadBoard() || c.CanRead() {
+		t.Fatalf("a board-only client: %v", err)
 	}
 	_ = os.Remove
 }

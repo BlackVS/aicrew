@@ -395,7 +395,8 @@ func credDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	writePrivate(t, filepath.Join(dir, "aimem-hub-id"), testHubID+"\n")
-	for i, name := range []string{"aimem-redeem.token", "aimem-read.token", "aimem-team-register.token", "aimem-team-read.token"} {
+	for i, name := range []string{"aimem-redeem.token", "aimem-read.token", "aimem-team-register.token", "aimem-team-read.token",
+		"aimem-board-read.token"} {
 		writePrivate(t, filepath.Join(dir, name), "aimem_peer_"+strings.Repeat(string("0123456789abcdef"[i+1]), 64)+"\n")
 	}
 	return dir
@@ -568,11 +569,13 @@ func TestUpgradeLegacyConfig(t *testing.T) {
 				HubID                 string `json:"hub_id"`
 				TeamRegisterTokenFile string `json:"team_register_token_file"`
 				TeamReadTokenFile     string `json:"team_read_token_file"`
+				BoardReadTokenFile    string `json:"board_read_token_file"`
 			} `json:"aimem_hubs"`
 		}
 		if err := json.Unmarshal(raw, &c); err != nil || c.Aimem != nil || len(c.AimemHubs) != 1 ||
 			c.AimemHubs[0].HubID != testHubID || c.AimemHubs[0].TeamReadTokenFile != filepath.Join(good, "aimem-team-read.token") ||
-			c.AimemHubs[0].TeamRegisterTokenFile != filepath.Join(good, "aimem-team-register.token") {
+			c.AimemHubs[0].TeamRegisterTokenFile != filepath.Join(good, "aimem-team-register.token") ||
+			c.AimemHubs[0].BoardReadTokenFile != filepath.Join(good, "aimem-board-read.token") {
 			t.Fatalf("migrated config (%v):\n%s", err, raw)
 		}
 	})

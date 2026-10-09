@@ -53,8 +53,9 @@ func provisionDir(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	files := map[string]string{svcconfig.HubIDFile: hubTestID}
-	for i, name := range []string{svcconfig.RedemptionTokenFile, svcconfig.ReadTokenFile, svcconfig.TeamRegisterTokenFile, svcconfig.TeamReadTokenFile} {
-		files[name] = "aimem_peer_" + strings.Repeat(string("abcd"[i]), 64)
+	for i, name := range []string{svcconfig.RedemptionTokenFile, svcconfig.ReadTokenFile, svcconfig.TeamRegisterTokenFile,
+		svcconfig.TeamReadTokenFile, svcconfig.BoardReadTokenFile} {
+		files[name] = "aimem_peer_" + strings.Repeat(string("abcde"[i]), 64)
 	}
 	for name, v := range files {
 		f, err := privatefile.Create(filepath.Join(dir, name))

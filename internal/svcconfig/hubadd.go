@@ -16,14 +16,15 @@ import (
 )
 
 // The files `aimem identity peer provision --output-dir DIR` writes: the
-// hub's ID and the four peer credentials it issues this service, under
-// fixed names.
+// hub's ID and the five peer credentials it issues this service, under
+// fixed names. aimem 0.10.0 added the fifth, board.read.
 const (
 	HubIDFile             = "aimem-hub-id"
 	RedemptionTokenFile   = "aimem-redeem.token"
 	ReadTokenFile         = "aimem-read.token"
 	TeamRegisterTokenFile = "aimem-team-register.token"
 	TeamReadTokenFile     = "aimem-team-read.token"
+	BoardReadTokenFile    = "aimem-board-read.token"
 )
 
 // HubRequest is one hub as the operator names it: its alias, how to reach
@@ -73,7 +74,7 @@ const maxCredFile = 4 << 10
 // AddHub adds the hub req names to the aimem_hubs of the configuration at
 // path, or replaces the entry of that name in place. The hub ID and the
 // credentials come from req.CredDir: each credential file must be private
-// and hold one peer credential, all four different, and the hub ID file
+// and hold one peer credential, all five different, and the hub ID file
 // one UUID. Every path written is absolute. The file must already be in
 // the aimem_hubs form (or have no hub): a legacy aimem block is moved
 // first with aicrewd config migrate. The rewritten file is checked as
@@ -172,8 +173,13 @@ func provisioned(req HubRequest) (AimemHub, error) {
 		{ReadTokenFile, &h.ReadTokenFile},
 		{TeamRegisterTokenFile, &h.TeamRegisterTokenFile},
 		{TeamReadTokenFile, &h.TeamReadTokenFile},
+		{BoardReadTokenFile, &h.BoardReadTokenFile},
 	} {
 		p := filepath.Join(dir, f.name)
+		if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) && f.name == BoardReadTokenFile {
+			return AimemHub{}, fmt.Errorf("%s is missing: the directory was provisioned before aimem 0.10.0; run aimem identity "+
+				"peer provision again with the same arguments, which issues only the missing board.read credential", p)
+		}
 		if err := privatefile.Check(p); err != nil {
 			return AimemHub{}, err
 		}

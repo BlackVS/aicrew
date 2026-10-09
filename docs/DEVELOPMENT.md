@@ -221,10 +221,11 @@ entry, in the block's place:
   `tls_trust_value`, `redemption_token_file` and `read_token_file`;
 - `-hub-id` and the two team credential files are added when given, the
   files as absolute paths;
-- `-cred-dir DIR` takes the hub ID and the two team credential files from
-  the directory `aimem identity peer provision` wrote, checked as
-  `aicrew hub add` checks them. It replaces `-hub-id` and the two file
-  flags, and cannot be given with them. The installer passes it;
+- `-cred-dir DIR` takes the hub ID, the two team credential files and the
+  `board.read` credential (`board_read_token_file`) from the directory
+  `aimem identity peer provision` wrote, checked as `aicrew hub add` checks
+  them. It replaces `-hub-id` and the two file flags, and cannot be given
+  with them. The installer passes it;
 - `-service-id` replaces `service_id`.
 
 Every other field keeps its value and its place. The file is replaced

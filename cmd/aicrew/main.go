@@ -59,6 +59,7 @@ const usage = `usage:
   aicrew team create|list|show|rename|register|setup ...   (run "aicrew team" for its usage)
   aicrew hub add NAME ...   (run "aicrew hub" for its usage)
   aicrew operator-token new --output PATH|-
+  aicrew architect init --dir DIR --project PROJECT ...   (run "aicrew architect" for its usage)
   aicrew version [--json]
 ` + connUsage
 
@@ -72,6 +73,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) >= 1 && args[0] == "hub" {
 		return runHub(ctx, args[1:], stdout, stderr, time.Now())
+	}
+	if len(args) >= 1 && args[0] == "architect" {
+		return runArchitect(args[1:], stdout, stderr)
 	}
 	if len(args) >= 1 && args[0] == "operator-token" {
 		return runOperatorToken(args[1:], stdout, stderr)

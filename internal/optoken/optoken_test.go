@@ -94,3 +94,34 @@ func TestReadRefusesSharedFile(t *testing.T) {
 		t.Fatal("a world-readable token file was read")
 	}
 }
+
+// A client reads the operator token or an architect credential; aicrewd's
+// own file takes the operator token only.
+func TestReadClientTakesTheArchitectCredential(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		p := filepath.Join(dir, name)
+		f, err := privatefile.Create(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.WriteString(content)
+		f.Close()
+		return p
+	}
+	op, _ := Generate()
+	arch := ArchitectPrefix + strings.Repeat("ab", 32)
+	opFile, archFile := write("op", op+"\n"), write("arch", arch+"\n")
+	if got, err := ReadClient(opFile); err != nil || got != op {
+		t.Fatalf("operator token: %q %v", got, err)
+	}
+	if got, err := ReadClient(archFile); err != nil || got != arch {
+		t.Fatalf("architect credential: %q %v", got, err)
+	}
+	if _, err := Read(archFile); err == nil {
+		t.Fatal("aicrewd's operator token file took an architect credential")
+	}
+	if _, err := ReadClient(write("short", "aar_abc\n")); err == nil {
+		t.Fatal("a malformed architect credential was read")
+	}
+}

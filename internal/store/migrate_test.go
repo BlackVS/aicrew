@@ -115,6 +115,7 @@ func downgradeToV10(t *testing.T, path string) {
 		schemaV6[1], schemaV6[3],
 		// Tables and columns added after v10.
 		`DROP TABLE session_tokens`, `DROP TABLE session_handles`, `DROP TABLE introspection_credentials`,
+		`DROP TABLE escalations`, `DROP TABLE architect_credentials`, `ALTER TABLE messages DROP COLUMN escalation`,
 		`ALTER TABLE messages DROP COLUMN offer`, `ALTER TABLE messages DROP COLUMN attempt_id`,
 		`ALTER TABLE teams DROP COLUMN hub`, `ALTER TABLE teams DROP COLUMN registration_state`,
 		`ALTER TABLE teams DROP COLUMN registration_detail`, `ALTER TABLE teams DROP COLUMN registered_name`,
@@ -495,9 +496,21 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 	)`
 
 // dropAttemptRepository takes a store back to v23.
+// dropEscalations takes a store back to v26.
+func dropEscalations(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	for _, stmt := range []string{`DROP TABLE escalations`, `DROP TABLE architect_credentials`,
+		`ALTER TABLE messages DROP COLUMN escalation`} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // dropPendingRefusal takes a store back to v25.
 func dropPendingRefusal(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropEscalations(t, raw)
 	if _, err := raw.Exec(`ALTER TABLE attempts DROP COLUMN pending_refusal`); err != nil {
 		t.Fatal(err)
 	}
@@ -600,6 +613,42 @@ func TestMigrationV26AddsThePendingRefusal(t *testing.T) {
 	}
 	if after != before || before == 0 || reported != 0 {
 		t.Fatalf("after v26: %d attempts (was %d), %d with a reported refusal", after, before, reported)
+	}
+}
+
+// Schema v27 adds escalations, architect credentials and the escalation an
+// answer's message carries to a populated v26 store, keeping every message.
+func TestMigrationV27AddsEscalations(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropEscalations(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 26`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v26 store: %v", err)
+	}
+	defer s2.Close()
+	var after, carrying, escalations, creds int
+	if err := s2.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(escalation, '')) FROM messages`).Scan(&after, &carrying); err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.db.QueryRow(`SELECT (SELECT COUNT(*) FROM escalations), (SELECT COUNT(*) FROM architect_credentials)`).
+		Scan(&escalations, &creds); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || before == 0 || carrying != 0 || escalations != 0 || creds != 0 {
+		t.Fatalf("after v27: %d messages (was %d), %d carrying an escalation, %d escalations, %d credentials",
+			after, before, carrying, escalations, creds)
 	}
 }
 

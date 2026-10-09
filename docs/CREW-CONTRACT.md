@@ -376,6 +376,7 @@ trusts a caller it is given, and a test enforces that.
 | `GET /v1/crew/requirements` | `Authorization: Bearer` session token | The team's granted projects with the repository the hub binds to each (`hub_id`, `project_id`, `repository {kind, url, access}`), from the grants snapshot: what a member's home verifies ("Capabilities"). Reply: `projects`. |
 | `POST /v1/crew/capabilities`, JSON `{"capabilities"}` | `Authorization: Bearer` session token | Record the member's capabilities, replacing its earlier report ("Capabilities"). Reply: `reported_at`. |
 | `GET /v1/crew/capabilities` | `Authorization: Bearer` session token | The team's current members with their last reports (`agent_id`, `label`, `role`, `reported_at`, `capabilities`), for planning who can take a task. Reply: `members`. |
+| `POST /v1/crew/escalations`, with `Idempotency-Key` | `Authorization: Bearer` session token | Raise an escalation, as the team's current coordinator ("Escalations"). Reply: the escalation. |
 
 - **Entry and resume.** The exchange names the proof type, this service as
   `audience`, the `challenge_id`, and either `team_id` (enter) or
@@ -1199,6 +1200,70 @@ Neither changes anything.
 Audit records hold the linked actor IDs, agent, session and generation,
 profile snapshot (model and client), process pin, task and attempt
 references and receipt, and never a secret, session handle or proof.
+
+## Escalations
+
+The coordinator never talks to a human. A question it cannot settle within
+its role goes to the architect as an escalation
+(`docs/DESIGN-CONTROL-PLANE.md`, section 7.5), and the answer comes back to
+the coordinator's inbox. aicrewd's store is the record. A task comment is
+only its mirror, and a comment without a recorded answer authorizes nothing.
+
+**The request,** `POST /v1/crew/escalations` with an `Idempotency-Key`:
+- **Who raises it:** only the team's current coordinator session; any other
+  role is `403 role_forbidden`.
+- **Its fields:**
+  - `task {hub_id, project_id, task_id}`, which must be in a project the
+    team's grants snapshot holds, or it is `409 project_not_granted`;
+  - `attempt_id`, optional: the team's attempt on that task;
+  - `category`, one of OPERATOR-SEAT's thirteen: `architecture`, `wire`,
+    `security`, `risk`, `merge`, `deploy`, `scope`, `cross_repo`, `intent`,
+    `process`, `implementation`, `environment` or `retry`;
+  - `question`, at most 1 KiB;
+  - `context`, optional, at most 8 KiB;
+  - two to four `options {option, consequence}`, each at most 512 bytes;
+  - `recommendation`, at most 1 KiB;
+  - `blocked`, optional: an active member's agent ID, other than the
+    coordinator;
+  - `urgency`: `now`, `today` or `next_session`.
+- **Refusals:** a request that breaks a rule is `400 invalid_request`, with
+  a message naming the rule.
+- **Retries:** a retry with the same key answers the original while the
+  session is current.
+- **Reply:** the escalation, with its `id` and `created_at`.
+
+**The answer,** on the operator API (DEVELOPMENT, "The operator API"):
+- **Who answers:** the operator credential, or an **architect credential**:
+  - an `aar_` bearer that aicrewd issues and keeps only as a digest;
+  - 90 days at most, and revocable;
+  - it reaches the three escalation routes and nothing else. Every other
+    operator route compares its bearer with the operator credential alone
+    and answers `401`.
+- **Its fields:** `{id, decision, rationale}`. The decision is at most
+  1 KiB, the rationale at most 4 KiB.
+- **Once only:** an escalation is answered once. A second answer is
+  `409 escalation_answered`.
+- **Who answered:** `answered_by` names the operator or the credential
+  (`operator:...` or `architect:<credential ID>`).
+
+**The message.** The answer's transaction also writes one lifecycle
+message, so it is delivered with the answer or not at all.
+- **Recipients:** the coordinator that raised the request and the `blocked`
+  member, each while still an active member.
+- **What it names:** the task and the attempt, if any.
+- **What it carries:** `escalation {id, category, question, decision,
+  rationale}`, and text naming the escalation and the decision.
+- **What wakes the member:** it is an ordinary inbox message. The current
+  keep-alive loop wakes the member on it: the Stop hook's `wait-inbox`
+  polls `GET /v1/crew/inbox/pending`. Once headless turns exist, the same
+  message starts the member's turn (control-plane increment A3).
+
+**Records.** An escalation's record holds:
+- the team and the coordinator's agent and session;
+- the request as sent;
+- the answer and who gave it.
+
+The audit records the request and the answer, as every command.
 
 ## Cross-project references
 

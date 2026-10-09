@@ -602,16 +602,22 @@ func TestLimiterRefills(t *testing.T) {
 
 // The routes agents and aimem reach call only the store operations that
 // authenticate by proof, session token or peer credential: never one that
-// trusts a caller it is given. The operator API (admin.go) alone calls the
-// operator's store operations, only in functions handed the operator's caller,
-// and builds that caller only inside the wrapper that has compared the
-// operator credential.
+// trusts a caller it is given. The operator API (admin.go, and the escalation
+// routes of escalations.go) alone calls the operator's store operations, only
+// in functions handed the operator's caller, and gets that caller only inside
+// the wrapper (adminRoute): it builds the operator's caller there after
+// comparing the operator credential, and has the store authenticate an
+// architect credential there and nowhere else.
 func TestExposureGuard(t *testing.T) {
 	operatorOps := map[string]bool{
 		"ListIntrospectionCredentials": true, "IssueIntrospectionCredential": true, "RevokeIntrospectionCredential": true,
 		"ListTeams": true, "CreateTeam": true, "GetTeam": true, "ListMembers": true, "SetTeamHub": true,
 		"RenameTeam": true, "ListInvitations": true, "IssueInvitation": true, "GetInvitation": true,
 		"RevokeInvitation": true, "RecordTeamRegistration": true,
+		// The escalations, which the operator's caller or an architect's
+		// reads and answers, and the architect credentials (5598).
+		"ListEscalations": true, "GetEscalation": true, "AnswerEscalation": true,
+		"ListArchitectCredentials": true, "IssueArchitectCredential": true, "RevokeArchitectCredential": true,
 	}
 	allowed := map[string]bool{
 		"AuthenticateIntrospection": true, "Introspect": true,
@@ -638,7 +644,11 @@ func TestExposureGuard(t *testing.T) {
 		// which the member records in its home (3a4b).
 		"RequirementsWithToken": true, "TeamProjectsWithToken": true, "ReportCapabilitiesWithToken": true, "TeamCapabilitiesWithToken": true,
 		"AgentCapabilities": true,
+		// The coordinator's escalation, by its session token (5598).
+		"RaiseEscalationWithToken": true,
 	}
+	// wrapperOnly are the store calls only the wrapper makes.
+	wrapperOnly := map[string]bool{"AuthenticateArchitect": true}
 	forbiddenPkg := map[string]bool{"AgentCaller": true, "OperatorCaller": true}
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -658,10 +668,10 @@ func TestExposureGuard(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		admin := name == "admin.go"
+		admin := name == "admin.go" || name == "escalations.go"
 		for _, decl := range f.Decls {
 			fn, _ := decl.(*ast.FuncDecl)
-			inOperator := admin && fn != nil && fn.Name.Name == "operator"
+			inOperator := name == "admin.go" && fn != nil && fn.Name.Name == "adminRoute"
 			// Only the wrapper and the functions it hands the operator's
 			// caller to may reach the operator's store operations.
 			operatorFn := admin && fn != nil && (inOperator || takesCaller(fn))
@@ -672,7 +682,11 @@ func TestExposureGuard(t *testing.T) {
 				}
 				if inner, ok := sel.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "store" {
 					checked++
-					if !allowed[sel.Sel.Name] && !(operatorFn && operatorOps[sel.Sel.Name]) {
+					if wrapperOnly[sel.Sel.Name] {
+						if !inOperator {
+							t.Errorf("%s: store.%s outside the operator wrapper", fset.Position(sel.Pos()), sel.Sel.Name)
+						}
+					} else if !allowed[sel.Sel.Name] && !(operatorFn && operatorOps[sel.Sel.Name]) {
 						t.Errorf("%s: the service calls store.%s", fset.Position(sel.Pos()), sel.Sel.Name)
 					}
 				}
@@ -716,9 +730,11 @@ func TestRouteInventory(t *testing.T) {
 		}
 	}
 	sort.Strings(got)
-	want := []string{"GET /healthz", "GET /v1/admin/hub-credentials", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations",
+	want := []string{"GET /healthz", "GET /v1/admin/architect-credentials", "GET /v1/admin/escalation", "GET /v1/admin/escalations",
+		"GET /v1/admin/hub-credentials", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations",
 		"GET /v1/admin/team", "GET /v1/admin/teams", "GET /v1/crew/capabilities", "GET /v1/crew/inbox", "GET /v1/crew/inbox/pending",
 		"GET /v1/crew/projects", "GET /v1/crew/requirements", "GET /v1/crew/session",
+		"POST /v1/admin/architect-credentials", "POST /v1/admin/architect-credentials/revoke", "POST /v1/admin/escalations/answer",
 		"POST /v1/admin/hub-credentials", "POST /v1/admin/hub-credentials/revoke", "POST /v1/admin/hub-credentials/rotate",
 		"POST /v1/admin/introspection-credentials", "POST /v1/admin/introspection-credentials/revoke",
 		"POST /v1/admin/introspection-credentials/rotate", "POST /v1/admin/invitations", "POST /v1/admin/invitations/revoke",
@@ -728,7 +744,7 @@ func TestRouteInventory(t *testing.T) {
 		"POST /v1/crew/attempts/{id}/confirm-stop", "POST /v1/crew/attempts/{id}/decline", "POST /v1/crew/attempts/{id}/finalize",
 		"POST /v1/crew/attempts/{id}/release", "POST /v1/crew/attempts/{id}/review", "POST /v1/crew/attempts/{id}/settle",
 		"POST /v1/crew/attempts/{id}/stop", "POST /v1/crew/attempts/{id}/withdraw", "POST /v1/crew/attempts/{id}/work", "POST /v1/crew/capabilities", "POST /v1/crew/challenges", "POST /v1/crew/coordination",
-		"POST /v1/crew/inbox/ack", "POST /v1/crew/introspect", "POST /v1/crew/invitations/begin", "POST /v1/crew/invitations/complete",
+		"POST /v1/crew/escalations", "POST /v1/crew/inbox/ack", "POST /v1/crew/introspect", "POST /v1/crew/invitations/begin", "POST /v1/crew/invitations/complete",
 		"POST /v1/crew/session/leave", "POST /v1/crew/token"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("routes = %v, want %v", got, want)

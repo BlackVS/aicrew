@@ -15,6 +15,9 @@ const (
 	// route constructs it, and it may only settle a pending step on the read
 	// scope's answers and close an attempt as recovered.
 	callerReconciler
+	// callerArchitect is an architect credential (docs/DESIGN-CONTROL-PLANE.md,
+	// D10): it reads and answers escalations, and nothing else.
+	callerArchitect
 )
 
 func (k callerKind) String() string {
@@ -25,6 +28,8 @@ func (k callerKind) String() string {
 		return "agent"
 	case callerReconciler:
 		return "reconciler"
+	case callerArchitect:
+		return "architect"
 	default:
 		return "none"
 	}
@@ -83,6 +88,16 @@ func requireAgent(c Caller) error {
 func requireOperator(c Caller) error {
 	if c.kind != callerOperator || c.id == "" {
 		return fmt.Errorf("%w: operator required, caller is %s", ErrForbidden, c)
+	}
+	return nil
+}
+
+// requireEscalationReader admits the operator and an architect
+// credential: the escalation reads and answers, the only operations an
+// architect credential reaches.
+func requireEscalationReader(c Caller) error {
+	if (c.kind != callerOperator && c.kind != callerArchitect) || c.id == "" {
+		return fmt.Errorf("%w: the operator or an architect credential is required, caller is %s", ErrForbidden, c)
 	}
 	return nil
 }

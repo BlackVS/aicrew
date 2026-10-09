@@ -78,9 +78,12 @@ type Message struct {
 	AttemptID string `json:"attempt_id,omitempty"`
 	// Offer is the offer an offer's announcement makes: what the worker
 	// needs to verify the pin and start its worktree.
-	Offer     *OfferDetail `json:"offer,omitempty"`
-	Text      string       `json:"text"`
-	CreatedAt time.Time    `json:"created_at"`
+	Offer *OfferDetail `json:"offer,omitempty"`
+	// Escalation is the answered escalation an answer's announcement
+	// carries (escalations.go); no other message carries one.
+	Escalation *EscalationDetail `json:"escalation,omitempty"`
+	Text       string            `json:"text"`
+	CreatedAt  time.Time         `json:"created_at"`
 }
 
 // OfferDetail is an offer as its announcement carries it, in the shape of
@@ -333,14 +336,22 @@ func insertMessage(ctx context.Context, tx *sql.Tx, m Message, recipients []stri
 		}
 		offer = string(b)
 	}
+	escalation := ""
+	if m.Escalation != nil {
+		b, err := json.Marshal(m.Escalation)
+		if err != nil {
+			return Message{}, fmt.Errorf("encode escalation: %w", err)
+		}
+		escalation = string(b)
+	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO messages (id, team_id, seq, kind, sender_agent_id, sender_session_id, sender_generation,
 		        sender_model, sender_client, sender_client_version, to_agent_id, project_hub_id, project_id,
-		        task_hub_id, task_project_id, task_id, attempt_id, offer, text, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		        task_hub_id, task_project_id, task_id, attempt_id, offer, escalation, text, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.TeamID, m.Seq, string(m.Kind), m.SenderAgentID, m.SenderSessionID, m.SenderGeneration,
 		m.SenderProfile.Model, m.SenderProfile.Client, m.SenderProfile.ClientVersion, m.To,
-		project.HubID, project.ProjectID, task.HubID, task.ProjectID, task.TaskID, m.AttemptID, offer,
+		project.HubID, project.ProjectID, task.HubID, task.ProjectID, task.TaskID, m.AttemptID, offer, escalation,
 		m.Text, formatTime(now)); err != nil {
 		return Message{}, fmt.Errorf("insert message: %w", err)
 	}
@@ -475,7 +486,7 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 		`SELECT m.id, m.team_id, m.seq, m.kind, m.sender_agent_id, m.sender_session_id, m.sender_generation,
 		        m.sender_model, m.sender_client, m.sender_client_version, m.to_agent_id,
 		        m.project_hub_id, m.project_id, m.task_hub_id, m.task_project_id, m.task_id, m.attempt_id, m.offer,
-		        m.text, m.created_at, r.deliveries, r.first_delivered_at
+		        m.escalation, m.text, m.created_at, r.deliveries, r.first_delivered_at
 		 FROM message_recipients r JOIN messages m ON m.id = r.message_id
 		 WHERE r.agent_id = ? AND m.team_id = ? AND r.acknowledged_at IS NULL
 		   AND (m.project_id = '' OR EXISTS (SELECT 1 FROM team_grants g
@@ -493,12 +504,13 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 			project        ProjectRef
 			task           TaskRef
 			offer          string
+			escalation     string
 			firstDelivered sql.NullString
 		)
 		if err := rows.Scan(&it.ID, &it.TeamID, &it.Seq, &kind, &it.SenderAgentID, &it.SenderSessionID,
 			&it.SenderGeneration, &it.SenderProfile.Model, &it.SenderProfile.Client,
 			&it.SenderProfile.ClientVersion, &it.To, &project.HubID, &project.ProjectID,
-			&task.HubID, &task.ProjectID, &task.TaskID, &it.AttemptID, &offer, &it.Text, &created,
+			&task.HubID, &task.ProjectID, &task.TaskID, &it.AttemptID, &offer, &escalation, &it.Text, &created,
 			&it.Deliveries, &firstDelivered); err != nil {
 			return nil, err
 		}
@@ -524,6 +536,13 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 				o.Repository.BaseCommit, o.Repository.Branch = o.BaseCommit, o.Branch
 			}
 			it.Offer = &o.OfferDetail
+		}
+		if escalation != "" {
+			var e EscalationDetail
+			if err := json.Unmarshal([]byte(escalation), &e); err != nil {
+				return nil, fmt.Errorf("read the escalation of message %s: %w", it.ID, err)
+			}
+			it.Escalation = &e
 		}
 		if it.CreatedAt, err = parseTime(created); err != nil {
 			return nil, err

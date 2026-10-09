@@ -59,10 +59,28 @@ func Write(path, token string) error {
 	return nil
 }
 
+// ArchitectPrefix marks an architect credential (docs/DESIGN-CONTROL-PLANE.md,
+// D10), which aicrewd issues and which reaches the escalation routes only.
+const ArchitectPrefix = "aar_"
+
+var architectShape = regexp.MustCompile(`^aar_[0-9a-f]{64}$`)
+
+// ReadClient is Read for a client of the operator API: the file holds the
+// operator token or an architect credential. aicrewd's own
+// operator_token_file is read with Read, which takes the operator token only.
+func ReadClient(path string) (string, error) {
+	return read(path, func(s string) bool { return Valid(s) || architectShape.MatchString(s) },
+		"an operator token or an architect credential", "")
+}
+
 // Read returns the token in path, which must be an owner-only file holding
 // one token alone on its line. Its errors name the path and the fault, never
 // the content.
 func Read(path string) (string, error) {
+	return read(path, Valid, "an operator token", " (create one with `aicrew operator-token new`)")
+}
+
+func read(path string, valid func(string) bool, what, hint string) (string, error) {
 	if err := privatefile.Check(path); err != nil {
 		return "", err
 	}
@@ -76,8 +94,8 @@ func Read(path string) (string, error) {
 		return "", err
 	}
 	s := strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r")
-	if !Valid(s) {
-		return "", fmt.Errorf("%s does not hold an operator token alone on one line (create one with `aicrew operator-token new`)", path)
+	if !valid(s) {
+		return "", fmt.Errorf("%s does not hold %s alone on one line%s", path, what, hint)
 	}
 	return s, nil
 }

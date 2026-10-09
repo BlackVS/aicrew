@@ -117,6 +117,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 	s.registerCapabilities()
 	s.registerRedemption()
 	s.registerAdmin()
+	s.registerEscalations()
 	s.http = &http.Server{
 		Handler:           s.logged(s.limitBody(http.HandlerFunc(s.dispatch))),
 		ReadHeaderTimeout: readHeaderTimeout,

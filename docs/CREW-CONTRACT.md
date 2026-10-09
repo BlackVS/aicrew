@@ -1288,8 +1288,9 @@ coordinator must react to as `board.changed` messages
 task's project on that hub:
 - the change is announced when the task became READY, or when the team
   has an attempt for the task (offered, running, or closed);
-- a change one of aicrew's own steps made is not announced: an attempt of
-  the task recorded that revision when its step settled;
+- a change one of aicrew's own steps made is not announced. Each committed
+  step of an attempt keeps the task revision it made (schema 28), so every
+  step counts, not only an attempt's last;
 - a project's changes from before aicrewd first saw it granted are
   history, and are not announced. That is aicrewd's first read, which has
   no cursor, a project granted later, and the whole feed after a hub
@@ -1317,6 +1318,8 @@ active coordinators at that moment.
   announced.
 - A step whose settlement lands after the tick that read its change can be
   announced once, which is harmless.
+- A team with no active coordinator when the change is read is not told;
+  a coordinator that joins later reads the board at its session start.
 
 ## Cross-project references
 

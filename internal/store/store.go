@@ -415,9 +415,12 @@ var schemaV5 = []string{
 // from its own inbox. Every other message carries none.
 // schemaV28 adds the board feed's state (docs/DESIGN-CONTROL-PLANE.md, A1):
 // each hub's cursor, stored with the announcements it led to; each granted
-// project's first sight, before which its changes are history; and the
-// board change a board.changed announcement carries, as JSON.
+// project's first sight, before which its changes are history; the board
+// change a board.changed announcement carries, as JSON; and the task
+// revision each committed step made, by which a change is known as
+// aicrew's own. Earlier steps record none (0).
 var schemaV28 = []string{
+	`ALTER TABLE attempt_steps ADD COLUMN task_revision INTEGER NOT NULL DEFAULT 0`,
 	`CREATE TABLE board_cursors (
 		hub_id     TEXT PRIMARY KEY,
 		cursor     TEXT NOT NULL,

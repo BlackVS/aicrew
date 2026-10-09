@@ -81,8 +81,8 @@ func TestBoardAnnouncesReadyOnce(t *testing.T) {
 	}
 }
 
-// A change made by aicrew's own step (an attempt records its revision) is
-// not announced; a later change of the same task made outside aicrew is,
+// A change made by one of aicrew's own steps (a committed step records its
+// revision) is not announced, however many steps ran before the read; a later change of the same task made outside aicrew is,
 // whatever its state, because the team has an attempt for it.
 func TestBoardAnnouncesChangesOfAnAttemptsTask(t *testing.T) {
 	ctx := context.Background()
@@ -94,20 +94,28 @@ func TestBoardAnnouncesChangesOfAnAttemptsTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	*now = now.Add(time.Minute)
-	a := e.offer(t, "o1", "task-1")
-	if a.TaskRevision < 1 {
-		t.Fatalf("the offer recorded no task revision: %+v", a)
+	// Two steps of the attempt before the board is read: the worker blocks,
+	// then resumes. Each one's revision is aicrew's own, not only the last,
+	// which is all the attempt itself keeps.
+	running := e.accept(t, "a1", e.offer(t, "o1", "task-1"))
+	blocked := e.mustWork(t, "w1", running, IntentBlock, "waiting on the schema")
+	a := e.mustWork(t, "w2", blocked, IntentResume, "")
+	if blocked.TaskRevision <= running.TaskRevision || a.TaskRevision <= blocked.TaskRevision {
+		t.Fatalf("the steps' task revisions: accept %d, block %d, resume %d", running.TaskRevision, blocked.TaskRevision, a.TaskRevision)
 	}
-	own := BoardChange{ProjectID: "project-a", TaskID: "task-1", Revision: a.TaskRevision, From: "READY", To: "IN_PROGRESS", At: *now}
-	cancelled := BoardChange{ProjectID: "project-a", TaskID: "task-1", Revision: a.TaskRevision + 1, From: "IN_PROGRESS",
+	own1 := BoardChange{ProjectID: "project-a", TaskID: "task-1", Revision: blocked.TaskRevision, From: "IN_PROGRESS", To: "BLOCKED", At: *now}
+	own2 := BoardChange{ProjectID: "project-a", TaskID: "task-1", Revision: a.TaskRevision, From: "BLOCKED", To: "IN_PROGRESS", At: *now}
+	rev := a.TaskRevision + 1
+	cancelled := BoardChange{ProjectID: "project-a", TaskID: "task-1", Revision: rev, From: "IN_PROGRESS",
 		To: "CANCELLED", At: now.Add(time.Second)}
-	if n, err := s.RecordBoardPage(ctx, rc, "hub-a", BoardPage{From: "c1", Changes: []BoardChange{own, cancelled}, Cursor: "c2"}); err != nil || n != 1 {
+	page := BoardPage{From: "c1", Changes: []BoardChange{own1, own2, cancelled}, Cursor: "c2"}
+	if n, err := s.RecordBoardPage(ctx, rc, "hub-a", page); err != nil || n != 1 {
 		t.Fatalf("%d announced, %v", n, err)
 	}
 	got := boardMessages(t, s, e.tm.ID, e.lead)
-	if len(got) != 1 || got[0].Board.To != "CANCELLED" || got[0].Board.Revision != a.TaskRevision+1 ||
-		got[0].Text != "Task task-1 of project project-a moved from IN_PROGRESS to CANCELLED on the board (revision "+
-			fmt.Sprint(a.TaskRevision+1)+"). The team has an attempt for it." {
+	if len(got) != 1 || got[0].Board.To != "CANCELLED" || got[0].Board.Revision != rev ||
+		got[0].Text != fmt.Sprintf("Task task-1 of project project-a moved from IN_PROGRESS to CANCELLED on the board (revision %d)."+
+			" The team has an attempt for it.", rev) {
 		t.Fatalf("announcements: %+v", got)
 	}
 }

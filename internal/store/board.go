@@ -193,13 +193,14 @@ func boardSince(ctx context.Context, tx *sql.Tx, hubID string, now time.Time) (m
 // announceBoardChange writes ch's announcement to the coordinators of each
 // team granted its project: when the task became READY, or when the team
 // has an attempt for the task. A change one of aicrew's own steps made,
-// which an attempt of the task records as its task revision, is not
-// announced. It returns how many announcements it wrote.
+// which a committed step of an attempt of the task records as its task
+// revision, is not announced. It returns how many announcements it wrote.
 func announceBoardChange(ctx context.Context, tx *sql.Tx, hubID string, ch BoardChange, now time.Time) (int, error) {
 	task := TaskRef{HubID: hubID, ProjectID: ch.ProjectID, TaskID: ch.TaskID}
 	var own int
 	err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM attempts WHERE task_hub_id = ? AND task_project_id = ? AND task_id = ? AND task_revision = ?`,
+		`SELECT COUNT(*) FROM attempt_steps s JOIN attempts a ON a.id = s.attempt_id
+		 WHERE a.task_hub_id = ? AND a.task_project_id = ? AND a.task_id = ? AND s.outcome = 'committed' AND s.task_revision = ?`,
 		task.HubID, task.ProjectID, task.TaskID, ch.Revision).Scan(&own)
 	if err != nil {
 		return 0, fmt.Errorf("read the task's attempts: %w", err)

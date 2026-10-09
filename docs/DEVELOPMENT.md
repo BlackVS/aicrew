@@ -598,8 +598,8 @@ announcements it leads to and the cursor to read on from
   that becomes READY, or that changes state on the board while the team has
   an attempt for it. The coordinator receives a `board.changed` lifecycle
   message, and the Stop hook wakes it as for any message.
-- **What is skipped:** a change one of aicrew's own steps made. An attempt
-  of the task records that revision.
+- **What is skipped:** a change one of aicrew's own steps made. Each
+  committed step keeps the task revision it made.
 - **History:** a project's changes from before aicrewd first saw it
   granted are read and announced to no one. That covers aicrewd's first
   read, which starts at the board's first change, and a project granted

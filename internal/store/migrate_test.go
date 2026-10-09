@@ -116,6 +116,7 @@ func downgradeToV10(t *testing.T, path string) {
 		// Tables and columns added after v10.
 		`DROP TABLE session_tokens`, `DROP TABLE session_handles`, `DROP TABLE introspection_credentials`,
 		`DROP TABLE board_cursors`, `DROP TABLE board_projects`, `ALTER TABLE messages DROP COLUMN board`,
+		`ALTER TABLE attempt_steps DROP COLUMN task_revision`,
 		`DROP TABLE escalations`, `DROP TABLE architect_credentials`, `ALTER TABLE messages DROP COLUMN escalation`,
 		`ALTER TABLE messages DROP COLUMN offer`, `ALTER TABLE messages DROP COLUMN attempt_id`,
 		`ALTER TABLE teams DROP COLUMN hub`, `ALTER TABLE teams DROP COLUMN registration_state`,
@@ -184,7 +185,7 @@ func rawDB(t *testing.T, path string) *sql.DB {
 
 const (
 	attemptRows = `SELECT ` + attemptsV10Columns + ` FROM attempts ORDER BY id`
-	stepRows    = `SELECT * FROM attempt_steps ORDER BY request_key`
+	stepRows    = `SELECT request_key, attempt_id, operation, outcome, refusal, receipt_id, settled_at FROM attempt_steps ORDER BY request_key`
 	resultRows  = `SELECT * FROM attempt_results ORDER BY attempt_id, seq`
 )
 
@@ -501,7 +502,7 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 func dropBoard(t *testing.T, raw *sql.DB) {
 	t.Helper()
 	for _, stmt := range []string{`DROP TABLE board_cursors`, `DROP TABLE board_projects`,
-		`ALTER TABLE messages DROP COLUMN board`} {
+		`ALTER TABLE messages DROP COLUMN board`, `ALTER TABLE attempt_steps DROP COLUMN task_revision`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}

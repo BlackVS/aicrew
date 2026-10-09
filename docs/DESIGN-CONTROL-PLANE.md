@@ -77,6 +77,7 @@ section 2 from then on.
 | A task of a granted project becomes READY, or an offered or claimed task changes state on the board (cancelled, blocked, moved back) | aimem's board feed (A0, below), read by aicrewd | **`board.changed`** (task 5570) |
 | An escalation answer from the architect | the operator API, under the architect credential (7.5) | **`escalation.answer`** |
 | A forge event on an attempt's PR (a check concluded, a review comment) | the member's turn loop (later its runner) polling the attempt's PR (D5) | **`forge.event`** |
+| An ops plan reviewed, approved or rejected (8.4) | aicrewd's store, in the review's or the approval's transaction | **`plan.reviewed`**, **`plan.approved`**, **`plan.rejected`** (E4) |
 | An operator action (nudge, resume after a pause, a note) | the operator API | **`operator.note`** |
 
 **Decision D1: every trigger is a message.** The inbox already has the

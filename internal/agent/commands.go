@@ -198,8 +198,8 @@ func commandCollision(name string) string {
 func commandFiles() []homeFile {
 	out := make([]homeFile, 0, len(crewCommands))
 	for _, c := range crewCommands {
-		out = append(out, homeFile{path: commandPath(c.Name), content: commandMD(c), managed: true,
-			collision: commandCollision(c.Name)})
+		out = append(out, homeFile{Path: commandPath(c.Name), Content: commandMD(c), Managed: true,
+			Collision: commandCollision(c.Name)})
 	}
 	return out
 }

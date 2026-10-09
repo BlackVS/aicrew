@@ -1,9 +1,6 @@
 package agent
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/BlackVS/aicrew/internal/managedfiles"
 	"github.com/BlackVS/aicrew/internal/privatefile"
 )
 
@@ -28,46 +26,28 @@ var (
 	privateDirs = []string{"creds", "state", aimemDirName}
 )
 
-// homeFile is a file the bootstrap writes. A managed file follows the
-// rerun rule; an agent-owned one is created once and never changed.
-type homeFile struct {
-	path    string // slash-separated, relative to the home
-	content string
-	managed bool
-	// collision, when set, is what the file would shadow (a managed
-	// command, commands.go): it is never written.
-	collision string
-}
+// homeFile is a file the bootstrap writes (managedfiles.File).
+type homeFile = managedfiles.File
 
 // homeFiles are the managed client entry files, the home guidance and the
 // Claude Code settings carrying the home's aimem installation; a change to
 // one of them means an open client should restart.
 func homeFiles(home string) []homeFile {
 	return append([]homeFile{
-		{path: "AGENTS.md", content: agentsMD, managed: true},
-		{path: "CLAUDE.md", content: claudeMD, managed: true},
-		{path: "docs/START.md", content: startMD, managed: true},
-		{path: "docs/ROLES.md", content: rolesMD(), managed: true},
-		{path: "docs/HANDOFF.md", content: handoffMD},
-		{path: ".claude/settings.json", content: claudeSettings(home), managed: true},
+		{Path: "AGENTS.md", Content: agentsMD, Managed: true},
+		{Path: "CLAUDE.md", Content: claudeMD, Managed: true},
+		{Path: "docs/START.md", Content: startMD, Managed: true},
+		{Path: "docs/ROLES.md", Content: rolesMD(), Managed: true},
+		{Path: "docs/HANDOFF.md", Content: handoffMD},
+		{Path: ".claude/settings.json", Content: claudeSettings(home), Managed: true},
 	}, commandFiles()...)
 }
 
-// FileChange is one planned or applied change to a home file.
-type FileChange struct {
-	Path string `json:"path"`
-	// Action is create, update, unchanged, conflict (the proposed version
-	// is written beside the file as <path>.aicrew-new), kept (an
-	// agent-owned file that exists) or collision (a managed command that
-	// would shadow Detail; nothing is written).
-	Action string `json:"action"`
-	Detail string `json:"detail,omitempty"`
-}
+// FileChange is one planned or applied change to a home file
+// (managedfiles.Change).
+type FileChange = managedfiles.Change
 
-func digestOf(b []byte) string {
-	sum := sha256.Sum256(b)
-	return "sha256:" + hex.EncodeToString(sum[:])
-}
+func digestOf(b []byte) string { return managedfiles.Digest(b) }
 
 // agentDoc is agent.json, read so that every key and aicrew field the
 // bootstrap does not own is written back unchanged.
@@ -159,24 +139,7 @@ func (d agentDoc) write(home string) error {
 	return writeAtomic(agentJSONPath(home), append(raw, '\n'))
 }
 
-func writeAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*")
-	if err != nil {
-		return err
-	}
-	_, werr := tmp.Write(data)
-	cerr := tmp.Close()
-	if werr != nil || cerr != nil {
-		os.Remove(tmp.Name())
-		return errors.Join(werr, cerr)
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return nil
-}
+func writeAtomic(path string, data []byte) error { return managedfiles.WriteAtomic(path, data) }
 
 // makeLayout creates the home's directories: creds/, state/ and aimem/
 // owner-only (restricted if they exist; their contents are never touched),
@@ -201,79 +164,13 @@ func makeLayout(home string) error {
 
 // planFiles decides each home file's change against the recorded digests.
 func planFiles(home string, recorded map[string]string) ([]FileChange, error) {
-	var plan []FileChange
-	for _, f := range homeFiles(home) {
-		if f.collision != "" {
-			plan = append(plan, FileChange{Path: f.path, Action: "collision", Detail: f.collision})
-			continue
-		}
-		cur, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(f.path)))
-		switch {
-		case errors.Is(err, os.ErrNotExist):
-			plan = append(plan, FileChange{Path: f.path, Action: "create"})
-			continue
-		case err != nil:
-			return nil, err
-		}
-		switch {
-		case !f.managed:
-			plan = append(plan, FileChange{Path: f.path, Action: "kept"})
-		case bytes.Equal(cur, []byte(f.content)):
-			plan = append(plan, FileChange{Path: f.path, Action: "unchanged"})
-		case recorded[f.path] == digestOf(cur):
-			plan = append(plan, FileChange{Path: f.path, Action: "update"})
-		default:
-			plan = append(plan, FileChange{Path: f.path, Action: "conflict"})
-		}
-	}
-	return plan, nil
+	return managedfiles.Plan(home, homeFiles(home), recorded)
 }
 
 // applyFiles carries out a plan and records the managed digests in rec.
 // It returns whether a managed file's existing content was replaced.
 func applyFiles(home string, plan []FileChange, rec map[string]string) (bool, error) {
-	files := map[string]homeFile{}
-	for _, f := range homeFiles(home) {
-		files[f.path] = f
-	}
-	replaced := false
-	for _, c := range plan {
-		f := files[c.Path]
-		path := filepath.Join(home, filepath.FromSlash(f.path))
-		switch c.Action {
-		case "create":
-			if err := createFile(path, f.content); err != nil {
-				return replaced, err
-			}
-		case "update":
-			if err := writeAtomic(path, []byte(f.content)); err != nil {
-				return replaced, err
-			}
-			replaced = true
-		case "conflict":
-			if err := writeAtomic(path+".aicrew-new", []byte(f.content)); err != nil {
-				return replaced, err
-			}
-			continue // the recorded digest stays the last managed write's
-		case "collision":
-			continue // never written, never recorded
-		}
-		if f.managed && c.Action != "kept" {
-			rec[f.path] = digestOf([]byte(f.content))
-		}
-	}
-	return replaced, nil
-}
-
-// createFile creates path, refusing to replace a file that appeared since
-// the plan.
-func createFile(path, content string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return err
-	}
-	_, werr := f.WriteString(content)
-	return errors.Join(werr, f.Close())
+	return managedfiles.Apply(home, homeFiles(home), plan, rec)
 }
 
 const managedNote = "This file is managed by `aicrew-agent join`. A rerun updates it only while it is\n" +

@@ -100,6 +100,11 @@ The end-to-end runs against a real aimem are not part of these checks:
   readable by its owner only, and checks that an existing secret file is
   private (mode bits on Unix, the effective DACL on Windows).
   `privatefiletest` weakens a file for tests only.
+- `internal/managedfiles`: the managed-file rerun rule (docs/WORKSPACE.md,
+  "Managed files and repeated setup"), shared by `aicrew-agent join` and
+  `aicrew architect init`.
+- `internal/architect`: the architect directory that `aicrew architect
+  init` writes (below).
 - `internal/installer`: no code; the tests of the installers at the
   repository's root: `install-aicrewd.sh` for the hub, `boot.sh` and
   `boot.ps1` for a member's `aicrew-agent` (below).
@@ -665,6 +670,70 @@ bin/aicrew invitation revoke --id INVITATION
 - `list` shows metadata only (state, attempts, expiry), never a code.
   `revoke` ends an invitation that is not yet redeemed. Undoing a redeemed
   one means removing the membership.
+
+## The architect directory: `aicrew architect init`
+
+The architect is the operator's own interactive Claude Code session, which
+plans with the operator and writes epics and tasks to the aimem board
+(`docs/DESIGN-CONTROL-PLANE.md`, section 7). It is not an agent home:
+- no aicrew membership or team session;
+- no forge credential, and no Stop hook;
+- the control plane does not run it.
+
+`aicrew architect init` writes its directory. It calls no service and takes
+no connection.
+
+```sh
+bin/aicrew architect init --dir ~/aicrew/architect --project PROJECT [--project PROJECT ...] [--hub HUB]
+cd ~/aicrew/architect && claude
+```
+
+**The managed files.** A rerun follows the agent home's rule: a managed file
+is updated only while it is unchanged since its last managed write, and
+otherwise the new version is written beside it as `<file>.aicrew-new`. The
+command then exits 1 and names the merge to do.
+- `AGENTS.md` and `CLAUDE.md` point to `docs/ARCHITECT.md`.
+- `docs/ARCHITECT.md` is the guidance:
+  - planning with the operator, from goal to epic to tasks;
+  - how a task is written so that a worker can take it, including the kind
+    of work and the capability it needs;
+  - what READY means. A task moves to READY only on the operator's word.
+  - how escalations are read and answered;
+  - the limits.
+
+  It lists the projects, and the session names the project on every task
+  call.
+- The commands:
+  - `/arch-plan` plans a goal into an epic and tasks;
+  - `/arch-task` writes one task;
+  - `/arch-ready` checks a task against READY, and moves it on the
+    operator's word;
+  - `/arch-escalations` lists the coordinator's open escalations. Until
+    aicrew's escalation channel exists, it reads them as task comments
+    headed `[escalation.request ID]`.
+- `.claude/settings.json` denies the session the directory's `creds/`,
+  through the Read and Edit tools and in Bash or PowerShell command text,
+  with the limit `docs/WORKSPACE.md` states. `creds/` is created
+  owner-only and empty: it will hold the architect's own credential once
+  the escalation channel exists.
+- `.mcp.json` has one `aimem` entry, which names no `AIMEM_*` variable. So
+  the session uses the user's own aimem installation, in personal mode, as
+  the human's own aimem user.
+
+**Written once, never changed:**
+- `docs/NOTES.md`, the session's own notes;
+- `.aimem.json`, aimem's binding of the directory to the first project and,
+  with `--hub`, to that hub. If your aimem installation needs more for this
+  directory, such as a task credential's name, add it there as aimem
+  documents it.
+
+**The record.** `architect.json` records the projects, the hub and the
+managed files' digests. A directory recorded with another layout is
+refused, never migrated.
+
+**First start.** The first `claude` in the directory asks to trust it and
+to approve its `aimem` MCP server, and each aimem tool asks once for
+permission: the operator answers, as for any session.
 
 ## Running aicrew-agent
 

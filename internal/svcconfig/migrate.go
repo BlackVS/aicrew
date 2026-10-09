@@ -25,10 +25,13 @@ type MigrateOptions struct {
 	// ServiceID replaces service_id when set.
 	ServiceID string
 	// CredDir, when set, is the directory aimem identity peer provision
-	// wrote: the hub ID and the two team credential files come from it,
-	// checked as aicrew hub add checks them, in place of HubID and the two
-	// team files.
+	// wrote: the hub ID, the two team credential files and the board.read
+	// credential come from it, checked as aicrew hub add checks them, in
+	// place of HubID and the two team files.
 	CredDir string
+	// boardReadTokenFile is the board.read credential's file, from CredDir
+	// only.
+	boardReadTokenFile string
 	// Now stamps the copy of the previous file.
 	Now time.Time
 }
@@ -106,6 +109,7 @@ func MigrateConfig(path string, opt MigrateOptions) (MigrateReport, error) {
 			return MigrateReport{}, err
 		}
 		opt.HubID, opt.TeamRegisterTokenFile, opt.TeamReadTokenFile = h.HubID, h.TeamRegisterTokenFile, h.TeamReadTokenFile
+		opt.boardReadTokenFile = h.BoardReadTokenFile
 	}
 	for _, f := range []*string{&opt.TeamRegisterTokenFile, &opt.TeamReadTokenFile} {
 		if *f != "" {
@@ -127,7 +131,8 @@ func MigrateConfig(path string, opt MigrateOptions) (MigrateReport, error) {
 	want := c
 	want.Aimem = nil
 	want.AimemHubs = []AimemHub{{Name: opt.Name, HubID: opt.HubID, AimemConfig: *c.Aimem,
-		TeamRegisterTokenFile: opt.TeamRegisterTokenFile, TeamReadTokenFile: opt.TeamReadTokenFile}}
+		TeamRegisterTokenFile: opt.TeamRegisterTokenFile, TeamReadTokenFile: opt.TeamReadTokenFile,
+		BoardReadTokenFile: opt.boardReadTokenFile}}
 	if opt.ServiceID != "" {
 		want.ServiceID = opt.ServiceID
 	}
@@ -211,7 +216,7 @@ func report(c Config) MigrateReport {
 
 // migrated is raw with its aimem member replaced, in its place, by
 // aimem_hubs holding one entry: name and hub_id, the block's own fields in
-// their order, then the team credential files.
+// their order, then the team and board credential files.
 func migrated(raw []byte, opt MigrateOptions) ([]byte, error) {
 	top, err := decodeJSONObject(raw)
 	if err != nil {
@@ -235,6 +240,7 @@ func migrated(raw []byte, opt MigrateOptions) ([]byte, error) {
 	for _, f := range []struct{ key, path string }{
 		{"team_register_token_file", opt.TeamRegisterTokenFile},
 		{"team_read_token_file", opt.TeamReadTokenFile},
+		{"board_read_token_file", opt.boardReadTokenFile},
 	} {
 		if f.path != "" {
 			entry.add(f.key, f.path)

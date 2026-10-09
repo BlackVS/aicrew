@@ -261,7 +261,7 @@ func TestAddHubProbeRefused(t *testing.T) {
 }
 
 // migrate -cred-dir completes a legacy block from a provisioned directory:
-// the hub ID and the two team files come from it, checked as hub add checks
+// the hub ID, the two team files and the board file come from it, checked as hub add checks
 // them; a bad directory, or the directory beside the values it names, is
 // refused and nothing is written.
 func TestMigrateFromCredDir(t *testing.T) {
@@ -280,7 +280,8 @@ func TestMigrateFromCredDir(t *testing.T) {
 	}
 	h := c.AimemHubs[0]
 	if h.HubID != testHubID || h.TeamRegisterTokenFile != filepath.Join(dir, TeamRegisterTokenFile) ||
-		h.TeamReadTokenFile != filepath.Join(dir, TeamReadTokenFile) || h.RedemptionTokenFile != "/etc/aicrew/aimem-redemption.token" {
+		h.TeamReadTokenFile != filepath.Join(dir, TeamReadTokenFile) || h.RedemptionTokenFile != "/etc/aicrew/aimem-redemption.token" ||
+		h.BoardReadTokenFile != filepath.Join(dir, BoardReadTokenFile) {
 		t.Fatalf("migrated = %+v", h)
 	}
 

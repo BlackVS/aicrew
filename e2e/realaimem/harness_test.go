@@ -44,14 +44,15 @@ import (
 	"time"
 )
 
-// aimemPin is the aimem commit the harness builds: the v0.9.2 release, which
+// aimemPin is the aimem commit the harness builds: the v0.10.0 release, which
 // internal/agent/supported.json names as both the minimum and the tested
 // aimem. Beside every earlier prerequisite (C5b, C6, C5-w3, `aimem hub
 // credential`, the fixture's corrected fences, `hub add --ca-file`, team
-// registration and team read, the task_not_ready refusal) it carries
-// `aimem identity peer provision`, which writes the peer's four credentials
-// and the hub's ID into the directory aicrew's operator commands read.
-const aimemPin = "4eae00c6fa2481e99c975223bcd5830cc729890d"
+// registration and team read, the task_not_ready refusal, `aimem identity
+// peer provision`) it carries the control plane's prerequisites: the board
+// feed (`board.read`, whose credential peer provision writes as a fifth
+// file), a task's required capability and team members' report documents.
+const aimemPin = "25d53e55ac0b2ed9be3dec6d2de2336defd4b3e7"
 
 const (
 	serviceID = "aicrew-e2e"
@@ -225,7 +226,7 @@ func (h *harness) build(aimemSrc string) {
 	}
 	h.aimemV = aimemPin
 	// A source install stamps its version as aimem's release build does,
-	// with the commit's `git describe`: v0.9.2 at the pin, which
+	// with the commit's `git describe`: v0.10.0 at the pin, which
 	// aicrew-agent's dependency check reads as the supported release.
 	desc, err := exec.Command("git", "-C", aimemSrc, "describe", "--tags", aimemPin).Output()
 	if err != nil {

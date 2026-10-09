@@ -59,7 +59,7 @@ func TestCommandsComeFromTheRoles(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"crew-start", "crew-inbox", "crew-triage", "crew-offer", "crew-review", "crew-accept",
-		"crew-submit", "crew-claim", "crew-handoff"} {
+		"crew-submit", "crew-claim", "crew-handoff", "crew-escalate"} {
 		if !seen[name] {
 			t.Errorf("no /%s", name)
 		}

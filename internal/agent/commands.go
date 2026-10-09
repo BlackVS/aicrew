@@ -73,6 +73,21 @@ var crewCommands = []crewCommand{
 			"3. Decide with the review step below: `accept`, or `rework` to send it back.\n" +
 			"4. Stop there. A person merges the pull request; only after that, record the delivery evidence.",
 		Ops: []string{"review", "confirm-delivery"}},
+	{Name: "crew-escalate", Role: "coordinator", Hint: "<task id>",
+		Desc: "Coordinator: escalate a question you cannot settle to the architect",
+		Body: "Escalate a question about task $ARGUMENTS that you cannot settle within your role.\n\n" +
+			"1. Check that it is one to escalate (`docs/ROLES.md`, the coordinator's \"You do not talk to a human\"): " +
+			"the floor (" + codeList(escalationFloor) + "), " + codeList(escalationAlways) + ", or a question you " +
+			"cannot classify with confidence. Take the most restrictive category that fits.\n" +
+			"2. Raise it with the step below: two to four options, each with its consequence, your recommendation, " +
+			"the blocked member's agent ID if one waits, and the urgency.\n" +
+			"3. Mirror it on the task with aimem's `add_task_comment`, a comment whose first line is " +
+			"`[escalation.request ID]`, with the `id` the step answered. If aimem answers `task_held`, post it when " +
+			"the hold ends and say so in `docs/HANDOFF.md`.\n" +
+			"4. Carry on with other work. The answer arrives in your inbox as a message whose `escalation` " +
+			"(`aicrew-agent inbox --json`) carries the decision; act on it then. Never decide it yourself meanwhile, " +
+			"and never raise the same question again.",
+		Ops: []string{"escalate"}},
 	{Name: "crew-accept", Role: "worker", Hint: "<attempt id>",
 		Desc: "Worker: accept an offer from your inbox after checking its pin",
 		Body: "Accept the offer on attempt $ARGUMENTS.\n\n" +

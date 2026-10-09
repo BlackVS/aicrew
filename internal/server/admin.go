@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -91,6 +92,18 @@ type adminAction func(w http.ResponseWriter, r *http.Request, op store.Caller) (
 
 // operator wraps an action with the operator's authentication and its log.
 func (s *Server) operator(action string, h adminAction) http.HandlerFunc {
+	return s.adminRoute(action, false, h)
+}
+
+// escalationRoute is operator for the escalation routes, which also take
+// an architect credential (escalations.go).
+func (s *Server) escalationRoute(action string, h adminAction) http.HandlerFunc {
+	return s.adminRoute(action, true, h)
+}
+
+// adminRoute authenticates the operator credential, or, when architect is
+// set, an active architect credential, under one failure budget.
+func (s *Server) adminRoute(action string, architect bool, h adminAction) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		addr := clientAddr(r)
 		if ok, wait := s.admin.failures.allow(addr); !ok {
@@ -99,17 +112,38 @@ func (s *Server) operator(action string, h adminAction) http.HandlerFunc {
 			adminRefuse(w, http.StatusTooManyRequests, opapi.CodeRateLimited, "too many failed operator authentications")
 			return
 		}
-		want, err := optoken.Read(s.cfg.OperatorTokenFile)
-		if err != nil {
-			// The file's error names the file, never its content.
-			s.log.Error("the operator token file cannot be read", "error", err.Error())
-			s.admin.failures.refund(addr) // the service's fault, not the client's
-			s.adminLog(action, opapi.CodeUnavailable, "")
-			adminRefuse(w, http.StatusServiceUnavailable, opapi.CodeUnavailable, "the operator credential is unavailable on the service")
-			return
-		}
 		got := bearer(r)
-		if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		var op store.Caller
+		var err error
+		if architect && strings.HasPrefix(got, "aar_") {
+			op, err = s.store.AuthenticateArchitect(r.Context(), got)
+			if err != nil && !errors.Is(err, store.ErrUnauthenticated) {
+				s.admin.failures.refund(addr)
+				s.adminLog(action, opapi.CodeInternal, "")
+				adminRefuse(w, http.StatusInternalServerError, opapi.CodeInternal, "")
+				return
+			}
+		} else {
+			want, rerr := optoken.Read(s.cfg.OperatorTokenFile)
+			if rerr != nil {
+				// The file's error names the file, never its content.
+				s.log.Error("the operator token file cannot be read", "error", rerr.Error())
+				s.admin.failures.refund(addr) // the service's fault, not the client's
+				s.adminLog(action, opapi.CodeUnavailable, "")
+				adminRefuse(w, http.StatusServiceUnavailable, opapi.CodeUnavailable, "the operator credential is unavailable on the service")
+				return
+			}
+			err = store.ErrUnauthenticated
+			if got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1 {
+				op, err = store.OperatorCaller(operatorCallerID)
+				if err != nil {
+					s.adminLog(action, opapi.CodeInternal, "")
+					adminRefuse(w, http.StatusInternalServerError, opapi.CodeInternal, "")
+					return
+				}
+			}
+		}
+		if err != nil {
 			// The attempt's token stays taken: it counts as a failure.
 			s.adminLog(action, opapi.CodeUnauthorized, "")
 			w.Header().Set("WWW-Authenticate", `Bearer realm="aicrew-operator"`)
@@ -117,12 +151,6 @@ func (s *Server) operator(action string, h adminAction) http.HandlerFunc {
 			return
 		}
 		s.admin.failures.refund(addr)
-		op, err := store.OperatorCaller(operatorCallerID)
-		if err != nil {
-			s.adminLog(action, opapi.CodeInternal, "")
-			adminRefuse(w, http.StatusInternalServerError, opapi.CodeInternal, "")
-			return
-		}
 		// id is one the store returned, never the request's text, which a
 		// refused request may have filled with anything.
 		outcome, id := h(w, r, op)
@@ -175,6 +203,10 @@ func adminFail(w http.ResponseWriter, err error) string {
 		status, code = http.StatusConflict, opapi.CodeCredentialLimit
 	case errors.Is(err, store.ErrInvitationFinal):
 		status, code = http.StatusConflict, opapi.CodeInvitationFinal
+	case errors.Is(err, store.ErrEscalationAnswered):
+		status, code = http.StatusConflict, opapi.CodeEscalationAnswered
+	case errors.Is(err, store.ErrForbidden):
+		status, code = http.StatusForbidden, opapi.CodeForbidden
 	}
 	msg := ""
 	if code != opapi.CodeInternal {

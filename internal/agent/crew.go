@@ -358,6 +358,9 @@ func (c *Crew) Read(ctx context.Context, token, path string) (json.RawMessage, e
 // inboxPath is aicrewd's member inbox (pilot G1).
 const inboxPath = "/v1/crew/inbox"
 
+// escalationsPath is where the team's coordinator raises an escalation.
+const escalationsPath = "/v1/crew/escalations"
+
 // Inbox reads a page of the member's oldest unacknowledged messages, which
 // aicrewd records as delivered.
 func (c *Crew) Inbox(ctx context.Context, token string, limit int) (json.RawMessage, error) {

@@ -106,7 +106,7 @@ func TestSettingsDenyTheCredentials(t *testing.T) {
 		Hooks any `json:"hooks"`
 		Env   any `json:"env"`
 	}
-	if err := json.Unmarshal([]byte(settingsJSON()), &s); err != nil {
+	if err := json.Unmarshal([]byte(settingsJSON(Options{})), &s); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"Read(/creds/**)", "Edit(/creds/**)", "Bash(*creds/*)", `Bash(*creds\*)`,
@@ -219,6 +219,50 @@ func TestGuidanceNamesNothingOutside(t *testing.T) {
 		"[escalation.request ID]", "[escalation.answer ID]", "capability", "never read it"} {
 		if !strings.Contains(g, want) {
 			t.Errorf("the guidance lacks %q", want)
+		}
+	}
+}
+
+// With aicrewd's connection, the settings name it and the credential's file
+// in creds/ by path, for the session's escalation commands; the connection
+// is validated, and init reports where the credential goes.
+func TestInitWithTheConnection(t *testing.T) {
+	dir := t.TempDir()
+	o := Options{Dir: dir, Projects: []string{"crew-app"},
+		Crew: Connection{URL: "https://aicrew.example:8443", TrustMode: "ca_dns", TrustValue: "aicrew.example"}}
+	rep, err := Init(o)
+	want := filepath.Join(dir, "creds", "aicrew.architect")
+	if err != nil || rep.CredentialFile != want {
+		t.Fatalf("init: %+v %v", rep, err)
+	}
+	var s struct {
+		Env         map[string]string `json:"env"`
+		Permissions struct {
+			Deny []string `json:"deny"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal([]byte(read(t, dir, ".claude/settings.json")), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Env["AICREW_URL"] != o.Crew.URL || s.Env["AICREW_TLS_TRUST_MODE"] != "ca_dns" ||
+		s.Env["AICREW_TLS_TRUST_VALUE"] != "aicrew.example" || s.Env["AICREW_OPERATOR_TOKEN_FILE"] != want ||
+		len(s.Env) != 4 || len(s.Permissions.Deny) != 6 {
+		t.Fatalf("settings: %+v", s)
+	}
+	// A rerun without the connection updates the managed settings back.
+	rep, err = Init(Options{Dir: dir, Projects: []string{"crew-app"}})
+	if err != nil || actions(rep)[".claude/settings.json"] != "update" || rep.CredentialFile != "" {
+		t.Fatalf("rerun without the connection: %+v %v", rep, err)
+	}
+	for _, c := range []Connection{
+		{URL: "http://aicrew.example", TrustMode: "ca_dns", TrustValue: "aicrew.example"},
+		{URL: "https://aicrew.example", TrustMode: "none", TrustValue: "x"},
+		{URL: "https://aicrew.example", TrustMode: "ca_dns"},
+		{URL: "https://u:p@aicrew.example", TrustMode: "ca_dns", TrustValue: "aicrew.example"},
+		{TrustMode: "ca_dns", TrustValue: "aicrew.example"},
+	} {
+		if _, err := Init(Options{Dir: t.TempDir(), Projects: []string{"p"}, Crew: c}); err == nil {
+			t.Errorf("%+v was accepted", c)
 		}
 	}
 }

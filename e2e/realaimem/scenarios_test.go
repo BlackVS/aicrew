@@ -54,6 +54,7 @@ func TestRealAimem(t *testing.T) {
 	t.Run("S5_dependencies", func(t *testing.T) { h.s5Dependencies(t) })
 	t.Run("G1_grants", func(t *testing.T) { h.g1Grants(t) })
 	t.Run("G2_capabilities", func(t *testing.T) { h.g2Capabilities(t) })
+	t.Run("E1_escalation", func(t *testing.T) { h.e1Escalation(t) })
 	t.Run("F1_lost_aimem_replies", func(t *testing.T) { h.f1LostAimemReplies(t) })
 	t.Run("F2_lost_aicrewd_replies", func(t *testing.T) { h.f2LostAicrewdReplies(t) })
 	t.Run("F3_restarts", func(t *testing.T) { h.f3Restarts(t) })

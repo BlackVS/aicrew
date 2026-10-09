@@ -46,6 +46,7 @@ const usage = `usage: aicrew-agent session start|status|leave --home DIR   (stat
        aicrew-agent run --client claude|opencode --home DIR [--no-start] [-- CLIENT ARGS]
        aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
        aicrew-agent inbox [--home DIR] [--limit N] [--ack ID,ID...] [--json]
+       aicrew-agent escalate [--home DIR] --body FILE|-   (the coordinator, through the launcher)
        aicrew-agent wait-inbox [--home DIR]   (the Claude Code Stop hook join installs)
        aicrew-agent join --label LABEL [--home DIR] --url URL --tls-trust-mode M --tls-trust-value V --aimem-hub NAME --client C
        aicrew-agent check (--home DIR | --label LABEL) [--client C] [--json]
@@ -115,6 +116,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "wait-inbox" {
 		os.Exit(waitInbox(context.Background(), os.Args[2:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "escalate" {
+		os.Exit(escalate(context.Background(), os.Args[2:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "inbox" {
 		os.Exit(inbox(context.Background(), os.Args[2:], os.Stdout, os.Stderr, os.Getenv))

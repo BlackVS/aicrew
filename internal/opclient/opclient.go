@@ -60,7 +60,7 @@ func New(cfg Config) (*Client, error) {
 	if cfg.TokenFile == "" {
 		return nil, errors.New("the operator token file is required")
 	}
-	token, err := optoken.Read(cfg.TokenFile)
+	token, err := optoken.ReadClient(cfg.TokenFile)
 	if err != nil {
 		return nil, err
 	}

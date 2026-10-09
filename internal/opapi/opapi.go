@@ -229,3 +229,87 @@ type Invitation struct {
 	CreatedAt      time.Time `json:"created_at"`
 	Code           string    `json:"code,omitempty"`
 }
+
+// Escalations (docs/DESIGN-CONTROL-PLANE.md, section 7.5): the coordinator's
+// requests and their answers. The routes take the operator credential or an
+// architect credential, which reaches these routes and nothing else.
+const (
+	EscalationsPath      = "/v1/admin/escalations"        // GET list (?team=, ?open=1)
+	EscalationPath       = "/v1/admin/escalation"         // GET show (?id=)
+	EscalationAnswerPath = "/v1/admin/escalations/answer" // POST
+
+	// The architect credentials, managed with the operator credential only.
+	ArchitectCredentialsPath      = "/v1/admin/architect-credentials"        // GET list, POST issue
+	ArchitectCredentialRevokePath = "/v1/admin/architect-credentials/revoke" // POST
+
+	// CodeEscalationAnswered refuses a second answer.
+	CodeEscalationAnswered = "escalation_answered"
+	// CodeForbidden refuses an architect credential on a route that is the
+	// operator's own.
+	CodeForbidden = "forbidden"
+)
+
+// EscalationTask is the aimem task an escalation is about.
+type EscalationTask struct {
+	HubID     string `json:"hub_id"`
+	ProjectID string `json:"project_id"`
+	TaskID    string `json:"task_id"`
+}
+
+// EscalationOption is one answer the coordinator offers, with its
+// consequence.
+type EscalationOption struct {
+	Option      string `json:"option"`
+	Consequence string `json:"consequence"`
+}
+
+// Escalation is a request and, once given, its answer.
+type Escalation struct {
+	ID                 string             `json:"id"`
+	TeamID             string             `json:"team_id"`
+	CoordinatorAgentID string             `json:"coordinator_agent_id"`
+	Task               EscalationTask     `json:"task"`
+	AttemptID          string             `json:"attempt_id,omitempty"`
+	Category           string             `json:"category"`
+	Question           string             `json:"question"`
+	Context            string             `json:"context,omitempty"`
+	Options            []EscalationOption `json:"options"`
+	Recommendation     string             `json:"recommendation"`
+	Blocked            string             `json:"blocked,omitempty"`
+	Urgency            string             `json:"urgency"`
+	CreatedAt          time.Time          `json:"created_at"`
+	Answer             *EscalationAnswer  `json:"answer,omitempty"`
+}
+
+// EscalationAnswer is the decision, who gave it ("operator:..." or
+// "architect:<credential ID>") and when.
+type EscalationAnswer struct {
+	Decision   string    `json:"decision"`
+	Rationale  string    `json:"rationale"`
+	AnsweredBy string    `json:"answered_by"`
+	AnsweredAt time.Time `json:"answered_at"`
+}
+
+// AnswerRequest answers one escalation.
+type AnswerRequest struct {
+	ID        string `json:"id"`
+	Decision  string `json:"decision"`
+	Rationale string `json:"rationale"`
+}
+
+// ArchitectCredentialRequest issues an architect credential.
+type ArchitectCredentialRequest struct {
+	Label string `json:"label"`
+}
+
+// ArchitectCredential is an architect credential's metadata. Bearer is set
+// only in an issue answer, once.
+type ArchitectCredential struct {
+	ID        string    `json:"id"`
+	Label     string    `json:"label"`
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+	RevokedAt time.Time `json:"revoked_at,omitzero"`
+	Bearer    string    `json:"bearer,omitempty"`
+}

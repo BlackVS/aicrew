@@ -311,6 +311,18 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 			return answerErr(err)
 		}
 		return StepAnswer{OK: true, Status: StepDone, Result: out}
+	case call.Op == "escalate":
+		// Raise an escalation as the team's coordinator (docs/DESIGN-CONTROL-PLANE.md,
+		// section 7.5): the request's JSON object, passed through.
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(call.Body, &obj) != nil || obj == nil {
+			return refuse("invalid_request", "An escalation's body is a JSON object.", "Pass the escalation's body with --body.")
+		}
+		out, err := s.local.LocalStep(ctx, newKey("escalate"), s.driver.Session.stepToken(), escalationsPath, call.Body)
+		if err != nil {
+			return answerErr(err)
+		}
+		return StepAnswer{OK: true, Status: StepDone, Result: out}
 	case localOps[call.Op]:
 		if !attemptIDShape(call.AttemptID) {
 			return refuse("invalid_request", "A local step needs the attempt's ID.", "Pass -attempt.")
@@ -325,7 +337,7 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 	op, ok := stepOps[call.Op]
 	if !ok {
 		return refuse("invalid_request", "Unknown step "+call.Op+".", "Use offer, accept, withdraw, claim, work, release, finalize, "+
-			"decline, review, stop, confirm-stop, confirm-delivery, recover, pending, inbox, ack or capabilities.")
+			"decline, review, stop, confirm-stop, confirm-delivery, recover, pending, inbox, ack, capabilities or escalate.")
 	}
 	req := StepRequest{Body: bodyOrEmpty(call.Body), TaskID: call.TaskID}
 	if op.fromBody {

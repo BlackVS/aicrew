@@ -93,6 +93,7 @@ type harness struct {
 	aicrewdPort int
 	aicrewdURL  string
 	aicrewdPin  string
+	opEnv       []string // the operator's environment for aicrew
 	adminToken  string
 	adminFile   string // the admin bearer, one line, owner only
 	hubID       string

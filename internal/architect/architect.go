@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -35,7 +36,20 @@ type Options struct {
 	Dir      string
 	Projects []string // the aimem projects it plans; the first binds a new directory (.aimem.json)
 	Hub      string   // the aimem hub alias, when the user's installation has more than one
+	// Crew names aicrewd, for the session's `aicrew escalations` commands;
+	// empty, the settings name no connection.
+	Crew Connection
 }
+
+// Connection is aicrewd's origin and TLS trust, as the aicrew client takes
+// them.
+type Connection struct {
+	URL, TrustMode, TrustValue string
+}
+
+// CredentialFile is where the architect credential lives in the directory:
+// in creds/, which the session's deny rules keep it from reading.
+const CredentialFile = "creds/aicrew.architect"
 
 // Report is what init did.
 type Report struct {
@@ -43,6 +57,9 @@ type Report struct {
 	Status  string                `json:"status"` // ready, or conflict when a managed file was edited locally
 	Changes []managedfiles.Change `json:"changes"`
 	Note    string                `json:"note,omitempty"`
+	// CredentialFile is the architect credential's path, when the settings
+	// name aicrewd.
+	CredentialFile string `json:"credential_file,omitempty"`
 }
 
 var (
@@ -66,6 +83,18 @@ func (o Options) validate() error {
 			return fmt.Errorf("project %q is named twice", p)
 		}
 		seen[p] = true
+	}
+	if c := o.Crew; c.URL != "" || c.TrustMode != "" || c.TrustValue != "" {
+		u, err := url.Parse(c.URL)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+			return errors.New("--url is aicrewd's https origin")
+		}
+		if c.TrustMode != "ca_dns" && c.TrustMode != "spki_sha256" {
+			return errors.New("--tls-trust-mode is ca_dns or spki_sha256")
+		}
+		if c.TrustValue == "" || strings.ContainsAny(c.TrustValue, "\r\n") {
+			return errors.New("--tls-trust-value is the host name, or sha256- and the pin")
+		}
 	}
 	if o.Hub != "" && !hubRE.MatchString(o.Hub) {
 		return fmt.Errorf("hub %q: use letters, digits, '.', '_' or '-' (at most 64)", o.Hub)
@@ -98,6 +127,7 @@ func Init(o Options) (Report, error) {
 	if err := privatefile.CheckDir(creds); err != nil {
 		return Report{}, fmt.Errorf("creds/ is not owner-only: %w", err)
 	}
+	o.Dir = dir
 	files := Files(o)
 	plan, err := managedfiles.Plan(dir, files, rec.Managed)
 	if err != nil {
@@ -111,6 +141,9 @@ func Init(o Options) (Report, error) {
 		return Report{}, err
 	}
 	rep := Report{Dir: dir, Status: "ready", Changes: plan}
+	if o.Crew.URL != "" {
+		rep.CredentialFile = filepath.Join(dir, filepath.FromSlash(CredentialFile))
+	}
 	for _, c := range plan {
 		if c.Action == "conflict" {
 			rep.Status = "conflict"
@@ -195,7 +228,7 @@ func Files(o Options) []managedfiles.File {
 		{Path: "AGENTS.md", Content: agentsMD, Managed: true},
 		{Path: "CLAUDE.md", Content: claudeMD, Managed: true},
 		{Path: "docs/ARCHITECT.md", Content: guidance(o.Projects), Managed: true},
-		{Path: ".claude/settings.json", Content: settingsJSON(), Managed: true},
+		{Path: ".claude/settings.json", Content: settingsJSON(o), Managed: true},
 		{Path: ".mcp.json", Content: mcpJSON, Managed: true},
 		{Path: "docs/NOTES.md", Content: notesMD},
 		{Path: ".aimem.json", Content: bindingJSON(o)},
@@ -218,8 +251,21 @@ func denyRules() []string {
 	return rules
 }
 
-func settingsJSON() string {
-	b, _ := json.MarshalIndent(map[string]any{"permissions": map[string]any{"deny": denyRules()}}, "", "  ")
+// settingsJSON is the managed settings: the deny rules and, when init
+// names aicrewd, the environment the session's aicrew commands connect
+// with. The credential's file is named by path only; its content stays in
+// creds/.
+func settingsJSON(o Options) string {
+	doc := map[string]any{"permissions": map[string]any{"deny": denyRules()}}
+	if c := o.Crew; c.URL != "" {
+		doc["env"] = map[string]string{
+			"AICREW_URL":                 c.URL,
+			"AICREW_TLS_TRUST_MODE":      c.TrustMode,
+			"AICREW_TLS_TRUST_VALUE":     c.TrustValue,
+			"AICREW_OPERATOR_TOKEN_FILE": filepath.Join(o.Dir, filepath.FromSlash(CredentialFile)),
+		}
+	}
+	b, _ := json.MarshalIndent(doc, "", "  ")
 	return string(b) + "\n"
 }
 

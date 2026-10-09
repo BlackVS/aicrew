@@ -68,12 +68,23 @@ coordinator keeps its own triage between BACKLOG and READY on the board.
 ## Escalations
 
 The crew's coordinator never talks to a human. A question it cannot settle
-comes to you as an escalation. Until aicrew's escalation channel exists, an
-escalation is a task comment whose first line is
-` + "`[escalation.request ID]`" + `, with the question, two to four options with
-their consequences, and a recommendation. ` + "`/arch-escalations`" + ` lists them.
-Answer only with the operator's decision, as a comment on the same task whose
-first line is ` + "`[escalation.answer ID]`" + `, with the decision and why.
+comes to you as an escalation, recorded by aicrewd: the task, the question,
+two to four options with their consequences, a recommendation, who is
+blocked and how urgent it is. ` + "`/arch-escalations`" + ` lists the open ones with
+` + "`aicrew escalations list --open`" + `.
+
+Answer only with the operator's decision, with
+` + "`aicrew escalations answer --id ID --decision ... --rationale ...`" + `. aicrewd
+records it once and delivers it to the coordinator and the blocked member.
+Then mirror it on the task as a comment whose first line is
+` + "`[escalation.answer ID]`" + `, so the board keeps the decision. A comment alone
+answers nothing: only the recorded answer reaches the crew.
+
+These commands use this directory's architect credential, which reads and
+answers escalations and nothing else. If they cannot connect, the directory
+was set up without aicrewd's address or the credential is missing: tell the
+operator, and read the open requests from the tasks' comments headed
+` + "`[escalation.request ID]`" + ` meanwhile.
 
 ## Limits
 
@@ -117,9 +128,10 @@ var commands = []command{
 			"Move it to READY only if the operator says READY in this conversation; otherwise change " +
 			"nothing."},
 	{name: "arch-escalations", desc: "List the coordinator's open escalations and draft answers",
-		body: "List the open escalations in the projects of `docs/ARCHITECT.md`: task comments whose first " +
-			"line starts with `[escalation.request ` and that no later `[escalation.answer ` comment " +
-			"with the same ID answers. Read the tasks that are not DONE or CANCELLED and their comments. " +
-			"For each, show the task, the question, the options and the recommendation, and draft an " +
-			"answer. Write an answer only with the operator's decision."},
+		body: "Run `aicrew escalations list --open`. For each escalation, show the task, the question, the " +
+			"options with their consequences, the recommendation, who is blocked and the urgency, and draft an " +
+			"answer. Answer only with the operator's decision: `aicrew escalations answer --id ID --decision " +
+			"TEXT --rationale TEXT`, then mirror it on the task as a comment headed `[escalation.answer ID]`. " +
+			"If the command cannot connect, say so, and list the tasks' comments headed `[escalation.request ` " +
+			"that no `[escalation.answer ` comment with the same ID follows."},
 }

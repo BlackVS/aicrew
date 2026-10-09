@@ -422,6 +422,12 @@ in `internal/opapi`:
 | `GET /v1/admin/invitations?team=TEAM` | list invitations (metadata, with each team's ID and name) |
 | `POST /v1/admin/invitations` | issue: `{"purpose", "team_id", "role", "hub_id", "label", "agent_id", "expected_user_id", "ttl"}`; the answer carries the code, once |
 | `POST /v1/admin/invitations/revoke` | revoke: `{"id"}` |
+| `GET /v1/admin/escalations?team=TEAM&open=1` | list escalations, newest first and at most 200; the operator or an architect credential |
+| `GET /v1/admin/escalation?id=ID` | show one; the operator or an architect credential |
+| `POST /v1/admin/escalations/answer` | `{"id", "decision", "rationale"}`, once (`409 escalation_answered`); the operator or an architect credential |
+| `GET /v1/admin/architect-credentials` | list architect credentials (metadata) |
+| `POST /v1/admin/architect-credentials` | issue: `{"label"}`; the answer carries the bearer, once |
+| `POST /v1/admin/architect-credentials/revoke` | revoke: `{"id"}` |
 
 The credential routes are also served under their names before 0.3.0,
 `/v1/admin/introspection-credentials` (and `/rotate`, `/revoke`), until
@@ -680,11 +686,11 @@ plans with the operator and writes epics and tasks to the aimem board
 - no forge credential, and no Stop hook;
 - the control plane does not run it.
 
-`aicrew architect init` writes its directory. It calls no service and takes
-no connection.
+`aicrew architect init` writes its directory. It calls no service.
 
 ```sh
-bin/aicrew architect init --dir ~/aicrew/architect --project PROJECT [--project PROJECT ...] [--hub HUB]
+bin/aicrew architect init --dir ~/aicrew/architect --project PROJECT [--project PROJECT ...] [--hub HUB] \
+    [--url URL --tls-trust-mode MODE --tls-trust-value VALUE]
 cd ~/aicrew/architect && claude
 ```
 
@@ -708,14 +714,15 @@ command then exits 1 and names the merge to do.
   - `/arch-task` writes one task;
   - `/arch-ready` checks a task against READY, and moves it on the
     operator's word;
-  - `/arch-escalations` lists the coordinator's open escalations. Until
-    aicrew's escalation channel exists, it reads them as task comments
+  - `/arch-escalations` lists the coordinator's open escalations with
+    `aicrew escalations list --open`, and answers on the operator's word
+    (below). Without a connection, it reads them from the tasks' comments
     headed `[escalation.request ID]`.
 - `.claude/settings.json` denies the session the directory's `creds/`,
   through the Read and Edit tools and in Bash or PowerShell command text,
   with the limit `docs/WORKSPACE.md` states. `creds/` is created
-  owner-only and empty: it will hold the architect's own credential once
-  the escalation channel exists.
+  owner-only, for the architect credential (`creds/aicrew.architect`,
+  below).
 - `.mcp.json` has one `aimem` entry, which names no `AIMEM_*` variable. So
   the session uses the user's own aimem installation, in personal mode, as
   the human's own aimem user.
@@ -730,6 +737,22 @@ command then exits 1 and names the merge to do.
 **The record.** `architect.json` records the projects, the hub and the
 managed files' digests. A directory recorded with another layout is
 refused, never migrated.
+
+**The escalation commands.** With `--url`, `--tls-trust-mode` and
+`--tls-trust-value`, init writes them into the managed settings' `env`,
+with `AICREW_OPERATOR_TOKEN_FILE` naming `creds/aicrew.architect`. The
+session's `aicrew escalations` commands then connect with no flags, and
+never name the credential's path in a command, where the deny rules would
+stop them. Put the credential there with the operator credential:
+
+```sh
+bin/aicrew architect credential issue --label planning --output ~/aicrew/architect/creds/aicrew.architect
+bin/aicrew architect credential list
+bin/aicrew architect credential revoke --id ID
+```
+
+An architect credential reads and answers escalations and nothing else, so
+the full operator token never enters an AI session. It lives 90 days.
 
 **First start.** The first `claude` in the directory asks to trust it and
 to approve its `aimem` MCP server, and each aimem tool asks once for
@@ -1385,6 +1408,40 @@ to make one.
   manifest it lacks stop the command with that reason and no digest. The
   worker then declines the offer.
 - `--json` adds the clone, the commit and the manifest.
+
+### Escalations: `aicrew-agent escalate` and `aicrew escalations`
+
+The coordinator raises a question it cannot settle within its role, through
+the launcher, as it takes a step (`docs/CREW-CONTRACT.md`, "Escalations"):
+
+```sh
+aicrew-agent escalate --body - < escalation.json
+```
+
+The body is the request's JSON: `task`, `category`, `question`, `context`,
+two to four `options` with their consequences, `recommendation`, `blocked`
+and `urgency`. The exit codes are `step`'s.
+
+The architect, or the operator, reads and answers:
+
+```sh
+bin/aicrew escalations list [--team TEAM] [--open]
+bin/aicrew escalations show --id ID
+bin/aicrew escalations answer --id ID --decision TEXT --rationale TEXT
+```
+
+- **Who can run them:** they take the operator credential or an architect
+  credential in the token file. A team is named by its ID, because
+  resolving a name reads the team routes, which an architect credential
+  does not reach.
+- **Once only:** an answer is recorded once.
+- **Delivery:** the answer reaches the coordinator's inbox, and the blocked
+  member's, as a lifecycle message carrying the escalation. The keep-alive
+  loop then wakes them as for any message.
+- **The task comment:** mirroring the request and the answer on the task,
+  as comments headed `[escalation.request ID]` and `[escalation.answer ID]`,
+  is the members' and the architect's guidance. A comment authorizes
+  nothing.
 
 ### Reading the inbox: `aicrew-agent inbox`
 

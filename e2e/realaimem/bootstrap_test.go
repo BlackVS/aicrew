@@ -157,6 +157,7 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	opEnv := append(append([]string{}, aEnv...), "AICREW_URL="+h.aicrewdURL, "AICREW_TLS_TRUST_MODE=spki_sha256",
 		"AICREW_TLS_TRUST_VALUE="+h.aicrewdPin, "AICREW_OPERATOR_TOKEN_FILE="+opFile)
 	h.checkIsolated(opEnv)
+	h.opEnv = opEnv
 
 	// 7. The team, by `aicrew team setup`: it creates and registers the team
 	// on that hub, and prints the one grant the hub's admin still has to

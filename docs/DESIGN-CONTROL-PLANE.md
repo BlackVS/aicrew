@@ -2,8 +2,10 @@
 
 Status: proposed design for review (task `01a11eab-120d`, the first task of
 the control-plane epic `01a11eaa-33e6`; section 7 answers the architect
-role, task `01a11c96-4a15`). Nothing here is implemented. The operator and
-the monitoring session review it before any code. Updated 2026-10-09.
+role, task `01a11c96-4a15`; section 8 answers the operator's additions on
+kinds of work, capabilities and worker profiles). Nothing here is
+implemented. The operator and the monitoring session review it before any
+code. Updated 2026-10-09.
 
 aicrew becomes a control plane. aicrewd decides when each member of a crew
 works, and a runner on the member's host makes it happen. No human starts a
@@ -145,8 +147,10 @@ one-turn-per-member rule in one place.
     `none`. A tool call that neither an allow rule nor the mode permits is
     denied and listed in the result's `permission_denials`.
     - The home's managed settings gain a `permissions.allow` list for what
-      the role needs: git in the worktree, the project's build and test
-      commands, `aicrew-agent`, and editing in `worktrees/`.
+      the role needs. For a code profile, that is git in the worktree, the
+      project's build and test commands, `aicrew-agent`, and editing in
+      `worktrees/`. The allow list is part of the worker profile's tool
+      policy (8.3), so each kind of work has its own.
     - The deny rules stay above it.
     - A denial is reported in the turn record. A denial the role needed is
       a guidance or allow-list change through a PR, never a widening at
@@ -235,9 +239,14 @@ or a submit earns a continuation turn (1.3 b). Three limits bound this, each
 in the provider profile (3.1):
 - **Continuations:** at most 20 per attempt by default.
 - **Budget:** a cost ceiling per attempt.
-- **No progress:** after three consecutive turns with no step and no new
-  commit on the attempt's branch, the attempt is **stalled**. The runner
-  reads the worktree's HEAD, so no model judges this. A stall:
+- **No progress:** after three consecutive turns with no step and no
+  progress signal, the attempt is **stalled**.
+  - The signal is the delivery kind's `progress` (8.1). For `code-pr` it
+    is a new commit on the attempt's branch, which the runner reads from
+    the worktree's HEAD. For `ops` it is a new entry in the command log or
+    a recorded finding or plan.
+  - Either way the runner reads a fact, and no model judges it.
+  - A stall:
   - sends a lifecycle message to the coordinator;
   - stops continuation turns until a message arrives for the worker.
 
@@ -349,8 +358,8 @@ TLS listener and trust bindings carry everything.
 
 | Command | What the runner does |
 | --- | --- |
-| `ensure-home {label, team, role, invitation_code, aimem_hub, url, trust}` | Runs `aicrew-agent join` for a new home, with the code on standard input. The member's aimem credential must already be on the host (2.5); otherwise the result is `needs_credential`, naming the hub. |
-| `refresh-home {agent}` | Reruns `join` on the home after an upgrade (managed files, hooks, deny and allow rules), with no code. |
+| `ensure-home {label, team, role, profile, invitation_code, aimem_hub, url, trust}` | Runs `aicrew-agent join` for a new home with its worker profile (8.3), with the code on standard input. Each credential the profile lists must already be on the host (2.5); otherwise the result is `needs_credential`, naming each missing one by purpose. |
+| `refresh-home {agent, profile}` | Reruns `join` on the home after an upgrade or a profile change (managed files, hooks, deny and allow rules, skills, MCP servers), with no code. |
 | `run-turn {turn_id, agent, trigger_summary, profile, lease}` | Starts the turn (section 1) and reports its start and end. |
 | `stop-turn {turn_id}` | Ends the turn's process tree and reports `stopped`. |
 | `report {agent?}` | Runs `aicrew-agent check` and reports versions, the client's login state, capabilities and the home's readiness. |
@@ -398,6 +407,10 @@ exact command. aicrewd is not a credential courier. The deposits of task
   lost. Runners keep polling and are answered when the service is back.
 
 ## 3. The provider profile
+
+The provider profile is one facet of the member's worker profile (8.3): the
+client, the model, the auth mode and the limits. A member may override this
+facet alone, because a subscription login belongs to its host.
 
 ### 3.1 What aicrewd keeps per member
 
@@ -522,7 +535,9 @@ for planning, never a bill.
 | Escalations | `aicrew escalations list [--open]`, `show ID`, and `answer ID` (the architect, 7.5): the coordinator's requests and their answers |
 | PRs awaiting merge | `aicrew merges --team-name T`: attempts the coordinator reviewed READY, with the PR, its head and the verify state. The merge itself stays on the forge, by a human. |
 | Control | `aicrew team pause\|resume`; `aicrew member pause\|resume\|nudge`; `aicrew turns stop ID`; `aicrew member profile set` |
-| Runners | `aicrew runner invite\|list\|revoke\|rotate\|unbind` |
+| Runners | `aicrew runner invite\|list\|revoke\|rotate\|unbind`; `aicrew runner set --caps ...` (the host's capabilities, 8.2) |
+| Worker profiles | `aicrew profile list\|show\|set`, export and import (8.3); `aicrew member profile set --agent A --profile P` |
+| Ops approvals | `aicrew approvals list [--open]`, `show ID`, `approve\|reject ID` (8.4); with the full operator credential only (D18) |
 
 Pause is a scheduler state. A paused team or member gets no new turns.
 Running turns end normally, unless `turns stop` ends them. Pause never
@@ -542,7 +557,8 @@ touches attempts, reservations or sessions.
   fetched log are redacted of known token shapes: aicrew's operator,
   session and runner tokens, aimem's tokens, forge tokens and provider
   keys. Redaction is best-effort.
-- **Decision D7:** transcripts are never stored centrally.
+- **Decision D7:** transcripts are never stored centrally. The exception
+  is an ops member's command log, which is stored on aicrewd (D17, 8.4).
 
 ### 4.4 What "stable API" means
 
@@ -569,7 +585,8 @@ passkeys.
 | --- | --- | --- |
 | Operator token | the operator's machine; aicrewd keeps its file | the operator API |
 | Runner credential (new) | the runner's state directory, owner-only | `/v1/runner/*` for its own bound members |
-| Architect credential (new) | the architect directory's owner-only credential file | the operator API's reads and escalation answers, nothing else (D10) |
+| Architect credential (new) | the architect directory's owner-only credential file | the operator API's reads and escalation answers, nothing else (D10); never an ops approval (D18) |
+| Ops identities (SSH, PowerShell remoting) | the ops member's home `creds/`, on the operator-prepared host | the hosts the profile names, limited there by sudoers or JEA (D19) |
 | Member session token | the runner's memory | the member's session API, as today |
 | Member aimem credential | the home's `aimem/` | the member's team-mode and personal-mode aimem access |
 | Forge token, provider key | the home's `creds/` | the forge; the provider |
@@ -646,6 +663,27 @@ Without a human watching each session, these boundaries carry more weight.
 So the floor stays human: merge, release, deployment, and any change to
 rules or credentials.
 
+### 5.6 Kinds of work that reach live systems
+
+Section 8's ops work adds its own boundaries:
+- **Placement** on operator-prepared hosts only. The crew never
+  provisions network access or credentials, and a host's capabilities are
+  the operator's word, never the host's own claim (8.2).
+- **Its own OS account or VM** for each ops member, and credentials scoped
+  to the hosts its profile names.
+- **A stricter policy per kind.** Commands are sorted into read-only,
+  mutating and forbidden classes. Mutating commands run only as approved
+  exact commands in that apply turn. The target hosts enforce the same
+  limits themselves, with sudoers or JEA (D19).
+- **A human approval** of every plan before any mutating command, bound to
+  the plan's digest, given with the full operator credential and never
+  from an AI session (D18).
+- **A full command log** of every ops turn on aicrewd (D17).
+
+A compromised ops host reaches the hosts its identities serve, within what
+those hosts allow the identity. That is why the host-side limits of D19,
+not the client's text rules, are the boundary.
+
 ## 6. What we are not, and the increments
 
 ### 6.1 What we are not
@@ -678,6 +716,8 @@ by humans and agents:
 - Implementing any increment.
 - Any UI.
 - VM lifecycle (the epic's last, optional line).
+- Delivery kinds other than `code-pr` and `ops`, beyond naming the contract
+  they plug into (8.1).
 - Changing aimem. The aimem prerequisite below is named for the aimem
   implementation session to take up; aicrew does not file it on the aimem
   board.
@@ -690,8 +730,10 @@ once this document is reviewed READY.
 | # | Increment | Depends on | aicrewd wire change |
 | --- | --- | --- | --- |
 | A0 | **aimem prerequisite, owned by the aimem session:** a peer read `board.read` for the peer's teams' granted projects. It is a cursor feed of task state changes (task, from, to, revision, time), read once per tick for all of the peer's teams, under its own single-operation credential like `team.read`. | aimem | none in aicrew |
+| A0b | **aimem prerequisite, owned by the aimem session:** a typed field on a task for the capability it requires (8.2, D15). Until then, a project's process names one capability for its work. | aimem | none in aicrew |
+| A0c | **aimem prerequisite, owned by the aimem session:** a team-mode write of a hub document, for reports (8.4). Until then, the report is the submit's text, mirrored by the coordinator as a comment. | aimem | none in aicrew |
 | A1 | **01a11c8d-5570, board wake:** aicrewd reads the feed each reconcile tick and writes `board.changed` messages to the coordinator, with the cursor in the same transaction. It works under today's Stop hook. | A0 | new message kind |
-| A2 | **Turn probe** (a document, like CLIENT-WAKE-PROBE): measures, for each client, a headless turn with resume, `dontAsk` with an allow list, the end and limit events, and usage and cost. It also confirms `apiKeyHelper` isolation. | none | none |
+| A2 | **Turn probe** (a document, like CLIENT-WAKE-PROBE): measures, for each client, a headless turn with resume, `dontAsk` with an allow list, the end and limit events, and usage and cost. It also confirms `apiKeyHelper` isolation and the ops policy shapes: PowerShell cmdlet rules, an SSH host allow list, and per-turn exact-command allow rules (8.4). | none | none |
 | A3 | **`aicrew-agent serve --home H`:** the local turn loop for one home and Claude Code. Its triggers are pending messages and worker continuation; it applies the limits and stall rule, writes turn records in the home's `logs/`, and sets `wake.mode: "turns"` (no Stop hook). | A2 | none |
 | A4 | **Turn reports:** a member-session route that records turns and accounting on aicrewd, with `aicrew turns` and `aicrew costs`. | A3 | yes |
 | A5 | **The provider profile** on aicrewd, API keys through `apiKeyHelper`, and `needs_login` and `limit_reached` handling. | A4 | yes |
@@ -704,6 +746,12 @@ once this document is reviewed READY.
 | C2 | **01a11c8d-5598, escalations:** `aicrew-agent escalate`, the escalation records, the architect credential, `aicrew escalations list\|show\|answer`, the `escalation.answer` message, and the comment mirrors (7.5, D10, D14). | D1 | yes |
 | C3 | **`aicrew merges`:** PRs awaiting the human merge. | A4 | yes |
 | C4 | **`aicrew turns log`,** through `fetch-log`. | B2 | yes |
+| E1 | **Delivery kinds:** the CREW-CONTRACT amendment and the code that make an offer name `delivery {kind, ...}`, with `code-pr` carrying today's repository fields and checks unchanged (8.1). | A4 | yes |
+| E2 | **Worker profiles:** the record on aicrewd and `aicrew profile`. `join` generates the home's managed files from a profile, and `check` verifies the home against it. The provider profile (A5) becomes its facet. | A5 | yes |
+| E3 | **Capabilities and placement:** `{kind, scope}` capabilities; host capabilities set by the operator on the runner; matching at offer (`capability_missing`). | E2, B2 | yes |
+| E4 | **The ops interactive mode:** the `plan` and `plan-review` steps, plan records, `aicrew approvals`, per-turn exact allow rules for the apply, the ops command log on aicrewd, and the Linux command classes. | E1, E3, A6 | yes |
+| E5 | **Windows ops:** the PowerShell command classes, and the JEA guidance for the operator's hosts. | E4 | none |
+| E6 | **The ops declarative mode:** a configuration-repository PR as the deliverable, with the apply after the merge as an approved step. | E4 | yes |
 | D1 | **The architect kit,** `aicrew architect init` (7.2). It is 4a15's first increment. | none | none |
 | D2 | **ROLES.md:** the coordinator does not talk to a human, and escalates through C2's path. | C2 | none |
 
@@ -714,7 +762,9 @@ once this document is reviewed READY.
 - 4a15's first increment is D1, which needs no change to aicrewd's wire.
 
 **What can start at once:** A2 and D1 can start as soon as this document is
-merged, and C2 right after D1. A1 waits on aimem's A0.
+merged, and C2 right after D1. A1 waits on aimem's A0. The E line follows
+the turns and the runner, because a kind of work that reaches live systems
+needs the turn records, the profile and the placement first.
 
 ## 7. The architect role
 
@@ -773,6 +823,10 @@ session.
   - acceptance criteria a reviewer can verify;
   - explicit non-goals;
   - dependencies, size, priority and the next action;
+  - the kind of work and the capability it needs, where its project's
+    process does not already fix them (8.2);
+  - for ops work, the acceptance criteria as checks a read-only command can
+    run;
   - the evidence that motivated it.
 
   This is the shape the tasks on this board have.
@@ -883,7 +937,321 @@ practice reproducible: the monitoring session has acted as architect by
 hand since 2026-10-05. D2 (ROLES.md) follows with C2, once the escalation
 path exists to be named.
 
-## 8. Decisions for the operator
+## 8. Kinds of work, capabilities and worker profiles
+
+The operator's additions of 2026-10-09 (task comments seq 424 to 429). A
+crew is not only a development team. It may set up a server, parse logs or
+write a research note. This section keeps the core the same for every kind
+of work, and fixes the one non-code kind the operator named: ops.
+
+### 8.1 One core, many delivery kinds
+
+These are the same for any work:
+- roles and the board;
+- offers and attempts;
+- submit, review and confirmed delivery;
+- the inbox, turns and the runner.
+
+What differs is the **delivery kind**: what a task's deliverable is, how it
+is verified, where the human gate sits, and what counts as progress. The
+project's pinned process defines its kinds, as it defines the development
+process today. A project whose process names no kind is `code-pr`, as
+every project is today. A kind is a named contract:
+
+| Field | What it says | Code via a pull request (the first kind) |
+| --- | --- | --- |
+| `kind` | the name | `code-pr` |
+| `target` | where the work happens | a repository the hub binds to the project |
+| `deliverable` | what `submit` names as `result_ref` | the PR URL |
+| `verification` | the checks before review | CI on the head; the review at level high |
+| `human_gate` | the human step before delivery | the merge |
+| `evidence` | the confirmed delivery's `{kind, ref}` list | `reviewed_head`, `human_merge`, `post_merge_ci` |
+| `progress` | the signal the stall rule (1.8) reads | a new commit on the attempt's branch |
+| `needs` | the capability and credentials a worker must have | `code: forge HOST`, write access to the repository |
+
+Most of the attempt already fits. `result_ref` and the delivery evidence
+are `{kind, ref}` values today (CREW-CONTRACT, "Attempt steps"). The parts
+that assume code are these:
+
+| Forge-specific today | Where | How it becomes the `code-pr` kind |
+| --- | --- | --- |
+| An offer must name a `repository`, which must equal the hub's binding, or it is refused as `repository_mismatch`. A project with no repository cannot be offered at all. | aicrewd, `granted` in the offer and claim routes; CREW-CONTRACT, "The attempt's repository" | The offer names a `delivery {kind, ...}`. `code-pr` carries today's six repository fields under the same check. Another kind carries its own target. The crew-contract amendment is increment E1. |
+| A worker's capabilities are forge hosts and repositories with their access, and an offer is refused `capability_missing` without one. | `aicrew-agent check`'s report; `POST /v1/crew/capabilities` | A capability becomes `{kind, scope}` (8.2). Today's report is the `code` kind's capabilities. |
+| `aicrew-agent clone`, `repos/`, `worktrees/`, and the forge credential (`join --cred`) | the member's home | These are the `code-pr` kind's workspace and credential. Another kind declares its own in the worker profile (8.3). |
+| `/crew-review`'s code review, and the delivery evidence | ROLES.md, the managed commands | These are the `code-pr` kind's `verification` and `evidence`, read from the process instead of being written into ROLES.md. |
+| The deny rules' git patterns | the managed settings (`01a1171d-c51c`) | The rules on credential files and TLS weakening apply to every profile. The rules on git's global and system configuration are the code profiles' policy (8.3). An ops profile adds its own classes (8.4). |
+| The stall rule's commit check; forge events | 1.8; 1.2 | These are the `code-pr` kind's `progress` and triggers. |
+
+The process repository and its pin (`aicrew-agent digest`) are not forge
+delivery. They are how any project's process is fixed, and they stay as
+they are.
+
+**Not designed here:** delivery kinds beyond `code-pr` and `ops`, such as a
+hub document, a dataset, a report or a research note. Each plugs into the
+contract above when a project's process needs it.
+
+### 8.2 Capabilities and placement
+
+- **What a task needs.**
+  - A task requires a capability such as `ops: network-x` or
+    `code: forge github.com`.
+  - **Decision D15:** the requirement comes from the project's pinned
+    process, which names the kind and capability of the project's work. A
+    task narrows it only through a typed task field.
+  - aimem tasks have no such field today, so that field is an aimem
+    prerequisite (A0b), named here for the aimem session. Until it exists,
+    a project's work has one capability, and a team that needs two kinds
+    of work uses two projects. That is the natural shape anyway: an ops
+    network is its own project.
+- **What a worker has.** A member's capabilities are those its worker
+  profile declares (8.3), limited to those its runner's host provides.
+  - **Host capabilities are the operator's word.** The operator records
+    them on the runner at enrolment or later (`aicrew runner set --caps
+    ops:network-x`), after preparing the host.
+  - **A host does not assert its own capabilities.** A compromised host
+    must not gain work by claiming a network.
+- **Matching.**
+  - The coordinator sees each member's profile and capabilities, and never
+    a host (`GET /v1/crew/capabilities` grows to carry them). It offers a
+    task only to a member whose capabilities cover the task's.
+  - aicrewd refuses any other offer as `capability_missing`, as it does
+    today for a forge repository.
+- **Placement.**
+  - The control plane runs a member only on its bound runner (2.2). An ops
+    member's runner is on a host the operator prepared with the network
+    identity (VPN or ZTNA) and the credentials for that network.
+  - The crew never provisions network access, a VPN profile or a
+    credential. A host that lacks one reports `needs_credential` (2.5).
+- **Isolation.** An ops member runs in its own OS account, or its own VM,
+  never sharing an account with a code member (D8's `--shared-user` is
+  refused for an ops profile). Its credentials are scoped to its kind: an
+  SSH identity for the hosts it serves, no forge write token unless its
+  declarative mode needs one.
+
+### 8.3 Worker profiles
+
+A **worker profile** is a named, versioned record of what a member is made
+of. Examples:
+
+| Profile | Capability | Credentials it needs | Skills and MCP | Policy |
+| --- | --- | --- | --- | --- |
+| `dev-go` | `code: forge github.com` | a forge write token | oh-code-review and the Go skills; the aimem MCP | the code deny rules (c51c) and the code allow list (D2) |
+| `ops-mail` | `ops: network-x` | an SSH identity for host M | the ops skills; the aimem MCP | the ops command classes for Linux (8.4) |
+| `ops-win` | `ops: network-y` | a PowerShell remoting identity for the allowed hosts | the ops skills; the aimem MCP | the ops command classes for Windows (8.4) |
+| `research` | `research` | none | the hub documents and the aimem MCP | no shell beyond reading files |
+
+- **Fields:**
+  - name and revision;
+  - capabilities;
+  - the delivery kinds it takes;
+  - the credentials it needs, by purpose, never by value;
+  - skills: from the ai-skills set at a pinned version, plus the project's
+    own;
+  - MCP servers and client plugins;
+  - the tool policy: deny rules, allow rules and, for ops, the command
+    classes;
+  - the provider facet: section 3's provider profile, now one part of the
+    worker profile.
+- **Per member.** A member names one profile. It may override only the
+  provider facet (model, auth mode, credential reference), because a
+  subscription login is a fact of its host.
+- **Where it lives (decision D16):** on aicrewd, edited by the operator
+  through the API and CLI (`aicrew profile list|show|set`), under its
+  revision.
+  - A profile's policy is security configuration, which belongs with the
+    operator's authority and aicrewd's audit. A hub document belongs to
+    the team's knowledge.
+  - A profile can be exported to a file for review in a PR, and imported
+    from one.
+- **Generated, applied and checked.**
+  - `join`, and the runner's `refresh-home`, generate the home's managed
+    files from the profile:
+    - `.claude/settings.json`, with its env, hooks and permissions;
+    - `.mcp.json`;
+    - the installed skills and plugins;
+    - the managed commands of the profile's kinds.
+  - `check` verifies the home against the profile, including the supported
+    client versions per profile.
+  - `ensure-home`'s `needs_credential` names the credentials the profile
+    lists, so a profile with no forge token never asks for one.
+- **Rollout.** A changed profile reaches each home that uses it at the
+  home's next refresh: the runner's `refresh-home` from B3 on, and before
+  that the human's `join` rerun. `team state` shows each home's profile
+  revision against the current one.
+
+### 8.4 The ops delivery kind
+
+Ops work changes live systems, so its human gate comes before the change,
+not after it. The kind has two modes. A task's mode comes from the process,
+or from the task where the process allows both.
+
+**Declarative mode.** The change is code in a configuration repository:
+OpenTofu, Ansible, Nix, or a compose file, whatever the process pins.
+- The deliverable is a pull request, delivered as `code-pr` with its
+  review and human merge.
+- The apply runs after the merge, by the pipeline or by the worker in a
+  second, approved step, as below.
+- It fits new servers built from scratch. It is available only where the
+  project's process names a working toolchain for it.
+
+**Interactive mode (the default).** The worker works on the live host in
+supervised phases. It is the default for one-off work (an incident, a few
+mailboxes, one setting) and always for Windows hosts, unless the process
+names a working declarative toolchain for them.
+
+1. **Diagnose.** The worker runs read-only commands only, with no
+   approval, and writes a **finding**.
+2. **Plan.** The worker writes a **plan record**:
+   - the target hosts;
+   - each mutating command exactly as it will run;
+   - its expected effect;
+   - its rollback, or `irreversible`;
+   - the pre-state it captures first, such as a copy of a configuration
+     file;
+   - the checks that verify the result.
+3. **Review.** The coordinator reviews the plan against the task's frozen
+   scope, as it reviews code.
+   - A plan is not a result. Today an accepted result can only go on to
+     delivery and finalize, so the plan is recorded and reviewed by its
+     own steps: `plan` by the worker, `plan-review` by the coordinator.
+   - The attempt stays `Working` throughout. These steps are the ops
+     kind's amendment to the crew contract (E4).
+4. **Approve.** The human approves the plan through the operator API. The
+   approval binds the plan's digest, so an edited plan needs a new
+   approval.
+5. **Apply.** The worker runs exactly the approved commands, in order.
+   - A command that fails, or an effect that differs from the plan, stops
+     the apply.
+   - The worker reports, and runs the rollback only if the approval
+     included it.
+6. **Verify.** Read-only commands check the task's acceptance criteria.
+7. **Report.** A report names what was done, the evidence, and the turn
+   log's references. It is the `deliverable`, and the confirmed delivery's
+   evidence points at it.
+
+**Command classes.** A profile's ops policy sorts commands into three
+classes, as patterns per platform. Read-only does not mean harmless: reading
+a private key or a password file changes nothing and leaks everything, so
+the forbidden class names those reads too.
+
+| Class | Approval | Linux example | Windows example |
+| --- | --- | --- | --- |
+| read-only | none | `systemctl status`, `journalctl`, reading files under `/etc/postfix`, `dig`, `ss -tlnp` | `Get-*`, `Test-*`, `Measure-*`, `Resolve-DnsName` |
+| mutating | the approved plan | `systemctl restart`, `postconf -e`, package installs, writing configuration | `Set-*`, `New-*`, `Remove-*`, `Restart-*`, `Install-*` |
+| forbidden | never | changing users or sudoers, flushing the firewall, `rm -rf` on system paths, reading `/etc/shadow` or private keys | changing local administrators, disabling Defender or the firewall, `Enter-PSSession`, exporting certificates with their private keys |
+
+- **How a class is enforced.** Each class maps onto Claude Code's
+  permission rules, under D2's `dontAsk` mode:
+  - read-only patterns are allow rules;
+  - forbidden patterns are deny rules;
+  - mutating patterns are neither, so they are denied by default.
+  - For an apply turn, the runner adds an allow rule for each approved
+    command, exactly as written, to that turn alone. It passes them as the
+    turn's own settings, never as a change to the home's.
+  - Remote targets are allow-listed hosts: `ssh HOST` for the hosts in the
+    profile, and `Invoke-Command -ComputerName` with the same list.
+- **The rules match text.** As WORKSPACE says of the deny rules, they stop
+  a mistake through the tools they name, not a determined bypass.
+- **Decision D19: the host enforces too.** The operator prepares the
+  target hosts so that the ops identity can do only its class of work:
+  - a sudoers command list on Linux;
+  - a Just Enough Administration endpoint on Windows, whose role
+    capabilities list the allowed cmdlets.
+
+  The client's classes are the first line, and the host's own limits are
+  the boundary.
+- **The A2 probe** measures these policy shapes before an ops profile is
+  built: PowerShell cmdlet rules, an SSH host allow list, and per-turn
+  exact-command allow rules.
+
+**The approval step.**
+- **Commands:** `aicrew approvals list [--open]`,
+  `aicrew approvals show ID`, and `aicrew approvals approve|reject ID
+  [--with-rollback] --reason ...`.
+- **Records:** an approval names the plan's digest, the approver, the
+  time, whether the rollback was included, and the turn that may apply it.
+- **Who approves (decision D18):** a human, with the full operator
+  credential, never the architect credential (D10). A change to a live
+  system is the floor, like a merge. OPERATOR-SEAT's second-factor receipts
+  will bind it more tightly when they exist.
+- **The rollback expectation.** Every mutating command has a rollback, or
+  the plan marks it `irreversible`, which the approval must acknowledge.
+  The worker captures the pre-state before the apply.
+
+**Audit (decision D17).** Every turn of an ops member keeps a full command
+log: each command, its output, and its class. Unlike D7's code turns, that
+log goes to aicrewd and is kept, redacted, owner-readable only, so an ops
+action is reviewable like a PR. The operator reads it with
+`aicrew turns log`. Command output can hold secrets that redaction misses,
+which is why the log stays on aicrewd and is never mirrored to the board.
+
+**Where the report lives.**
+- Team mode cannot write hub documents today; a coordinator can only
+  comment on tasks. So the report is the worker's submit: its text is kept
+  by aicrewd, and the coordinator mirrors a summary on the task as a
+  comment.
+- A team-mode document write, for the report as a hub document, is an
+  aimem prerequisite (A0c), named here for the aimem session.
+
+### 8.5 Walk-through: setting up the mail server on host M
+
+1. **The board.** The architect writes the task "Set up the mail server on
+   host M" in the ops project for network X, whose process names the
+   `ops` kind, the interactive mode and the capability `ops: network-x`.
+   - The acceptance criteria are checks:
+     - mail is accepted on port 25 with STARTTLS;
+     - a test message reaches a mailbox;
+     - the DKIM and SPF records resolve;
+     - a report exists.
+   - The operator says READY, and the architect sets it.
+2. **The trigger.** The task's move to READY reaches the coordinator as a
+   `board.changed` message (A1), and its turn starts (section 1).
+3. **The offer.**
+   - The coordinator's capability read shows one member with the
+     `ops-mail` profile and `ops: network-x`. That member's runner is on
+     the host the operator prepared with the ZTNA identity for network X
+     and an SSH identity limited to host M.
+   - The coordinator offers it the task. An offer to a `dev-go` member
+     would be refused `capability_missing`.
+4. **Diagnose.** The worker's turns run read-only commands over SSH on host
+   M: the installed packages, the listening ports, the DNS records. Its
+   finding: Postfix is not installed, and port 25 is free.
+5. **Plan.**
+   - The plan lists the exact commands:
+     - install Postfix and OpenDKIM;
+     - write `main.cf` with STARTTLS and the certificate paths;
+     - generate the DKIM key;
+     - restart the services.
+   - It also gives the DNS records to publish. The DNS zone is outside
+     host M, so that step is an escalation (7.5) unless the profile
+     covers it.
+   - Each command has a rollback: remove the packages, restore the saved
+     `main.cf`.
+   - The worker records the plan with the `plan` step.
+6. **Review and approval.** The coordinator's `plan-review` returns the
+   plan once, because one rollback was missing. The worker records the
+   amended plan, and the coordinator accepts it. The human runs `aicrew
+   approvals approve ID --with-rollback`.
+7. **Apply.** The approval message starts the worker's apply turn, which
+   has exact allow rules for the approved commands only. Each command's
+   output goes to the ops command log.
+8. **Verify.** Read-only checks:
+   - an SMTP session shows STARTTLS;
+   - a test message is delivered to a mailbox;
+   - `dig` resolves the DKIM and SPF records.
+9. **Report and delivery.**
+   - The worker submits the report as its result. The coordinator reviews
+     it and confirms delivery with the approval, the verification output
+     and the log's references as evidence.
+   - The task becomes DONE through the usual finalize. The coordinator
+     mirrors the report on the task.
+
+A small change, such as adding two mailboxes, has the same shape with a
+one-line plan. An incident ("the mail server stopped delivering") starts
+at the diagnosis, and its finding may end the task without any mutating
+step.
+
+## 9. Decisions for the operator
 
 Each has a recommendation, and the design above assumes it.
 
@@ -903,3 +1271,8 @@ Each has a recommendation, and the design above assumes it.
 | D12 | Pause and resume | A scheduler state (C1); amend 5598's criterion 2 |
 | D13 | The board trigger's source | Ask the aimem session for the `board.read` cursor feed of task state changes (A0) |
 | D14 | The escalation record | aicrewd's store, mirrored as task comments; a coordinator's comment on a held task waits for the hold to end, unless aimem later allows comments under a hold |
+| D15 | Where a task's required capability comes from | The project's pinned process; a task narrows it through a typed field once aimem has one (A0b) |
+| D16 | Where worker profiles live | On aicrewd, edited by the operator, exportable for review; not a hub document |
+| D17 | Ops audit | A full, redacted command log of every ops turn, kept on aicrewd (an exception to D7) |
+| D18 | Who approves an ops plan | A human with the full operator credential, never the architect credential; bound to the plan's digest |
+| D19 | Host-side enforcement for ops | The operator prepares sudoers command lists or JEA endpoints; the client's command classes are the first line, not the boundary |

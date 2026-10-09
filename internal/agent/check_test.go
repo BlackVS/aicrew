@@ -424,7 +424,7 @@ func hasInstruction(rep CheckReport, sub string) bool {
 	return false
 }
 
-var readyTools = fakeTools{Aimem: "aimem v0.9.2", Claude: "2.1.286 (Claude Code)", OpenCode: "1.18.32"}
+var readyTools = fakeTools{Aimem: "aimem v0.10.0", Claude: "2.1.286 (Claude Code)", OpenCode: "1.18.32"}
 
 // A CLAUDE_CONFIG_DIR in the invoking shell, as a member on a shared account
 // has, does not leak into the fixture: the baseline home is still ready.
@@ -575,11 +575,11 @@ func TestCheckOutcomes(t *testing.T) {
 		instruction string
 		notice      string
 	}{
-		{"aimem missing", []string{"claude"}, nil, "1.26.1", JoinBlocked, "aimem_missing", "Install aimem v0.9.2 with its verifying installer", ""},
-		{"aimem newer", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.9.3" }, "1.26.1", JoinRestartRequired, "",
-			"", "aimem 0.9.3 is newer than the tested 0.9.2"},
-		{"aimem v0.9.1", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.9.1" }, "1.26.1", JoinBlocked,
-			"aimem_below", "aimem 0.9.2 or later is required", ""},
+		{"aimem missing", []string{"claude"}, nil, "1.26.1", JoinBlocked, "aimem_missing", "Install aimem v0.10.0 with its verifying installer", ""},
+		{"aimem newer", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.10.1" }, "1.26.1", JoinRestartRequired, "",
+			"", "aimem 0.10.1 is newer than the tested 0.10.0"},
+		{"aimem v0.9.2", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.9.2" }, "1.26.1", JoinBlocked,
+			"aimem_below", "aimem 0.10.0 or later is required", ""},
 		{"aimem source build", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.7.3-52-gabc1234" }, "1.26.1",
 			JoinRestartRequired, "", "", "aimem v0.7.3-52-gabc1234 is a development build"},
 		{"aimem unstamped source build", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem dev" }, "1.26.1",
@@ -718,7 +718,7 @@ func TestSupportedSet(t *testing.T) {
 		}
 	}
 	am := set.Components["aimem"]
-	for v, want := range map[string]string{"0.8.0": StateBelow, "0.9.1": StateBelow, "0.9.2": StateSupported, "0.9.3": StateNewer, "0.10.0": StateNewer, "1.0.0": StateNewer} {
+	for v, want := range map[string]string{"0.8.0": StateBelow, "0.9.2": StateBelow, "0.9.10": StateBelow, "0.10.0": StateSupported, "0.10.1": StateNewer, "0.11.0": StateNewer, "1.0.0": StateNewer} {
 		s, _, _ := parseVersion(v)
 		if got, _ := am.classify(s); got != want {
 			t.Fatalf("aimem %s: %s, want %s", v, got, want)

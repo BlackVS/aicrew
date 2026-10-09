@@ -12,6 +12,17 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+### Breaking changes
+
+- **aimem 0.10.0 is required.** `internal/agent/supported.json` names 0.10.0
+  as both the minimum and the tested release, so `aicrew-agent check` blocks
+  a member below it, and the real-aimem harness builds the v0.10.0 release.
+  0.10.0 carries the control plane's aimem prerequisites (the board feed, a
+  task's required capability, team members' report documents). Its project
+  and access schemas are one-way: read aimem's upgrade notes, then upgrade
+  the hub with aimem's hub one-liner and each member with aimem's member
+  installer.
+
 ## [0.4.0] - 2026-10-08
 
 Product tooling for setting up and upgrading aicrew, with no hand edits:

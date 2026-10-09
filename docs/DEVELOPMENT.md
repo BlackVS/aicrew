@@ -1183,6 +1183,7 @@ rule as the guidance.
 | `/crew-triage <task>` | coordinator | moves a task between BACKLOG and READY with aimem's `triage_task` |
 | `/crew-offer <task> <worker>` | coordinator | checks READY, dependencies and the pin, then offers |
 | `/crew-review <attempt>` | coordinator | reviews a submission against the frozen scope at level high, then the review step; stops before the human merge |
+| `/crew-escalate <task>` | coordinator | checks the question is one to escalate, raises it with `aicrew-agent escalate`, mirrors it as an `[escalation.request ID]` task comment, then carries on |
 | `/crew-accept <attempt>` | worker | checks the offer's pin and digest, accepts, clones |
 | `/crew-submit <attempt> <url>` | worker | submits the result |
 | `/crew-claim <task>` | independent | claims a READY task |
@@ -1442,6 +1443,20 @@ bin/aicrew escalations answer --id ID --decision TEXT --rationale TEXT
   as comments headed `[escalation.request ID]` and `[escalation.answer ID]`,
   is the members' and the architect's guidance. A comment authorizes
   nothing.
+- **The coordinator's guidance:** the coordinator's section of the managed
+  `docs/ROLES.md` and `/crew-escalate` say the following:
+  - it does not talk to a human;
+  - it always escalates OPERATOR-SEAT's floor (architecture, wire,
+    security, risk, merge, deploy), scope, cross_repo, intent, and
+    anything it cannot classify;
+  - it settles process, implementation, environment (inside the worktree
+    only) and retry itself, within the project's process. That is
+    OPERATOR-SEAT's `default` mode, since no team policy exists yet;
+  - it mirrors each request on the task;
+  - it carries on with other work while a request is open, and acts on the
+    answer's message.
+
+  A test keeps those categories equal to the ones aicrewd accepts.
 
 ### Reading the inbox: `aicrew-agent inbox`
 

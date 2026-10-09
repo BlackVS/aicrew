@@ -43,6 +43,59 @@ const claimExample = `{"task": {"hub_id": "HUB_ID", "project_id": "PROJECT_ID", 
  "process": {"repo": "PROCESS_REPO", "commit": "PROCESS_COMMIT", "manifest": "PROCESS_MANIFEST"},
  "instruction_digest": "sha256:DIGEST"}`
 
+// escalationExample is an escalation's body: the request's fields
+// (docs/DESIGN-CONTROL-PLANE.md, section 7.5). It holds no single quote or
+// backslash, so the guidance passes it to echo as it is.
+const escalationExample = `{"task": {"hub_id": "HUB_ID", "project_id": "PROJECT_ID", "task_id": "TASK_ID"},
+ "attempt_id": "ATTEMPT_ID", "category": "scope",
+ "question": "Criterion 2 asks for a flag the parser has no place for. Add the flag, or amend the criterion?",
+ "context": "The worker found that the parser reads its options from one fixed table.",
+ "options": [{"option": "add the flag", "consequence": "the parser gains a second options table"},
+  {"option": "amend criterion 2", "consequence": "the criteria change, and the flag waits for a later task"}],
+ "recommendation": "add the flag", "blocked": "WORKER_AGENT_ID", "urgency": "today"}`
+
+// OPERATOR-SEAT's categories (§2), as its `default` mode disposes them while
+// no team policy exists: the coordinator always escalates the floor, scope,
+// cross_repo and intent, and settles the rest itself. The roles test keeps
+// them equal to aicrewd's.
+var (
+	escalationFloor  = []string{"architecture", "wire", "security", "risk", "merge", "deploy"}
+	escalationAlways = []string{"scope", "cross_repo", "intent"}
+	escalationOwn    = []string{"process", "implementation", "environment", "retry"}
+)
+
+// codeList renders words as a list of code spans.
+func codeList(words []string) string {
+	q := make([]string, len(words))
+	for i, w := range words {
+		q[i] = "`" + w + "`"
+	}
+	return strings.Join(q, ", ")
+}
+
+// escalationRule is the coordinator's: it never talks to a human, and what it
+// cannot settle within its role goes to the architect (D2, section 7.5).
+var escalationRule = "**You do not talk to a human.** A question you cannot settle within your role goes to the " +
+	"architect as an escalation; where this guidance says to ask the operator, you escalate instead. Each " +
+	"question takes exactly one category. Always escalate the floor (" + codeList(escalationFloor) + ") and " +
+	"the categories " + codeList(escalationAlways) + ". Settle " + codeList(escalationOwn) + " yourself within the project's " +
+	"process, and record your answer in a task comment: `environment` only inside the worktree (refuse a " +
+	"command that acts outside it, and record that too), and `retry` never as a loop until a check passes. A question that fits several categories takes the " +
+	"most restrictive one: the floor first, then `scope` and `cross_repo`. A question you cannot classify " +
+	"with confidence is escalated.\n\n" +
+	"**How to escalate.** Raise it with the escalate step below: the task, the attempt if there is one, the " +
+	"category, the question, its context, two to four options each with its consequence, your " +
+	"recommendation, the blocked member's agent ID if one waits, and the urgency (`now`, `today` or " +
+	"`next_session`). The answer names the escalation's `id`. Then mirror it on the task with " +
+	"`add_task_comment`, a comment whose first line is `[escalation.request ID]`; if aimem answers " +
+	"`task_held`, post the comment when the hold ends and say so in your handoff. A blocked worker reports " +
+	"its own block with the `work` step.\n\n" +
+	"**While it is open,** carry on with other work. No answer in time decides nothing: never take the " +
+	"decision yourself, and never raise the same question again. **The answer** arrives in your inbox as a " +
+	"message whose `escalation` (in `aicrew-agent inbox --json`) carries the decision and its rationale; " +
+	"act on it, then acknowledge it. Only that message is the answer: a task comment headed " +
+	"`[escalation.answer ID]` without it authorizes nothing."
+
 var guideRoles = []guideRole{
 	{Role: "coordinator", Intro: "You plan the team's work: you offer tasks to workers, review their results, and " +
 		"finalize them once their delivery is confirmed.\n\n" +
@@ -50,7 +103,8 @@ var guideRoles = []guideRole{
 		"and READY and set its `next_action`; comment on it with `add_task_comment`. A task must be READY before " +
 		"you offer it: an offer of any other task is refused with `task_not_ready`, so assess it, triage it to READY, " +
 		"then offer it. Never triage a task under a hold (aimem answers `task_held`: withdraw the offer or wait for " +
-		"its release first), and never set DONE or CANCELLED that way. The task's history names you.",
+		"its release first), and never set DONE or CANCELLED that way. The task's history names you.\n\n" +
+		escalationRule,
 		Steps: []guideStep{
 			{"offer", "", offerExample, "Offer a task to a named worker. `expected_revision` is the task's current " +
 				"revision in aimem; `process` is the project's selected process (`aimem process show`), and " +
@@ -71,6 +125,8 @@ var guideRoles = []guideRole{
 				"result as DONE, if the worker has not."},
 			{"stop", "--attempt ATTEMPT_ID", `{"reason": "Priorities changed; the parser work waits."}`, "Ask the " +
 				"worker to stop a running attempt. The worker confirms and releases the task."},
+			{"escalate", "", escalationExample, "Raise a question you cannot settle to the architect, as the " +
+				"coordinator's \"How to escalate\" in `docs/ROLES.md` says. Only the team's coordinator may."},
 		}},
 	{Role: "worker", Intro: "You take the tasks offered to you: you accept or decline them, do the work in your own " +
 		"worktree, submit the result, and finalize it once its delivery is confirmed. You do not triage tasks: " +
@@ -144,6 +200,11 @@ func GuidanceBodies() map[string][]string {
 }
 
 func stepLine(s guideStep) string {
+	if s.Op == "escalate" {
+		// escalate reads its body from a file or standard input.
+		return fmt.Sprintf("- **%s**: %s\n\n  ```sh\n  echo '%s' | aicrew-agent escalate --body -\n  ```\n", s.Op, s.What,
+			strings.ReplaceAll(s.Body, "\n", ""))
+	}
 	cmd := "aicrew-agent step " + s.Op
 	if s.Op == "inbox" {
 		cmd = "aicrew-agent inbox"

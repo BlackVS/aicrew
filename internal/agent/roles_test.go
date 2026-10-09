@@ -2,17 +2,21 @@ package agent
 
 import (
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/BlackVS/aicrew/internal/store"
 )
 
 // The guidance teaches exactly the launcher's operations: every step and
-// local step, pending and recover, and the inbox's read and acknowledgement.
+// local step, pending and recover, the inbox's read and acknowledgement, and
+// the coordinator's escalation.
 // A step added to the launcher, or renamed, fails here until the guidance
 // teaches it (pilot G2).
 func TestRoleGuidanceTeachesEveryOperation(t *testing.T) {
-	want := map[string]bool{"pending": true, "recover": true, "inbox": true, "ack": true}
+	want := map[string]bool{"pending": true, "recover": true, "inbox": true, "ack": true, "escalate": true}
 	for op := range stepOps {
 		want[op] = true
 	}
@@ -55,7 +59,7 @@ func TestRoleGuidanceContent(t *testing.T) {
 	}
 	for op, bodies := range GuidanceBodies() {
 		for _, b := range bodies {
-			if !json.Valid([]byte(b)) || strings.Contains(b, "'") {
+			if !json.Valid([]byte(b)) || strings.ContainsAny(b, `'\`) {
 				t.Errorf("%s: the example body is not JSON a single-quoted shell argument can hold: %s", op, b)
 			}
 		}
@@ -84,6 +88,36 @@ func TestRoleGuidanceTriage(t *testing.T) {
 	}
 	if !strings.Contains(md, "the coordinator's triage,\nbelow, is the one exception") {
 		t.Error("the direct-write rule does not name triage as its exception")
+	}
+}
+
+// The coordinator does not talk to a human (D2, docs/DESIGN-CONTROL-PLANE.md
+// section 7.5): its section names what it escalates, by OPERATOR-SEAT's
+// categories as aicrewd checks them, how, the comment mirror, carrying on
+// meanwhile and the answer's message. No other section mentions escalating.
+func TestRoleGuidanceEscalation(t *testing.T) {
+	all := slices.Concat(escalationFloor, escalationAlways, escalationOwn)
+	if !slices.Equal(all, store.EscalationCategories) {
+		t.Fatalf("the guidance's categories %v are not aicrewd's %v", all, store.EscalationCategories)
+	}
+	md := rolesMD()
+	coord := md[strings.Index(md, "## Coordinator"):strings.Index(md, "## Worker")]
+	for _, s := range []string{"**You do not talk to a human.**",
+		"where this guidance says to ask the operator, you escalate instead",
+		codeList(escalationFloor), codeList(escalationAlways), codeList(escalationOwn), "most restrictive",
+		"cannot classify with confidence is escalated", `echo '{"task": {`, "| aicrew-agent escalate --body -",
+		"`[escalation.request ID]`", "`add_task_comment`", "`task_held`", "carry on with other work",
+		"No answer in time decides nothing", "never raise the same question again", "message whose `escalation`",
+		"`[escalation.answer ID]` without it authorizes nothing"} {
+		if !strings.Contains(coord, s) {
+			t.Errorf("the coordinator's section lacks %q", s)
+		}
+	}
+	if strings.Contains(strings.ToLower(md[strings.Index(md, "## Worker"):]), "escalat") {
+		t.Error("the worker's or the independent member's section mentions escalating")
+	}
+	if strings.Contains(strings.ToLower(md[:strings.Index(md, "## Coordinator")]), "escalat") {
+		t.Error("the rules every member follows mention escalating")
 	}
 }
 

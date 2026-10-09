@@ -1027,3 +1027,37 @@ func TestJoinAddsRoleGuidance(t *testing.T) {
 		t.Fatal("no new version beside the edited ROLES.md")
 	}
 }
+
+// An unedited ROLES.md of an earlier release is replaced on a join rerun
+// under the managed-file rules (D2): the coordinator's escalation guidance
+// reaches a home made before it.
+func TestJoinRefreshesRoleGuidance(t *testing.T) {
+	e := setupJoin(t)
+	code := e.invite(t, "inv-1", store.RoleCoordinator)
+	e.join(t, e.opts(), &recCrew{}, activeAimem(), code)
+	path := func(p string) string { return filepath.Join(e.home, filepath.FromSlash(p)) }
+
+	older := strings.Replace(rolesMD(), "\n\n"+escalationRule, "", 1)
+	if older == rolesMD() {
+		t.Fatal("the fixture did not remove the escalation guidance")
+	}
+	os.WriteFile(path("docs/ROLES.md"), []byte(older), 0o644)
+	doc := readJSON(t, path("agent.json"))
+	doc["managed"].(map[string]any)["docs/ROLES.md"] = digestOf([]byte(older))
+	raw, _ := json.Marshal(doc)
+	os.WriteFile(path("agent.json"), raw, 0o644)
+
+	rep, _ := e.join(t, JoinOptions{Home: e.home}, &recCrew{}, activeAimem())
+	action := ""
+	for _, c := range rep.Changes {
+		if c.Path == "docs/ROLES.md" {
+			action = c.Action
+		}
+	}
+	if action != "update" {
+		t.Fatalf("an unedited earlier ROLES.md: %q, want update (%+v)", action, rep.Changes)
+	}
+	if b, _ := os.ReadFile(path("docs/ROLES.md")); string(b) != rolesMD() {
+		t.Fatal("the rerun did not write the current ROLES.md")
+	}
+}

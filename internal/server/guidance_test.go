@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/BlackVS/aicrew/internal/agent"
+	"github.com/BlackVS/aicrew/internal/store"
 )
 
 // Every example body the agent's role guidance shows decodes strictly into
@@ -20,6 +21,7 @@ func TestRoleGuidanceBodiesDecode(t *testing.T) {
 		"confirm-delivery": func() any { return &deliveryBody{} },
 		"finalize":         func() any { return &finalizeBody{} },
 		"work":             func() any { return &workBody{} },
+		"escalate":         func() any { return &store.EscalationRequest{} },
 	}
 	bodies := agent.GuidanceBodies()
 	if len(bodies) == 0 {

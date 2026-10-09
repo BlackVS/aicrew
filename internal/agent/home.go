@@ -224,8 +224,8 @@ Repository instructions live in each repository, not here.
    ` + "`docs/ROLES.md`" + ` says. A worker takes the project, the task and the
    repository from the offer, never from this list.
 9. **Your commands.** The home's ` + "`/crew-*`" + ` commands carry these steps: ` + "`/crew-start`" + `,
-   ` + "`/crew-inbox`" + `, ` + "`/crew-handoff`" + `; for a coordinator ` + "`/crew-triage`" + `, ` + "`/crew-offer`" + ` and
-   ` + "`/crew-review`" + `; for a worker ` + "`/crew-accept`" + ` and ` + "`/crew-submit`" + `; for an independent
+   ` + "`/crew-inbox`" + `, ` + "`/crew-handoff`" + `; for a coordinator ` + "`/crew-triage`" + `, ` + "`/crew-offer`" + `,
+   ` + "`/crew-review`" + ` and ` + "`/crew-escalate`" + `; for a worker ` + "`/crew-accept`" + ` and ` + "`/crew-submit`" + `; for an independent
    member ` + "`/crew-claim`" + `.
 
 ` + managedNote

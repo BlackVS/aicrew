@@ -12,6 +12,94 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.5.1] - 2026-10-10
+
+A member-side release:
+- `aicrew-agent check` and `join` no longer wait out the client probe.
+- They report each probe step as it ends.
+- The environment notice no longer names aimem's installer knobs.
+- The member one-liners also install the operator CLI `aicrew`.
+
+aicrewd, its store and the managed home files are unchanged from 0.5.0.
+
+### Breaking changes
+
+- None. The store stays at schema 28, and aimem 0.10.0 stays required.
+
+### Upgrade steps
+
+1. **Each member, and the operator's machine.** As that user, rerun the
+   member one-liner:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.1/boot.sh | bash
+     ```
+
+   - Windows:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.1/boot.ps1 | iex"
+     ```
+
+   It upgrades `aicrew-agent` and installs `aicrew` beside it. No `join`
+   rerun is needed: the managed files did not change.
+2. **The hub, optionally.** aicrewd changes only in the version it reports.
+   The hub one-liner at v0.5.1 keeps the releases aligned:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.1/install-aicrewd.sh | bash
+   ```
+
+### The client probe
+
+- **Claude Code's probe ends at its init event** (#122). Against the probe's
+  closed model endpoint, Claude Code retries its request and never ends by
+  itself, so every check and join used to wait the full 90-second ceiling.
+  The probe now:
+  - stops the run once it has read the init event;
+  - sends a SIGTERM so the client closes its MCP servers (a kill on
+    Windows), then a kill 2 seconds later if the client is still running.
+- **Progress lines** (#122).
+  - **Before the probe:** the check says that the probe starts the client
+    and can take a minute or two on a cold start.
+  - **As each step ends:** one line with its elapsed time and what it found,
+    or that it stopped at its ceiling. OpenCode 2's step also reports its
+    ceiling when its catalogs are still incomplete or its server keeps
+    failing.
+  - The lines go to the human output; `--json` is unchanged.
+- **A quieter environment notice** (#122). The notice about `AIMEM_*`
+  variables ignores aimem's installer-only knobs, such as `AIMEM_USER_ONLY`
+  and `AIMEM_VERSION`, which aimem itself never reads.
+
+### The operator CLI on workstations
+
+- The member one-liners, `boot.sh` and `boot.ps1`, install `aicrew` beside
+  `aicrew-agent` (#123). `aicrew architect init`, `aicrew architect
+  credential` and `aicrew escalations` run on the operator's machine, where
+  nothing installed `aicrew` before.
+  - **Verified:** both binaries are checked against the release's
+    `SHA256SUMS` before either is installed, so a mismatch installs neither.
+  - **Idempotent:** a binary that already reports the release is left alone.
+  - **Running binaries on Windows:** a running binary is renamed aside to
+    `<name>.exe.old-<UTC time>`, as before for the agent.
+- `aicrew-agent check` reports the `aicrew` beside it (`operator_cli` in
+  `--json`): the same release, another release, or none, with a notice for
+  the last two. A member does not need `aicrew`, so this never blocks.
+
+### Tests
+
+- The probe test's fake Claude registers for SIGTERM before it prints its
+  init event. A new case delivers the signal at once (#124).
+
+### Supported and pinned versions
+
+- **Unchanged:** aimem 0.10.0 (the minimum and the tested release),
+  ai-skills 1.26.1, Claude Code 2.1.283 to 2.1.286 tested, and OpenCode
+  1.18.32 or 2.0.18 to 2.0.19 tested.
+- **The one-liners** (`install-aicrewd.sh`, `boot.sh` and `boot.ps1`) pin
+  v0.5.1.
+
 ## [0.5.0] - 2026-10-10
 
 The first increments of the control plane (`docs/DESIGN-CONTROL-PLANE.md`):

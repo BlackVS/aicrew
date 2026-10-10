@@ -3,7 +3,7 @@
 # member's aicrew-agent, and the operator CLI aicrew beside it, from any
 # directory:
 #
-#   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.0/boot.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.1/boot.sh | bash
 #
 # It installs the release this script was fetched from (RELEASE below):
 # aicrew-agent and aicrew for this platform, each checked against that
@@ -23,7 +23,7 @@ set -euo pipefail
 
 # The release this script installs. Bumped together with the CHANGELOG
 # when a release is cut (internal/installer checks they agree).
-RELEASE=v0.5.0
+RELEASE=v0.5.1
 
 command -v curl >/dev/null 2>&1 || { echo "ERROR: 'curl' is required." >&2; exit 1; }
 REPO=${AICREW_REPO:-BlackVS/aicrew}

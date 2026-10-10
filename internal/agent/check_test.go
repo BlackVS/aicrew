@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/store"
+	"github.com/BlackVS/aicrew/internal/version"
 )
 
 // The dependency and client check (1a81-5a). This test binary stands in for
@@ -53,6 +54,9 @@ type fakeTools struct {
 	OpenCodeDB    bool   `json:"opencode_db,omitempty"` // 1.x refuses data 2 wrote
 	// OpenCodeAPIError: OpenCode 2's /api/mcp answers 500.
 	OpenCodeAPIError bool `json:"opencode_api_error,omitempty"`
+	// AicrewCLI is what the operator CLI stand-in reports; "" is the
+	// running aicrew-agent's own release.
+	AicrewCLI string `json:"aicrew_cli,omitempty"`
 }
 
 func init() {
@@ -74,6 +78,16 @@ func init() {
 		}
 	}
 	switch name {
+	case "aicrew":
+		if len(args) == 1 && args[0] == "version" {
+			v := f.AicrewCLI
+			if v == "" {
+				v = version.Get().Version
+			}
+			fmt.Println("aicrew " + v)
+			os.Exit(0)
+		}
+		os.Exit(2)
 	case "aimem":
 		if len(args) == 1 && args[0] == "version" && f.Aimem != "" {
 			fmt.Println(f.Aimem)
@@ -349,6 +363,11 @@ func setupCheck(t *testing.T, f fakeTools, tools ...string) *checkEnv {
 		}
 	}
 	t.Setenv("PATH", e.bin)
+	// The operator CLI is looked for beside aicrew-agent: here, the
+	// stand-ins' directory.
+	prevCLIDir := operatorCLIDir
+	operatorCLIDir = func() (string, error) { return e.bin, nil }
+	t.Cleanup(func() { operatorCLIDir = prevCLIDir })
 	t.Setenv("HOME", e.user)
 	t.Setenv("USERPROFILE", e.user)
 	t.Setenv("XDG_CONFIG_HOME", "")
@@ -593,6 +612,39 @@ func TestCheckOpenCodeServeCeilingIsReported(t *testing.T) {
 			}
 			if !strings.Contains(out.String(), "  opencode serve: stopped at its 3s ceiling\n") {
 				t.Fatalf("the ceiling is not reported:\n%s", out.String())
+			}
+		})
+	}
+}
+
+// The check reports the operator CLI beside aicrew-agent, which the member
+// one-liners install with it (01a124c9-1648): the same release, another
+// one, or none, with a notice for the last two. It never blocks.
+func TestCheckReportsTheOperatorCLI(t *testing.T) {
+	for name, tc := range map[string]struct {
+		tools  []string
+		cli    string
+		state  string
+		notice string
+	}{
+		"same release":  {[]string{"aimem", "claude", "aicrew"}, "", "same", ""},
+		"other release": {[]string{"aimem", "claude", "aicrew"}, "v0.0.9", "other", "is v0.0.9, and aicrew-agent is"},
+		"missing":       {[]string{"aimem", "claude"}, "", "missing", "the operator CLI aicrew is not beside aicrew-agent"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := readyTools
+			f.AicrewCLI = tc.cli
+			e := setupCheck(t, f, tc.tools...)
+			e.installSkills(t, "1.26.1", "oh-code-review")
+			rep := e.check(t, "claude")
+			if rep.Status == JoinBlocked || rep.OperatorCLI == nil || rep.OperatorCLI.State != tc.state {
+				t.Fatalf("%+v %+v", rep, rep.OperatorCLI)
+			}
+			if tc.state == "same" && rep.OperatorCLI.Version != version.Get().Version {
+				t.Fatalf("version %q", rep.OperatorCLI.Version)
+			}
+			if got := hasNotice(rep, "operator CLI"); (tc.notice != "") != got || (tc.notice != "" && !hasNotice(rep, tc.notice)) {
+				t.Fatalf("notices %q", rep.Notices)
 			}
 		})
 	}

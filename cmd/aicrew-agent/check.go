@@ -70,6 +70,9 @@ func check(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func printCheck(w io.Writer, rep agent.CheckReport) {
 	fmt.Fprintf(w, "aicrew-agent: %s\n", rep.Agent.Version)
+	if o := rep.OperatorCLI; o != nil {
+		fmt.Fprintf(w, "aicrew (operator CLI): %s (%s)\n", orNone(o.Version), o.State)
+	}
 	for _, c := range rep.Components {
 		found := c.Found
 		if found == "" && c.State != agent.StateMissing {

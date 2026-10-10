@@ -317,7 +317,7 @@ On a Debian or Ubuntu host, usually the aimem hub's own, aicrewd is
 installed and upgraded with the release's one-liner, run as root:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.4.0/install-aicrewd.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.0/install-aicrewd.sh | bash
 ```
 
 It replaces the manual steps: downloading, checking the sums, copying the
@@ -810,13 +810,13 @@ release's one-liner, from any directory, as the member's own user:
 - Linux and macOS:
 
   ```sh
-  curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.4.0/boot.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.0/boot.sh | bash
   ```
 
 - Windows:
 
   ```powershell
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.4.0/boot.ps1 | iex"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.0/boot.ps1 | iex"
   ```
 
 It replaces copying the binary by hand. Each script installs the release it

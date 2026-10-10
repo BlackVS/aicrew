@@ -76,7 +76,7 @@ func codeList(words []string) string {
 // escalationRule is the coordinator's: it never talks to a human, and what it
 // cannot settle within its role goes to the architect (D2, section 7.5).
 var escalationRule = "**You do not talk to a human.** A question you cannot settle within your role goes to the " +
-	"architect as an escalation; where this guidance says to ask the operator, you escalate instead. Each " +
+	"architect as an escalation; where a rule of every member says to turn to your coordinator, you escalate instead. Each " +
 	"question takes exactly one category. Always escalate the floor (" + codeList(escalationFloor) + ") and " +
 	"the categories " + codeList(escalationAlways) + ". Settle " + codeList(escalationOwn) + " yourself within the project's " +
 	"process, and record your answer in a task comment: `environment` only inside the worktree (refuse a " +
@@ -264,7 +264,13 @@ reference is in aicrew's DEVELOPMENT.md and CREW-CONTRACT.md.
   4 recorded but not settled (run ` + "`step recover`" + ` later); 1 failed (no
   launcher, or aicrewd, aimem or the channel failed). On a refusal, follow
   its ` + "`next_action`" + ` as written. ` + "`role_forbidden`" + ` or ` + "`attempt_forbidden`" + ` means
-  the step is not yours: stop and ask the operator.
+  the step is not yours: stop, and turn to your coordinator, never to a
+  human. With a running attempt, report it with the ` + "`work`" + ` step's
+  ` + "`block`" + ` and the refusal as its reason; the coordinator decides, and
+  escalates what it cannot settle. Without one, aicrew has no message from
+  a member to its coordinator yet: write the refusal in
+  ` + "`docs/HANDOFF.md`" + ` and end your turn. A coordinator escalates instead
+  (its section, below).
 - **Worktrees and handoff** follow ` + "`docs/START.md`" + `: one worktree per attempt
   under ` + "`worktrees/`" + `, from the offer's base commit; ` + "`docs/HANDOFF.md`" + ` is yours.
 - **The instruction digest** of a process pin is ` + "`sha256:`" + ` and the

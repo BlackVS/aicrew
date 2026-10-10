@@ -1,7 +1,7 @@
 # aicrew-agent installer for Windows: installs or upgrades the member's
 # aicrew-agent, and the operator CLI aicrew beside it, from any directory:
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.0/boot.ps1 | iex"
+#   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.1/boot.ps1 | iex"
 #
 # It installs the release this script was fetched from ($release below):
 # aicrew-agent-windows-amd64.exe and aicrew-windows-amd64.exe, each checked
@@ -24,7 +24,7 @@ $ErrorActionPreference = 'Stop'
 
 # The release this script installs. Bumped together with the CHANGELOG
 # when a release is cut (internal/installer checks they agree).
-$release = 'v0.5.0'
+$release = 'v0.5.1'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $repo = if ($env:AICREW_REPO) { $env:AICREW_REPO } else { 'BlackVS/aicrew' }

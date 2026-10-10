@@ -12,16 +12,199 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.5.0] - 2026-10-10
+
+The first increments of the control plane (`docs/DESIGN-CONTROL-PLANE.md`):
+- **The board wakes the coordinator.** aicrewd reads the hub's board feed,
+  and a task that becomes READY, or changes on the board while the team has
+  an attempt for it, wakes the coordinator through its inbox.
+- **The escalation channel.** The coordinator never talks to a human: it
+  escalates to the architect, and the answer comes back to its inbox.
+- **The architect's kit.** `aicrew architect init` writes the architect's
+  directory, and an architect credential reaches the escalations and nothing
+  else.
+- **Managed deny rules.** Each member home's Claude Code settings deny
+  credential reads, global git configuration and TLS weakening.
+
+aimem 0.10.0, which serves the board feed, is required.
+
 ### Breaking changes
 
-- **aimem 0.10.0 is required.** `internal/agent/supported.json` names 0.10.0
-  as both the minimum and the tested release, so `aicrew-agent check` blocks
-  a member below it, and the real-aimem harness builds the v0.10.0 release.
-  0.10.0 carries the control plane's aimem prerequisites (the board feed, a
-  task's required capability, team members' report documents). Its project
-  and access schemas are one-way: read aimem's upgrade notes, then upgrade
-  the hub with aimem's hub one-liner and each member with aimem's member
-  installer.
+- **aimem 0.10.0 is required** (#116).
+  - `internal/agent/supported.json` names 0.10.0 as both the minimum and the
+    tested release, so `aicrew-agent check` blocks a member below it, and
+    the real-aimem harness builds the v0.10.0 release.
+  - 0.10.0 carries the control plane's aimem prerequisites: the board feed
+    (`board.read`), a task's required capability, and team members' report
+    documents.
+  - Its project and access schemas are one-way: read aimem's upgrade notes
+    before upgrading.
+- **The aicrew store moves to schema 28** (#115, #118): escalations,
+  architect credentials and the board's cursors. The migration is additive
+  and runs when aicrewd starts. A 0.4.0 aicrewd refuses a store at schema 28,
+  so a rollback must restore the store copy the installer keeps, as its
+  automatic rollback does.
+
+### Upgrade steps
+
+All of them use product commands and one-liners.
+
+1. **The hub's aimem.** Upgrade it to 0.10.0 with aimem's own hub one-liner,
+   from its v0.10.0 tag. Upgrade each member's aimem with aimem's member
+   installer.
+2. **aicrewd.** On the hub host, as root, run the hub one-liner:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.0/install-aicrewd.sh | bash
+   ```
+
+   As before, it backs up the configuration and the store, swaps the
+   binaries, waits for health at 0.5.0, and rolls back if the new release
+   does not come up.
+3. **The board credential.** aicrewd reads the board only with the hub's
+   `board.read` credential. Without it, aicrewd logs at start that the hub
+   has no `board_read_token_file`, and that hub's board changes wake no one.
+   1. On the hub, as its admin, run `aimem identity peer provision` again,
+      with the same arguments and output directory as before. It issues only
+      the missing `board.read` credential, into `aimem-board-read.token`,
+      and keeps every other file.
+   2. As the service user, bind the hub again from that directory, and
+      restart:
+
+      ```sh
+      aicrew hub add NAME --config ~/aicrew/etc/aicrewd.json --base-url HUB_URL \
+        --tls-trust-mode ca_dns --tls-trust-value HUB_HOST --cred-dir DIR
+      systemctl --user restart aicrewd
+      ```
+
+      `hub add` updates the entry in place and keeps the previous file. It
+      refuses a directory without `aimem-board-read.token`, and says to rerun
+      the provision.
+   3. aicrewd's log no longer warns about the board, and it logs
+      "board changes announced" when a task becomes READY.
+4. **Each member.** As the member's user, upgrade `aicrew-agent` with the
+   member one-liner:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.0/boot.sh | bash
+     ```
+
+   - Windows:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.0/boot.ps1 | iex"
+     ```
+
+   Then rerun `aicrew-agent join --home HOME` in each home. The rerun
+   refreshes the managed files: the deny rules in `.claude/settings.json`,
+   the role guidance in `docs/ROLES.md`, and the new `/crew-escalate`
+   command. An edited file is kept, with the new version written beside it
+   as `<file>.aicrew-new`.
+5. **The architect, when you use one.** Write its directory, then issue its
+   credential into it:
+
+   ```sh
+   aicrew architect init --dir DIR --project PROJECT --url AICREW_URL \
+     --tls-trust-mode MODE --tls-trust-value VALUE
+   aicrew architect credential issue --label NAME --output DIR/creds/aicrew.architect
+   ```
+
+### Deprecated, removal moved to 0.6.0
+
+0.3.0 announced these removals, and 0.4.0 moved them to 0.5.0. They move
+again, to 0.6.0 (#120):
+- `aicrew introspection-credential` and `/v1/admin/introspection-credentials`:
+  use `aicrew hub-credential` and `/v1/admin/hub-credentials`;
+- `--secret-file`, `--code-file` and `--file`: use `--output FILE|-`;
+- the single `aimem` block of `aicrewd.json`: use `aimem_hubs`.
+
+Each still works with its notice or warning, which now names 0.6.0.
+
+### Board wake
+
+- aicrewd reads each hub's board feed (aimem's `board.read`) every 15
+  seconds, from the cursor it stored, at most 4 pages of 500 a tick (#118).
+- **What wakes the coordinator.** A task of a granted project that becomes
+  READY, or that changes state while the team has an attempt for it,
+  reaches the team's coordinators as a `board.changed` lifecycle message.
+  The Stop hook wakes them on it, as on any message.
+- **What is announced once.** Each page is recorded in one transaction with
+  its announcements and its cursor, so a change is announced once, across
+  restarts.
+- **What is not announced:**
+  - aicrew's own steps;
+  - a project's history from before aicrewd first saw it granted.
+- **Configuration.** The new `aimem_hubs[].board_read_token_file`.
+  `aicrew hub add` and `aicrewd config migrate -cred-dir` read it from the
+  provision directory.
+- Documented in CREW-CONTRACT ("Board changes") and DEVELOPMENT ("Board
+  wake").
+
+### Escalations
+
+- The coordinator raises a question it cannot settle with
+  `aicrew-agent escalate`, through its launcher. The architect, or the
+  operator, lists, reads and answers it once with
+  `aicrew escalations list|show|answer` (#115).
+- The answer reaches the team's coordinator and the blocked member as a
+  lifecycle message, in the answer's own transaction.
+- aicrewd's store is the record. A task comment is only a mirror, and
+  authorizes nothing.
+- **The architect credential.** The operator issues, lists and revokes it
+  with `aicrew architect credential issue|list|revoke`. It reaches the
+  three escalation routes and nothing else.
+- **The coordinator's guidance** in the managed `docs/ROLES.md` (#117):
+  - it does not talk to a human;
+  - it always escalates OPERATOR-SEAT's floor categories, `scope`,
+    `cross_repo`, `intent`, and anything it cannot classify;
+  - it settles `process`, `implementation`, `environment` (inside the
+    worktree only) and `retry`;
+  - it mirrors each request on the task, and carries on with other work
+    meanwhile.
+
+  The new `/crew-escalate` command carries the step.
+- **A member refused** `role_forbidden` or `attempt_forbidden` turns to its
+  coordinator, never to a human. With a running attempt it reports the
+  refusal with the `work` step's `block`. Without one it writes the refusal
+  in its handoff: aicrew has no message from a member to its coordinator
+  yet (#119).
+
+### The architect
+
+- `aicrew architect init` writes the architect's directory under the
+  managed-file rules (#114):
+  - its guidance;
+  - its commands, among them `/arch-escalations`;
+  - Claude Code settings that carry aicrewd's URL, its trust binding and the
+    path of the architect credential (#115).
+
+  A rerun refreshes what the architect did not edit.
+
+### Member homes
+
+- The managed Claude Code settings deny reading credential files, changing
+  git's global or system configuration, and weakening TLS verification
+  (#111).
+  - The home's check reports when the deny rules are missing.
+  - Ordinary work is not denied.
+
+### Design and records
+
+- `docs/DESIGN-CONTROL-PLANE.md`: the control plane design, with the
+  architect role, kinds of work and decisions D1 to D19, which the operator
+  accepted (#112).
+- `docs/TURN-PROBE.md`: headless turns of Claude Code, Codex and OpenCode,
+  measured before any adapter (#113).
+
+### Supported and pinned versions
+
+- **aimem:** 0.10.0, both the minimum and the tested release (#116). The
+  real-aimem harness builds v0.10.0 (`25d53e5`).
+- **Unchanged:** ai-skills 1.26.1, Claude Code 2.1.283 to 2.1.286 tested,
+  and OpenCode 1.18.32 or 2.0.18 to 2.0.19 tested.
+- **The one-liners** (`install-aicrewd.sh`, `boot.sh` and `boot.ps1`) pin
+  v0.5.0.
 
 ## [0.4.0] - 2026-10-08
 

@@ -2,7 +2,7 @@
 # aicrewd hub installer: install or upgrade aicrew's service on a Debian or
 # Ubuntu host, usually the aimem hub's own host. Run AS ROOT:
 #
-#   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.4.0/install-aicrewd.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.0/install-aicrewd.sh | bash
 #
 # What it does: installs the release this script was fetched from (RELEASE
 # below), aicrewd and aicrew, checked against that release's SHA256SUMS,
@@ -50,7 +50,7 @@ set -euo pipefail
 
 # The release this script installs. Bumped together with the CHANGELOG
 # when a release is cut (internal/installer checks they agree).
-RELEASE=v0.4.0
+RELEASE=v0.5.0
 
 [ "$(id -u)" = 0 ] || { echo "ERROR: run as root." >&2; exit 1; }
 for t in curl runuser systemctl loginctl sha256sum; do

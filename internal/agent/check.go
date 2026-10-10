@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -71,9 +72,74 @@ type CheckReport struct {
 	Forge      []ForgeCheck      `json:"forge,omitempty"`
 	// Projects are the team's requirements as the launcher verified and
 	// reported them (3.6); absent when no launcher serves the home.
-	Projects     []CapabilityRow `json:"projects,omitempty"`
-	Notices      []string        `json:"notices,omitempty"`
-	Instructions []string        `json:"instructions,omitempty"`
+	Projects []CapabilityRow `json:"projects,omitempty"`
+	// OperatorCLI is the operator CLI `aicrew` beside this aicrew-agent,
+	// which the member one-liners install with it. A member does not need
+	// it, so it never blocks.
+	OperatorCLI  *OperatorCLI `json:"operator_cli,omitempty"`
+	Notices      []string     `json:"notices,omitempty"`
+	Instructions []string     `json:"instructions,omitempty"`
+}
+
+// OperatorCLI is the `aicrew` found beside aicrew-agent: its path and the
+// release it reports. State is same (aicrew-agent's release), other,
+// missing, or failed (it could not be run or read).
+type OperatorCLI struct {
+	Path    string `json:"path"`
+	Version string `json:"version,omitempty"`
+	State   string `json:"state"`
+}
+
+// operatorCLIDir is the directory the check looks for `aicrew` in: the
+// running aicrew-agent's own, where the one-liners install both. Tests
+// replace it.
+var operatorCLIDir = func() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	return filepath.Dir(exe), nil
+}
+
+// checkOperatorCLI reports the `aicrew` beside aicrew-agent, with a notice
+// when it is missing or another release. It never blocks.
+func (c *checker) checkOperatorCLI(ctx context.Context) {
+	dir, err := operatorCLIDir()
+	if err != nil {
+		return
+	}
+	name := "aicrew"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	r := &OperatorCLI{Path: filepath.Join(dir, name)}
+	c.rep.OperatorCLI = r
+	if _, err := os.Stat(r.Path); err != nil {
+		r.State = "missing"
+		c.notice(fmt.Sprintf("the operator CLI aicrew is not beside aicrew-agent in %s; a member does not need it, but "+
+			"`aicrew architect init` and `aicrew escalations` do: rerun the member one-liner, which installs both", dir))
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, r.Path, "version").Output()
+	if f := strings.Fields(string(out)); err == nil && len(f) >= 2 {
+		r.Version = f[1]
+	}
+	switch agent := version.Get().Version; {
+	case r.Version == "":
+		r.State = "failed"
+		c.notice(fmt.Sprintf("%s did not report its version: rerun the member one-liner", r.Path))
+	case r.Version == agent:
+		r.State = "same"
+	default:
+		r.State = "other"
+		c.notice(fmt.Sprintf("the operator CLI %s is %s, and aicrew-agent is %s: rerun the member one-liner for one release of both",
+			r.Path, r.Version, agent))
+	}
 }
 
 // homeLockName serializes join and check runs on one home.
@@ -187,6 +253,7 @@ func runCheck(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) 
 	c.disc = discoveryEnv{env: checkProbeEnv(clientEnv(os.Environ(), sink), o.Home), timeout: o.Timeout, progress: o.Out}
 
 	c.checkAimem(ctx)
+	c.checkOperatorCLI(ctx)
 	if len(sel) == 0 {
 		c.block("no_client", "select the client this home is for: rerun with `--client claude` or `--client opencode`")
 	} else {

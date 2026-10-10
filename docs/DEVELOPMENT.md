@@ -804,8 +804,11 @@ session through `aicrewd`'s client session API (`docs/CREW-CONTRACT.md`,
 
 ### Installing and upgrading: `boot.sh` and `boot.ps1`
 
-On a member's machine, `aicrew-agent` is installed and upgraded with the
-release's one-liner, from any directory, as the member's own user:
+On a member's machine, `aicrew-agent` and the operator CLI `aicrew` are
+installed and upgraded with the release's one-liner, from any directory,
+as the member's own user. The operator's machine uses the same one-liner:
+`aicrew architect init`, `aicrew architect credential` and
+`aicrew escalations` run there.
 
 - Linux and macOS:
 
@@ -822,19 +825,26 @@ release's one-liner, from any directory, as the member's own user:
 It replaces copying the binary by hand. Each script installs the release it
 pins (`RELEASE=` or `$release`), which is the release of the tag it is
 fetched from:
-- it downloads `aicrew-agent` for the platform and refuses it unless its
-  SHA-256 is listed in the release's `SHA256SUMS`;
-- it installs it as `~/.local/bin/aicrew-agent` on Linux and macOS, or as
-  `%LOCALAPPDATA%\aicrew\bin\aicrew-agent.exe` on Windows, where the
-  directory is added to the user's `PATH` when it is missing;
-- an installed `aicrew-agent` that already reports the release is left
-  alone, and the script says it is current. An older one is replaced, and
-  both versions are printed;
-- on Windows a running `aicrew-agent.exe` (a launcher or a Stop hook) keeps
-  its file: the old file is renamed aside to `aicrew-agent.exe.old-<UTC
-  time>`, and a later run removes it.
+- it downloads `aicrew-agent` and `aicrew` for the platform, and refuses
+  them unless each one's SHA-256 is listed in the release's `SHA256SUMS`.
+  Both are checked before either is installed, so a mismatch installs
+  neither;
+- it installs them as `~/.local/bin/aicrew-agent` and `~/.local/bin/aicrew`
+  on Linux and macOS, or as `aicrew-agent.exe` and `aicrew.exe` in
+  `%LOCALAPPDATA%\aicrew\bin` on Windows, where the directory is added
+  to the user's `PATH` when it is missing;
+- a binary that already reports the release is left alone, and the
+  script says it is current. An older one is replaced, and both versions
+  are printed;
+- on Windows a running binary (a launcher or a Stop hook) keeps its file:
+  the old file is renamed aside to `<name>.exe.old-<UTC time>`, and a
+  later run removes it.
 
-The one-liner installs the binary and nothing else. It creates no agent
+`aicrew-agent check` reports the `aicrew` beside it (`operator_cli` in
+`--json`): the same release, another release, or none, with a notice for
+the last two. A member does not need `aicrew`, so it never blocks.
+
+The one-liner installs the binaries and nothing else. It creates no agent
 home, does not join, touches no client settings, and writes no file outside
 the bin directory, whatever directory it runs from. `join` writes the
 home's Stop hook with the absolute path of the `aicrew-agent` that ran it.
@@ -850,8 +860,9 @@ Knobs:
 
 `internal/installer` checks both pins and the documented one-liners against
 the CHANGELOG, and runs both scripts' install step against a local release:
-a fresh install, the same release, a refused hash, and an upgrade while the
-old binary is running. The release check refuses a tag either script does
+a fresh install of both binaries, the same release, a refused hash for
+either binary (installing neither), and an upgrade while the old agent is
+running. The release check refuses a tag either script does
 not pin.
 
 For development, build it from source:

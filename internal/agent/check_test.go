@@ -14,10 +14,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -41,6 +43,11 @@ type fakeTools struct {
 	ClaudeMCP     string `json:"claude_mcp,omitempty"`
 	ClaudePending bool   `json:"claude_pending,omitempty"`
 	ClaudeHang    bool   `json:"claude_hang,omitempty"`
+	// ClaudeRetries: after the init event the run keeps retrying its model
+	// request, as Claude Code does against the sink, and never ends by
+	// itself. On a SIGTERM it writes TermMark and exits.
+	ClaudeRetries bool   `json:"claude_retries,omitempty"`
+	TermMark      string `json:"term_mark,omitempty"`
 	OpenCode      string `json:"opencode,omitempty"` // `opencode --version`
 	OpenCodeMCP   string `json:"opencode_mcp,omitempty"`
 	OpenCodeDB    bool   `json:"opencode_db,omitempty"` // 1.x refuses data 2 wrote
@@ -194,6 +201,9 @@ func fakeClaude(f fakeTools, args []string) int {
 		init, _ := json.Marshal(map[string]any{"type": "system", "subtype": "init", "mcp_servers": servers,
 			"skills": skillsSeen(), "tools": []string{}})
 		fmt.Println(string(init))
+		if f.ClaudeRetries {
+			waitForTerm(f.TermMark)
+		}
 		fmt.Println(`{"type":"result","subtype":"error_during_execution","is_error":true}`)
 		return 1
 	}
@@ -506,6 +516,56 @@ func TestCheckClaudeApprovalPending(t *testing.T) {
 	}
 }
 
+// waitForTerm stands in for Claude Code retrying its model request: it
+// blocks until a SIGTERM, then writes mark and exits.
+func waitForTerm(mark string) {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGTERM)
+	select {
+	case <-c:
+		if mark != "" {
+			os.WriteFile(mark, []byte("terminated"), 0o644)
+		}
+		os.Exit(143)
+	case <-time.After(time.Hour):
+	}
+}
+
+// The init probe ends the run once it has read the init event, instead of
+// waiting for a run that never ends by itself (01a11c7d-1de3): with a
+// 60-second ceiling, the check returns in seconds, and the client got its
+// termination: a SIGTERM where there is one, a kill on Windows. Each step is
+// reported with its elapsed time after the cold-start note, in order
+// (01a11c79-b9a8).
+func TestCheckEndsTheInitProbeAtTheInitEvent(t *testing.T) {
+	f := readyTools
+	f.ClaudeRetries = true
+	f.TermMark = filepath.Join(t.TempDir(), "terminated")
+	e := setupCheck(t, f, "aimem", "claude")
+	e.installSkills(t, "1.26.1", "oh-code-review")
+	var out bytes.Buffer
+	start := time.Now()
+	rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"claude"}, Timeout: 60 * time.Second, Out: &out})
+	took := time.Since(start)
+	if err != nil || rep.Clients[0].MCP != "connected" || took > 20*time.Second {
+		t.Fatalf("%+v, %v, after %s", rep, err, took)
+	}
+	if runtime.GOOS != "windows" {
+		if b, _ := os.ReadFile(f.TermMark); string(b) != "terminated" {
+			t.Fatal("the client did not get a SIGTERM")
+		}
+	}
+	s := out.String()
+	note := strings.Index(s, "Asking claude what it sees in this home (no model call). This starts claude in the home, "+
+		"which can take a minute or two on a cold start")
+	initLine := strings.Index(s, "  claude init probe: ")
+	listLine := strings.Index(s, "  claude mcp list: ")
+	if note < 0 || initLine < note || listLine < initLine ||
+		!strings.Contains(s, "init event read, aimem MCP server connected") || !strings.Contains(s, ", aimem connected") {
+		t.Fatalf("the progress lines:\n%s", s)
+	}
+}
+
 // A client that never answers is stopped at the bound and reported.
 func TestCheckClientHangIsBounded(t *testing.T) {
 	f := readyTools
@@ -513,9 +573,13 @@ func TestCheckClientHangIsBounded(t *testing.T) {
 	e := setupCheck(t, f, "aimem", "claude")
 	e.installSkills(t, "1.26.1", "oh-code-review")
 	start := time.Now()
-	rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"claude"}, Timeout: 2 * time.Second})
+	var out bytes.Buffer
+	rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"claude"}, Timeout: 2 * time.Second, Out: &out})
 	if err != nil || rep.Status != JoinBlocked || rep.Reason != "claude_discovery" || time.Since(start) > 20*time.Second {
 		t.Fatalf("%+v, %v, %s", rep, err, time.Since(start))
+	}
+	if !strings.Contains(out.String(), "  claude init probe: stopped at its 2s ceiling\n") {
+		t.Fatalf("the ceiling is not reported:\n%s", out.String())
 	}
 }
 

@@ -1136,7 +1136,17 @@ member's user-level skills under it. It reports:
     Claude Code is selected.
   - **Notices, without blocking:**
     - `AIMEM_*` variables in the environment or in `~/.config/aimem/env`
-      that name another installation, reported by name only;
+      that name another installation, reported by name only. aimem's
+      installer-only knobs are not reported: aimem itself never reads them,
+      so a member process that inherits one acts on nothing. The list is
+      `aimemInstallerKnobs` in `internal/agent/check_installation.go`:
+      `AIMEM_BIN_DIR`, `AIMEM_CLAUDE_SETTINGS`, `AIMEM_CODEX_HOME`,
+      `AIMEM_NO_SYSTEMD`, `AIMEM_OC_PLUGIN_DIR`, `AIMEM_PREBUILT`,
+      `AIMEM_REINSTALL`, `AIMEM_REPO`, `AIMEM_TARGET_VERSION`,
+      `AIMEM_UNIT_DIR`, `AIMEM_UPGRADE_WAIT`, `AIMEM_USER_ONLY` and
+      `AIMEM_VERSION`, as aimem v0.10.0's installers read them. Its hub
+      variables (`AIMEM_HUB_URL`, `AIMEM_HUB_TOKEN`, `AIMEM_GROUPS`) are
+      still reported;
     - an aimem MCP server at user scope, or at local scope for the home, in
       Claude Code's `.claude.json`;
     - a socket path over the Unix limit;
@@ -1156,11 +1166,20 @@ member's user-level skills under it. It reports:
   MCP server runs in the home and whether the required skills are
   visible. There is no model call: the model endpoint is a local port that
   closes every connection, and the key is a dummy.
-  - Claude Code: the print-mode init event and `claude mcp list`.
+  - Claude Code: the print-mode init event and `claude mcp list`. The run
+    is ended as soon as its init event is read: against the closed model
+    endpoint it would retry its request and never end by itself. It gets
+    a SIGTERM, so it closes its MCP servers (a kill on Windows, where the
+    servers end with their closed input), and is killed 2 s later if it
+    has not exited.
   - OpenCode 1.x: `mcp list` and `debug skill`.
   - OpenCode 2.x: its own `serve`, read through `/api/mcp` and `/api/skill`.
 
-  Each step is bounded (90 s). Print mode never shows Claude Code's
+  Each step is bounded (90 s). The check first says that it starts the
+  client, which can take a minute or two on a cold start, then prints one
+  line per step when it ends: its elapsed time and what it found, or that
+  it stopped at its ceiling (the human output only, never `--json`). Print
+  mode never shows Claude Code's
   workspace-trust dialog. A project server Claude Code has not yet approved
   for interactive use is reported as a notice: the first interactive start
   in the home asks to trust the folder and to approve it.

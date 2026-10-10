@@ -51,6 +51,8 @@ type fakeTools struct {
 	OpenCode      string `json:"opencode,omitempty"` // `opencode --version`
 	OpenCodeMCP   string `json:"opencode_mcp,omitempty"`
 	OpenCodeDB    bool   `json:"opencode_db,omitempty"` // 1.x refuses data 2 wrote
+	// OpenCodeAPIError: OpenCode 2's /api/mcp answers 500.
+	OpenCodeAPIError bool `json:"opencode_api_error,omitempty"`
 }
 
 func init() {
@@ -249,14 +251,14 @@ func fakeOpenCode(f fakeTools, args []string) int {
 		fmt.Printf("INFO loading\n%s\n", raw)
 		return 0
 	case len(args) == 3 && args[0] == "serve" && args[1] == "--port":
-		return fakeServe(args[2], status)
+		return fakeServe(args[2], status, f.OpenCodeAPIError)
 	}
 	fmt.Fprintf(os.Stderr, "fake opencode: unexpected %q\n", args)
 	return 3
 }
 
 // fakeServe is OpenCode 2's server: its catalogs load after two polls.
-func fakeServe(port, status string) int {
+func fakeServe(port, status string, apiError bool) int {
 	polls := 0
 	cwd, _ := os.Getwd()
 	mux := http.NewServeMux()
@@ -291,6 +293,10 @@ func fakeServe(port, status string) int {
 	})
 	mux.HandleFunc("/api/mcp", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
+			return
+		}
+		if apiError {
+			http.Error(w, "internal", http.StatusInternalServerError)
 			return
 		}
 		data := []map[string]any{}
@@ -563,6 +569,32 @@ func TestCheckEndsTheInitProbeAtTheInitEvent(t *testing.T) {
 	if note < 0 || initLine < note || listLine < initLine ||
 		!strings.Contains(s, "init event read, aimem MCP server connected") || !strings.Contains(s, ", aimem connected") {
 		t.Fatalf("the progress lines:\n%s", s)
+	}
+}
+
+// OpenCode 2's step that reaches its ceiling is reported as such, whether its
+// catalogs are still incomplete (what loaded is reported, as before) or its
+// server keeps failing (the error is kept, as before).
+func TestCheckOpenCodeServeCeilingIsReported(t *testing.T) {
+	for name, mod := range map[string]func(*fakeTools){
+		"incomplete catalogs": func(f *fakeTools) { f.OpenCodeMCP = "pending" },
+		"server error":        func(f *fakeTools) { f.OpenCodeAPIError = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := readyTools
+			f.OpenCode = "opencode v2.0.19"
+			mod(&f)
+			e := setupCheck(t, f, "aimem", "opencode")
+			e.installSkills(t, "1.26.1", "oh-code-review")
+			var out bytes.Buffer
+			rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"opencode"}, Timeout: 3 * time.Second, Out: &out})
+			if err != nil || rep.Status != JoinBlocked {
+				t.Fatalf("%+v, %v", rep, err)
+			}
+			if !strings.Contains(out.String(), "  opencode serve: stopped at its 3s ceiling\n") {
+				t.Fatalf("the ceiling is not reported:\n%s", out.String())
+			}
+		})
 	}
 }
 

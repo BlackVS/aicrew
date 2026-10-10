@@ -313,15 +313,20 @@ var ansi = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 func opencodeDiscover(ctx context.Context, p discoveryEnv, path, home string, major int, skills []string) (Discovery, error) {
 	if major >= 2 {
 		var d Discovery
-		err := p.step("opencode serve", func() (string, error) {
-			var err error
-			d, err = opencodeServe(ctx, p, path, home, skills)
-			if err != nil {
-				return "", err
+		var serr error
+		p.step("opencode serve", func() (string, error) {
+			var ceiling bool
+			d, ceiling, serr = opencodeServe(ctx, p, path, home, skills)
+			switch {
+			case ceiling:
+				// What loaded is still reported, or the server's error.
+				return "", ceilingError{"opencode serve reached its ceiling"}
+			case serr != nil:
+				return "", serr
 			}
 			return fmt.Sprintf("aimem MCP server %s, %d skills", d.AimemMCP, len(d.Skills)), nil
 		})
-		return d, err
+		return d, serr
 	}
 	d := Discovery{Skills: map[string]bool{}}
 	var out, errOut string
@@ -398,12 +403,14 @@ var servePassword = regexp.MustCompile(`server password (\S+)`)
 // polls its catalogs until the required skills and aimem's status are in or
 // the timeout passes. The server's password is read from its output and
 // kept in memory only.
-func opencodeServe(ctx context.Context, p discoveryEnv, path, home string, skills []string) (Discovery, error) {
+// opencodeServe reports, besides what it read, whether it reached its
+// ceiling: what loaded by then is still reported.
+func opencodeServe(ctx context.Context, p discoveryEnv, path, home string, skills []string) (Discovery, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 	port, err := freePort()
 	if err != nil {
-		return Discovery{}, err
+		return Discovery{}, false, err
 	}
 	cmd := exec.CommandContext(ctx, path, "serve", "--port", strconv.Itoa(port))
 	cmd.Dir, cmd.Env = home, p.env
@@ -411,7 +418,7 @@ func opencodeServe(ctx context.Context, p discoveryEnv, path, home string, skill
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
 	if err := cmd.Start(); err != nil {
-		return Discovery{}, fmt.Errorf("opencode could not be run: %w", err)
+		return Discovery{}, false, fmt.Errorf("opencode could not be run: %w", err)
 	}
 	defer func() { cancel(); cmd.Wait(); pw.Close() }()
 	pwc := make(chan string, 1)
@@ -429,7 +436,7 @@ func opencodeServe(ctx context.Context, p discoveryEnv, path, home string, skill
 	select {
 	case password = <-pwc:
 	case <-ctx.Done():
-		return Discovery{}, ceilingError{fmt.Sprintf("opencode serve printed no server password within %s", p.timeout)}
+		return Discovery{}, true, ceilingError{fmt.Sprintf("opencode serve printed no server password within %s", p.timeout)}
 	}
 	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: nil}}
 	get := func(route string, out any) error {
@@ -485,15 +492,15 @@ func opencodeServe(ctx context.Context, p discoveryEnv, path, home string, skill
 				complete = complete && d.Skills[s]
 			}
 			if complete {
-				return d, nil
+				return d, false, nil
 			}
 		}
 		select {
 		case <-ctx.Done():
 			if errS != nil || errM != nil {
-				return d, fmt.Errorf("opencode's server did not answer: %v", errors.Join(errS, errM))
+				return d, true, fmt.Errorf("opencode's server did not answer: %v", errors.Join(errS, errM))
 			}
-			return d, nil // report what loaded within the bound
+			return d, true, nil // report what loaded within the bound
 		case <-time.After(time.Second):
 		}
 	}

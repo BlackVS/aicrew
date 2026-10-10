@@ -184,7 +184,7 @@ func runCheck(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) 
 		return CheckReport{}, err
 	}
 	defer closeSink()
-	c.disc = discoveryEnv{env: checkProbeEnv(clientEnv(os.Environ(), sink), o.Home), timeout: o.Timeout}
+	c.disc = discoveryEnv{env: checkProbeEnv(clientEnv(os.Environ(), sink), o.Home), timeout: o.Timeout, progress: o.Out}
 
 	c.checkAimem(ctx)
 	if len(sel) == 0 {
@@ -381,7 +381,8 @@ func (c *checker) checkClient(ctx context.Context, name string, single bool) {
 		return
 	}
 	v, _, _ := parseVersion(r.Found)
-	fmt.Fprintf(c.o.Out, "Asking %s what it sees in this home (no model call)...\n", name)
+	fmt.Fprintf(c.o.Out, "Asking %s what it sees in this home (no model call). This starts %s in the home, which can "+
+		"take a minute or two on a cold start; each step is reported when it ends:\n", name, name)
 	var d Discovery
 	if name == "opencode" {
 		d, err = opencodeDiscover(ctx, c.disc, path, c.o.Home, v[0], c.set.RequiredSkills)

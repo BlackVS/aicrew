@@ -15,8 +15,10 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -51,10 +53,51 @@ type Discovery struct {
 	Notes []string
 }
 
-// discoveryEnv is the environment discovery runs clients in.
+// discoveryEnv is the environment discovery runs clients in. progress, when
+// set, gets one line per sub-step as it ends: what ran, how long it took and
+// what it found, or that it reached its ceiling.
 type discoveryEnv struct {
-	env     []string
-	timeout time.Duration
+	env      []string
+	timeout  time.Duration
+	progress io.Writer
+}
+
+// ceilingError is a sub-step stopped at its ceiling.
+type ceilingError struct{ msg string }
+
+func (e ceilingError) Error() string { return e.msg }
+
+// step runs one sub-step of a probe and reports it on p.progress: its
+// elapsed time and the result run returns, or its ceiling or failure.
+func (p discoveryEnv) step(label string, run func() (string, error)) error {
+	start := time.Now()
+	result, err := run()
+	if p.progress == nil {
+		return err
+	}
+	took := time.Since(start).Round(100 * time.Millisecond)
+	var ce ceilingError
+	switch {
+	case errors.As(err, &ce):
+		fmt.Fprintf(p.progress, "  %s: stopped at its %s ceiling\n", label, p.timeout)
+	case err != nil:
+		fmt.Fprintf(p.progress, "  %s: failed after %s\n", label, took)
+	case result != "":
+		fmt.Fprintf(p.progress, "  %s: %s, %s\n", label, took, result)
+	default:
+		fmt.Fprintf(p.progress, "  %s: %s\n", label, took)
+	}
+	return err
+}
+
+// terminate asks a probed client to stop: SIGTERM, so it closes its MCP
+// servers, where there is one; Windows has only a kill. WaitDelay kills it
+// if it does not exit.
+func terminate(cmd *exec.Cmd) error {
+	if runtime.GOOS == "windows" {
+		return cmd.Process.Kill()
+	}
+	return cmd.Process.Signal(syscall.SIGTERM)
 }
 
 // modelSink listens on a local port and closes every connection at once: a
@@ -107,7 +150,7 @@ func (p discoveryEnv) capture(ctx context.Context, dir, path string, args ...str
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
-		err = fmt.Errorf("%s %s did not finish within %s", path, strings.Join(args, " "), p.timeout)
+		err = ceilingError{fmt.Sprintf("%s %s did not finish within %s", path, strings.Join(args, " "), p.timeout)}
 	}
 	return out.String(), errb.String(), err
 }
@@ -123,11 +166,28 @@ func tail(s string, n int) string {
 // ---- Claude Code
 
 func claudeDiscover(ctx context.Context, p discoveryEnv, path, home string) (Discovery, error) {
-	d, err := claudeInit(ctx, p, path, home)
+	var d Discovery
+	err := p.step("claude init probe", func() (string, error) {
+		var err error
+		d, err = claudeInit(ctx, p, path, home)
+		if err != nil {
+			return "", err
+		}
+		return "init event read, aimem MCP server " + d.AimemMCP, nil
+	})
 	if err != nil {
 		return d, err
 	}
-	out, errOut, err := p.capture(ctx, home, path, "mcp", "list")
+	var out, errOut string
+	err = p.step("claude mcp list", func() (string, error) {
+		var err error
+		out, errOut, err = p.capture(ctx, home, path, "mcp", "list")
+		if err != nil {
+			return "", err
+		}
+		st, _ := parseClaudeMCPList(out)
+		return "aimem " + st, nil
+	})
 	if err != nil {
 		d.Notes = append(d.Notes, "`claude mcp list` failed, so the approval state is unknown: "+tail(errOut+out+err.Error(), 200))
 		return d, nil
@@ -138,14 +198,16 @@ func claudeDiscover(ctx context.Context, p discoveryEnv, path, home string) (Dis
 	return d, nil
 }
 
-// claudeInit reads the init event of a print-mode run, then lets the run end
-// on its own (it closes its MCP servers) or stops it at the timeout.
+// claudeInit reads the init event of a print-mode run and then ends the run.
+// The run would not end on its own: its model request fails at the sink,
+// and Claude Code retries it with a growing backoff.
 func claudeInit(ctx context.Context, p discoveryEnv, path, home string) (Discovery, error) {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, "-p", "hi", "--output-format", "stream-json", "--verbose", "--max-turns", "1",
 		"--no-session-persistence")
 	cmd.Dir, cmd.Env = home, p.env
+	cmd.Cancel = func() error { return terminate(cmd) }
 	cmd.WaitDelay = 2 * time.Second
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -174,11 +236,14 @@ func claudeInit(ctx context.Context, p discoveryEnv, path, home string) (Discove
 			break
 		}
 	}
-	go io.Copy(io.Discard, r) // let the run finish writing
+	if found {
+		cancel() // the init event is all the probe needs
+	}
+	go io.Copy(io.Discard, r) // drain what the run still writes
 	werr := <-waitc
 	if !found {
 		if ctx.Err() == context.DeadlineExceeded {
-			return Discovery{}, fmt.Errorf("claude gave no init event within %s", p.timeout)
+			return Discovery{}, ceilingError{fmt.Sprintf("claude gave no init event within %s", p.timeout)}
 		}
 		return Discovery{}, fmt.Errorf("claude gave no init event (%v): %s", werr, tail(errb.String(), 300))
 	}
@@ -247,15 +312,40 @@ var ansi = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
 func opencodeDiscover(ctx context.Context, p discoveryEnv, path, home string, major int, skills []string) (Discovery, error) {
 	if major >= 2 {
-		return opencodeServe(ctx, p, path, home, skills)
+		var d Discovery
+		var serr error
+		p.step("opencode serve", func() (string, error) {
+			var ceiling bool
+			d, ceiling, serr = opencodeServe(ctx, p, path, home, skills)
+			switch {
+			case ceiling:
+				// What loaded is still reported, or the server's error.
+				return "", ceilingError{"opencode serve reached its ceiling"}
+			case serr != nil:
+				return "", serr
+			}
+			return fmt.Sprintf("aimem MCP server %s, %d skills", d.AimemMCP, len(d.Skills)), nil
+		})
+		return d, serr
 	}
-	out, errOut, err := p.capture(ctx, home, path, "mcp", "list")
+	d := Discovery{Skills: map[string]bool{}}
+	var out, errOut string
+	err := p.step("opencode mcp list", func() (string, error) {
+		var err error
+		if out, errOut, err = p.capture(ctx, home, path, "mcp", "list"); err != nil {
+			return "", err
+		}
+		d.AimemMCP, d.MCPDetail = parseOpencodeMCPList(out)
+		return "aimem " + d.AimemMCP, nil
+	})
 	if err != nil {
 		return Discovery{}, fmt.Errorf("opencode mcp list: %s", tail(errOut+out+err.Error(), 300))
 	}
-	d := Discovery{Skills: map[string]bool{}}
-	d.AimemMCP, d.MCPDetail = parseOpencodeMCPList(out)
-	out, errOut, err = p.capture(ctx, home, path, "debug", "skill")
+	err = p.step("opencode debug skill", func() (string, error) {
+		var err error
+		out, errOut, err = p.capture(ctx, home, path, "debug", "skill")
+		return "", err
+	})
 	if err != nil {
 		return d, fmt.Errorf("opencode debug skill: %s", tail(errOut+err.Error(), 300))
 	}
@@ -313,12 +403,14 @@ var servePassword = regexp.MustCompile(`server password (\S+)`)
 // polls its catalogs until the required skills and aimem's status are in or
 // the timeout passes. The server's password is read from its output and
 // kept in memory only.
-func opencodeServe(ctx context.Context, p discoveryEnv, path, home string, skills []string) (Discovery, error) {
+// opencodeServe reports, besides what it read, whether it reached its
+// ceiling: what loaded by then is still reported.
+func opencodeServe(ctx context.Context, p discoveryEnv, path, home string, skills []string) (Discovery, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 	port, err := freePort()
 	if err != nil {
-		return Discovery{}, err
+		return Discovery{}, false, err
 	}
 	cmd := exec.CommandContext(ctx, path, "serve", "--port", strconv.Itoa(port))
 	cmd.Dir, cmd.Env = home, p.env
@@ -326,7 +418,7 @@ func opencodeServe(ctx context.Context, p discoveryEnv, path, home string, skill
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
 	if err := cmd.Start(); err != nil {
-		return Discovery{}, fmt.Errorf("opencode could not be run: %w", err)
+		return Discovery{}, false, fmt.Errorf("opencode could not be run: %w", err)
 	}
 	defer func() { cancel(); cmd.Wait(); pw.Close() }()
 	pwc := make(chan string, 1)
@@ -344,7 +436,7 @@ func opencodeServe(ctx context.Context, p discoveryEnv, path, home string, skill
 	select {
 	case password = <-pwc:
 	case <-ctx.Done():
-		return Discovery{}, fmt.Errorf("opencode serve printed no server password within %s", p.timeout)
+		return Discovery{}, true, ceilingError{fmt.Sprintf("opencode serve printed no server password within %s", p.timeout)}
 	}
 	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: nil}}
 	get := func(route string, out any) error {
@@ -400,15 +492,15 @@ func opencodeServe(ctx context.Context, p discoveryEnv, path, home string, skill
 				complete = complete && d.Skills[s]
 			}
 			if complete {
-				return d, nil
+				return d, false, nil
 			}
 		}
 		select {
 		case <-ctx.Done():
 			if errS != nil || errM != nil {
-				return d, fmt.Errorf("opencode's server did not answer: %v", errors.Join(errS, errM))
+				return d, true, fmt.Errorf("opencode's server did not answer: %v", errors.Join(errS, errM))
 			}
-			return d, nil // report what loaded within the bound
+			return d, true, nil // report what loaded within the bound
 		case <-time.After(time.Second):
 		}
 	}

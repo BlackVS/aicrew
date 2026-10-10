@@ -151,9 +151,20 @@ func (c *checker) checkDenyRules() {
 	}
 }
 
+// aimemInstallerKnobs are the AIMEM_* variables only aimem's installers read
+// (boot.sh, boot.ps1, install.sh, install.ps1 and install-hub.sh at
+// v0.10.0): the aimem binary never reads them, so a member process that
+// inherits one acts on nothing, and the environment check ignores them.
+var aimemInstallerKnobs = []string{
+	"AIMEM_BIN_DIR", "AIMEM_CLAUDE_SETTINGS", "AIMEM_CODEX_HOME", "AIMEM_NO_SYSTEMD", "AIMEM_OC_PLUGIN_DIR",
+	"AIMEM_PREBUILT", "AIMEM_REINSTALL", "AIMEM_REPO", "AIMEM_TARGET_VERSION", "AIMEM_UNIT_DIR",
+	"AIMEM_UPGRADE_WAIT", "AIMEM_USER_ONLY", "AIMEM_VERSION",
+}
+
 // checkForeignVars notes AIMEM_* variables, in the environment or in
-// aimem's ~/.config/aimem/env, that do not name the home's installation.
-// Only their names are reported: a value may be a secret.
+// aimem's ~/.config/aimem/env, that do not name the home's installation,
+// other than aimem's installer-only knobs. Only their names are reported: a
+// value may be a secret.
 func (c *checker) checkForeignVars() {
 	own := map[string]string{}
 	for _, v := range aimemVars(c.o.Home) {
@@ -164,7 +175,8 @@ func (c *checker) checkForeignVars() {
 		for _, kv := range kvs {
 			k, v, _ := strings.Cut(kv, "=")
 			k = strings.ToUpper(k)
-			if !strings.HasPrefix(k, "AIMEM_") || (own[k] != "" && samePath(v, own[k])) || slices.Contains(out, k) {
+			if !strings.HasPrefix(k, "AIMEM_") || (own[k] != "" && samePath(v, own[k])) || slices.Contains(out, k) ||
+				slices.Contains(aimemInstallerKnobs, k) {
 				continue
 			}
 			out = append(out, k)
@@ -174,8 +186,9 @@ func (c *checker) checkForeignVars() {
 	}
 	if names := foreign(os.Environ()); len(names) > 0 {
 		c.notice(fmt.Sprintf("the environment sets %s: aicrew-agent replaces AIMEM_STATE_DIR and AIMEM_SOCKET "+
-			"with the home's for what it starts, but every other process inherits them; a member needs none of them",
-			strings.Join(names, ", ")))
+			"with the home's for what it starts, but every other process inherits them; a member needs none of them "+
+			"(aimem's installer-only knobs, such as AIMEM_USER_ONLY and AIMEM_VERSION, are not listed: aimem itself "+
+			"never reads them)", strings.Join(names, ", ")))
 	}
 	uh, err := os.UserHomeDir()
 	if err != nil {

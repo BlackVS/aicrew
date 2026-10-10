@@ -250,6 +250,34 @@ func TestCheckForeignInstallation(t *testing.T) {
 
 func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
 
+// aimem's installer-only knobs are not reported: no aimem process reads
+// them. A variable a member process acts on still is (01a11c7d-1e08).
+func TestCheckIgnoresAimemInstallerKnobs(t *testing.T) {
+	for _, kv := range os.Environ() {
+		if k, v, _ := strings.Cut(kv, "="); strings.HasPrefix(strings.ToUpper(k), "AIMEM_") {
+			t.Setenv(k, v) // restored after the test
+			os.Unsetenv(k)
+		}
+	}
+	e := setupCheck(t, readyTools, "aimem", "claude")
+	e.installSkills(t, "1.26.1", "oh-code-review")
+	t.Setenv(StateDirEnv, AimemDir(e.home))
+	t.Setenv(SocketEnv, AimemSocket(e.home))
+	os.Unsetenv(SessionEnv) // setupCheck's foreign session; restored by its t.Setenv
+	for _, k := range aimemInstallerKnobs {
+		t.Setenv(k, "1")
+	}
+	rep := e.check(t, "claude")
+	if hasNotice(rep, "the environment sets") {
+		t.Fatalf("installer-only knobs reported: %q", rep.Notices)
+	}
+	t.Setenv(StateDirEnv, filepath.Join(t.TempDir(), "elsewhere"))
+	rep = e.check(t, "claude")
+	if !hasNotice(rep, "the environment sets AIMEM_STATE_DIR: ") || !hasNotice(rep, "AIMEM_USER_ONLY and AIMEM_VERSION, are not listed") {
+		t.Fatalf("a foreign state directory is not reported alone: %q", rep.Notices)
+	}
+}
+
 // The managed settings carry the deny rules exactly. They were verified
 // against Claude Code 2.1.294: each is refused with the rules and done
 // without them (PR evidence). Changing one needs that smoke again.

@@ -49,9 +49,12 @@ type fakeTools struct {
 	// itself. On a SIGTERM it writes TermMark and exits.
 	ClaudeRetries bool   `json:"claude_retries,omitempty"`
 	TermMark      string `json:"term_mark,omitempty"`
-	OpenCode      string `json:"opencode,omitempty"` // `opencode --version`
-	OpenCodeMCP   string `json:"opencode_mcp,omitempty"`
-	OpenCodeDB    bool   `json:"opencode_db,omitempty"` // 1.x refuses data 2 wrote
+	// ClaudeTermAtOnce: the SIGTERM arrives the moment the init event is
+	// out (the fake sends it to itself), before any later step of the fake.
+	ClaudeTermAtOnce bool   `json:"claude_term_at_once,omitempty"`
+	OpenCode         string `json:"opencode,omitempty"` // `opencode --version`
+	OpenCodeMCP      string `json:"opencode_mcp,omitempty"`
+	OpenCodeDB       bool   `json:"opencode_db,omitempty"` // 1.x refuses data 2 wrote
 	// OpenCodeAPIError: OpenCode 2's /api/mcp answers 500.
 	OpenCodeAPIError bool `json:"opencode_api_error,omitempty"`
 	// AicrewCLI is what the operator CLI stand-in reports; "" is the
@@ -216,9 +219,19 @@ func fakeClaude(f fakeTools, args []string) int {
 		}
 		init, _ := json.Marshal(map[string]any{"type": "system", "subtype": "init", "mcp_servers": servers,
 			"skills": skillsSeen(), "tools": []string{}})
-		fmt.Println(string(init))
+		var term chan os.Signal
 		if f.ClaudeRetries {
-			waitForTerm(f.TermMark)
+			term = make(chan os.Signal, 1)
+			signal.Notify(term, syscall.SIGTERM)
+		}
+		fmt.Println(string(init))
+		if f.ClaudeTermAtOnce {
+			if p, err := os.FindProcess(os.Getpid()); err == nil {
+				p.Signal(syscall.SIGTERM)
+			}
+		}
+		if f.ClaudeRetries {
+			waitForTerm(term, f.TermMark)
 		}
 		fmt.Println(`{"type":"result","subtype":"error_during_execution","is_error":true}`)
 		return 1
@@ -542,10 +555,10 @@ func TestCheckClaudeApprovalPending(t *testing.T) {
 }
 
 // waitForTerm stands in for Claude Code retrying its model request: it
-// blocks until a SIGTERM, then writes mark and exits.
-func waitForTerm(mark string) {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGTERM)
+// blocks until a SIGTERM on c, then writes mark and exits. c is registered
+// before the init event is printed, so a probe that terminates the client
+// as soon as it reads the event cannot beat the registration.
+func waitForTerm(c chan os.Signal, mark string) {
 	select {
 	case <-c:
 		if mark != "" {
@@ -561,10 +574,18 @@ func waitForTerm(mark string) {
 // 60-second ceiling, the check returns in seconds, and the client got its
 // termination: a SIGTERM where there is one, a kill on Windows. Each step is
 // reported with its elapsed time after the cold-start note, in order
-// (01a11c79-b9a8).
+// (01a11c79-b9a8). The fake holds its SIGTERM registration before the event
+// is out, and the second case delivers the signal at once (01a124e7-e875).
 func TestCheckEndsTheInitProbeAtTheInitEvent(t *testing.T) {
+	for name, atOnce := range map[string]bool{"terminated by the probe": false, "signal at once": true} {
+		t.Run(name, func(t *testing.T) { checkEndsTheInitProbe(t, atOnce) })
+	}
+}
+
+func checkEndsTheInitProbe(t *testing.T, atOnce bool) {
 	f := readyTools
 	f.ClaudeRetries = true
+	f.ClaudeTermAtOnce = atOnce
 	f.TermMark = filepath.Join(t.TempDir(), "terminated")
 	e := setupCheck(t, f, "aimem", "claude")
 	e.installSkills(t, "1.26.1", "oh-code-review")

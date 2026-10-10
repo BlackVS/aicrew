@@ -15,7 +15,7 @@
 //
 // hub-credential is the credential an aimem hub uses to call this service.
 // Its name before 0.3.0, introspection-credential, still works,
-// with a notice, until 0.5.0 removes it.
+// with a notice, until 0.6.0 removes it.
 //
 // Every command but hub, operator-token and version takes the connection flags
 // (conn.go). --operations names what the new credential permits,
@@ -100,7 +100,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if args[0] == "introspection-credential" {
-		fmt.Fprintln(stderr, "aicrew: introspection-credential is now hub-credential; the old name is removed in 0.5.0")
+		fmt.Fprintln(stderr, "aicrew: introspection-credential is now hub-credential; the old name is removed in 0.6.0")
 	}
 	verb := args[1]
 	fs := flag.NewFlagSet("aicrew hub-credential "+verb, flag.ContinueOnError)

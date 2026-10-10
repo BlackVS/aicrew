@@ -131,7 +131,7 @@ func TestLegacyCredentialCommand(t *testing.T) {
 	r = cli(t, "introspection-credential", "list", "-hub", "hub-a")
 	var listed []credentialView
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &listed) != nil || len(listed) != 1 ||
-		!strings.Contains(r.stderr, "removed in 0.5.0") {
+		!strings.Contains(r.stderr, "removed in 0.6.0") {
 		t.Fatalf("legacy list: %d %s %s", r.code, r.stdout, r.stderr)
 	}
 }

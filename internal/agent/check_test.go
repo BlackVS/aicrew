@@ -549,7 +549,8 @@ func TestCheckClaudeApprovalPending(t *testing.T) {
 	e := setupCheck(t, f, "aimem", "claude")
 	e.installSkills(t, "1.26.1", "oh-code-review")
 	rep := e.check(t, "claude")
-	if rep.Status != JoinRestartRequired || !rep.Clients[0].ApprovalPending || !hasNotice(rep, "trust the folder") {
+	if rep.Status != JoinRestartRequired || !rep.Clients[0].ApprovalPending || !hasNotice(rep, "trust the folder") ||
+		!hasNotice(rep, "(`"+StartCommand(e.home, []string{"claude"})+"`)") {
 		t.Fatalf("%+v", rep)
 	}
 }

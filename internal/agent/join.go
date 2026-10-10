@@ -645,8 +645,9 @@ func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error)
 
 // StartCommand is the one command that starts a member: its client, under
 // the launcher that holds the team session (DEVELOPMENT, "Starting a
-// member"). join prints it, session start names it, and the managed START.md
-// says the same; TestStartCommandIsDocumented keeps them in step. A home
+// member"). join prints it, the check's trust notice and session start name
+// it, and the managed START.md says the same; TestStartCommandIsDocumented
+// keeps them in step. A home
 // recorded for several clients is named with its first.
 func StartCommand(home string, clients []string) string {
 	client := "<client>"

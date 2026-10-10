@@ -489,7 +489,7 @@ func (c *checker) checkClient(ctx context.Context, name string, single bool) {
 	}
 	if d.ApprovalPending {
 		c.notice(fmt.Sprintf("Claude Code will ask at the first interactive start in this home to trust the folder and to "+
-			"approve the project MCP server aimem: accept both (`aicrew-agent run --client claude --home %s`)", quoteArg(c.o.Home)))
+			"approve the project MCP server aimem: accept both (`%s`)", StartCommand(c.o.Home, []string{"claude"})))
 	}
 }
 

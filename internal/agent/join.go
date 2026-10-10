@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -594,7 +595,7 @@ func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error)
 	}
 	rep := JoinReport{Status: JoinReady, Home: o.Home, AgentID: str(j.doc.aicrew, "agent_id"),
 		TeamID: str(j.doc.aicrew, "team_id"), Redeemed: redeemed, Changes: plan,
-		Next: fmt.Sprintf("aicrew-agent session start --home %s", quoteArg(o.Home))}
+		Next: StartCommand(o.Home, slices.Concat(o.Clients, j.doc.clients()))}
 	if replaced {
 		rep.Status = JoinRestartRequired
 		rep.Instruction = "managed guidance changed: restart any client already open in this home"
@@ -640,6 +641,33 @@ func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error)
 		rep.Status = JoinRestartRequired
 	}
 	return rep, nil
+}
+
+// StartCommand is the one command that starts a member: its client, under
+// the launcher that holds the team session (DEVELOPMENT, "Starting a
+// member"). join prints it, session start names it, and the managed START.md
+// says the same; TestStartCommandIsDocumented keeps them in step. A home
+// recorded for several clients is named with its first.
+func StartCommand(home string, clients []string) string {
+	client := "<client>"
+	if len(clients) > 0 {
+		client = clients[0]
+	}
+	return startCommand(client, quoteArg(home))
+}
+
+func startCommand(client, home string) string {
+	return "aicrew-agent run --client " + client + " --home " + home
+}
+
+// HomeClients reads the clients a home is for, as join recorded them; none
+// when the home has no agent.json or records none.
+func HomeClients(home string) []string {
+	d, ok, err := readAgentDoc(home)
+	if err != nil || !ok {
+		return nil
+	}
+	return d.clients()
 }
 
 func quoteArg(s string) string {

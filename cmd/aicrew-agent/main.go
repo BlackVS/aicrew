@@ -194,7 +194,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, build eng
 	switch verb {
 	case "status":
 		return status(ctx, cfg, stdout, log)
-	case "start", "leave":
+	case "start":
+		// A member's client is started by run; this alone holds a session
+		// with no client, so it says so and names that command.
+		fmt.Fprintf(stderr, "aicrew-agent session start holds this home's team session until interrupted, and starts no client.\n"+
+			"To start the member's client, which holds the session itself, run instead: %s\n",
+			agent.StartCommand(*home, agent.HomeClients(*home)))
+	case "leave":
 	default:
 		fmt.Fprintln(stderr, usage)
 		return exitUsage

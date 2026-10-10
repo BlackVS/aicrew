@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -48,6 +49,27 @@ func TestBadConfigAndStatus(t *testing.T) {
 	}
 	if code := run(context.Background(), []string{"session", "fly", "-home", home}, &out, &errb, noEngine, noEnv); code != exitUsage {
 		t.Fatalf("an unknown verb: exit %d", code)
+	}
+}
+
+// session start says, before it enters the session, that it starts no
+// client, and names the command that does for this home (01a126f4-a256).
+// Stdout carries only AIMEM_TEAM_SESSION, as before.
+func TestSessionStartNamesTheRunCommand(t *testing.T) {
+	home := t.TempDir()
+	cfg := `{"clients": ["opencode"], "aicrew": {"url": "https://aicrew.example", "tls_trust_mode": "ca_dns",
+		"tls_trust_value": "aicrew.example", "agent_id": "agent-1", "team_id": "team-1", "aimem_command": "aimem-not-installed-here"}}`
+	if err := os.WriteFile(filepath.Join(home, "agent.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failing := func(agent.Config, *slog.Logger) (*agent.Engine, error) { return nil, errors.New("no hub in this test") }
+	var out, errb bytes.Buffer
+	if code := run(context.Background(), []string{"session", "start", "-home", home}, &out, &errb, failing, noEnv); code != exitFailed {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(errb.String(), "starts no client") ||
+		!strings.Contains(errb.String(), "run instead: "+agent.StartCommand(home, []string{"opencode"})+"\n") || out.Len() != 0 {
+		t.Fatalf("stdout %q, stderr %q", out.String(), errb.String())
 	}
 }
 

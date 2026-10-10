@@ -802,6 +802,22 @@ authority: it proves the agent's aimem identity and keeps the agent's team
 session through `aicrewd`'s client session API (`docs/CREW-CONTRACT.md`,
 "Client session API").
 
+### Starting a member
+
+After `join` reports the home `ready`, the member is started with one
+command, from a terminal, as the member's user:
+
+```sh
+aicrew-agent run --client claude --home HOME
+```
+
+`--client` is the client the home was joined for (`claude` or `opencode`).
+The launcher enters the team session, starts the client in the home and
+keeps the session while the client runs ("Running aicrew-agent" below). It
+is the command `join` prints and the home's `docs/START.md` names.
+`aicrew-agent session start` is not a way to start a member: it holds the
+session with no client, and says so.
+
 ### Installing and upgrading: `boot.sh` and `boot.ps1`
 
 On a member's machine, `aicrew-agent` and the operator CLI `aicrew` are
@@ -870,7 +886,7 @@ For development, build it from source:
 ```sh
 CGO_ENABLED=0 go build -o bin/aicrew-agent ./cmd/aicrew-agent
 bin/aicrew-agent run --client claude --home ~/aicrew/agents/builder
-bin/aicrew-agent session start  --home ~/aicrew/agents/builder
+bin/aicrew-agent session start  --home ~/aicrew/agents/builder   # the session only, no client
 bin/aicrew-agent session status --home ~/aicrew/agents/builder
 bin/aicrew-agent session leave  --home ~/aicrew/agents/builder
 bin/aicrew-agent step pending   # from the client run started ("Driving steps")
@@ -1065,7 +1081,7 @@ bin/aicrew-agent join --home ~/aicrew/agents/builder    # rerun: refresh and che
   `blocked` with its instructions; exit 0 for the first two, 1 when blocked
   or failed, 2 on usage. A blocked check leaves the home linked: rerun
   after following its instructions. It opens no session: it prints the
-  `session start` command.
+  member's start command ("Starting a member").
 - **The member's own forge credentials** (`docs/proposals/PILOT-1-FOLLOWUPS.md`,
   3.1 to 3.4): each `--cred HOST=PATH` gives the member's token for one forge
   host, from an owner-only file, or with `--cred HOST=-` from standard input

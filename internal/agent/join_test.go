@@ -372,6 +372,27 @@ func readJSON(t *testing.T, path string) map[string]any {
 // team, the layout exists with private creds/ and state/, the guidance is
 // written with its digests, the join state is gone, the configuration loads,
 // and the code appears nowhere.
+// The member's start command is one command in three places: the hint join
+// prints (StartCommand), DEVELOPMENT's "Starting a member", and the managed
+// START.md. A change to one of them fails here until the others follow
+// (01a126f4-a256).
+func TestStartCommandIsDocumented(t *testing.T) {
+	if got, want := StartCommand("/x/my home", []string{"claude", "opencode"}), `aicrew-agent run --client claude --home "/x/my home"`; got != want {
+		t.Fatalf("StartCommand = %q, want %q", got, want)
+	}
+	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "DEVELOPMENT.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := strings.ReplaceAll(string(b), "\r\n", "\n")
+	if !strings.Contains(dev, "### Starting a member\n") || !strings.Contains(dev, "\n"+StartCommand("HOME", []string{"claude"})+"\n") {
+		t.Errorf("DEVELOPMENT's \"Starting a member\" does not show %q", StartCommand("HOME", []string{"claude"}))
+	}
+	if !strings.Contains(startMD, startCommand("<client>", "<this directory>")) {
+		t.Errorf("START.md does not name %q", startCommand("<client>", "<this directory>"))
+	}
+}
+
 func TestJoinEndToEnd(t *testing.T) {
 	e := setupJoin(t)
 	code := e.invite(t, "inv-1", store.RoleWorker)
@@ -383,7 +404,7 @@ func TestJoinEndToEnd(t *testing.T) {
 	if rep.Status != JoinReady || !rep.Redeemed || rep.Role != "worker" || rep.TeamID != e.teamID || reads != 1 {
 		t.Fatalf("report %+v, %d reads", rep, reads)
 	}
-	if !strings.Contains(rep.Next, "aicrew-agent session start --home ") {
+	if rep.Next != StartCommand(e.home, []string{"claude"}) {
 		t.Fatalf("next command %q", rep.Next)
 	}
 	a, err := e.store.GetAgent(context.Background(), rep.AgentID)

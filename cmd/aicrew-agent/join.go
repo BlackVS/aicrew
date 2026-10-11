@@ -169,7 +169,7 @@ func printJoinReport(w io.Writer, rep agent.JoinReport) {
 		printCheck(w, *rep.Check)
 	}
 	if rep.Next != "" && rep.Status != agent.JoinBlocked {
-		fmt.Fprintf(w, "start the session with: %s\n", rep.Next)
+		fmt.Fprintf(w, "start the member with: %s\n", rep.Next)
 	}
 }
 

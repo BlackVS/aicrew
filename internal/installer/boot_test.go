@@ -299,3 +299,41 @@ func agentVersion(t *testing.T, bin string) string {
 	}
 	return strings.Fields(string(out))[1]
 }
+
+// boot.ps1 reads an installed binary's version when the binary lingers
+// after printing it, and reads none when it fails. A pipeline cut short by
+// Select-Object -First abandoned a process that had printed its line but
+// not yet exited, and read its exit code as -1. On loaded Windows runners
+// the installer then reinstalled the current release, or reported an
+// upgrade as an install (task 01a12bf6-fdcb).
+func TestBootPs1VersionRead(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("boot.ps1 runs on Windows")
+	}
+	if _, err := exec.LookPath("powershell.exe"); err != nil {
+		t.Skip("no powershell.exe")
+	}
+	stub := filepath.Join(t.TempDir(), "lingerversion.exe")
+	build := exec.Command("go", "build", "-o", stub, "./internal/installer/testdata/lingerversion")
+	build.Dir = repoRoot
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build the stub: %v\n%s", err, out)
+	}
+	script := filepath.Join(t.TempDir(), "read.ps1")
+	text := extractFrom(t, "boot.ps1", "install-agent") + fmt.Sprintf("Write-Output ('[' + (Get-AgentVersion '%s') + ']')\n", stub)
+	if err := os.WriteFile(script, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ linger, exit, want string }{
+		{"0", "0", "[v0.0.1]"},
+		{"300", "0", "[v0.0.1]"},
+		{"300", "3", "[]"},
+	} {
+		cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script)
+		cmd.Env = append(os.Environ(), "LINGER_MS="+c.linger, "EXIT_CODE="+c.exit)
+		out, code := combined(t, cmd)
+		if code != 0 || strings.TrimSpace(out) != c.want {
+			t.Errorf("linger %sms, exit %s: read %q (exit %d), want %s", c.linger, c.exit, strings.TrimSpace(out), code, c.want)
+		}
+	}
+}

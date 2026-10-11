@@ -19,7 +19,8 @@ with its home's own forge credential, then correctly blocked. No product
 command opened a pull request with that credential: `gh` holds another
 account, and handling the token by hand is forbidden. `aicrew-agent forge
 pr` now opens, reads, labels and comments on pull requests with the
-home's credential.
+home's credential. The Windows member one-liner also reads an installed
+binary's version reliably.
 
 aicrewd and its store are unchanged from 0.5.3. The managed
 `docs/ROLES.md` and the `/crew-submit` and `/crew-review` commands
@@ -93,6 +94,16 @@ changed, so each home takes them on a `join` rerun.
   the project's gates, then submits its URL. `/crew-review` reads, comments
   and labels with these commands. Each says never to use `gh`, `tea`,
   `glab` or a forge's API with a credential.
+
+### The Windows installer
+
+- **`boot.ps1` reads an installed binary's version reliably** (#135).
+  It read the version through a pipeline cut short after the first line.
+  That abandoned a binary that had printed its version but not yet exited,
+  and read its exit code as -1. So under load, the installer could
+  reinstall the current release, or report an upgrade as a fresh install.
+  It now lets `version` run to its end before reading the line. No
+  installed version was ever wrong: the reinstall wrote the same release.
 
 ### Supported and pinned versions
 

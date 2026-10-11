@@ -292,3 +292,26 @@ func TestGuidanceReconcilesOpenAttemptsFirst(t *testing.T) {
 		t.Errorf("START.md does not name %s", OpenAttemptsFile)
 	}
 }
+
+// The coordinator checks the open escalations before raising one, and
+// never raises a question an open one already asks (pilot finding
+// 2026-10-11: the same question was raised twice).
+func TestGuidanceChecksOpenEscalationsFirst(t *testing.T) {
+	flat := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	md := rolesMD()
+	coord := flat(md[strings.Index(md, "## Coordinator"):strings.Index(md, "## Worker")])
+	if !strings.Contains(coord, "**How to escalate.** First run `aicrew-agent escalations`") ||
+		!strings.Contains(coord, "when one already asks your question, do not raise it again") {
+		t.Errorf("the coordinator's section does not check the open escalations first: %s", coord)
+	}
+	var body string
+	for _, c := range crewCommands {
+		if c.Name == "crew-escalate" {
+			body = flat(c.Body)
+		}
+	}
+	check, raise := strings.Index(body, "Run `aicrew-agent escalations`"), strings.Index(body, "Raise it with the step below")
+	if check < 0 || raise < 0 || check > raise || !strings.Contains(body, "already asks this question, stop here") {
+		t.Errorf("/crew-escalate does not check the open escalations before raising: %s", body)
+	}
+}

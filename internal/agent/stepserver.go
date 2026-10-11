@@ -290,6 +290,24 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 			return answerErr(err)
 		}
 		return StepAnswer{OK: true, Status: StepDone, Result: out}
+	case call.Op == "escalations":
+		// A page of the open escalations the member sees, before it raises
+		// another: {"after": ID} continues after the escalation ID.
+		var in struct {
+			After string `json:"after"`
+		}
+		if len(call.Body) > 0 && json.Unmarshal(call.Body, &in) != nil {
+			return refuse("invalid_request", "The body is not {\"after\": ID}.", "Pass the previous page's next.")
+		}
+		path := escalationsPath
+		if in.After != "" {
+			path += "?after=" + url.QueryEscape(in.After)
+		}
+		out, err := s.local.Read(ctx, s.driver.Session.stepToken(), path)
+		if err != nil {
+			return answerErr(err)
+		}
+		return StepAnswer{OK: true, Status: StepDone, Result: out}
 	case call.Op == "attempts":
 		// The team's open attempts, for its coordinator to reconcile.
 		out, err := s.local.Read(ctx, s.driver.Session.stepToken(), openAttemptsPath)

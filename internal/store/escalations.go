@@ -569,3 +569,82 @@ func activeCoordinators(ctx context.Context, tx *sql.Tx, teamID string) ([]strin
 	}
 	return ids, rows.Err()
 }
+
+// EscalationSummary is an open escalation as a member's list shows it: what
+// identifies the question, without its context, options or answer, so a
+// page stays within the launcher's reply bounds.
+type EscalationSummary struct {
+	ID          string    `json:"id"`
+	Task        TaskRef   `json:"task"`
+	AttemptID   string    `json:"attempt_id,omitempty"`
+	Category    string    `json:"category"`
+	Urgency     string    `json:"urgency"`
+	Question    string    `json:"question"`
+	Coordinator string    `json:"coordinator_agent_id"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// EscalationPage is one page of a member's open escalations. Next, when
+// set, is the cursor of the following page.
+type EscalationPage struct {
+	Escalations []EscalationSummary `json:"escalations"`
+	Next        string              `json:"next,omitempty"`
+}
+
+// OpenEscalationPageSize is how many open escalations one page holds. With
+// a question of at most 1 KiB, a full page stays far below the launcher's
+// 256 KiB reply limit even when every character needs escaping.
+const OpenEscalationPageSize = 20
+
+// OpenEscalationsWithToken lists the open (unanswered) escalations a member
+// sees, oldest first, a page at a time after the escalation after (empty
+// for the first page): the team's, for the team's coordinator, which may
+// not be the one that raised them, and for any other member only those it
+// raised itself. The coordinator reads every page before raising a
+// question, so it never asks one twice (pilot finding 2026-10-11).
+func (s *Store) OpenEscalationsWithToken(ctx context.Context, token, after string) (EscalationPage, error) {
+	out := EscalationPage{Escalations: []EscalationSummary{}}
+	err := s.snapshot(ctx, func(q querier) error {
+		b, err := tokenBinding(ctx, q, token, s.now())
+		if err != nil {
+			return err
+		}
+		raiser := b.AgentID
+		if b.Role == RoleCoordinator {
+			raiser = ""
+		}
+		var afterAt string
+		if after != "" {
+			if err := q.QueryRowContext(ctx, `SELECT created_at FROM escalations WHERE id = ? AND team_id = ?`,
+				after, b.TeamID).Scan(&afterAt); errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("%w: no escalation %s in the team to continue after", ErrInvalid, after)
+			} else if err != nil {
+				return err
+			}
+		}
+		rows, err := q.QueryContext(ctx, `SELECT `+escalationColumns+` FROM escalations
+			WHERE team_id = ? AND answered_at = '' AND (? = '' OR coordinator_agent_id = ?)
+			  AND (? = '' OR created_at > ? OR (created_at = ? AND id > ?))
+			ORDER BY created_at, id LIMIT ?`, b.TeamID, raiser, raiser, after, afterAt, afterAt, after,
+			OpenEscalationPageSize+1)
+		if err != nil {
+			return fmt.Errorf("list open escalations: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			e, err := scanEscalation(rows)
+			if err != nil {
+				return err
+			}
+			if len(out.Escalations) == OpenEscalationPageSize {
+				out.Next = out.Escalations[OpenEscalationPageSize-1].ID
+				break
+			}
+			out.Escalations = append(out.Escalations, EscalationSummary{ID: e.ID, Task: e.Task, AttemptID: e.AttemptID,
+				Category: e.Category, Urgency: e.Urgency, Question: e.Question, Coordinator: e.Coordinator,
+				CreatedAt: e.CreatedAt})
+		}
+		return rows.Err()
+	})
+	return out, err
+}

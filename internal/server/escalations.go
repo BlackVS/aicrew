@@ -20,8 +20,38 @@ import (
 // EscalationsPath is the member route a coordinator raises an escalation on.
 const EscalationsPath = "/v1/crew/escalations"
 
+// openEscalations is GET /v1/crew/escalations[?after=ID]: a page of the
+// open escalations the member sees (the team's, for its coordinator; its
+// own otherwise), so the coordinator checks them before raising another.
+// The reply's next, when set, is the after of the following page.
+func (s *Server) openEscalations(w http.ResponseWriter, r *http.Request) {
+	token := sessionToken(r)
+	if _, err := s.store.AuthenticateSessionToken(r.Context(), token); err != nil {
+		s.refuseSession(w, r, refusalCode(err), false, 0)
+		return
+	}
+	var after string
+	for name, v := range r.URL.Query() {
+		if name != "after" || len(v) != 1 || v[0] == "" || len(v[0]) > maxEscalationCursor {
+			s.refuseSession(w, r, "invalid_request", false, 0)
+			return
+		}
+		after = v[0]
+	}
+	page, err := s.store.OpenEscalationsWithToken(r.Context(), token, after)
+	if err != nil {
+		s.refuseSession(w, r, refusalCode(err), false, 0)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+// maxEscalationCursor bounds the after cursor, an escalation's ID.
+const maxEscalationCursor = 64
+
 func (s *Server) registerEscalations() {
 	s.handle(http.MethodPost, EscalationsPath, s.raiseEscalation)
+	s.handle(http.MethodGet, EscalationsPath, s.openEscalations)
 	s.handle(http.MethodGet, opapi.EscalationsPath, s.escalationRoute("escalation.list", s.listEscalations))
 	s.handle(http.MethodGet, opapi.EscalationPath, s.escalationRoute("escalation.show", s.showEscalation))
 	s.handle(http.MethodPost, opapi.EscalationAnswerPath, s.escalationRoute("escalation.answer", s.answerEscalation))

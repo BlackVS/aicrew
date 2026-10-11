@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,5 +109,56 @@ func TestServeStepsRecordsACoordinatorsOpenAttempts(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(s.cfg.Home, filepath.FromSlash(OpenAttemptsFile)))
 	if err != nil || !strings.Contains(string(b), "The team has no open attempts.") {
 		t.Fatalf("%s after the step channel started: %q %v", OpenAttemptsFile, b, err)
+	}
+}
+
+// A page of open escalations fits the reader's bound in the worst case the
+// store accepts: a full page of maximal questions that all need escaping,
+// with maximal contexts the list leaves out. Every escalation is reached by
+// following next through the real HTTP reader.
+func TestOpenEscalationPagesFitTheReader(t *testing.T) {
+	ctx := context.Background()
+	s := setupStepsWith(t, crewOptions{role: store.RoleCoordinator, steps: true, shortHome: true})
+	e := s.d.Session.(*Engine)
+	token := e.stepToken()
+	n := store.OpenEscalationPageSize + 3
+	for i := range n {
+		in := store.EscalationRequest{Task: store.TaskRef{HubID: "hub-test", ProjectID: "project-t", TaskID: "task-1"},
+			Category: "scope", Urgency: "today", Question: strings.Repeat("<", 1<<10-4) + fmt.Sprintf("%04d", i),
+			Context: strings.Repeat("&", 8<<10), Recommendation: "add it",
+			Options: []store.EscalationOption{{Option: "add it", Consequence: "c"}, {Option: "drop it", Consequence: "c"}}}
+		if _, err := s.store.RaiseEscalationWithToken(ctx, fmt.Sprintf("raise-%d", i), token, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reader := e.Crew.(attemptsReader)
+	seen, after := 0, ""
+	for pages := 0; ; pages++ {
+		path := escalationsPath
+		if after != "" {
+			path += "?after=" + after
+		}
+		raw, err := reader.Read(ctx, token, path)
+		if err != nil {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		if len(raw) >= maxInboxReply {
+			t.Fatalf("page %d is %d bytes, at or over the reader's %d", pages, len(raw), maxInboxReply)
+		}
+		var page struct {
+			Escalations []json.RawMessage `json:"escalations"`
+			Next        string            `json:"next"`
+		}
+		if err := json.Unmarshal(raw, &page); err != nil {
+			t.Fatal(err)
+		}
+		seen += len(page.Escalations)
+		if page.Next == "" {
+			break
+		}
+		after = page.Next
+	}
+	if seen != n {
+		t.Fatalf("followed %d escalations, want %d", seen, n)
 	}
 }

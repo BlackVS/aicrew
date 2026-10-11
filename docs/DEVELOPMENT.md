@@ -1506,6 +1506,27 @@ The body is the request's JSON: `task`, `category`, `question`, `context`,
 two to four `options` with their consequences, `recommendation`, `blocked`
 and `urgency`. The exit codes are `step`'s.
 
+Before raising a question, the coordinator lists the open (unanswered)
+escalations through the launcher, and never raises one that an open
+escalation already asks:
+
+```sh
+aicrew-agent escalations [--json]   # GET /v1/crew/escalations, every page
+```
+
+- **The coordinator** sees every open escalation of its team, whoever
+  raised it.
+- **Any other member** sees only those it raised itself.
+- **Paging:** the route answers 20 to a page, with `next` naming the
+  following page's `after`. The command follows every page.
+- **What a page holds:** each item names the escalation, its task,
+  category, urgency and question. Its context, options and answer are left
+  out, so even a page of the largest questions stays within the launcher's
+  256 KiB reply bound.
+
+ROLES.md's "How to escalate" and `/crew-escalate` both start with this
+check.
+
 The architect, or the operator, reads and answers:
 
 ```sh

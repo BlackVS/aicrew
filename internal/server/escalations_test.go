@@ -206,3 +206,47 @@ func TestArchitectCredentialReachesOnlyEscalations(t *testing.T) {
 		t.Fatal("the log holds the architect's bearer")
 	}
 }
+
+// GET /v1/crew/escalations lists the open escalations the member sees: the
+// coordinator's raised one; nothing for the worker, which raised none. A
+// query and a missing token are refused.
+func TestOpenEscalationsRoute(t *testing.T) {
+	e := setupCoordination(t)
+	got := e.call(t, e.lead.token, EscalationsPath, "raise-1", escalationBody())
+	if got.status != http.StatusOK {
+		t.Fatalf("raise: %d %s", got.status, got.raw)
+	}
+	id, _ := got.body["id"].(string)
+	open := func(token string) []string {
+		t.Helper()
+		r := e.get(t, token, EscalationsPath)
+		var out struct {
+			Escalations []struct {
+				ID       string `json:"id"`
+				Question string `json:"question"`
+			} `json:"escalations"`
+		}
+		if r.status != http.StatusOK || json.Unmarshal([]byte(r.raw), &out) != nil || out.Escalations == nil {
+			t.Fatalf("open escalations: %d %s", r.status, r.raw)
+		}
+		var ids []string
+		for _, esc := range out.Escalations {
+			ids = append(ids, esc.ID)
+		}
+		return ids
+	}
+	if ids := open(e.lead.token); len(ids) != 1 || ids[0] != id {
+		t.Errorf("the coordinator's open escalations = %v, want [%s]", ids, id)
+	}
+	if ids := open(e.worker.token); len(ids) != 0 {
+		t.Errorf("the worker's open escalations = %v, want none", ids)
+	}
+	refused(t, e.get(t, e.lead.token, EscalationsPath+"?open=1"), http.StatusBadRequest, "invalid_request")
+	refused(t, e.get(t, e.lead.token, EscalationsPath+"?after="+id+"&after="+id), http.StatusBadRequest, "invalid_request")
+	refused(t, e.get(t, e.lead.token, EscalationsPath+"?after=01a00000-0000-7000-8000-000000000000"), http.StatusBadRequest,
+		"invalid_request")
+	if r := e.get(t, e.lead.token, EscalationsPath+"?after="+id); r.status != http.StatusOK || !strings.Contains(r.raw, `"escalations":[]`) {
+		t.Errorf("the page after the last: %d %s", r.status, r.raw)
+	}
+	refused(t, e.get(t, "", EscalationsPath), http.StatusUnauthorized, "invalid_token")
+}

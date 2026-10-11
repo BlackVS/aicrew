@@ -3,8 +3,11 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 var escTask = TaskRef{HubID: "hub-test", ProjectID: "project-t", TaskID: "task-1"}
@@ -25,12 +28,13 @@ type escTeam struct {
 	lead, worker       Agent
 	leadTok, workerTok string
 	leadSess           string
+	now                *time.Time
 }
 
 func newEscTeam(t *testing.T) escTeam {
 	t.Helper()
 	s, _ := openTemp(t)
-	clock(s)
+	now := clock(s)
 	tm := mustTeam(t, s, "t1", "crew", ProjectRef{HubID: "hub-test", ProjectID: "project-t"})
 	p := newProver(t, s)
 	lead, _ := member(t, s, tm.ID, "lead", RoleCoordinator)
@@ -38,7 +42,7 @@ func newEscTeam(t *testing.T) escTeam {
 	le, ls := p.enter("e-lead", lead, tm.ID)
 	_, ws := p.enter("e-worker", worker, tm.ID)
 	return escTeam{s: s, tm: tm, lead: lead, worker: worker, leadTok: ls.Token.Reveal(), workerTok: ws.Token.Reveal(),
-		leadSess: le.Session.ID}
+		leadSess: le.Session.ID, now: now}
 }
 
 func pendingKinds(t *testing.T, s *Store, token string) []PendingMessage {
@@ -253,5 +257,113 @@ func TestEscalationAnswerReachesTheTeamsCoordinator(t *testing.T) {
 	want := []string{e.lead.ID, lead2.ID}
 	if len(to) != 2 || !(to[0] == want[0] && to[1] == want[1] || to[0] == want[1] && to[1] == want[0]) {
 		t.Fatalf("recipients %v, want the coordinators %v and nobody else", to, want)
+	}
+}
+
+// A member lists the open escalations it sees, oldest first: the team's
+// coordinator every open one of its team, whoever raised it, and any other
+// member only those it raised itself. An answered escalation is not listed
+// (pilot finding 2026-10-11).
+func TestOpenEscalationsWithToken(t *testing.T) {
+	ctx := context.Background()
+	e := newEscTeam(t)
+	var ids []string
+	for _, key := range []string{"raise-1", "raise-2", "raise-3"} {
+		in := escRequest()
+		in.Question += " (" + key + ")"
+		esc, err := e.s.RaiseEscalationWithToken(ctx, key, e.leadTok, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, esc.ID)
+	}
+	if _, err := e.s.AnswerEscalation(ctx, operator(t), "a-1", ids[0], EscalationAnswer{Decision: "add it", Rationale: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	// The second was raised by an earlier coordinator, the third by the
+	// member who is a worker now.
+	former := mustAgent(t, e.s, "former-lead", "former-lead")
+	if _, err := e.s.db.Exec(`UPDATE escalations SET coordinator_agent_id = ? WHERE id = ?`, former.ID, ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.s.db.Exec(`UPDATE escalations SET coordinator_agent_id = ? WHERE id = ?`, e.worker.ID, ids[2]); err != nil {
+		t.Fatal(err)
+	}
+	list := func(token string) []string {
+		t.Helper()
+		got, err := e.s.OpenEscalationsWithToken(ctx, token, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, esc := range got.Escalations {
+			if esc.Question == "" || esc.Category != "scope" || esc.Task != escTask {
+				t.Errorf("a listed escalation: %+v", esc)
+			}
+			out = append(out, esc.ID)
+		}
+		if got.Next != "" {
+			t.Errorf("a short list names a next page: %q", got.Next)
+		}
+		return out
+	}
+	if got := list(e.leadTok); len(got) != 2 || !slices.Contains(got, ids[1]) || !slices.Contains(got, ids[2]) {
+		t.Errorf("the coordinator's list = %v, want the team's open %v", got, ids[1:])
+	}
+	if got := list(e.workerTok); len(got) != 1 || got[0] != ids[2] {
+		t.Errorf("the worker's list = %v, want its own %s", got, ids[2])
+	}
+	if _, err := e.s.OpenEscalationsWithToken(ctx, "acs_not_a_token", ""); err == nil {
+		t.Error("an unknown token lists escalations")
+	}
+}
+
+// The member list is paged: every open escalation is reached by following
+// next, in order, each once, however many there are; a cursor from
+// another team or none at all is refused.
+func TestOpenEscalationsPages(t *testing.T) {
+	ctx := context.Background()
+	e := newEscTeam(t)
+	const n = 2*OpenEscalationPageSize + 5
+	want := map[string]bool{}
+	for i := range n {
+		in := escRequest()
+		in.Question = fmt.Sprintf("question %d", i)
+		esc, err := e.s.RaiseEscalationWithToken(ctx, fmt.Sprintf("raise-%d", i), e.leadTok, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[esc.ID] = true
+		*e.now = e.now.Add(time.Millisecond * time.Duration(i%3)) // ties and steps alike
+	}
+	seen, after, pages := map[string]bool{}, "", 0
+	for {
+		page, err := e.s.OpenEscalationsWithToken(ctx, e.leadTok, after)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pages++
+		if len(page.Escalations) > OpenEscalationPageSize {
+			t.Fatalf("a page of %d", len(page.Escalations))
+		}
+		for _, esc := range page.Escalations {
+			if seen[esc.ID] || !want[esc.ID] {
+				t.Fatalf("escalation %s listed twice or not raised", esc.ID)
+			}
+			seen[esc.ID] = true
+		}
+		if page.Next == "" {
+			break
+		}
+		if page.Next != page.Escalations[len(page.Escalations)-1].ID {
+			t.Fatalf("next %s is not the page's last escalation", page.Next)
+		}
+		after = page.Next
+	}
+	if len(seen) != n || pages != 3 {
+		t.Fatalf("%d escalations over %d pages, want %d over 3", len(seen), pages, n)
+	}
+	if _, err := e.s.OpenEscalationsWithToken(ctx, e.leadTok, "01a00000-0000-7000-8000-000000000000"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("an unknown cursor: got %v, want ErrInvalid", err)
 	}
 }

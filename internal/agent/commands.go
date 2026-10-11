@@ -81,12 +81,14 @@ var crewCommands = []crewCommand{
 			"1. Check that it is one to escalate (`docs/ROLES.md`, the coordinator's \"You do not talk to a human\"): " +
 			"the floor (" + codeList(escalationFloor) + "), " + codeList(escalationAlways) + ", or a question you " +
 			"cannot classify with confidence. Take the most restrictive category that fits.\n" +
-			"2. Raise it with the step below: two to four options, each with its consequence, your recommendation, " +
+			"2. Run `aicrew-agent escalations`. If an open escalation already asks this question, stop here: do " +
+			"not raise it again, and carry on with other work while it is open.\n" +
+			"3. Raise it with the step below: two to four options, each with its consequence, your recommendation, " +
 			"the blocked member's agent ID if one waits, and the urgency.\n" +
-			"3. Mirror it on the task with aimem's `add_task_comment`, a comment whose first line is " +
+			"4. Mirror it on the task with aimem's `add_task_comment`, a comment whose first line is " +
 			"`[escalation.request ID]`, with the `id` the step answered. If aimem answers `task_held`, post it when " +
 			"the hold ends and say so in `docs/HANDOFF.md`.\n" +
-			"4. Carry on with other work. The answer arrives in your inbox as a message whose `escalation` " +
+			"5. Carry on with other work. The answer arrives in your inbox as a message whose `escalation` " +
 			"(`aicrew-agent inbox --json`) carries the decision; act on it then. Never decide it yourself meanwhile, " +
 			"and never raise the same question again.",
 		Ops: []string{"escalate"}},

@@ -99,8 +99,9 @@ func (s *Store) beginNew(ctx context.Context, c Caller, cmd command, proof *stri
 // offer's hold to its attempt.
 func (s *Store) BeginAccept(ctx context.Context, c Caller, key, attemptID string, in AcceptRequest) (Attempt, Step, error) {
 	var proof string
-	return s.begin(ctx, c, acceptCommand(c, key, attemptID, in, true, &proof), attemptID, &proof,
+	a, st, err := s.begin(ctx, c, acceptCommand(c, key, attemptID, in, true, &proof), attemptID, &proof,
 		FactAcceptedAttempt, in.SessionID, in.Generation, nil)
+	return a, st, s.noticeStaleAccept(ctx, attemptID, err)
 }
 
 // BeginRelease begins the release of an offer never accepted (declined,

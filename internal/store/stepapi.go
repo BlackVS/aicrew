@@ -147,7 +147,8 @@ func (s *Store) BeginAcceptWithToken(ctx context.Context, key, token, attemptID,
 	var proof string
 	in := AcceptRequest{SessionID: t.sessionID, Generation: t.generation, InstructionDigest: instructionDigest}
 	cmd, g := s.withToken(intentOnly(acceptCommand(c, key, attemptID, in, false, &proof)), token, t)
-	return s.begin(ctx, c, cmd, attemptID, &proof, FactAcceptedAttempt, t.sessionID, t.generation, g)
+	a, st, err := s.begin(ctx, c, cmd, attemptID, &proof, FactAcceptedAttempt, t.sessionID, t.generation, g)
+	return a, st, s.noticeStaleAccept(ctx, attemptID, err)
 }
 
 // DeclineWithToken records the worker's decline, as the token's session. It

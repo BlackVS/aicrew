@@ -996,7 +996,21 @@ established, such as one issued before this history was recorded, cannot
 be accepted; the coordinator releases and re-issues it. A refused
 acceptance changes nothing:
 the hold and the worker's capacity stay until the coordinator's release is
-confirmed. A worker's decline is recorded in
+confirmed.
+
+Aicrew tells the coordinator when an offer has gone stale, since nothing
+else would. The notice is a lifecycle message to the team's coordinators.
+It names the attempt, the task and the worker, and says to withdraw the
+offer and offer the task again. Its arrival wakes the coordinator. It is
+written in two cases:
+- **A coordinator session starts or resumes.** In the same transaction,
+  aicrew writes one message for each offer still outstanding (`offered`)
+  that was made under an earlier coordinator generation.
+- **An acceptance is refused `offer_stale`.** Aicrew writes the message in
+  a transaction of its own after the refusal, and only once per attempt, so
+  a worker retrying the acceptance does not repeat it. No message is written
+  if the coordinator was already told about that offer. The refusal itself
+  still records nothing. A worker's decline is recorded in
 aicrew and releases nothing: the coordinator releases the offer's hold. An
 expired offer cannot be accepted, and expiry releases nothing by itself.
 

@@ -290,6 +290,13 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 			return answerErr(err)
 		}
 		return StepAnswer{OK: true, Status: StepDone, Result: out}
+	case call.Op == "escalations":
+		// The open escalations the member sees, before it raises another.
+		out, err := s.local.Read(ctx, s.driver.Session.stepToken(), escalationsPath)
+		if err != nil {
+			return answerErr(err)
+		}
+		return StepAnswer{OK: true, Status: StepDone, Result: out}
 	case call.Op == "attempts":
 		// The team's open attempts, for its coordinator to reconcile.
 		out, err := s.local.Read(ctx, s.driver.Session.stepToken(), openAttemptsPath)

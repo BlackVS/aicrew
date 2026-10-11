@@ -1506,6 +1506,21 @@ The body is the request's JSON: `task`, `category`, `question`, `context`,
 two to four `options` with their consequences, `recommendation`, `blocked`
 and `urgency`. The exit codes are `step`'s.
 
+Before raising a question, the coordinator lists the open (unanswered)
+escalations through the launcher, and never raises one that an open
+escalation already asks:
+
+```sh
+aicrew-agent escalations [--json]   # GET /v1/crew/escalations
+```
+
+- **The coordinator** sees every open escalation of its team, whoever
+  raised it.
+- **Any other member** sees only those it raised itself.
+
+ROLES.md's "How to escalate" and `/crew-escalate` both start with this
+check.
+
 The architect, or the operator, reads and answers:
 
 ```sh

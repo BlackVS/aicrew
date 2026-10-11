@@ -48,6 +48,7 @@ const usage = `usage: aicrew-agent session start|status|leave --home DIR   (stat
        aicrew-agent inbox [--home DIR] [--limit N] [--ack ID,ID...] [--json]
        aicrew-agent escalate [--home DIR] --body FILE|-   (the coordinator, through the launcher)
        aicrew-agent attempts [--home DIR] [--json]   (the coordinator: the team's open attempts)
+       aicrew-agent escalations [--home DIR] [--json]   (the open escalations, before raising another)
        aicrew-agent wait-inbox [--home DIR]   (the Claude Code Stop hook join installs)
        aicrew-agent join --label LABEL [--home DIR] --url URL --tls-trust-mode M --tls-trust-value V --aimem-hub NAME --client C
        aicrew-agent check (--home DIR | --label LABEL) [--client C] [--json]
@@ -120,6 +121,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "escalate" {
 		os.Exit(escalate(context.Background(), os.Args[2:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "escalations" {
+		os.Exit(escalations(context.Background(), os.Args[2:], os.Stdout, os.Stderr, os.Getenv))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "attempts" {
 		os.Exit(attempts(context.Background(), os.Args[2:], os.Stdout, os.Stderr, os.Getenv))

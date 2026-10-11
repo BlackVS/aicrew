@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -253,5 +254,60 @@ func TestEscalationAnswerReachesTheTeamsCoordinator(t *testing.T) {
 	want := []string{e.lead.ID, lead2.ID}
 	if len(to) != 2 || !(to[0] == want[0] && to[1] == want[1] || to[0] == want[1] && to[1] == want[0]) {
 		t.Fatalf("recipients %v, want the coordinators %v and nobody else", to, want)
+	}
+}
+
+// A member lists the open escalations it sees, oldest first: the team's
+// coordinator every open one of its team, whoever raised it, and any other
+// member only those it raised itself. An answered escalation is not listed
+// (pilot finding 2026-10-11).
+func TestOpenEscalationsWithToken(t *testing.T) {
+	ctx := context.Background()
+	e := newEscTeam(t)
+	var ids []string
+	for _, key := range []string{"raise-1", "raise-2", "raise-3"} {
+		in := escRequest()
+		in.Question += " (" + key + ")"
+		esc, err := e.s.RaiseEscalationWithToken(ctx, key, e.leadTok, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, esc.ID)
+	}
+	if _, err := e.s.AnswerEscalation(ctx, operator(t), "a-1", ids[0], EscalationAnswer{Decision: "add it", Rationale: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	// The second was raised by an earlier coordinator, the third by the
+	// member who is a worker now.
+	former := mustAgent(t, e.s, "former-lead", "former-lead")
+	if _, err := e.s.db.Exec(`UPDATE escalations SET coordinator_agent_id = ? WHERE id = ?`, former.ID, ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.s.db.Exec(`UPDATE escalations SET coordinator_agent_id = ? WHERE id = ?`, e.worker.ID, ids[2]); err != nil {
+		t.Fatal(err)
+	}
+	list := func(token string) []string {
+		t.Helper()
+		got, err := e.s.OpenEscalationsWithToken(ctx, token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, esc := range got {
+			if esc.Answer != nil || esc.Question == "" {
+				t.Errorf("a listed escalation: %+v", esc)
+			}
+			out = append(out, esc.ID)
+		}
+		return out
+	}
+	if got := list(e.leadTok); len(got) != 2 || !slices.Contains(got, ids[1]) || !slices.Contains(got, ids[2]) {
+		t.Errorf("the coordinator's list = %v, want the team's open %v", got, ids[1:])
+	}
+	if got := list(e.workerTok); len(got) != 1 || got[0] != ids[2] {
+		t.Errorf("the worker's list = %v, want its own %s", got, ids[2])
+	}
+	if _, err := e.s.OpenEscalationsWithToken(ctx, "acs_not_a_token"); err == nil {
+		t.Error("an unknown token lists escalations")
 	}
 }

@@ -20,8 +20,32 @@ import (
 // EscalationsPath is the member route a coordinator raises an escalation on.
 const EscalationsPath = "/v1/crew/escalations"
 
+// openEscalations is GET /v1/crew/escalations: the open escalations the
+// member sees (the team's, for its coordinator; its own otherwise), so the
+// coordinator checks them before raising another. It takes no query.
+func (s *Server) openEscalations(w http.ResponseWriter, r *http.Request) {
+	token := sessionToken(r)
+	if _, err := s.store.AuthenticateSessionToken(r.Context(), token); err != nil {
+		s.refuseSession(w, r, refusalCode(err), false, 0)
+		return
+	}
+	if len(r.URL.Query()) > 0 {
+		s.refuseSession(w, r, "invalid_request", false, 0)
+		return
+	}
+	open, err := s.store.OpenEscalationsWithToken(r.Context(), token)
+	if err != nil {
+		s.refuseSession(w, r, refusalCode(err), false, 0)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Escalations []store.Escalation `json:"escalations"`
+	}{open})
+}
+
 func (s *Server) registerEscalations() {
 	s.handle(http.MethodPost, EscalationsPath, s.raiseEscalation)
+	s.handle(http.MethodGet, EscalationsPath, s.openEscalations)
 	s.handle(http.MethodGet, opapi.EscalationsPath, s.escalationRoute("escalation.list", s.listEscalations))
 	s.handle(http.MethodGet, opapi.EscalationPath, s.escalationRoute("escalation.show", s.showEscalation))
 	s.handle(http.MethodPost, opapi.EscalationAnswerPath, s.escalationRoute("escalation.answer", s.answerEscalation))

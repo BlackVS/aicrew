@@ -83,7 +83,9 @@ var escalationRule = "**You do not talk to a human.** A question you cannot sett
 	"command that acts outside it, and record that too), and `retry` never as a loop until a check passes. A question that fits several categories takes the " +
 	"most restrictive one: the floor first, then `scope` and `cross_repo`. A question you cannot classify " +
 	"with confidence is escalated.\n\n" +
-	"**How to escalate.** Raise it with the escalate step below: the task, the attempt if there is one, the " +
+	"**How to escalate.** First run `aicrew-agent escalations`, which lists the team's open escalations: when " +
+	"one already asks your question, do not raise it again; carry on and wait for its answer. Otherwise raise it " +
+	"with the escalate step below: the task, the attempt if there is one, the " +
 	"category, the question, its context, two to four options each with its consequence, your " +
 	"recommendation, the blocked member's agent ID if one waits, and the urgency (`now`, `today` or " +
 	"`next_session`). The answer names the escalation's `id`. Then mirror it on the task with " +

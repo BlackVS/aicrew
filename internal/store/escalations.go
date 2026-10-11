@@ -569,3 +569,38 @@ func activeCoordinators(ctx context.Context, tx *sql.Tx, teamID string) ([]strin
 	}
 	return ids, rows.Err()
 }
+
+// OpenEscalationsWithToken lists the open (unanswered) escalations a member
+// sees, oldest first: the team's, for the team's coordinator, which may not
+// be the one that raised them, and for any other member only those it
+// raised itself. The coordinator checks it before raising a question, so
+// it never asks one twice (pilot finding 2026-10-11).
+func (s *Store) OpenEscalationsWithToken(ctx context.Context, token string) ([]Escalation, error) {
+	out := []Escalation{}
+	err := s.snapshot(ctx, func(q querier) error {
+		b, err := tokenBinding(ctx, q, token, s.now())
+		if err != nil {
+			return err
+		}
+		raiser := b.AgentID
+		if b.Role == RoleCoordinator {
+			raiser = ""
+		}
+		rows, err := q.QueryContext(ctx, `SELECT `+escalationColumns+` FROM escalations
+			WHERE team_id = ? AND answered_at = '' AND (? = '' OR coordinator_agent_id = ?)
+			ORDER BY created_at, id LIMIT ?`, b.TeamID, raiser, raiser, maxEscalationList)
+		if err != nil {
+			return fmt.Errorf("list open escalations: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			e, err := scanEscalation(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, e)
+		}
+		return rows.Err()
+	})
+	return out, err
+}

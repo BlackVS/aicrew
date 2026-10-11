@@ -633,6 +633,8 @@ func TestExposureGuard(t *testing.T) {
 		"ReadInboxWithToken": true, "AckWithToken": true, "PendingInboxWithToken": true,
 		// The team's open attempts, for its coordinator (the store refuses any other role).
 		"OpenAttemptsWithToken": true,
+		// The member's open escalations, before it raises another.
+		"OpenEscalationsWithToken": true,
 		// Invitation redemption authenticates by the invitation code, which
 		// the store checks inside every command (1a81-3).
 		"BeginRedemption": true, "CompleteRedemption": true,
@@ -737,7 +739,7 @@ func TestRouteInventory(t *testing.T) {
 	sort.Strings(got)
 	want := []string{"GET /healthz", "GET /v1/admin/architect-credentials", "GET /v1/admin/escalation", "GET /v1/admin/escalations",
 		"GET /v1/admin/hub-credentials", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations",
-		"GET /v1/admin/team", "GET /v1/admin/teams", "GET /v1/crew/attempts", "GET /v1/crew/capabilities", "GET /v1/crew/inbox", "GET /v1/crew/inbox/pending",
+		"GET /v1/admin/team", "GET /v1/admin/teams", "GET /v1/crew/attempts", "GET /v1/crew/capabilities", "GET /v1/crew/escalations", "GET /v1/crew/inbox", "GET /v1/crew/inbox/pending",
 		"GET /v1/crew/projects", "GET /v1/crew/requirements", "GET /v1/crew/session",
 		"POST /v1/admin/architect-credentials", "POST /v1/admin/architect-credentials/revoke", "POST /v1/admin/escalations/answer",
 		"POST /v1/admin/hub-credentials", "POST /v1/admin/hub-credentials/revoke", "POST /v1/admin/hub-credentials/rotate",

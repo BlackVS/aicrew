@@ -377,6 +377,7 @@ trusts a caller it is given, and a test enforces that.
 | `GET /v1/crew/requirements` | `Authorization: Bearer` session token | The team's granted projects with the repository the hub binds to each (`hub_id`, `project_id`, `repository {kind, url, access}`), from the grants snapshot: what a member's home verifies ("Capabilities"). Reply: `projects`. |
 | `POST /v1/crew/capabilities`, JSON `{"capabilities"}` | `Authorization: Bearer` session token | Record the member's capabilities, replacing its earlier report ("Capabilities"). Reply: `reported_at`. |
 | `GET /v1/crew/capabilities` | `Authorization: Bearer` session token | The team's current members with their last reports (`agent_id`, `label`, `role`, `reported_at`, `capabilities`), for planning who can take a task. Reply: `members`. |
+| `GET /v1/crew/escalations` | `Authorization: Bearer` session token | The open (unanswered) escalations the member sees, oldest first: every one of its team for the team's coordinator, and for any other member only those it raised. The coordinator checks them before raising another. Reply: `escalations`. |
 | `POST /v1/crew/escalations`, with `Idempotency-Key` | `Authorization: Bearer` session token | Raise an escalation, as the team's current coordinator ("Escalations"). Reply: the escalation. |
 
 - **Entry and resume.** The exchange names the proof type, this service as

@@ -86,9 +86,9 @@ changed, so each home takes them on a `join` rerun.
 
 - **The open attempts at session start** (#130). A new route,
   `GET /v1/crew/attempts`, lists the team's open attempts for its
-  coordinator only. Each entry is an offer or a running attempt, says
-  whether an offer is stale, expired or declined, and names the next
-  action.
+  coordinator only. It holds every attempt not yet closed: offers, running
+  attempts, and attempts with a pending step. Each entry says whether an
+  offer is stale, expired or declined, and names the next action.
 - **The launcher records them.** Before a coordinator's client starts,
   its launcher writes the list to `state/open-attempts.md` in the home. A
   failed read is recorded too, so the file never shows an earlier

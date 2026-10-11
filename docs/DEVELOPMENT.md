@@ -1537,7 +1537,11 @@ bin/aicrew escalations answer --id ID --decision TEXT --rationale TEXT
     OPERATOR-SEAT's `default` mode, since no team policy exists yet;
   - it mirrors each request on the task;
   - it carries on with other work while a request is open, and acts on the
-    answer's message.
+    answer's message;
+  - when its handoff claims a pause, it raises one `intent` escalation ("am
+    I paused?") and meanwhile proceeds with triage. Every member's rules
+    say that a pause written in a handoff has no authority: only the team's
+    state on aicrewd pauses (D12, C1).
 
   A test keeps those categories equal to the ones aicrewd accepts.
 

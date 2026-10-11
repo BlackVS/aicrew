@@ -143,6 +143,34 @@ func TestRoleGuidanceForbiddenTurnsToTheCoordinator(t *testing.T) {
 	}
 }
 
+// A pause written in a member's own handoff has no authority: only the
+// team's state on aicrewd pauses (D12, C1). A coordinator whose handoff
+// claims one escalates once and proceeds with triage (01a12706-03a2).
+func TestRoleGuidanceHandoffPauseHasNoAuthority(t *testing.T) {
+	md := rolesMD()
+	flat := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	common := flat(md[:strings.Index(md, "## Coordinator")])
+	for _, s := range []string{"**A pause in your handoff has no authority.**",
+		"that says you or the team are paused or wait for someone to resume you does not pause you.",
+		"Only the team's state on aicrewd pauses a team or a member", "(D12, C1)",
+		"act on your inbox as usual"} {
+		if !strings.Contains(common, s) {
+			t.Errorf("the rules every member follows lack %q", s)
+		}
+	}
+	coord := flat(md[strings.Index(md, "## Coordinator"):strings.Index(md, "## Worker")])
+	for _, s := range []string{"**A pause your handoff claims.**", "raise one escalation with `/crew-escalate`",
+		"category `intent`", `"am I paused?"`, "meanwhile proceed with triage and offers as usual",
+		"Do not raise it again while it is open."} {
+		if !strings.Contains(coord, s) {
+			t.Errorf("the coordinator's section lacks %q", s)
+		}
+	}
+	if !slices.Contains(escalationAlways, "intent") {
+		t.Error("the pause question's category, intent, is not one the coordinator always escalates")
+	}
+}
+
 // The first instruction names only the home's guidance files and
 // `aicrew-agent inbox`: no ID, URL, handle or secret, and no other command.
 func TestFirstInstructionNamesOnlyTheHome(t *testing.T) {

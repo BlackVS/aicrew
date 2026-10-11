@@ -1,0 +1,111 @@
+package agent
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/BlackVS/aicrew/internal/store"
+)
+
+// seedOffer writes an outstanding offer to the member, made under the
+// coordinator generation gen. The member is its own worker here only so the
+// list has a label to show: the store's offer rules are not under test.
+func (c *crewEnv) seedOffer(t *testing.T, id string, gen int64) {
+	t.Helper()
+	db, err := sql.Open("sqlite", c.storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO attempts (id, team_id, task_hub_id, task_project_id, task_id, worker_agent_id, origin,
+		coordinator_agent_id, coordinator_session_id, coordinator_generation, state, base_commit, branch, process_repository, process_commit,
+		process_manifest, instruction_digest, offer_expires_at, task_revision, revision, created_at, updated_at, phase)
+		VALUES (?, ?, 'hub-test', 'project-a', 'task-3dc2', ?, 'offer', ?, 'old-session', ?, 'offered', 'base', 'work/task-3dc2',
+		'github.com/example/process', 'abc1234', 'process.yaml', 'sha256:x', ?, 1, 1, ?, ?, '')`,
+		id, c.teamID, c.agentID, c.agentID, gen, now.Add(time.Hour).Format("2006-01-02T15:04:05.000000000Z07:00"),
+		now.Format("2006-01-02T15:04:05.000000000Z07:00"), now.Format("2006-01-02T15:04:05.000000000Z07:00")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// At a coordinator's session start the launcher records the team's open
+// attempts from aicrewd in the home file the first instruction names: an
+// offer made under an earlier coordinator session is listed as stale, with
+// the withdraw-and-offer-again action (pilot finding 2026-10-11).
+func TestCoordinatorStartRecordsOpenAttempts(t *testing.T) {
+	c := setupCrewWith(t, crewOptions{role: store.RoleCoordinator})
+	ctx := context.Background()
+	e := c.engine(t)
+	if err := e.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c.seedOffer(t, "attempt-stale", 0)
+
+	o, ok, err := e.RecordOpenAttempts(ctx)
+	if err != nil || !ok {
+		t.Fatalf("record the open attempts: ok %v, %v\n%s", ok, err, c.logs)
+	}
+	if len(o.Attempts) != 1 || !o.Attempts[0].Stale || o.Attempts[0].ID != "attempt-stale" {
+		t.Fatalf("open attempts = %+v, want the stale offer", o.Attempts)
+	}
+	b, err := os.ReadFile(filepath.Join(c.cfg.Home, filepath.FromSlash(OpenAttemptsFile)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# Open attempts at this session's start", "`attempt-stale`", "task `hub-test/project-a/task-3dc2`",
+		"stale: made under an earlier coordinator session", "Next: Withdraw the offer, then offer the task again",
+		"\"Reconcile first\"", "`aicrew-agent attempts`"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("%s lacks %q:\n%s", OpenAttemptsFile, want, b)
+		}
+	}
+	if !strings.Contains(FirstInstruction(), OpenAttemptsFile) {
+		t.Errorf("the first instruction does not name %s", OpenAttemptsFile)
+	}
+}
+
+// A worker's start records nothing, and the file a failed read leaves says
+// so instead of showing an older list.
+func TestOpenAttemptsOnlyForTheCoordinator(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	e := c.engine(t)
+	if err := e.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := e.RecordOpenAttempts(ctx); ok || err != nil {
+		t.Fatalf("a worker's start: ok %v, %v; want nothing recorded", ok, err)
+	}
+	if _, err := os.Stat(filepath.Join(c.cfg.Home, filepath.FromSlash(OpenAttemptsFile))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a worker's home has %s: %v", OpenAttemptsFile, err)
+	}
+	failed := RenderOpenAttempts(OpenAttempts{}, time.Now(), errors.New("aicrewd is unreachable"))
+	if !strings.Contains(failed, "could not be read: aicrewd is unreachable. Run `aicrew-agent attempts`.") ||
+		strings.Contains(failed, "no open attempts") {
+		t.Errorf("a failed read renders:\n%s", failed)
+	}
+}
+
+// The launcher's start of the step channel, which run makes before it
+// starts the client, records a coordinator's open attempts.
+func TestServeStepsRecordsACoordinatorsOpenAttempts(t *testing.T) {
+	s := setupStepsWith(t, crewOptions{role: store.RoleCoordinator, steps: true, shortHome: true})
+	defer swapAccess(fakeAccess{})()
+	e := s.d.Session.(*Engine)
+	srv := serveSteps(e)
+	if srv == nil {
+		t.Fatal("the step channel is not served")
+	}
+	defer srv.Close()
+	b, err := os.ReadFile(filepath.Join(s.cfg.Home, filepath.FromSlash(OpenAttemptsFile)))
+	if err != nil || !strings.Contains(string(b), "The team has no open attempts.") {
+		t.Fatalf("%s after the step channel started: %q %v", OpenAttemptsFile, b, err)
+	}
+}

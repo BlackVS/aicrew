@@ -31,9 +31,11 @@ var crewCommands = []crewCommand{
 		Body: "Start your aicrew session.\n\n" +
 			"1. Read `docs/START.md` and `docs/ROLES.md`.\n" +
 			"2. Run `aicrew-agent session status`: it names your role and your team's projects.\n" +
-			"3. Run `aicrew-agent inbox`.\n" +
-			"4. Say in one short message what you will do; then act on what you found, within your role only.\n" +
-			"5. If there is nothing to do, end your turn: the home's Stop hook wakes you when a message arrives.\n\n" +
+			"3. If you are the coordinator, read `" + OpenAttemptsFile + "`, the team's open attempts at this " +
+			"session's start, and reconcile them first, as `docs/ROLES.md` says under \"Reconcile first\".\n" +
+			"4. Run `aicrew-agent inbox`.\n" +
+			"5. Say in one short message what you will do; then act on what you found, within your role only.\n" +
+			"6. If there is nothing to do, end your turn: the home's Stop hook wakes you when a message arrives.\n\n" +
 			"Never run `aicrew-agent session start`, `session leave` or `run` here: the launcher holds this " +
 			"home's session, and they are refused inside the client.",
 		Ops: []string{"inbox"}},

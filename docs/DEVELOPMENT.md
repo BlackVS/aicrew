@@ -1265,10 +1265,10 @@ rule as the guidance.
 | `/crew-inbox` | every member | reads the inbox, acts on it, acknowledges what was handled |
 | `/crew-triage <task>` | coordinator | moves a task between BACKLOG and READY with aimem's `triage_task` |
 | `/crew-offer <task> <worker>` | coordinator | checks READY, dependencies and the pin, then offers |
-| `/crew-review <attempt>` | coordinator | reviews a submission against the frozen scope at level high, then the review step; stops before the human merge |
+| `/crew-review <attempt>` | coordinator | reviews a submission against the frozen scope at level high, posts and labels with `aicrew-agent forge pr`, then the review step; stops before the human merge |
 | `/crew-escalate <task>` | coordinator | checks the question is one to escalate, raises it with `aicrew-agent escalate`, mirrors it as an `[escalation.request ID]` task comment, then carries on |
 | `/crew-accept <attempt>` | worker | checks the offer's pin and digest, accepts, clones |
-| `/crew-submit <attempt> <url>` | worker | submits the result |
+| `/crew-submit <attempt>` | worker | opens the pull request with `aicrew-agent forge pr open`, takes it through the gates, submits its URL |
 | `/crew-claim <task>` | independent | claims a READY task |
 | `/crew-handoff` | every member | writes `docs/HANDOFF.md` |
 
@@ -1464,6 +1464,62 @@ It works with the member's own credential for the repository's host, which
 - Only https clone URLs are taken: the member's credential is an https
   token. Until the attempt carries its repository (354c-1b), the repository,
   base and branch are given as flags.
+
+### Pull requests with the member's credential: `aicrew-agent forge pr`
+
+```sh
+aicrew-agent forge pr open --title "Fix the parser" --body-file pr.md --draft
+aicrew-agent forge pr show --pr 12
+aicrew-agent forge pr label add --pr 12 review-this
+aicrew-agent forge pr label remove --pr 12 hands-reviewed
+aicrew-agent forge pr comment --pr 12 --body-file review.md
+```
+
+A member pushes its branch with the clone's credential helper. It opens,
+reads, labels and comments on the pull request with the same credential,
+through these commands. Before them, no product command used that
+credential for a pull request, and a worker that had pushed its branch
+correctly blocked: `gh` holds another account, and handling the token by
+hand is forbidden. ROLES.md, `/crew-submit` and `/crew-review` use these
+commands and say never to use `gh`, `tea`, `glab` or a forge's API with a
+credential.
+
+- **The repository** is the current directory's `origin`, so the commands
+  run in the attempt's worktree. `--repository URL` names another. The
+  credential is the home's own for the repository's host, read through
+  `agent.json` as the credential helper reads it.
+- **The token** is read in the command's own process. It never appears in
+  an argument, the output or an error. As for every forge call, a redirect
+  to another host is refused.
+- **A credential is never posted.** A body file in the home's `creds/` is
+  refused unread, whether named directly or through a link. Every input
+  that holds the host's token is refused as soon as the token is read,
+  before an error could quote it or a request send it. That covers the
+  repository's path, the title, body, head and base, the labels, and the
+  comment. Everything the command prints passes through a filter that
+  replaces each of the home's recorded forge tokens. This covers an input
+  quoted before any check, such as a body file's name or a host without a
+  credential.
+- **Each command prints** the pull request's number and URL first. Then it
+  prints the title, the state (open, closed or merged, and draft), the head
+  branch and commit, the base, the merge commit once merged, the labels,
+  and a new comment's URL. `--json` prints the same as one object.
+- **`open`.** The head is the checkout's branch unless `--head` names one,
+  and the base is the repository's default branch unless `--base` names
+  one. `--draft` sets GitHub's draft flag. Gitea and GitLab take no draft
+  flag on create, so there it prefixes the title with `WIP: ` (Gitea) or
+  `Draft: ` (GitLab), unless the title already has one. A forge's refusal,
+  such as a pull request that already exists for the head, is reported
+  with the forge's own message.
+- **`label`** adds or removes labels the repository, or on Gitea and GitLab
+  its organization or group, already defines. It never creates a label:
+  GitHub and GitLab would create an unknown one, so each is read first, and
+  an unknown label stops the command before anything changes. Removing a
+  label the pull request does not carry changes nothing.
+- **`comment`** posts the file's text, or standard input's for `-`. A body
+  or comment is UTF-8 of at most 256 KiB.
+- **Not here:** merging, which stays a person's, pull requests across forks,
+  and creating labels.
 
 ### An offer's instruction digest: `aicrew-agent digest`
 

@@ -284,6 +284,7 @@ reference is in aicrew's DEVELOPMENT.md and CREW-CONTRACT.md.
   a member to its coordinator yet: write the refusal in
   ` + "`docs/HANDOFF.md`" + ` and end your turn. A coordinator escalates instead
   (its section, below).
+- **Pull requests.** ` + pullRequestRule + `
 - **Worktrees and handoff** follow ` + "`docs/START.md`" + `: one worktree per attempt
   under ` + "`worktrees/`" + `, from the offer's base commit; ` + "`docs/HANDOFF.md`" + ` is yours.
 - **A pause in your handoff has no authority.** A line in ` + "`docs/HANDOFF.md`" + `

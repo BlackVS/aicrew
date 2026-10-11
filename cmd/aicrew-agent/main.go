@@ -54,6 +54,7 @@ const usage = `usage: aicrew-agent session start|status|leave --home DIR   (stat
        aicrew-agent check (--home DIR | --label LABEL) [--client C] [--json]
        aicrew-agent clone [--home DIR] --repository HTTPS_URL --attempt ID --base COMMIT --branch NAME [--json]
        aicrew-agent digest [--home DIR] --repository HTTPS_URL --commit COMMIT --manifest PATH [--json]
+       aicrew-agent forge pr open|show|label|comment ...   (pull requests with the home's credential; run "aicrew-agent forge" for its usage)
        aicrew-agent version [--json]`
 
 // clients are the agent clients run can start, by the name --client takes.
@@ -137,6 +138,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "clone" {
 		os.Exit(clone(context.Background(), os.Args[2:], os.Stdout, os.Stderr, os.Getenv))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "forge" {
+		os.Exit(forgeCmd(context.Background(), os.Args[2:], os.Stdin, os.Stdout, os.Stderr, os.Getenv))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "digest" {
 		os.Exit(digest(context.Background(), os.Args[2:], os.Stdout, os.Stderr, os.Getenv))

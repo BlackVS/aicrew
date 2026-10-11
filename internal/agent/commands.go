@@ -71,9 +71,13 @@ var crewCommands = []crewCommand{
 		Body: "Review the latest result submitted on attempt $ARGUMENTS.\n\n" +
 			"1. Read the task's frozen scope: objective, acceptance criteria and non-goals.\n" +
 			"2. Review the submitted pull request at level high with the `oh-code-review` skill, against that " +
-			"scope, and post the review on the pull request.\n" +
+			"scope. Read its head and labels with `aicrew-agent forge pr show --pr N`, post the review with " +
+			"`aicrew-agent forge pr comment --pr N --body-file FILE`, and request an external review with " +
+			"`aicrew-agent forge pr label add --pr N LABEL` where the project's process asks for one. " +
+			pullRequestNever + "\n" +
 			"3. Decide with the review step below: `accept`, or `rework` to send it back.\n" +
-			"4. Stop there. A person merges the pull request; only after that, record the delivery evidence.",
+			"4. Stop there. A person merges the pull request; only after that, record the delivery evidence " +
+			"(`aicrew-agent forge pr show --pr N` names the merge commit).",
 		Ops: []string{"review", "confirm-delivery"}},
 	{Name: "crew-escalate", Role: "coordinator", Hint: "<task id>",
 		Desc: "Coordinator: escalate a question you cannot settle to the architect",
@@ -107,11 +111,17 @@ var crewCommands = []crewCommand{
 			"message's `id` from `aicrew-agent inbox --json` (acknowledging is not a `step`): until you " +
 			"acknowledge it, the inbox keeps showing it.",
 		Ops: []string{"accept", "decline"}},
-	{Name: "crew-submit", Role: "worker", Hint: "<attempt id> <pull request url>",
-		Desc: "Worker: submit your result for the coordinator's review",
-		Body: "Submit the result of attempt $ARGUMENTS: the pull request link, after its gates passed as the " +
-			"project's process requires. Use the work step below with `submit`; `block` with the reason, or " +
-			"`resume` after a block, use the same step.",
+	{Name: "crew-submit", Role: "worker", Hint: "<attempt id>",
+		Desc: "Worker: open your pull request and submit it for the coordinator's review",
+		Body: "Submit the result of attempt $ARGUMENTS.\n\n" +
+			"1. Push your branch, then open its pull request from your worktree with `aicrew-agent forge pr open " +
+			"--title TITLE --body-file FILE`, with `--draft` while a gate is open if the project's process says " +
+			"so. It prints the pull request's number and URL.\n" +
+			"2. Take it through the gates the project's process requires: `aicrew-agent forge pr show --pr N` " +
+			"reads it, `aicrew-agent forge pr label add|remove --pr N LABEL` labels it, and `aicrew-agent forge " +
+			"pr comment --pr N --body-file FILE` comments on it. " + pullRequestNever + "\n" +
+			"3. Submit its URL with the work step below with `submit`; `block` with the reason, or `resume` " +
+			"after a block, use the same step.",
 		Ops: []string{"work"}},
 	{Name: "crew-claim", Role: "independent", Hint: "<task id>",
 		Desc: "Independent member: claim a READY task for yourself",
@@ -176,6 +186,18 @@ const credentialRule = "Never read `creds/`, and never put a credential into a c
 	"TLS verification (`http.sslVerify`, `GIT_SSL_NO_VERIFY` or an unverified connection). When an access, " +
 	"a clone or a fetch is refused or fails, stop and report it (an offer you cannot verify is declined); " +
 	"never work around it."
+
+// pullRequestNever is what every pull request instruction says about other
+// forge clients (pilot finding 2026-10-11).
+const pullRequestNever = "Never use `gh`, `tea`, `glab` or another forge client, or a forge's API with a " +
+	"credential: their account is not yours. When a `forge pr` command is refused or fails, stop and report it."
+
+// pullRequestRule is ROLES.md's rule on pull requests, which every member
+// follows.
+const pullRequestRule = "Open, read, label and comment on pull requests with `aicrew-agent forge pr`, which " +
+	"uses your home's own forge credential for the repository's host: `open --title TITLE --body-file FILE " +
+	"[--draft]` in your worktree after pushing your branch, `show --pr N`, `label add|remove --pr N LABEL`, " +
+	"and `comment --pr N --body-file FILE`. Each prints the pull request's number and URL. " + pullRequestNever
 
 func commandPath(name string) string { return ".claude/commands/" + name + ".md" }
 

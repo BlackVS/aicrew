@@ -1,12 +1,14 @@
-// Package forge is aicrew-agent's read-only view of a forge (GitHub, Gitea
-// or GitLab) with a member's own token (docs/proposals/PILOT-1-FOLLOWUPS.md,
-// section 3): who the token authenticates as, a repository's default branch
-// and a branch's head commit. It never writes to a forge, never logs or
-// returns a token, and never follows a redirect to another host, so a token
-// sent to one host never reaches another.
+// Package forge is aicrew-agent's view of a forge (GitHub, Gitea or GitLab)
+// with a member's own token (docs/proposals/PILOT-1-FOLLOWUPS.md, section
+// 3): who the token authenticates as, a repository's default branch and a
+// branch's head commit. Its only writes are on pull requests (pulls.go):
+// opening one, labelling it and commenting on it. It never logs or returns a
+// token, and never follows a redirect to another host, so a token sent to
+// one host never reaches another.
 package forge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -40,9 +43,12 @@ var (
 	ErrUnreachable = errors.New("the forge could not be reached")
 	// ErrRejected is a token the forge refused (401 or 403).
 	ErrRejected = errors.New("the forge rejected the token")
-	// ErrNotFound is a repository or branch the forge does not show to the
-	// token.
-	ErrNotFound = errors.New("the forge shows no such repository or branch to this token")
+	// ErrNotFound is a repository, branch, pull request or label the forge
+	// does not show to the token.
+	ErrNotFound = errors.New("the forge shows no such repository, branch, pull request or label to this token")
+	// ErrForbidden is a write the forge refuses a valid token (403): the
+	// account lacks the access it needs.
+	ErrForbidden = errors.New("the forge forbids this to the token's account")
 )
 
 // maxBody bounds a forge answer.
@@ -369,11 +375,30 @@ func repoPath(k Kind, path string) string {
 
 // get is one authenticated read.
 func (c *Client) get(ctx context.Context, host string, k Kind, token, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase(host, k)+path, nil)
+	return c.do(ctx, http.MethodGet, host, k, token, path, nil, out)
+}
+
+// do is one authenticated request: in, when not nil, is sent as JSON, and a
+// JSON answer is decoded into out when out is not nil. A write the forge
+// refuses with 403 is ErrForbidden, not ErrRejected: the token is valid but
+// may not do this. Any other refusal carries the forge's own message.
+func (c *Client) do(ctx context.Context, method, host string, k Kind, token, path string, in, out any) error {
+	var body io.Reader
+	if in != nil {
+		raw, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, apiBase(host, k)+path, body)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	switch k {
 	case GitHub:
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -393,19 +418,84 @@ func (c *Client) get(ctx context.Context, host string, k Kind, token, path strin
 	case resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0":
 		// A rate limit is not a verdict on the token: try again later.
 		return fmt.Errorf("%w: rate limited", ErrUnreachable)
+	case resp.StatusCode == http.StatusForbidden && method != http.MethodGet:
+		return fmt.Errorf("%w%s", ErrForbidden, refusal(resp.Body))
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return ErrRejected
 	case resp.StatusCode == http.StatusNotFound:
 		return ErrNotFound
 	case resp.StatusCode >= 500:
 		return fmt.Errorf("%w: status %d", ErrUnreachable, resp.StatusCode)
-	case resp.StatusCode != http.StatusOK:
-		return fmt.Errorf("the forge answered status %d", resp.StatusCode)
+	case resp.StatusCode == http.StatusNoContent:
+		return nil
+	case resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated:
+		return fmt.Errorf("the forge answered status %d%s", resp.StatusCode, refusal(resp.Body))
+	}
+	if out == nil {
+		return nil
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(out); err != nil {
 		return fmt.Errorf("the forge's answer is not JSON: %w", err)
 	}
 	return nil
+}
+
+// maxRefusal bounds the forge's message a refusal quotes.
+const maxRefusal = 300
+
+// refusal is the forge's own message in a refused answer, as ": message",
+// or "" when the answer carries none: GitHub's and Gitea's `message` with
+// GitHub's validation `errors`, GitLab's `message` or `error`. It is one
+// printable line of at most maxRefusal bytes.
+func refusal(body io.Reader) string {
+	var r struct {
+		Message any `json:"message"`
+		Error   any `json:"error"`
+		Errors  []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if json.NewDecoder(io.LimitReader(body, 64<<10)).Decode(&r) != nil {
+		return ""
+	}
+	var parts []string
+	for _, v := range []any{r.Message, r.Error} {
+		switch m := v.(type) {
+		case string:
+			parts = append(parts, m)
+		case []any:
+			for _, s := range m {
+				parts = append(parts, fmt.Sprint(s))
+			}
+		case map[string]any:
+			// GitLab's validation answer: {"message": {"field": ["problem"]}}.
+			keys := make([]string, 0, len(m))
+			for key := range m {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				parts = append(parts, fmt.Sprintf("%s %v", key, m[key]))
+			}
+		}
+	}
+	for _, e := range r.Errors {
+		parts = append(parts, e.Message)
+	}
+	msg := strings.Map(func(c rune) rune {
+		if c < 0x20 || c == 0x7f {
+			return ' '
+		}
+		return c
+	}, strings.Join(parts, "; "))
+	msg = strings.TrimSpace(msg)
+	if len(msg) > maxRefusal {
+		msg = strings.ToValidUTF8(msg[:maxRefusal], "") + "…"
+	}
+	if msg == "" {
+		return ""
+	}
+	return ": " + msg
 }
 
 // reason is a transport error without its URL, which is harmless but long.

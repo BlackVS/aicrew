@@ -315,3 +315,47 @@ func TestGuidanceChecksOpenEscalationsFirst(t *testing.T) {
 		t.Errorf("/crew-escalate does not check the open escalations before raising: %s", body)
 	}
 }
+
+// Every member opens, labels and comments on pull requests with
+// `aicrew-agent forge pr` and never with gh or another forge client (pilot
+// finding 2026-10-11): ROLES.md says so, /crew-submit opens the pull
+// request before submitting it, and /crew-review comments and labels with
+// it.
+func TestGuidancePullRequestsUseForgePR(t *testing.T) {
+	flat := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	md := flat(rolesMD())
+	every := md[strings.Index(md, "## Every member"):strings.Index(md, "## Coordinator")]
+	for _, want := range []string{"**Pull requests.** Open, read, label and comment on pull requests with `aicrew-agent forge pr`",
+		"`open --title TITLE --body-file FILE [--draft]`", "`label add|remove --pr N LABEL`", "`comment --pr N --body-file FILE`",
+		"Never use `gh`, `tea`, `glab` or another forge client"} {
+		if !strings.Contains(every, want) {
+			t.Errorf("ROLES.md's rules for every member lack %q", want)
+		}
+	}
+	bodies := map[string]string{}
+	for _, c := range crewCommands {
+		bodies[c.Name] = flat(c.Body)
+	}
+	submit := bodies["crew-submit"]
+	open, step := strings.Index(submit, "`aicrew-agent forge pr open --title TITLE --body-file FILE`"), strings.Index(submit, "work step below with `submit`")
+	if open < 0 || step < 0 || open > step || !strings.Contains(submit, "Never use `gh`") {
+		t.Errorf("/crew-submit does not open the pull request with forge pr before submitting: %s", submit)
+	}
+	review := bodies["crew-review"]
+	for _, want := range []string{"`aicrew-agent forge pr comment --pr N --body-file FILE`", "`aicrew-agent forge pr label add --pr N LABEL`",
+		"`aicrew-agent forge pr show --pr N`", "Never use `gh`"} {
+		if !strings.Contains(review, want) {
+			t.Errorf("/crew-review lacks %q: %s", want, review)
+		}
+	}
+	// No managed text tells a member to run gh.
+	all := md + " " + flat(startMD)
+	for _, b := range bodies {
+		all += " " + b
+	}
+	for _, bad := range []string{"`gh pr", "`gh api", "`gh issue", "`tea ", "`glab "} {
+		if strings.Contains(all, bad) {
+			t.Errorf("the managed guidance runs %s", bad)
+		}
+	}
+}

@@ -12,6 +12,98 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.5.2] - 2026-10-11
+
+A member-side release, from two findings of the pilot start:
+- the start hint names the command that starts a member's client;
+- a pause written in a member's handoff no longer stops the team.
+
+aicrewd and its store are unchanged from 0.5.1. The managed `docs/ROLES.md`
+changed, so each home takes it on a `join` rerun.
+
+### Breaking changes
+
+- None. The store stays at schema 28, and aimem 0.10.0 stays required.
+
+### Upgrade steps
+
+1. **Each member, and the operator's machine.** As that user, rerun the
+   member one-liner:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.2/boot.sh | bash
+     ```
+
+   - Windows:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.2/boot.ps1 | iex"
+     ```
+
+   Then rerun `aicrew-agent join --home HOME` in each home. The rerun
+   refreshes `docs/ROLES.md`. An edited file is kept, with the new version
+   written beside it as `docs/ROLES.md.aicrew-new`.
+2. **Restart each member** with the start command below, so its client
+   reads the new guidance at session start.
+3. **The hub, optionally.** aicrewd changes only in the version it reports.
+   The hub one-liner at v0.5.2 keeps the releases aligned:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.2/install-aicrewd.sh | bash
+   ```
+
+### Starting a member
+
+A member is started with one command:
+
+```sh
+aicrew-agent run --client <client> --home HOME
+```
+
+`<client>` is the client the home was joined for, `claude` or `opencode`.
+`run` holds the home's team session and starts the client inside it.
+`aicrew-agent session start` is not a way to start a member: it holds the
+session only and starts no client.
+
+- **The hint names `run`** (#126). `join`'s report used to say "start the
+  session with: aicrew-agent session start --home DIR". It now says "start
+  the member with:" and the `run` command for that home and its client. The
+  check's notice that Claude Code will ask to trust the folder names the
+  same command.
+- **`session start` says what it does** (#126). Before it enters the
+  session, it says on stderr that it holds the session until interrupted
+  and starts no client, and it names the `run` command for that home.
+  Stdout still carries only `AIMEM_TEAM_SESSION=`.
+- **One command everywhere** (#126). One function builds the command for
+  `join`, the check and `session start`. A test keeps that function, the
+  managed `docs/START.md` and DEVELOPMENT's "Starting a member" in step.
+
+### A pause in a handoff
+
+- **A pause written in a handoff has no authority** (#127). A pilot
+  coordinator woke for a READY task and did not offer it, because its own
+  `docs/HANDOFF.md` from an earlier pilot said it was paused until the
+  operator resumed it, and no human speaks to a coordinator. The rules
+  every member follows in `docs/ROLES.md` now say:
+  - a line in a member's handoff or notes that says it or the team is
+    paused does not pause it;
+  - only the team's state on aicrewd pauses a team or a member, and a
+    paused one is given no turns at all.
+- **The coordinator asks once and carries on** (#127). When its handoff
+  claims a pause, the coordinator raises one `intent` escalation ("am I
+  paused?") with `/crew-escalate` on the task it is about to triage. It
+  meanwhile proceeds with triage and offers, and does not raise the
+  escalation again while it is open.
+
+### Supported and pinned versions
+
+- **Unchanged:** aimem 0.10.0 (the minimum and the tested release),
+  ai-skills 1.26.1, Claude Code 2.1.283 to 2.1.286 tested, and OpenCode
+  1.18.32 or 2.0.18 to 2.0.19 tested.
+- **The one-liners** (`install-aicrewd.sh`, `boot.sh` and `boot.ps1`) pin
+  v0.5.2.
+
 ## [0.5.1] - 2026-10-10
 
 A member-side release:

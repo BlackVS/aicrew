@@ -117,6 +117,9 @@ func startSessionTx(ctx context.Context, tx *sql.Tx, c Caller, teamID string, no
 		if coordGen, err = bumpCoordinatorGeneration(ctx, tx, teamID); err != nil {
 			return Session{}, err
 		}
+		if err := noticeFencedOffers(ctx, tx, teamID, coordGen, now); err != nil {
+			return Session{}, err
+		}
 	}
 	id, err := newID(now)
 	if err != nil {
@@ -178,6 +181,9 @@ func resumeSessionTx(ctx context.Context, tx *sql.Tx, c Caller, sessionID string
 	coordGen := sess.CoordinatorGeneration
 	if sess.Role == RoleCoordinator {
 		if coordGen, err = bumpCoordinatorGeneration(ctx, tx, sess.TeamID); err != nil {
+			return Session{}, err
+		}
+		if err := noticeFencedOffers(ctx, tx, sess.TeamID, coordGen, now); err != nil {
 			return Session{}, err
 		}
 	}

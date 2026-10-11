@@ -446,7 +446,8 @@ func offerCommand(c Caller, key string, in OfferRequest, proof *string) command 
 // The worker starts work only once the transfer is confirmed (running).
 func (s *Store) AcceptOffer(ctx context.Context, c Caller, port Reservations, key, attemptID string, in AcceptRequest) (Attempt, error) {
 	var proof string
-	return s.transition(ctx, c, port, acceptCommand(c, key, attemptID, in, true, &proof), attemptID, &proof)
+	a, err := s.transition(ctx, c, port, acceptCommand(c, key, attemptID, in, true, &proof), attemptID, &proof)
+	return a, s.noticeStaleAccept(ctx, attemptID, err)
 }
 
 // acceptCommand is an acceptance's intent: it checks the offer and the

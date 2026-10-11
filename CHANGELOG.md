@@ -12,6 +12,125 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.5.3] - 2026-10-11
+
+A release from a pilot finding: a cycle stuck on a stale offer. The
+coordinator's session was restarted while its offer of a task was
+outstanding. The worker's accept was then refused `offer_stale`, and
+nothing told the coordinator, which kept waiting on the offer. This release
+makes three changes:
+- aicrewd tells the coordinator about a stale offer;
+- a coordinator's session starts by reconciling the team's open attempts;
+- a member lists its open escalations, and the coordinator checks them
+  before raising one.
+
+aicrewd gains two read routes and the stale-offer messages, so the hub is
+upgraded as well as the members. The managed `docs/ROLES.md`,
+`docs/START.md` and the `/crew-start` and `/crew-escalate` commands
+changed, so each home takes them on a `join` rerun.
+
+### Breaking changes
+
+- None. The store stays at schema 28, and aimem 0.10.0 stays required.
+
+### Upgrade steps
+
+1. **The hub, first.** Rerun the hub one-liner at v0.5.3:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.3/install-aicrewd.sh | bash
+   ```
+
+   A 0.5.3 member against an older aicrewd still starts. But its
+   coordinator's list of open attempts records that the read failed, and
+   `aicrew-agent attempts` and `aicrew-agent escalations` fail.
+2. **Each member, and the operator's machine.** As that user, rerun the
+   member one-liner:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.3/boot.sh | bash
+     ```
+
+   - Windows:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.3/boot.ps1 | iex"
+     ```
+
+   Then rerun `aicrew-agent join --home HOME` in each home. The rerun
+   refreshes `docs/ROLES.md`, `docs/START.md` and the client commands. An
+   edited file is kept, with the new version written beside it with the
+   suffix `.aicrew-new`.
+3. **Restart each member** with `aicrew-agent run --client <client> --home
+   HOME`, so its client reads the new guidance at session start. Restart
+   the coordinator last: its new session lists the open attempts, and
+   aicrewd tells it about each offer its earlier session made.
+
+### A stale offer reaches the coordinator
+
+- **aicrewd tells the coordinator** (#129). An offer is bound to the
+  coordinator session it was made in and to the worker's session context.
+  Once either moves on, the offer can never be accepted, and only the
+  coordinator can release it. aicrewd now writes a lifecycle message, which
+  wakes the team's coordinator, in two cases:
+  - when a worker's accept is refused `offer_stale`, once per attempt;
+  - when a coordinator session starts or resumes, for each offer still
+    outstanding from an earlier coordinator session.
+
+  The message names the task, the worker and the attempt, says why the
+  offer is stale, and gives the remedy: "Withdraw it and offer the task
+  again."
+
+### A coordinator reconciles first
+
+- **The open attempts at session start** (#130). A new route,
+  `GET /v1/crew/attempts`, lists the team's open attempts for its
+  coordinator only. Each entry is an offer or a running attempt, says
+  whether an offer is stale, expired or declined, and names the next
+  action.
+- **The launcher records them.** Before a coordinator's client starts,
+  its launcher writes the list to `state/open-attempts.md` in the home. A
+  failed read is recorded too, so the file never shows an earlier
+  session's list. `aicrew-agent attempts [--json]` reads the current list,
+  and `aicrew-agent session start` prints it on stderr.
+- **The guidance says to reconcile them first.** Several places now say
+  so: the client's first instruction, step 3 of `/crew-start`, and
+  `docs/START.md`. They point to a new "Reconcile first" rule in
+  `docs/ROLES.md`, which says:
+  - withdraw an offer that can no longer be accepted, then offer the task
+    again if it is still to be done;
+  - follow a running attempt;
+  - recover a pending step of its own;
+  - never wait on an offer made before its session started.
+
+### One question, one escalation
+
+- **A member lists its open escalations** (#131). In the pilot, the
+  coordinator raised the same question twice. A new route,
+  `GET /v1/crew/escalations`, lists the open (unanswered) escalations a
+  member can see:
+  - the coordinator sees every one in its team, including any an earlier
+    coordinator raised;
+  - any other member sees only its own.
+- **Short pages.** The list holds short summaries, 20 per page, without
+  the context, options or answer. Each page names where the next starts
+  (`next`, then `?after=`), so a long list always fits the launcher's
+  reply bound and is never cut off.
+- **The command.** `aicrew-agent escalations [--json]` reads every page.
+- **The guidance.** "How to escalate" in `docs/ROLES.md` and
+  `/crew-escalate` now start with that check. When an open escalation
+  already asks the question, the member does not raise it again and
+  carries on.
+
+### Supported and pinned versions
+
+- **Unchanged:** aimem 0.10.0 (the minimum and the tested release),
+  ai-skills 1.26.1, Claude Code 2.1.283 to 2.1.286 tested, and OpenCode
+  1.18.32 or 2.0.18 to 2.0.19 tested.
+- **The one-liners** (`install-aicrewd.sh`, `boot.sh` and `boot.ps1`) pin
+  v0.5.3.
+
 ## [0.5.2] - 2026-10-11
 
 A member-side release, from two findings of the pilot start:

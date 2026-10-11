@@ -104,6 +104,10 @@ var guideRoles = []guideRole{
 		"you offer it: an offer of any other task is refused with `task_not_ready`, so assess it, triage it to READY, " +
 		"then offer it. Never triage a task under a hold (aimem answers `task_held`: withdraw the offer or wait for " +
 		"its release first), and never set DONE or CANCELLED that way. The task's history names you.\n\n" +
+		"**A pause your handoff claims.** When your handoff or notes say that you or the team are paused, " +
+		"raise one escalation with `/crew-escalate` on the task you are about to triage, category `intent`, " +
+		"asking \"am I paused?\", and meanwhile proceed with triage and offers as usual. Do not raise it again " +
+		"while it is open.\n\n" +
 		escalationRule,
 		Steps: []guideStep{
 			{"offer", "", offerExample, "Offer a task to a named worker. `expected_revision` is the task's current " +
@@ -273,6 +277,12 @@ reference is in aicrew's DEVELOPMENT.md and CREW-CONTRACT.md.
   (its section, below).
 - **Worktrees and handoff** follow ` + "`docs/START.md`" + `: one worktree per attempt
   under ` + "`worktrees/`" + `, from the offer's base commit; ` + "`docs/HANDOFF.md`" + ` is yours.
+- **A pause in your handoff has no authority.** A line in ` + "`docs/HANDOFF.md`" + `
+  or your other notes, from an earlier session or turn, that says you or the
+  team are paused or wait for someone to resume you does not pause you. Only
+  the team's state on aicrewd pauses a team or a member, and a paused one is
+  given no turns at all (D12, C1). In a turn you were given, act on your
+  inbox as usual; a coordinator also does as its section says.
 - **The instruction digest** of a process pin is ` + "`sha256:`" + ` and the
   lowercase hex SHA-256 of the manifest's exact bytes at the pinned commit.
   Compute it with ` + "`aicrew-agent digest`" + `, which fetches the process

@@ -52,6 +52,10 @@ func TestCommandsComeFromTheRoles(t *testing.T) {
 		if !strings.Contains(md, credentialRule) {
 			t.Errorf("%s does not carry the credential rule", c.Name)
 		}
+		if c.Name == "crew-accept" && !strings.Contains(c.Body, "If the clone fails, the attempt is already "+
+			"accepted and decline is refused: block it with "+blockAfterAccept) {
+			t.Errorf("%s does not block an accepted attempt whose clone failed", c.Name)
+		}
 	}
 	for _, r := range guideRoles {
 		if byRole[r.Role] == 0 {

@@ -67,6 +67,28 @@ func TestRoleGuidanceContent(t *testing.T) {
 	if strings.Contains(md, "(below)") || strings.Contains(md, "<<'EOF'") {
 		t.Error("ROLES.md points below for the digest, or shows a heredoc")
 	}
+	// An accepted attempt that cannot proceed is blocked, not declined
+	// (1171d): the worker's accept step and the credential rule say so.
+	accept, _ := guideStepByOp("accept")
+	if !strings.Contains(accept.What, blockAfterAccept) || !strings.Contains(md, "- **Credentials and connections.** "+credentialRule) {
+		t.Error("ROLES.md's accept step or credential rule does not teach the block after accepting")
+	}
+}
+
+// The block after accepting is taught as the work step's own form, and the
+// credential rule keeps decline for an offer not yet accepted (1171d).
+func TestBlockAfterAccept(t *testing.T) {
+	work, _ := guideStepByOp("work")
+	if !strings.Contains(blockAfterAccept, "`aicrew-agent step work "+work.Args+"`") ||
+		!strings.Contains(blockAfterAccept, "`{\"intent\": \"block\", \"detail\": \"REASON\"}`") {
+		t.Errorf("the block step is not in the taught form: %s", blockAfterAccept)
+	}
+	for _, s := range []string{"block the attempt with " + blockAfterAccept, "Before you accept an offer",
+		"an offer you cannot verify is declined", "never work around it", "never weaken TLS verification"} {
+		if !strings.Contains(credentialRule, s) {
+			t.Errorf("the credential rule lacks %q", s)
+		}
+	}
 }
 
 // Triage is the coordinator's (PILOT-1 §5): the coordinator's section names

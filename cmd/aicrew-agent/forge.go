@@ -97,16 +97,20 @@ func forgeCmd(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 			rep, err = f.Comment(ctx, pr, body)
 		}
 	}
+	// Everything printed passes through RedactForgeTokens: an input quoted
+	// before a check could refuse it never shows a token.
 	if err != nil {
-		fmt.Fprintln(stderr, "forge pr "+verb+":", err)
+		fmt.Fprintln(stderr, agent.RedactForgeTokens(f.Home, "forge pr "+verb+": "+err.Error()))
 		return exitFailed
 	}
+	var out strings.Builder
 	if *asJSON {
-		out, _ := json.MarshalIndent(rep, "", "  ")
-		fmt.Fprintln(stdout, string(out))
-		return exitOK
+		raw, _ := json.MarshalIndent(rep, "", "  ")
+		fmt.Fprintln(&out, string(raw))
+	} else {
+		printPull(&out, rep)
 	}
-	printPull(stdout, rep)
+	fmt.Fprint(stdout, agent.RedactForgeTokens(f.Home, out.String()))
 	return exitOK
 }
 

@@ -170,8 +170,37 @@ func TestForgePRCommandRefusalsAndCheckout(t *testing.T) {
 		!strings.Contains(errOut, "contains this home's forge credential") {
 		t.Errorf("a title holding the token: %d", code)
 	}
+	// Every other input holding the token is refused as soon as the token is
+	// read, before an error could quote it or a request send it: the head
+	// and base, a label (also an invalid one), the repository's path. The
+	// token is a valid branch name, label and path segment.
+	tok := fakeforge.Token
+	for _, args := range [][]string{
+		{"pr", "open", repo, "--title", "T", "--body-file", "-", "--head", tok, "--base", tok},
+		{"pr", "open", repo, "--title", "T", "--body-file", "-", "--head", tok},
+		{"pr", "open", repo, "--title", "T", "--body-file", "-", "--head", "feat/x", "--base", tok},
+		{"pr", "label", "add", repo, "--pr", "1", tok + ","},
+		{"pr", "label", "remove", repo, "--pr", "1", tok},
+		{"pr", "show", "--repository=https://" + f.Host + "/team/" + tok, "--pr", "1"},
+	} {
+		if code, _, errOut := runForge(t, home, "", args...); code != exitFailed ||
+			!strings.Contains(errOut, "contains this home's forge credential") {
+			t.Errorf("forge %v: %d %s", args[1:3], code, errOut)
+		}
+	}
 	if got := f.Requests[before:]; len(got) != 0 {
 		t.Errorf("a refused text reached the forge: %v", got)
+	}
+	// An input quoted before any check could refuse it, a body file's name
+	// or a host, is redacted wherever it is printed (runForge fails on the
+	// token in any output).
+	for _, args := range [][]string{
+		{"pr", "comment", repo, "--pr", "1", "--body-file", filepath.Join(t.TempDir(), tok+".md")},
+		{"pr", "show", "--repository=https://" + tok + ".example/team/app", "--pr", "1"},
+	} {
+		if code, _, errOut := runForge(t, home, "", args...); code != exitFailed || !strings.Contains(errOut, "[a forge credential]") {
+			t.Errorf("forge %v: %d %s", args[1:3], code, errOut)
+		}
 	}
 
 	if _, err := exec.LookPath("git"); err != nil {

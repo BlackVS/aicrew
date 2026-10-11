@@ -1492,8 +1492,14 @@ credential.
   an argument, the output or an error. As for every forge call, a redirect
   to another host is refused.
 - **A credential is never posted.** A body file in the home's `creds/` is
-  refused unread, whether named directly or through a link. So is a title,
-  body or comment that contains the host's token.
+  refused unread, whether named directly or through a link. Every input
+  that holds the host's token is refused as soon as the token is read,
+  before an error could quote it or a request send it. That covers the
+  repository's path, the title, body, head and base, the labels, and the
+  comment. Everything the command prints passes through a filter that
+  replaces each of the home's recorded forge tokens. This covers an input
+  quoted before any check, such as a body file's name or a host without a
+  credential.
 - **Each command prints** the pull request's number and URL first. Then it
   prints the title, the state (open, closed or merged, and draft), the head
   branch and commit, the base, the merge commit once merged, the labels,

@@ -113,6 +113,26 @@ func inCreds(home, name string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// redacted replaces a forge token in what RedactForgeTokens returns.
+const redacted = "[a forge credential]"
+
+// RedactForgeTokens replaces in s every forge token home records, for any
+// host. `forge pr` passes everything it prints through it, so an input that
+// carried a token and was quoted before any check could refuse it (a file
+// name, a host) still never shows the token.
+func RedactForgeTokens(home, s string) string {
+	doc, _, err := readAgentDoc(home)
+	if err != nil {
+		return s
+	}
+	for host := range doc.forgeEntries() {
+		if _, tok, err := forgeTokenFor(home, doc, host); err == nil && tok != "" {
+			s = strings.ReplaceAll(s, tok, redacted)
+		}
+	}
+	return s
+}
+
 // errHoldsToken refuses a text that carries the host's token.
 var errHoldsToken = errors.New("the text contains this home's forge credential: a credential is never posted")
 
@@ -164,7 +184,23 @@ func (f *ForgePR) target(ctx context.Context) (pullTarget, error) {
 		return pullTarget{}, fmt.Errorf("agent.json records no forge dialect for %s: provision the credential again "+
 			"with aicrew-agent join --home %s --cred %s=FILE", host, quoteArg(f.Home), host)
 	}
-	return pullTarget{host: host, path: path, entry: e, token: tok}, nil
+	t := pullTarget{host: host, path: path, entry: e, token: tok}
+	if t.holds(path) {
+		return pullTarget{}, errHoldsToken
+	}
+	return t, nil
+}
+
+// holds reports whether any of texts contains the token. Every input a
+// command takes is checked with it as soon as the token is read, before an
+// error could quote the input or a request could send it.
+func (t pullTarget) holds(texts ...string) bool {
+	for _, s := range texts {
+		if strings.Contains(s, t.token) {
+			return true
+		}
+	}
+	return false
 }
 
 func (t pullTarget) report(p forge.Pull) PullReport {
@@ -197,12 +233,15 @@ func (f *ForgePR) Open(ctx context.Context, o OpenPull) (PullReport, error) {
 	if err != nil {
 		return PullReport{}, err
 	}
-	if strings.Contains(o.Title, t.token) || strings.Contains(o.Body, t.token) {
+	if t.holds(o.Title, o.Body, o.Head, o.Base) {
 		return PullReport{}, errHoldsToken
 	}
 	if o.Head == "" {
 		if o.Head, err = f.git(ctx, "symbolic-ref", "--quiet", "--short", "HEAD"); err != nil || o.Head == "" {
 			return PullReport{}, errors.New("this checkout is on no branch: pass --head BRANCH")
+		}
+		if t.holds(o.Head) {
+			return PullReport{}, errHoldsToken
 		}
 	}
 	if o.Base == "" {
@@ -252,14 +291,17 @@ func (f *ForgePR) Label(ctx context.Context, n int64, add bool, labels []string)
 	if len(labels) == 0 {
 		return PullReport{}, errors.New("name at least one label")
 	}
+	t, err := f.target(ctx)
+	if err != nil {
+		return PullReport{}, err
+	}
+	if t.holds(labels...) {
+		return PullReport{}, errHoldsToken
+	}
 	for _, l := range labels {
 		if strings.TrimSpace(l) == "" || len(l) > 100 || strings.ContainsAny(l, ",\r\n\t") {
 			return PullReport{}, fmt.Errorf("%q is not a label: one line, no comma, at most 100 bytes", l)
 		}
-	}
-	t, err := f.target(ctx)
-	if err != nil {
-		return PullReport{}, err
 	}
 	if n <= 0 {
 		return PullReport{}, errors.New("--pr must be a pull request number")
@@ -286,7 +328,7 @@ func (f *ForgePR) Comment(ctx context.Context, n int64, body string) (PullReport
 	if err != nil {
 		return PullReport{}, err
 	}
-	if strings.Contains(body, t.token) {
+	if t.holds(body) {
 		return PullReport{}, errHoldsToken
 	}
 	rep, err := f.show(ctx, t, n)

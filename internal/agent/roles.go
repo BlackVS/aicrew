@@ -104,6 +104,12 @@ var guideRoles = []guideRole{
 		"you offer it: an offer of any other task is refused with `task_not_ready`, so assess it, triage it to READY, " +
 		"then offer it. Never triage a task under a hold (aimem answers `task_held`: withdraw the offer or wait for " +
 		"its release first), and never set DONE or CANCELLED that way. The task's history names you.\n\n" +
+		"**Reconcile first.** When your session starts, the launcher records the team's open attempts in `" +
+		OpenAttemptsFile + "`; `aicrew-agent attempts` reads the current list. Before anything else, settle each " +
+		"one as its next action says: withdraw an offer that can no longer be accepted (stale, expired or " +
+		"declined) with the withdraw step below, then offer the task again if it is still to be done; follow a " +
+		"running attempt; recover a pending step of your own, and wait for another member's. An offer made before your session started is stale: never " +
+		"wait on it, and never report a task as already offered because of one.\n\n" +
 		"**A pause your handoff claims.** When your handoff or notes say that you or the team are paused, " +
 		"raise one escalation with `/crew-escalate` on the task you are about to triage, category `intent`, " +
 		"asking \"am I paused?\", and meanwhile proceed with triage and offers as usual. Do not raise it again " +
@@ -228,6 +234,7 @@ func stepLine(s guideStep) string {
 // secret, a handle or an ID.
 func FirstInstruction() string {
 	return "Start your aicrew session. Read docs/START.md and docs/ROLES.md, then run `aicrew-agent inbox`. " +
+		"A coordinator first reads " + OpenAttemptsFile + " and reconciles those attempts, as docs/ROLES.md says. " +
 		"First say in one short message what you will do; then act on what you found, within your role only. " +
 		"If there is nothing to do, end your turn: the home's Stop hook wakes you when a message arrives."
 }

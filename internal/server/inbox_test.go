@@ -207,3 +207,33 @@ func TestInboxPendingDeliversNothing(t *testing.T) {
 	}
 	refused(t, e.get(t, "", InboxPendingPath), http.StatusUnauthorized, "invalid_token")
 }
+
+// GET /v1/crew/attempts lists the team's open attempts to its coordinator
+// only: the settled offer with its next action. A worker is refused
+// role_forbidden, a query is refused, and no token is unauthorized.
+func TestOpenAttemptsRoute(t *testing.T) {
+	e := setupCoordination(t)
+	e.offerAndSettle(t, "offer-1", "task-1", time.Now().Add(time.Hour))
+	got := e.get(t, e.lead.token, AttemptsPath)
+	var out struct {
+		CoordinatorGeneration int64 `json:"coordinator_generation"`
+		Attempts              []struct {
+			ID         string `json:"id"`
+			State      string `json:"state"`
+			Stale      bool   `json:"stale"`
+			NextAction string `json:"next_action"`
+			Task       struct {
+				TaskID string `json:"task_id"`
+			} `json:"task"`
+		} `json:"attempts"`
+	}
+	if got.status != http.StatusOK || json.Unmarshal([]byte(got.raw), &out) != nil || len(out.Attempts) != 1 ||
+		out.Attempts[0].State != "offered" || out.Attempts[0].Stale || out.Attempts[0].Task.TaskID != "task-1" ||
+		out.Attempts[0].NextAction == "" || out.CoordinatorGeneration == 0 {
+		t.Fatalf("the coordinator's list: %d %s", got.status, got.raw)
+	}
+	refused(t, e.get(t, e.worker.token, AttemptsPath), http.StatusForbidden, "role_forbidden")
+	refused(t, e.get(t, e.lead.token, AttemptsPath+"?all=1"), http.StatusBadRequest, "invalid_request")
+	refused(t, e.get(t, "", AttemptsPath), http.StatusUnauthorized, "invalid_token")
+	refused(t, e.get(t, "", AttemptsPath+"?all=1"), http.StatusUnauthorized, "invalid_token")
+}

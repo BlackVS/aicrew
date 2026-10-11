@@ -254,3 +254,41 @@ func TestGuidanceSafetyAckAndOfferTexts(t *testing.T) {
 		}
 	}
 }
+
+// A coordinator reconciles its open attempts before anything else (pilot
+// finding 2026-10-11): the first instruction, /crew-start, START.md and the
+// coordinator's section of ROLES.md name the file the launcher records them
+// in and the command that reads the current list. Only the coordinator's
+// section says to.
+func TestGuidanceReconcilesOpenAttemptsFirst(t *testing.T) {
+	flat := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	md := rolesMD()
+	coord := flat(md[strings.Index(md, "## Coordinator"):strings.Index(md, "## Worker")])
+	for _, s := range []string{"**Reconcile first.**", "`" + OpenAttemptsFile + "`", "`aicrew-agent attempts`",
+		"withdraw an offer that can no longer be accepted (stale, expired or declined)",
+		"then offer the task again", "An offer made before your session started is stale: never wait on it"} {
+		if !strings.Contains(coord, s) {
+			t.Errorf("the coordinator's section lacks %q", s)
+		}
+	}
+	if strings.Contains(md[strings.Index(md, "## Worker"):], OpenAttemptsFile) {
+		t.Error("the worker's or the independent member's section names the open attempts")
+	}
+	if s := FirstInstruction(); !strings.Contains(s, "A coordinator first reads "+OpenAttemptsFile+" and reconciles") {
+		t.Errorf("the first instruction does not send a coordinator to %s: %s", OpenAttemptsFile, s)
+	}
+	var start string
+	for _, c := range crewCommands {
+		if c.Name == "crew-start" {
+			start = flat(c.Body)
+		}
+	}
+	if !strings.Contains(start, "If you are the coordinator, read `"+OpenAttemptsFile+"`") ||
+		strings.Index(start, OpenAttemptsFile) > strings.Index(start, "Run `aicrew-agent inbox`") {
+		t.Errorf("/crew-start does not read %s before the inbox: %s", OpenAttemptsFile, start)
+	}
+	if s := flat(startMD); !strings.Contains(s, "records the team's open attempts in `"+OpenAttemptsFile+"`") ||
+		!strings.Contains(s, `under "Reconcile first"`) {
+		t.Errorf("START.md does not name %s", OpenAttemptsFile)
+	}
+}

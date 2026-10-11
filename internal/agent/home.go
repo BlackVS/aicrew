@@ -223,6 +223,10 @@ Repository instructions live in each repository, not here.
    project's tasks with aimem's task tools in team mode, and triages them as
    ` + "`docs/ROLES.md`" + ` says. A worker takes the project, the task and the
    repository from the offer, never from this list.
+   A coordinator's launcher also records the team's open attempts in
+   ` + "`" + OpenAttemptsFile + "`" + ` when the session starts. Reconcile them before anything
+   else, as ` + "`docs/ROLES.md`" + ` says under "Reconcile first";
+   ` + "`aicrew-agent attempts`" + ` reads the current list.
 9. **Your commands.** The home's ` + "`/crew-*`" + ` commands carry these steps: ` + "`/crew-start`" + `,
    ` + "`/crew-inbox`" + `, ` + "`/crew-handoff`" + `; for a coordinator ` + "`/crew-triage`" + `, ` + "`/crew-offer`" + `,
    ` + "`/crew-review`" + ` and ` + "`/crew-escalate`" + `; for a worker ` + "`/crew-accept`" + ` and ` + "`/crew-submit`" + `; for an independent

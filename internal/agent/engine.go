@@ -130,6 +130,21 @@ func retryAfter(err error) time.Duration {
 func (e *Engine) SessionID() string { return e.session.ID }
 func (e *Engine) AimemFile() string { return e.aimemFile }
 
+// RecordOpenAttempts records the team's open attempts in the home's
+// OpenAttemptsFile when the held session is the team's coordinator's; ok is
+// false for any other role, which records nothing.
+func (e *Engine) RecordOpenAttempts(ctx context.Context) (o OpenAttempts, ok bool, err error) {
+	if e.session.Role != "coordinator" {
+		return OpenAttempts{}, false, nil
+	}
+	r, isReader := e.Crew.(attemptsReader)
+	if !isReader {
+		return OpenAttempts{}, false, nil
+	}
+	o, err = RecordOpenAttempts(ctx, e.Cfg.Home, r, e.stepToken(), e.Now())
+	return o, true, err
+}
+
 // Start enters the agent's team, or resumes the session a restarted client
 // recorded, and binds aimem to it. A recorded session that has ended is
 // forgotten and the team entered anew.

@@ -99,6 +99,13 @@ func serveSteps(e *Engine) *StepServer {
 		return nil
 	}
 	s.RecoverPending()
+	// A coordinator reconciles its open attempts first: the list is
+	// recorded before the client starts, so its first turn reads it.
+	if o, ok, err := e.RecordOpenAttempts(context.Background()); err != nil {
+		e.Log.Warn("the open attempts were not read", "error", err.Error())
+	} else if ok {
+		e.Log.Info("open attempts recorded", "file", OpenAttemptsFile, "attempts", len(o.Attempts))
+	}
 	// The session's start reports the home's capabilities (3.6); a failure
 	// is logged and never holds the session back.
 	go func() {

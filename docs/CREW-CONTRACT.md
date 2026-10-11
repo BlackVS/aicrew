@@ -365,6 +365,7 @@ trusts a caller it is given, and a test enforces that.
 | `POST /v1/crew/attempts` | `Authorization: Bearer` session token | Begin an offer ("Attempt steps"). |
 | `POST /v1/crew/attempts/{id}/accept`, `/decline`, `/withdraw` | `Authorization: Bearer` session token | Begin an acceptance or a withdrawal, or record a decline. |
 | `POST /v1/crew/attempts/claim` | `Authorization: Bearer` session token | Begin an independent claim. |
+| `GET /v1/crew/attempts` | `Authorization: Bearer` session token | The team's open attempts (every state but `closed`), oldest first, for its current coordinator to reconcile when its session starts; any other member is refused `role_forbidden`. Each: `id`, `state`, `phase`, `task`, `worker_agent_id`, `worker_label`, the `coordinator_generation` an offer was made under, `offer_expires_at`, `stale` (an offer made under an earlier coordinator generation), `expired`, `declined` and `next_action`. Reply: `coordinator_generation`, `attempts`. |
 | `POST /v1/crew/attempts/{id}/stop`, `/confirm-stop`, `/release` | `Authorization: Bearer` session token | Request or confirm a stop, or begin the stopped attempt's release. |
 | `POST /v1/crew/attempts/{id}/review`, `/confirm-delivery`, `/finalize` | `Authorization: Bearer` session token | Review the latest result, confirm its delivery, or begin finalizing it as `DONE`. |
 | `POST /v1/crew/attempts/{id}/work` | `Authorization: Bearer` session token | Begin, or supersede, the holder's work update: block, submit or resume. |

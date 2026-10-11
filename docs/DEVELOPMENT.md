@@ -1545,6 +1545,35 @@ bin/aicrew escalations answer --id ID --decision TEXT --rationale TEXT
 
   A test keeps those categories equal to the ones aicrewd accepts.
 
+### A coordinator's open attempts: `aicrew-agent attempts`
+
+When a coordinator's session starts, under `run` or `session start`, the
+launcher reads the team's open attempts from aicrewd (`GET
+/v1/crew/attempts`). It records them in the home's
+`state/open-attempts.md` before the client starts. `session start` also
+prints them on stderr. The first instruction, `/crew-start`, START.md and
+the coordinator's section of ROLES.md ("Reconcile first") send the
+coordinator to that file before anything else.
+
+Each attempt has its task, worker and state, and a next action:
+- **An offer that can no longer be accepted:** withdraw it, then offer the
+  task again. That is an offer that is stale (made under an earlier
+  coordinator session), expired or declined.
+- **A live offer:** wait for the worker.
+- **A running attempt:** follow it.
+- **An attempt with a pending step:** recover the step.
+
+A failed read is written to the file too, so the file never shows an
+earlier session's list as this one's. The current list is read through
+the launcher:
+
+```sh
+aicrew-agent attempts           # the team's open attempts, one line each
+aicrew-agent attempts --json
+```
+
+Only the team's coordinator may read it. A worker's start records nothing.
+
 ### Reading the inbox: `aicrew-agent inbox`
 
 Offers, acceptances, submissions, stops and other lifecycle messages reach

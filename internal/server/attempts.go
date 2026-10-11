@@ -38,6 +38,7 @@ func attemptRoute(action string) string { return AttemptsPath + "/{id}/" + actio
 
 func (s *Server) registerAttempts() {
 	s.handle(http.MethodPost, AttemptsPath, s.offer)
+	s.handle(http.MethodGet, AttemptsPath, s.openAttempts)
 	s.handle(http.MethodPost, ClaimPath, s.claim)
 	handlers := map[string]http.HandlerFunc{"accept": s.accept, "decline": s.decline, "withdraw": s.withdraw,
 		"settle": s.settle, "stop": s.requestStop, "confirm-stop": s.confirmStop, "release": s.releaseStopped,
@@ -45,6 +46,26 @@ func (s *Server) registerAttempts() {
 	for _, action := range attemptActions {
 		s.handle(http.MethodPost, attemptRoute(action), handlers[action])
 	}
+}
+
+// openAttempts is GET /v1/crew/attempts: the team's open attempts, for its
+// coordinator to reconcile at the start of its session. It takes no query.
+func (s *Server) openAttempts(w http.ResponseWriter, r *http.Request) {
+	token := sessionToken(r)
+	if _, err := s.store.AuthenticateSessionToken(r.Context(), token); err != nil {
+		s.refuseSession(w, r, refusalCode(err), false, 0)
+		return
+	}
+	if len(r.URL.Query()) > 0 {
+		s.refuseSession(w, r, "invalid_request", false, 0)
+		return
+	}
+	open, err := s.store.OpenAttemptsWithToken(r.Context(), token)
+	if err != nil {
+		s.refuseSession(w, r, refusalCode(err), false, 0)
+		return
+	}
+	writeJSON(w, http.StatusOK, open)
 }
 
 // attemptPath splits an attempt action path into the attempt ID and the

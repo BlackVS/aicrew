@@ -108,7 +108,7 @@ var guideRoles = []guideRole{
 		OpenAttemptsFile + "`; `aicrew-agent attempts` reads the current list. Before anything else, settle each " +
 		"one as its next action says: withdraw an offer that can no longer be accepted (stale, expired or " +
 		"declined) with the withdraw step below, then offer the task again if it is still to be done; follow a " +
-		"running attempt; recover a pending step. An offer made before your session started is stale: never " +
+		"running attempt; recover a pending step of your own, and wait for another member's. An offer made before your session started is stale: never " +
 		"wait on it, and never report a task as already offered because of one.\n\n" +
 		"**A pause your handoff claims.** When your handoff or notes say that you or the team are paused, " +
 		"raise one escalation with `/crew-escalate` on the task you are about to triage, category `intent`, " +

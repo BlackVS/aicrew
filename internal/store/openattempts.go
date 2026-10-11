@@ -43,7 +43,7 @@ const (
 	nextWithdrawReoffer = "Withdraw the offer, then offer the task again if it is still to be done."
 	nextWaitAccept      = "Wait for the worker to accept or decline; withdraw the offer if it is no longer wanted."
 	nextFollowRunning   = "Follow the running attempt: review a submitted result, or answer a block."
-	nextSettlePending   = "A step is pending on this attempt; recover it with `aicrew-agent step recover` or reconcile the attempt."
+	nextSettlePending   = "A step is pending on this attempt. The member that began it finishes it with `aicrew-agent step recover`: run that if it is yours, otherwise wait for it."
 )
 
 // OpenAttemptsWithToken lists the open attempts of the token's team, oldest

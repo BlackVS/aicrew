@@ -242,5 +242,11 @@ func TestOpenEscalationsRoute(t *testing.T) {
 		t.Errorf("the worker's open escalations = %v, want none", ids)
 	}
 	refused(t, e.get(t, e.lead.token, EscalationsPath+"?open=1"), http.StatusBadRequest, "invalid_request")
+	refused(t, e.get(t, e.lead.token, EscalationsPath+"?after="+id+"&after="+id), http.StatusBadRequest, "invalid_request")
+	refused(t, e.get(t, e.lead.token, EscalationsPath+"?after=01a00000-0000-7000-8000-000000000000"), http.StatusBadRequest,
+		"invalid_request")
+	if r := e.get(t, e.lead.token, EscalationsPath+"?after="+id); r.status != http.StatusOK || !strings.Contains(r.raw, `"escalations":[]`) {
+		t.Errorf("the page after the last: %d %s", r.status, r.raw)
+	}
 	refused(t, e.get(t, "", EscalationsPath), http.StatusUnauthorized, "invalid_token")
 }

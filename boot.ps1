@@ -38,10 +38,13 @@ $binDir = if ($env:AICREW_BIN_DIR) { $env:AICREW_BIN_DIR } else { Join-Path $env
 # left alone. Every download is checked against the release's SHA256SUMS in
 # a temporary directory, all of them before any is installed: nothing in the
 # bin directory changes unless every one passes.
+# Get-AgentVersion lets `version` run to its end before reading its first
+# line: cutting the pipeline short (Select-Object -First) abandons a process
+# that has printed its line but not yet exited, and its exit code reads -1.
 function Get-AgentVersion([string]$Exe) {
   try {
-    $line = (& $Exe version 2>$null | Select-Object -First 1)
-    if ($LASTEXITCODE -eq 0 -and $line) { return ($line -split '\s+')[1] }
+    $out = @(& $Exe version 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $out.Count -gt 0 -and $out[0]) { return ("$($out[0])" -split '\s+')[1] }
   } catch {}
   return ''
 }

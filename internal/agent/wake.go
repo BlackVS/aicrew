@@ -40,6 +40,16 @@ type WakeResult struct {
 	// closed, resumed elsewhere or refused) or "stopping" (the launcher is
 	// shutting down) when nothing is pending.
 	Ended string `json:"ended,omitempty"`
+	// Paused is set when the last read found the team or the member paused
+	// by the operator: aicrewd then lists nothing pending, so the wait ends
+	// without a message (docs/DESIGN-CONTROL-PLANE.md, D12).
+	Paused *PauseNote `json:"paused,omitempty"`
+}
+
+// PauseNote is the operator's pause as the pending read names it.
+type PauseNote struct {
+	AgentID string `json:"agent_id,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // PendingMessage is an unacknowledged message, without its content.
@@ -72,7 +82,10 @@ func (s *StepServer) waitInbox(ctx context.Context, call StepCall) StepAnswer {
 // elsewhere or refused) ends it as "session"; a read that did not answer, or
 // a retryable refusal, is tried again.
 func waitPending(ctx context.Context, read func(context.Context) (json.RawMessage, error), wait time.Duration) WakeResult {
-	none := func(why string) WakeResult { return WakeResult{Pending: []PendingMessage{}, Ended: why} }
+	var paused *PauseNote
+	none := func(why string) WakeResult {
+		return WakeResult{Pending: []PendingMessage{}, Ended: why, Paused: paused}
+	}
 	deadline := time.Now().Add(wait)
 	for {
 		raw, err := read(ctx)
@@ -81,9 +94,13 @@ func waitPending(ctx context.Context, read func(context.Context) (json.RawMessag
 		case err == nil:
 			var out struct {
 				Pending []PendingMessage `json:"pending"`
+				Paused  *PauseNote       `json:"paused"`
 			}
-			if json.Unmarshal(raw, &out) == nil && len(out.Pending) > 0 {
-				return WakeResult{Pending: out.Pending}
+			if json.Unmarshal(raw, &out) == nil {
+				if len(out.Pending) > 0 {
+					return WakeResult{Pending: out.Pending}
+				}
+				paused = out.Paused
 			}
 		case errors.As(err, &ref) && !ref.Retryable:
 			return none("session")
@@ -214,8 +231,27 @@ func StopHook(ctx context.Context, home, sessionID string, now func() time.Time)
 	if now().Sub(st.IdleSince) >= time.Duration(ws.IdleHours)*time.Hour {
 		return nil
 	}
-	return &HookDecision{Decision: "block", Reason: "No new message in your aicrew inbox yet. " +
-		"Reply with the single word: waiting. Do nothing else: your next turn end waits for the inbox again."}
+	return &HookDecision{Decision: "block", Reason: keepAliveReason(res.Paused)}
+}
+
+// keepAliveReason asks for the one-word reply that keeps the member
+// waiting, and says when the operator paused the team or the member: its
+// messages then wait in the inbox until the resume.
+func keepAliveReason(p *PauseNote) string {
+	const reply = "Reply with the single word: waiting. Do nothing else: your next turn end waits for the inbox again."
+	if p == nil {
+		return "No new message in your aicrew inbox yet. " + reply
+	}
+	who := "your team"
+	if p.AgentID != "" {
+		who = "you"
+	}
+	why := ""
+	if p.Reason != "" {
+		why = fmt.Sprintf(" (%q)", p.Reason)
+	}
+	return fmt.Sprintf("The operator paused %s%s: aicrewd holds your inbox until the operator resumes. "+
+		"Do not read the inbox or start work meanwhile. %s", who, why, reply)
 }
 
 // pendingReason tells the member what arrived and what to do, without the

@@ -113,6 +113,48 @@ func TestStopHookDecisions(t *testing.T) {
 	}
 }
 
+// While the operator pauses the team, or the member, a message that arrives
+// starts no turn: the Stop hook keeps the member waiting and says it is
+// paused, without the message. On the resume the next stop blocks with it.
+func TestStopHookWhilePaused(t *testing.T) {
+	shortWakePoll(t)
+	ctx := context.Background()
+	s := setupStepsWith(t, crewOptions{role: store.RoleWorker, steps: true, shortHome: true})
+	setWake(t, s.cfg.Home, `{"wait_seconds": 1}`)
+	now := time.Now
+	s.serve(t)
+	for _, target := range []string{"", s.agentID} {
+		if _, err := s.store.SetPause(ctx, s.operator, "pause-"+target, s.teamID, target, true, "upgrading"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.store.SendMessage(ctx, s.coord, "while-"+target, store.NewMessage{SessionID: s.coordSess.ID,
+			Generation: s.coordSess.Generation, To: s.agentID, Text: "Start the next task."}); err != nil {
+			t.Fatal(err)
+		}
+		who := map[string]string{"": "your team", s.agentID: "you"}[target]
+		d := StopHook(ctx, s.cfg.Home, "sess-p", now)
+		if d == nil || d.Decision != "block" || !strings.Contains(d.Reason, "The operator paused "+who+` ("upgrading")`) ||
+			strings.Contains(d.Reason, "new message") || !strings.Contains(d.Reason, "waiting") {
+			t.Fatalf("a message while paused (%q): %+v", target, d)
+		}
+		if _, err := s.store.SetPause(ctx, s.operator, "resume-"+target, s.teamID, target, false, ""); err != nil {
+			t.Fatal(err)
+		}
+		d = StopHook(ctx, s.cfg.Home, "sess-p", now)
+		if d == nil || d.Decision != "block" || !strings.Contains(d.Reason, "1 new message") {
+			t.Fatalf("the stop after the resume (%q): %+v", target, d)
+		}
+		var answers []byte
+		page := s.call(t, &answers, StepCall{Op: "inbox"})
+		var msgs struct {
+			Messages []store.InboxItem `json:"messages"`
+		}
+		_ = json.Unmarshal(page.Result, &msgs)
+		ack, _ := json.Marshal(map[string][]string{"ids": {msgs.Messages[0].ID}})
+		s.call(t, &answers, StepCall{Op: "ack", Body: ack})
+	}
+}
+
 // setWake sets agent.json's wake settings.
 func setWake(t *testing.T, home, wake string) {
 	t.Helper()

@@ -602,8 +602,8 @@ func TestLimiterRefills(t *testing.T) {
 
 // The routes agents and aimem reach call only the store operations that
 // authenticate by proof, session token or peer credential: never one that
-// trusts a caller it is given. The operator API (admin.go, and the escalation
-// routes of escalations.go) alone calls the operator's store operations, only
+// trusts a caller it is given. The operator API (admin.go, the escalation
+// routes of escalations.go and the control routes of control.go) alone calls the operator's store operations, only
 // in functions handed the operator's caller, and gets that caller only inside
 // the wrapper (adminRoute): it builds the operator's caller there after
 // comparing the operator credential, and has the store authenticate an
@@ -618,6 +618,8 @@ func TestExposureGuard(t *testing.T) {
 		// reads and answers, and the architect credentials (5598).
 		"ListEscalations": true, "GetEscalation": true, "AnswerEscalation": true,
 		"ListArchitectCredentials": true, "IssueArchitectCredential": true, "RevokeArchitectCredential": true,
+		// The team's state, pauses and nudges (C1).
+		"GetTeamState": true, "SetPause": true, "Nudge": true,
 	}
 	allowed := map[string]bool{
 		"AuthenticateIntrospection": true, "Introspect": true,
@@ -630,7 +632,10 @@ func TestExposureGuard(t *testing.T) {
 		"ReviewWithToken": true, "ConfirmDeliveryWithToken": true, "BeginFinalizeWithToken": true,
 		"BeginWorkWithToken": true, "SupersedeWorkWithToken": true,
 		// The member's inbox, as the token's session (pilot G1).
-		"ReadInboxWithToken": true, "AckWithToken": true, "PendingInboxWithToken": true,
+		"ReadInboxWithToken": true, "AckWithToken": true, "PendingInboxWithToken": true, "PendingWithToken": true,
+		// The pause in force for the member whose session token the route
+		// has just authenticated, for its session status (C1).
+		"PauseFor": true,
 		// The team's open attempts, for its coordinator (the store refuses any other role).
 		"OpenAttemptsWithToken": true,
 		// The member's open escalations, before it raises another.
@@ -675,7 +680,7 @@ func TestExposureGuard(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		admin := name == "admin.go" || name == "escalations.go"
+		admin := name == "admin.go" || name == "escalations.go" || name == "control.go"
 		for _, decl := range f.Decls {
 			fn, _ := decl.(*ast.FuncDecl)
 			inOperator := name == "admin.go" && fn != nil && fn.Name.Name == "adminRoute"
@@ -739,13 +744,15 @@ func TestRouteInventory(t *testing.T) {
 	sort.Strings(got)
 	want := []string{"GET /healthz", "GET /v1/admin/architect-credentials", "GET /v1/admin/escalation", "GET /v1/admin/escalations",
 		"GET /v1/admin/hub-credentials", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations",
-		"GET /v1/admin/team", "GET /v1/admin/teams", "GET /v1/crew/attempts", "GET /v1/crew/capabilities", "GET /v1/crew/escalations", "GET /v1/crew/inbox", "GET /v1/crew/inbox/pending",
+		"GET /v1/admin/team", "GET /v1/admin/team/state", "GET /v1/admin/teams", "GET /v1/crew/attempts", "GET /v1/crew/capabilities", "GET /v1/crew/escalations", "GET /v1/crew/inbox", "GET /v1/crew/inbox/pending",
 		"GET /v1/crew/projects", "GET /v1/crew/requirements", "GET /v1/crew/session",
 		"POST /v1/admin/architect-credentials", "POST /v1/admin/architect-credentials/revoke", "POST /v1/admin/escalations/answer",
 		"POST /v1/admin/hub-credentials", "POST /v1/admin/hub-credentials/revoke", "POST /v1/admin/hub-credentials/rotate",
 		"POST /v1/admin/introspection-credentials", "POST /v1/admin/introspection-credentials/revoke",
 		"POST /v1/admin/introspection-credentials/rotate", "POST /v1/admin/invitations", "POST /v1/admin/invitations/revoke",
-		"POST /v1/admin/team/grants", "POST /v1/admin/team/register", "POST /v1/admin/team/rename", "POST /v1/admin/teams",
+		"POST /v1/admin/member/nudge", "POST /v1/admin/member/pause", "POST /v1/admin/member/resume",
+		"POST /v1/admin/team/grants", "POST /v1/admin/team/pause", "POST /v1/admin/team/register", "POST /v1/admin/team/rename",
+		"POST /v1/admin/team/resume", "POST /v1/admin/teams",
 		"POST /v1/crew/attempts", "POST /v1/crew/attempts/claim",
 		"POST /v1/crew/attempts/{id}/accept", "POST /v1/crew/attempts/{id}/confirm-delivery",
 		"POST /v1/crew/attempts/{id}/confirm-stop", "POST /v1/crew/attempts/{id}/decline", "POST /v1/crew/attempts/{id}/finalize",

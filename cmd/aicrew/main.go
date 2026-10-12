@@ -8,7 +8,8 @@
 //	aicrew hub-credential list   [--hub HUB]
 //	aicrew hub-credential revoke --id ID
 //	aicrew invitation issue|list|revoke ... (see invitation.go)
-//	aicrew team create|list|show|rename|register|setup ... (see team.go, teamsetup.go)
+//	aicrew team create|list|show|rename|register|setup|state|pause|resume ... (see team.go, teamsetup.go)
+//	aicrew member pause|resume|nudge ... (see member.go)
 //	aicrew hub add NAME ... (see hub.go)
 //	aicrew operator-token new --output PATH|-
 //	aicrew version [--json]
@@ -56,7 +57,8 @@ const usage = `usage:
   aicrew hub-credential list   [--hub HUB]
   aicrew hub-credential revoke --id ID
   aicrew invitation issue|list|revoke ...   (run "aicrew invitation" for its usage)
-  aicrew team create|list|show|rename|register|setup ...   (run "aicrew team" for its usage)
+  aicrew team create|list|show|rename|register|setup|state|pause|resume ...   (run "aicrew team" for its usage)
+  aicrew member pause|resume|nudge ...   (run "aicrew member" for its usage)
   aicrew hub add NAME ...   (run "aicrew hub" for its usage)
   aicrew operator-token new --output PATH|-
   aicrew architect init|credential ...   (run "aicrew architect" for its usage)
@@ -71,6 +73,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) >= 1 && args[0] == "team" {
 		return runTeam(ctx, args[1:], stdout, stderr)
+	}
+	if len(args) >= 1 && args[0] == "member" {
+		return runMember(ctx, args[1:], os.Stdin, stdout, stderr)
 	}
 	if len(args) >= 1 && args[0] == "hub" {
 		return runHub(ctx, args[1:], stdout, stderr, time.Now())

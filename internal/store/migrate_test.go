@@ -115,6 +115,7 @@ func downgradeToV10(t *testing.T, path string) {
 		schemaV6[1], schemaV6[3],
 		// Tables and columns added after v10.
 		`DROP TABLE session_tokens`, `DROP TABLE session_handles`, `DROP TABLE introspection_credentials`,
+		`DROP TABLE pauses`, `ALTER TABLE messages DROP COLUMN operator`,
 		`DROP TABLE board_cursors`, `DROP TABLE board_projects`, `ALTER TABLE messages DROP COLUMN board`,
 		`ALTER TABLE attempt_steps DROP COLUMN task_revision`,
 		`DROP TABLE escalations`, `DROP TABLE architect_credentials`, `ALTER TABLE messages DROP COLUMN escalation`,
@@ -498,9 +499,20 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 	)`
 
 // dropAttemptRepository takes a store back to v23.
+// dropPauses takes a store back to v28.
+func dropPauses(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	for _, stmt := range []string{`DROP TABLE pauses`, `ALTER TABLE messages DROP COLUMN operator`} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // dropBoard takes a store back to v27.
 func dropBoard(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropPauses(t, raw)
 	for _, stmt := range []string{`DROP TABLE board_cursors`, `DROP TABLE board_projects`,
 		`ALTER TABLE messages DROP COLUMN board`, `ALTER TABLE attempt_steps DROP COLUMN task_revision`} {
 		if _, err := raw.Exec(stmt); err != nil {
@@ -627,6 +639,41 @@ func TestMigrationV26AddsThePendingRefusal(t *testing.T) {
 	}
 	if after != before || before == 0 || reported != 0 {
 		t.Fatalf("after v26: %d attempts (was %d), %d with a reported refusal", after, before, reported)
+	}
+}
+
+// Schema v29 adds the operator's pauses and the note a nudge's message
+// carries to a populated v28 store: every message is kept, carrying none,
+// and nothing is paused.
+func TestMigrationV29AddsPauses(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropPauses(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 28`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v28 store: %v", err)
+	}
+	defer s2.Close()
+	var after, carrying, pauses int
+	if err := s2.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(operator, '')) FROM messages`).Scan(&after, &carrying); err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM pauses`).Scan(&pauses); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || before == 0 || carrying != 0 || pauses != 0 {
+		t.Fatalf("after v29: %d messages (was %d), %d carrying a note, %d pauses", after, before, carrying, pauses)
 	}
 }
 

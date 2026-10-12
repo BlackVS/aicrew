@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 28
+const schemaVersion = 29
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -219,7 +219,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
 		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21,
-		schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28}
+		schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -433,6 +433,21 @@ var schemaV28 = []string{
 		PRIMARY KEY (hub_id, project_id)
 	)`,
 	`ALTER TABLE messages ADD COLUMN board TEXT NOT NULL DEFAULT ''`,
+}
+
+// schemaV29 adds the operator's pauses (docs/DESIGN-CONTROL-PLANE.md, D12;
+// increment C1): one row per paused team (agent_id empty) or paused member,
+// and the operator's note a nudge's message carries, as JSON.
+var schemaV29 = []string{
+	`CREATE TABLE pauses (
+		team_id   TEXT NOT NULL REFERENCES teams (id),
+		agent_id  TEXT NOT NULL DEFAULT '',
+		reason    TEXT NOT NULL DEFAULT '',
+		paused_by TEXT NOT NULL,
+		paused_at TEXT NOT NULL,
+		PRIMARY KEY (team_id, agent_id)
+	)`,
+	`ALTER TABLE messages ADD COLUMN operator TEXT NOT NULL DEFAULT ''`,
 }
 
 // schemaV27 adds escalations (docs/DESIGN-CONTROL-PLANE.md, section 7.5):

@@ -84,9 +84,12 @@ type Message struct {
 	Escalation *EscalationDetail `json:"escalation,omitempty"`
 	// Board is the board change a board.changed announcement carries
 	// (board.go); no other message carries one.
-	Board     *BoardDetail `json:"board,omitempty"`
-	Text      string       `json:"text"`
-	CreatedAt time.Time    `json:"created_at"`
+	Board *BoardDetail `json:"board,omitempty"`
+	// Operator is the operator's note a nudge carries (control.go); no
+	// other message carries one.
+	Operator  *OperatorDetail `json:"operator,omitempty"`
+	Text      string          `json:"text"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 // OfferDetail is an offer as its announcement carries it, in the shape of
@@ -355,15 +358,19 @@ func insertMessage(ctx context.Context, tx *sql.Tx, m Message, recipients []stri
 		}
 		board = string(b)
 	}
+	operator, err := encodeOperator(m.Operator)
+	if err != nil {
+		return Message{}, err
+	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO messages (id, team_id, seq, kind, sender_agent_id, sender_session_id, sender_generation,
 		        sender_model, sender_client, sender_client_version, to_agent_id, project_hub_id, project_id,
-		        task_hub_id, task_project_id, task_id, attempt_id, offer, escalation, board, text, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		        task_hub_id, task_project_id, task_id, attempt_id, offer, escalation, board, operator, text, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.TeamID, m.Seq, string(m.Kind), m.SenderAgentID, m.SenderSessionID, m.SenderGeneration,
 		m.SenderProfile.Model, m.SenderProfile.Client, m.SenderProfile.ClientVersion, m.To,
 		project.HubID, project.ProjectID, task.HubID, task.ProjectID, task.TaskID, m.AttemptID, offer, escalation,
-		board, m.Text, formatTime(now)); err != nil {
+		board, operator, m.Text, formatTime(now)); err != nil {
 		return Message{}, fmt.Errorf("insert message: %w", err)
 	}
 	for _, r := range recipients {
@@ -406,21 +413,42 @@ type PendingMessage struct {
 // PendingInboxWithToken lists the token's member's unacknowledged visible
 // messages, oldest first and at most a page, as ReadInbox would deliver
 // them, without recording a delivery: a hint that something waits, which
-// only a read and an acknowledgement act on.
+// only a read and an acknowledgement act on. While the team or the member is
+// paused it lists none (PendingWithToken).
 func (s *Store) PendingInboxWithToken(ctx context.Context, token string) ([]PendingMessage, error) {
-	var out []PendingMessage
+	p, err := s.PendingWithToken(ctx, token)
+	return p.Pending, err
+}
+
+// Pending is a member's pending read: the session it was read as, the
+// messages waiting, and the pause in force. While the team or the member is
+// paused, Pending is empty whatever waits, so the member's wake starts no
+// turn (docs/DESIGN-CONTROL-PLANE.md, D12): the messages stay in the inbox
+// for the resume.
+type Pending struct {
+	SessionID string           `json:"-"`
+	Pending   []PendingMessage `json:"pending"`
+	Paused    *Pause           `json:"paused,omitempty"`
+}
+
+// PendingWithToken is the token's member's pending read.
+func (s *Store) PendingWithToken(ctx context.Context, token string) (Pending, error) {
+	var out Pending
 	err := s.snapshot(ctx, func(q querier) error {
 		b, err := tokenBinding(ctx, q, token, s.now())
 		if err != nil {
+			return err
+		}
+		out = Pending{SessionID: b.SessionID, Pending: []PendingMessage{}}
+		if out.Paused, err = pauseOf(ctx, q, b.TeamID, b.AgentID); err != nil || out.Paused != nil {
 			return err
 		}
 		items, err := pendingMessages(ctx, q, b.TeamID, b.AgentID, maxInboxPage)
 		if err != nil {
 			return err
 		}
-		out = make([]PendingMessage, 0, len(items))
 		for _, it := range items {
-			out = append(out, PendingMessage{ID: it.ID, Seq: it.Seq, Kind: it.Kind, AttemptID: it.AttemptID})
+			out.Pending = append(out.Pending, PendingMessage{ID: it.ID, Seq: it.Seq, Kind: it.Kind, AttemptID: it.AttemptID})
 		}
 		return nil
 	})
@@ -497,7 +525,7 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 		`SELECT m.id, m.team_id, m.seq, m.kind, m.sender_agent_id, m.sender_session_id, m.sender_generation,
 		        m.sender_model, m.sender_client, m.sender_client_version, m.to_agent_id,
 		        m.project_hub_id, m.project_id, m.task_hub_id, m.task_project_id, m.task_id, m.attempt_id, m.offer,
-		        m.escalation, m.board, m.text, m.created_at, r.deliveries, r.first_delivered_at
+		        m.escalation, m.board, m.operator, m.text, m.created_at, r.deliveries, r.first_delivered_at
 		 FROM message_recipients r JOIN messages m ON m.id = r.message_id
 		 WHERE r.agent_id = ? AND m.team_id = ? AND r.acknowledged_at IS NULL
 		   AND (m.project_id = '' OR EXISTS (SELECT 1 FROM team_grants g
@@ -517,12 +545,13 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 			offer          string
 			escalation     string
 			board          string
+			operator       string
 			firstDelivered sql.NullString
 		)
 		if err := rows.Scan(&it.ID, &it.TeamID, &it.Seq, &kind, &it.SenderAgentID, &it.SenderSessionID,
 			&it.SenderGeneration, &it.SenderProfile.Model, &it.SenderProfile.Client,
 			&it.SenderProfile.ClientVersion, &it.To, &project.HubID, &project.ProjectID,
-			&task.HubID, &task.ProjectID, &task.TaskID, &it.AttemptID, &offer, &escalation, &board, &it.Text, &created,
+			&task.HubID, &task.ProjectID, &task.TaskID, &it.AttemptID, &offer, &escalation, &board, &operator, &it.Text, &created,
 			&it.Deliveries, &firstDelivered); err != nil {
 			return nil, err
 		}
@@ -562,6 +591,13 @@ func pendingMessages(ctx context.Context, q querier, teamID, agentID string, lim
 				return nil, fmt.Errorf("read the board change of message %s: %w", it.ID, err)
 			}
 			it.Board = &d
+		}
+		if operator != "" {
+			var d OperatorDetail
+			if err := json.Unmarshal([]byte(operator), &d); err != nil {
+				return nil, fmt.Errorf("read the operator note of message %s: %w", it.ID, err)
+			}
+			it.Operator = &d
 		}
 		if it.CreatedAt, err = parseTime(created); err != nil {
 			return nil, err

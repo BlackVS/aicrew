@@ -129,10 +129,12 @@ func attemptRefusal(err error) string {
 // transaction.
 func (s *Server) stepRequest(w http.ResponseWriter, r *http.Request, wantKey bool, v any) (token, key string, ok bool) {
 	token = sessionToken(r)
-	if _, err := s.store.AuthenticateSessionToken(r.Context(), token); err != nil {
+	b, err := s.store.AuthenticateSessionToken(r.Context(), token)
+	if err != nil {
 		s.refuseSession(w, r, refusalCode(err), false, 0)
 		return "", "", false
 	}
+	s.live.saw(b.SessionID, false, time.Now())
 	if wantKey {
 		if key, ok = idempotencyKey(r); !ok {
 			s.refuseSession(w, r, "invalid_request", false, 0)

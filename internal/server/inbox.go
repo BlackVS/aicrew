@@ -4,7 +4,9 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
+	"github.com/BlackVS/aicrew/internal/opapi"
 	"github.com/BlackVS/aicrew/internal/store"
 )
 
@@ -32,16 +34,19 @@ func (s *Server) registerInbox() {
 // inboxPending is GET /v1/crew/inbox/pending: the member's unacknowledged
 // messages by id and kind, without content and without recording a
 // delivery. The launcher's wake-up polls it; the inbox read stays the only
-// delivery.
+// delivery. While the team or the member is paused it lists none and names
+// the pause, so the wake starts no turn (control.go).
 func (s *Server) inboxPending(w http.ResponseWriter, r *http.Request) {
-	pending, err := s.store.PendingInboxWithToken(r.Context(), sessionToken(r))
+	p, err := s.store.PendingWithToken(r.Context(), sessionToken(r))
 	if err != nil {
 		s.refuseSession(w, r, refusalCode(err), false, 0)
 		return
 	}
+	s.live.saw(p.SessionID, true, time.Now())
 	writeJSON(w, http.StatusOK, struct {
 		Pending []store.PendingMessage `json:"pending"`
-	}{pending})
+		Paused  *opapi.Pause           `json:"paused,omitempty"`
+	}{p.Pending, pauseOf(p.Paused)})
 }
 
 type inboxReply struct {
@@ -53,10 +58,12 @@ type inboxReply struct {
 // parameter is refused.
 func (s *Server) inbox(w http.ResponseWriter, r *http.Request) {
 	token := sessionToken(r)
-	if _, err := s.store.AuthenticateSessionToken(r.Context(), token); err != nil {
+	b, err := s.store.AuthenticateSessionToken(r.Context(), token)
+	if err != nil {
 		s.refuseSession(w, r, refusalCode(err), false, 0)
 		return
 	}
+	s.live.saw(b.SessionID, false, time.Now())
 	limit := defaultInboxPage
 	q := r.URL.Query()
 	for name := range q {

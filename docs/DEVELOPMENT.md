@@ -440,6 +440,12 @@ in `internal/opapi`:
 | `GET /v1/admin/architect-credentials` | list architect credentials (metadata) |
 | `POST /v1/admin/architect-credentials` | issue: `{"label"}`; the answer carries the bearer, once |
 | `POST /v1/admin/architect-credentials/revoke` | revoke: `{"id"}` |
+| `GET /v1/admin/team/state?id=TEAM` | the team's pause and each current member's state ("Team state, pause and nudge", below) |
+| `POST /v1/admin/team/pause` | `{"team_id", "reason"}`: pause the team |
+| `POST /v1/admin/team/resume` | `{"team_id"}`: resume the team |
+| `POST /v1/admin/member/pause` | `{"team_id", "agent_id", "reason"}`: pause one member |
+| `POST /v1/admin/member/resume` | `{"team_id", "agent_id"}`: resume one member |
+| `POST /v1/admin/member/nudge` | `{"team_id", "agent_id", "note"}`: the operator's note to one member; answers the message's ID |
 
 The credential routes are also served under their names before 0.3.0,
 `/v1/admin/introspection-credentials` (and `/rotate`, `/revoke`), until
@@ -679,6 +685,81 @@ bin/aicrew team rename   --team-name crew --expect-revision N --name crew-2
   service refuses a request that still carries `projects`.
 - Members join through invitations (below); `aicrew team` does not change
   membership.
+
+### Team state, pause and nudge
+
+The operator's control of a running team (`docs/DESIGN-CONTROL-PLANE.md`,
+section 4.2 and decision D12; increment C1):
+
+```sh
+bin/aicrew team state    --team-name crew
+bin/aicrew team pause    --team-name crew [--reason TEXT]
+bin/aicrew team resume   --team-name crew
+bin/aicrew member pause  --team-name crew --agent builder [--reason TEXT]
+bin/aicrew member resume --team-name crew --agent builder
+bin/aicrew member nudge  --team-name crew --agent builder --note TEXT
+bin/aicrew member nudge  --team-name crew --agent builder --note-file PATH|-
+```
+
+**Team state.** `state` prints the team's pause and, for each current
+member:
+- its label, role, and the client and model its agent reported;
+- its active session: ID, generation, start, and when aicrewd last heard
+  from it (`last_seen_at`) and last saw its wake read the pending list
+  (`last_waited_at`);
+- its own pause;
+- its newest open attempt: ID, state, phase and task;
+- its unacknowledged messages;
+- its `state`, derived as follows until the runner reports it (B2):
+  - `paused`: the team or the member is paused;
+  - `offline`: no active session, or aicrewd has heard nothing from it for
+    30 minutes;
+  - `waiting`: its wake read the pending list within the last 15 seconds,
+    which the Stop hook's `wait-inbox` does every 3 seconds while it waits;
+  - `working`: otherwise.
+
+  What aicrewd heard is kept in memory, so after a restart a session counts
+  from its start or resume until its next call. `needs_login` and
+  `limit_reached` arrive with the provider profile (A5), the current turn
+  with the turn reports (A4), and the runner and host with B2.
+
+**Pause and resume.**
+- **What a pause does.** A pause is a scheduler state, not a message that a
+  model has to obey. While the team or the member is paused, the member's
+  pending read (`GET /v1/crew/inbox/pending`) lists nothing and names the
+  pause: `{"pending": [], "paused": {...}}`. So the Stop hook's `wait-inbox`
+  starts no turn on a new message, and its keep-alive turn tells the member
+  that the operator paused it. aicrewd decides this, so it holds for an agent
+  of any release.
+- **Where it shows.** The session status (`GET /v1/crew/session`) names the
+  pause in force, for the turn loop (A3) to read before a turn.
+- **What it leaves alone.** A pause never touches attempts, reservations or
+  sessions. A turn already running ends normally and may still read its
+  inbox.
+- **Resuming.** Messages that arrived during the pause stay in the inbox,
+  and the next wake after the resume delivers them.
+- **The team and a member.** The team's pause holds every member. A
+  member's pause holds that member alone and outlasts a resume of the team.
+- **Repeating a call.** Pausing what is paused, or resuming what is not,
+  changes nothing: `changed` is false and stderr says so.
+
+**Nudge.**
+- `nudge` writes one lifecycle message to the member alone. Its `text` is
+  "A note from the operator: " followed by the note, and its `operator`
+  carries the note and who sent it. Notes are at most 4 KiB.
+- The message wakes the member like any other, once it is not paused. The
+  member's rules (`docs/ROLES.md`) say to act on it within the member's role
+  and acknowledge it, and that it assigns no task.
+- Use it to tell a member something the board does not carry, for example
+  that its upgraded agent is installed and it should restart with `run`.
+
+**Naming a member and the team.**
+- `--agent` names the member by its agent ID, or by its label when exactly
+  one current member has it. The team is named by `--team` or `--team-name`.
+- Every route is the operator credential's alone. An unknown team or a
+  non-member is `404 not_found`.
+- A team route naming a member, a member route naming none, or a resume with
+  a reason is `400 invalid_request`.
 
 ## Invitations
 

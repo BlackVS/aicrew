@@ -67,6 +67,7 @@ type Server struct {
 	challengeLimit, tokenLimit, refreshLimit *limiter
 	redemption                               redemptionState // redemption.go
 	admin                                    adminState      // admin.go
+	live                                     liveness        // control.go
 }
 
 // Option adjusts a Server before it serves.
@@ -123,6 +124,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 	s.registerRedemption()
 	s.registerAdmin()
 	s.registerEscalations()
+	s.registerControl()
 	s.http = &http.Server{
 		Handler:           s.logged(s.limitBody(http.HandlerFunc(s.dispatch))),
 		ReadHeaderTimeout: readHeaderTimeout,

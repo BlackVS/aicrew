@@ -125,8 +125,9 @@ type StepServer struct {
 	sock os.FileInfo
 	mu   sync.Mutex // one step at a time
 	wg   sync.WaitGroup
-	// steps counts the attempt steps the channel ran, for the turn loop's
-	// progress rule.
+	// steps counts the attempt steps that ran (aicrewd recorded a local
+	// step; a reservation step committed or is pending), for the turn
+	// loop's progress rule. A refused request is not counted.
 	steps atomic.Int64
 	// ctx ends at Close: a step it interrupts stays recorded.
 	ctx    context.Context
@@ -361,7 +362,6 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 		}
 		return StepAnswer{OK: true, Status: StepDone, Result: out}
 	case localOps[call.Op]:
-		s.steps.Add(1)
 		if !attemptIDShape(call.AttemptID) {
 			return refuse("invalid_request", "A local step needs the attempt's ID.", "Pass -attempt.")
 		}
@@ -370,12 +370,10 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 		if err != nil {
 			return answerErr(err)
 		}
+		s.steps.Add(1) // aicrewd recorded it: progress, for the turn loop
 		return StepAnswer{OK: true, Status: StepDone, Result: out}
 	}
 	op, ok := stepOps[call.Op]
-	if ok {
-		s.steps.Add(1)
-	}
 	if !ok {
 		return refuse("invalid_request", "Unknown step "+call.Op+".", "Use offer, accept, withdraw, claim, work, release, finalize, "+
 			"decline, review, stop, confirm-stop, confirm-delivery, recover, pending, inbox, ack, capabilities, escalate or watch-pull.")
@@ -420,6 +418,11 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 	res, err := s.driver.Run(ctx, req)
 	if err != nil {
 		return answerErr(err)
+	}
+	if !res.Settled || res.Outcome == "committed" {
+		// The step committed, or was sent and waits to settle: progress,
+		// for the turn loop. A refused or uncommitted one is not.
+		s.steps.Add(1)
 	}
 	ans := done(res)
 	switch {

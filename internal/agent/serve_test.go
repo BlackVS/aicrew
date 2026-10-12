@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/BlackVS/aicrew/internal/store"
 )
 
 // fakeHost is the launcher's session as the loop sees it.
@@ -407,5 +409,66 @@ func TestReadTurnLimits(t *testing.T) {
 	writeAgentDoc(t, home, map[string]any{"turns": map[string]any{"turn_timeout": "1s", "model": "--dangerously"}})
 	if l := ReadTurnLimits(home); l.TurnTimeout != 30*time.Minute || l.Model != "" {
 		t.Fatalf("out of range: %+v", l)
+	}
+}
+
+// A turn that opens an attempt (a claim, an accepted offer) is the
+// attempt's first turn: its record names the attempt, its cost is the
+// attempt's, and the attempt's continuation resumes its conversation.
+func TestTurnLoopAttemptOpenedInATurn(t *testing.T) {
+	e := newLoopEnv(t)
+	writeAgentDoc(t, e.home, map[string]any{"turns": map[string]any{"attempt_budget_usd": 1}})
+	e.host.role = "independent"
+	e.host.pending = []PendingMessage{msg("m1", "message")}
+	e.next = func(TurnSpec, *fakeHost) TurnResult {
+		e.host.pending = nil
+		e.host.attempt = &memberAttempt{ID: "att-9", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-9"}}
+		e.host.steps++ // the claim
+		return TurnResult{Outcome: TurnFinished, CostUSD: 0.4}
+	}
+	e.tick(t)
+	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished, CostUSD: 0.7} }
+	e.tick(t)
+	if len(e.specs) != 2 || !e.specs[1].Resume || e.specs[1].Conversation != e.specs[0].Conversation {
+		t.Fatalf("the continuation did not resume the claiming turn's conversation: %+v", e.specs)
+	}
+	recs := e.records(t)
+	if recs[0].AttemptID != "att-9" || recs[0].Task == nil || recs[0].Task.TaskID != "task-9" {
+		t.Fatalf("the claiming turn's record: %+v", recs[0])
+	}
+	st := readTurnState(e.home)
+	if a := st.Attempts["att-9"]; a == nil || a.CostUSD != 1.1 || st.Member.ID != "" {
+		t.Fatalf("the attempt's state: %+v, member %+v", st.Attempts["att-9"], st.Member)
+	}
+	e.tick(t)
+	if len(e.specs) != 2 {
+		t.Fatal("a turn after the attempt's budget was spent")
+	}
+}
+
+// Only a step that ran counts as progress: a request the channel refuses
+// before anything is recorded does not, and a committed step does.
+func TestStepsDoneCountsStepsThatRan(t *testing.T) {
+	s := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
+	srv := s.serve(t)
+	var answers []byte
+	for _, c := range []StepCall{
+		{Op: "work", AttemptID: "01a12ff0-5afa-7000-95ab-3277b0539633", Body: []byte(`{"intent":"block","detail":"x"}`)},
+		{Op: "review"},
+		{Op: "fly"},
+	} {
+		if ans := s.call(t, &answers, c); ans.OK {
+			t.Fatalf("%s was not refused: %+v", c.Op, ans)
+		}
+	}
+	if n := srv.StepsDone(); n != 0 {
+		t.Fatalf("refused requests counted %d steps", n)
+	}
+	body, _ := json.Marshal(s.claimBody())
+	if ans := s.call(t, &answers, StepCall{Op: "claim", Body: body}); !ans.OK {
+		t.Fatalf("the claim: %+v", ans)
+	}
+	if n := srv.StepsDone(); n != 1 {
+		t.Fatalf("a committed claim counted %d steps", n)
 	}
 }

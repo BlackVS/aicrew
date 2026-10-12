@@ -223,6 +223,19 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		rec.Denials = res.Denials
 	}
 	rec.Steps = int(l.Host.StepsDone() - before)
+	after, afterErr := l.Host.Status(ctx)
+	if afterErr == nil && attempt == nil && after.Attempt != nil && after.Attempt.State != "closed" {
+		// The turn opened an attempt (an accepted offer, a claim): the
+		// turn is the attempt's first, and its conversation the attempt's
+		// (D4), with its cost charged to it.
+		attempt = after.Attempt
+		task := attempt.Task
+		rec.AttemptID, rec.Task = attempt.ID, &task
+		a = st.attempt(attempt.ID)
+		a.Conversation = *conv
+		st.Member = conversation{}
+		conv = &a.Conversation
+	}
 	if err := appendTurnRecord(l.Home, rec); err != nil {
 		l.Log.Warn("record the turn", "error", err.Error())
 	}
@@ -258,7 +271,7 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		a.Head = newHead
 	}
 	st.Continue = ""
-	if after, err := l.Host.Status(ctx); err == nil && after.Attempt.inWork() {
+	if afterErr == nil && after.Attempt.inWork() {
 		st.Continue = after.Attempt.ID
 		if a != nil && after.Attempt.ID == attemptID && a.NoProgress >= stallTurns && !a.Stalled {
 			l.stall(ctx, after.Attempt, a)

@@ -125,6 +125,7 @@ func New(cfg Config, st *store.Store, log *slog.Logger, opts ...Option) (*Server
 	s.registerAdmin()
 	s.registerEscalations()
 	s.registerControl()
+	s.registerForgeEvents()
 	s.http = &http.Server{
 		Handler:           s.logged(s.limitBody(http.HandlerFunc(s.dispatch))),
 		ReadHeaderTimeout: readHeaderTimeout,

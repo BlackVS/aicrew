@@ -658,6 +658,9 @@ func TestExposureGuard(t *testing.T) {
 		// The hubs' board feeds, read and recorded as aicrewd's reconciler
 		// (5570); the store refuses every other caller.
 		"BoardCursor": true, "RecordBoardPage": true, "ResetBoardCursor": true,
+		// The worker's observation of its running attempt's pull request, by
+		// its session token (forge events).
+		"ObservePullWithToken": true,
 	}
 	// wrapperOnly are the store calls only the wrapper makes.
 	wrapperOnly := map[string]bool{"AuthenticateArchitect": true}
@@ -758,7 +761,7 @@ func TestRouteInventory(t *testing.T) {
 		"POST /v1/crew/attempts/{id}/confirm-stop", "POST /v1/crew/attempts/{id}/decline", "POST /v1/crew/attempts/{id}/finalize",
 		"POST /v1/crew/attempts/{id}/release", "POST /v1/crew/attempts/{id}/review", "POST /v1/crew/attempts/{id}/settle",
 		"POST /v1/crew/attempts/{id}/stop", "POST /v1/crew/attempts/{id}/withdraw", "POST /v1/crew/attempts/{id}/work", "POST /v1/crew/capabilities", "POST /v1/crew/challenges", "POST /v1/crew/coordination",
-		"POST /v1/crew/escalations", "POST /v1/crew/inbox/ack", "POST /v1/crew/introspect", "POST /v1/crew/invitations/begin", "POST /v1/crew/invitations/complete",
+		"POST /v1/crew/escalations", "POST /v1/crew/inbox/ack", "POST /v1/crew/introspect", "POST /v1/crew/invitations/begin", "POST /v1/crew/invitations/complete", "POST /v1/crew/pulls",
 		"POST /v1/crew/session/leave", "POST /v1/crew/token"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("routes = %v, want %v", got, want)

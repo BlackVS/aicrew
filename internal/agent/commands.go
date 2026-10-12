@@ -207,7 +207,11 @@ const pullRequestNever = "Never use `gh`, `tea`, `glab` or another forge client,
 const pullRequestRule = "Open, read, label and comment on pull requests with `aicrew-agent forge pr`, which " +
 	"uses your home's own forge credential for the repository's host: `open --title TITLE --body-file FILE " +
 	"[--draft]` in your worktree after pushing your branch, `show --pr N`, `label add|remove --pr N LABEL`, " +
-	"and `comment --pr N --body-file FILE`. Each prints the pull request's number and URL. " + pullRequestNever
+	"and `comment --pr N --body-file FILE`. Each prints the pull request's number and URL, and whether your " +
+	"launcher watches it (`watch:`): a later change of a watched pull request (a label added, its CI concluding, " +
+	"a new comment, a merge or a close) arrives in your inbox as a lifecycle message whose `forge` names the " +
+	"change, a forge.event, which wakes you. Never wait for a review or CI with a background watch, a sleep loop " +
+	"or a polling script: its end never reaches you. After `label add --pr N review-this`, end your turn. " + pullRequestNever
 
 func commandPath(name string) string { return ".claude/commands/" + name + ".md" }
 

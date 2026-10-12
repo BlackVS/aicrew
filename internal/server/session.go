@@ -70,6 +70,9 @@ var sessionRefusals = map[string]struct {
 }{
 	"invalid_request": {http.StatusBadRequest, "invalid_request", false,
 		"The request is malformed.", "Correct the request."},
+	"no_attempt": {http.StatusNotFound, "", false,
+		"The pull request is none of your running attempts': its repository and head branch match none.",
+		"Report only the pull request of your running attempt's branch."},
 	"unsupported_grant_type": {http.StatusBadRequest, "unsupported_grant_type", false,
 		"Only token exchange is supported.", "Use grant_type " + GrantTokenExchange + "."},
 	"invalid_target": {http.StatusBadRequest, "invalid_target", false,

@@ -207,7 +207,7 @@ func TestWaitPendingEnds(t *testing.T) {
 	refused := func(context.Context) (json.RawMessage, error) {
 		return nil, &Refusal{Code: "invalid_token", Message: "the session has ended"}
 	}
-	if r := waitPending(ctx, refused, time.Minute); r.Ended != "session" || len(r.Pending) != 0 {
+	if r := waitPending(ctx, refused, nil, time.Minute); r.Ended != "session" || len(r.Pending) != 0 {
 		t.Fatalf("a refused read: %+v", r)
 	}
 	tries := 0
@@ -218,18 +218,18 @@ func TestWaitPendingEnds(t *testing.T) {
 		}
 		return json.RawMessage(`{"pending":[{"id":"m1","seq":1,"kind":"lifecycle"}]}`), nil
 	}
-	if r := waitPending(ctx, flaky, time.Minute); len(r.Pending) != 1 || tries != 3 {
+	if r := waitPending(ctx, flaky, nil, time.Minute); len(r.Pending) != 1 || tries != 3 {
 		t.Fatalf("a read that failed twice: %+v after %d tries", r, tries)
 	}
 	down := func(context.Context) (json.RawMessage, error) { return nil, errors.New("connection refused") }
 	start := time.Now()
-	if r := waitPending(ctx, down, 300*time.Millisecond); r.Ended != "timeout" || time.Since(start) > 2*time.Second {
+	if r := waitPending(ctx, down, nil, 300*time.Millisecond); r.Ended != "timeout" || time.Since(start) > 2*time.Second {
 		t.Fatalf("a read that never answers: %+v after %s", r, time.Since(start))
 	}
 	stopping, cancel := context.WithCancel(ctx)
 	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
 	empty := func(context.Context) (json.RawMessage, error) { return json.RawMessage(`{"pending":[]}`), nil }
-	if r := waitPending(stopping, empty, time.Minute); r.Ended != "stopping" {
+	if r := waitPending(stopping, empty, nil, time.Minute); r.Ended != "stopping" {
 		t.Fatalf("the launcher stopping: %+v", r)
 	}
 }
@@ -246,7 +246,7 @@ func TestWaitPendingRetriesARetryableRefusal(t *testing.T) {
 		}
 		return json.RawMessage(`{"pending":[{"id":"m1","seq":1,"kind":"message"}]}`), nil
 	}
-	if r := waitPending(context.Background(), limited, time.Minute); len(r.Pending) != 1 {
+	if r := waitPending(context.Background(), limited, nil, time.Minute); len(r.Pending) != 1 {
 		t.Fatalf("a rate-limited read: %+v", r)
 	}
 }

@@ -24,6 +24,10 @@ const forgeUsage = `usage: aicrew-agent forge pr open    [--home DIR] [--reposit
   name them. --draft opens a draft: GitHub's draft flag, or the title prefix
   "WIP: " on Gitea and "Draft: " on GitLab. Labels must exist already: none
   is created. Never use another forge client or a credential by hand.
+  Each command reports the pull request to the launcher, which then watches
+  it: a later change of its labels, CI or comments arrives in the inbox as a
+  forge.event and wakes the member. Do not wait with a background watch:
+  end the turn.
   --home defaults to $` + agent.HomeEnv + `, which the launcher gives its client.`
 
 // newPullAPI is the forge client `forge pr` uses; tests replace it.
@@ -129,5 +133,8 @@ func printPull(w io.Writer, rep agent.PullReport) {
 	fmt.Fprintf(w, "labels: %s\n", strings.Join(p.Labels, ", "))
 	if rep.Comment != nil {
 		fmt.Fprintf(w, "comment: %s\n", rep.Comment.URL)
+	}
+	if rep.Watch != "" {
+		fmt.Fprintf(w, "watch: %s\n", rep.Watch)
 	}
 }

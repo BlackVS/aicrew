@@ -617,6 +617,31 @@ announcements it leads to and the cursor to read on from
 - **A hub that asks to wait:** it is not read again before the time it
   named.
 
+### Forge events
+
+A member waiting for a review, for CI or for a merge is woken by a
+`forge.event` message, never by a background script it started: only a
+message ends the Stop hook's wait (`docs/CREW-CONTRACT.md`, "Forge
+events"). aicrewd reads no forge; the member's launcher does, with the
+home's own forge credential:
+- **The baseline:** every `aicrew-agent forge pr` command reports the pull
+  request it acted on to aicrewd (`POST /v1/crew/pulls`) through the
+  launcher, and prints `watch:` with whether it is watched. aicrewd matches
+  it to the member's running attempt by repository and branch, and records
+  it.
+- **The watch:** while the member waits for its inbox, the launcher reads
+  each watched pull request (the home's `state/pulls.json`) at the start of
+  the wait and every 60 seconds, and reports it. A read costs one to three
+  forge calls: the pull request, and on GitHub and Gitea the head commit's
+  status, and on GitHub its check runs.
+- **The message:** aicrewd compares a report with the last one and, on a
+  label added, CI concluding, a new comment, or a merge or close, writes one
+  lifecycle message carrying `forge`, to the worker, and to the
+  coordinators while the result is submitted or when the pull request was
+  merged or closed. A repeated report writes nothing.
+- **The end of a watch:** a merged or closed pull request, or one that is no
+  running attempt's (`no_attempt`), is no longer watched.
+
 ## Teams
 
 A team has a name and a hub. Its projects are the grants its hub's
@@ -1584,7 +1609,9 @@ credential.
 - **Each command prints** the pull request's number and URL first. Then it
   prints the title, the state (open, closed or merged, and draft), the head
   branch and commit, the base, the merge commit once merged, the labels,
-  and a new comment's URL. `--json` prints the same as one object.
+  a new comment's URL, and `watch:`, whether the launcher now watches the
+  pull request for forge events ("Forge events", above) or why not.
+  `--json` prints the same as one object.
 - **`open`.** The head is the checkout's branch unless `--head` names one,
   and the base is the repository's default branch unless `--base` names
   one. `--draft` sets GitHub's draft flag. Gitea and GitLab take no draft

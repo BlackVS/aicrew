@@ -1337,6 +1337,81 @@ active coordinators at that moment.
 - A team with no active coordinator when the change is read is not told;
   a coordinator that joins later reads the board at its session start.
 
+## Forge events
+
+A member acts when a message lands in its inbox. So that a review, CI or a
+merge on an attempt's pull request wakes the member, the attempt's pull
+request is watched, and a change becomes a `forge.event` message (a minimal
+A6 of `docs/DESIGN-CONTROL-PLANE.md`; DEVELOPMENT, "Forge events"). A
+background script the member starts to wait for the forge never wakes it:
+only a message ends the Stop hook's wait.
+
+**Who reads the forge.** aicrewd holds no forge credential and reads no
+forge. The member's own launcher reads the pull request with the home's
+forge credential for the repository's host, the credential `forge pr` uses.
+
+**The report.** `POST /v1/crew/pulls`, with the member's session token,
+carries one observation of a pull request:
+- `host` and `repository`: the forge host and the repository's path, as the
+  member's checkout names them;
+- `number`, `url`, `state` (`open`, `closed` or `merged`), `head` (the head
+  branch) and `head_commit`;
+- `labels`, `checks` (the head commit's CI: `none`, `pending`, `success` or
+  `failure`) and `comments` (how many it carries).
+
+aicrewd matches it to the member's running attempt whose repository (host,
+and path without regard to case) and branch are the pull request's. A pull
+request that is none of the member's running attempts' is refused with
+`no_attempt`. The answer names the attempt, whether the observation was the
+baseline, what changed, and the message written, if any.
+
+**When the launcher reports.**
+- Every `aicrew-agent forge pr` command (open, show, label, comment)
+  reports the pull request it acted on, read after the command, and prints
+  whether it is watched. That report is the baseline: the member has just
+  seen it.
+- While the member waits for its inbox (the Stop hook's wait), the launcher
+  reads each watched pull request at the wait's start and every 60 seconds
+  after, and reports it. A pull request refused with `no_attempt`, or
+  reported merged or closed, is no longer watched. The list is the home's
+  `state/pulls.json`, at most 20 entries, and holds no secret.
+
+**What is announced.** aicrewd keeps the last observation of each
+attempt's pull request (schema 30). The first observation of a pull
+request, or of a new one for the attempt, is recorded and announces
+nothing. A later one that differs is recorded, in the same transaction as
+its message, so a change is announced once however often it is reported.
+A change is announced when it is one of:
+- the pull request was merged, closed, or reopened;
+- a label was added (a label removed is not announced);
+- the CI of the head concluded `success` or `failure` (a new head, or CI
+  starting, is not announced);
+- the comment count grew.
+
+**The message.** It is a lifecycle message of the team that names the
+task and the attempt.
+- **Recipients:** the attempt's worker always. The team's active
+  coordinators too when the change bears on a submit: the attempt's result
+  is submitted, or the pull request was merged or closed.
+- **What it carries:** `forge {pull, url, state, head_commit, labels,
+  checks, comments, changes}`: the pull request as observed, and the changes
+  in words, such as "label hands-reviewed added" or "CI concluded success
+  at 0123456789ab".
+- **Its text** is built from those fields alone, never from a comment's
+  body: "forge.event: pull request #N (URL): CHANGES. Read it with
+  `aicrew-agent forge pr show --pr N` and act on it within your role."
+- **Pauses:** as every message, it waits in the inbox while the member or
+  its team is paused.
+
+**Limits.**
+- Nothing is read while no launcher runs for the worker's home, or while
+  the member works in a turn: the next wait reads the current state, and a
+  change made meanwhile is announced then.
+- Changes between two reads are announced together; a label added and
+  removed between them is not seen.
+- A comment the worker posts with `forge pr comment` is in its baseline and
+  is not announced; one it posts another way is.
+
 ## Cross-project references
 
 - A team may span several projects on one hub. Multi-hub teams are out of

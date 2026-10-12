@@ -74,20 +74,28 @@ func (s *StepServer) waitInbox(ctx context.Context, call StepCall) StepAnswer {
 	read := func(ctx context.Context) (json.RawMessage, error) {
 		return s.local.Read(ctx, s.driver.Session.stepToken(), inboxPendingPath)
 	}
-	return done(waitPending(ctx, read, wakeWait(in.Seconds)))
+	return done(waitPending(ctx, read, s.pollPulls, wakeWait(in.Seconds)))
 }
 
 // waitPending reads the pending list every wakePoll until a message waits,
 // the wait ends, or ctx ends. A refused read (the session closed, resumed
 // elsewhere or refused) ends it as "session"; a read that did not answer, or
-// a retryable refusal, is tried again.
-func waitPending(ctx context.Context, read func(context.Context) (json.RawMessage, error), wait time.Duration) WakeResult {
+// a retryable refusal, is tried again. poll, when not nil, runs at the start
+// and every forgePoll before the read: the watched pull requests are read
+// and reported, so a forge event's message is read in the same pass.
+func waitPending(ctx context.Context, read func(context.Context) (json.RawMessage, error), poll func(context.Context),
+	wait time.Duration) WakeResult {
 	var paused *PauseNote
 	none := func(why string) WakeResult {
 		return WakeResult{Pending: []PendingMessage{}, Ended: why, Paused: paused}
 	}
 	deadline := time.Now().Add(wait)
+	var nextPoll time.Time
 	for {
+		if poll != nil && !time.Now().Before(nextPoll) {
+			poll(ctx)
+			nextPoll = time.Now().Add(forgePoll)
+		}
 		raw, err := read(ctx)
 		var ref *Refusal
 		switch {

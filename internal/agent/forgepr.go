@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ type PullAPI interface {
 	AddLabels(ctx context.Context, host string, k forge.Kind, token, path string, n int64, labels []string) error
 	RemoveLabels(ctx context.Context, host string, k forge.Kind, token, path string, n int64, labels []string) error
 	CommentPull(ctx context.Context, host string, k forge.Kind, token, path string, n int64, body string) (forge.Comment, error)
+	GetPullStatus(ctx context.Context, host string, k forge.Kind, token, path string, n int64) (forge.PullStatus, error)
 }
 
 // ForgePR is the home and repository one `forge pr` command acts in.
@@ -44,6 +46,8 @@ type ForgePR struct {
 	API PullAPI
 	// Git runs git; nil means the git on PATH.
 	Git GitRunner
+	// Step calls the home's launcher; nil means CallStep.
+	Step func(ctx context.Context, home string, call StepCall) (StepAnswer, error)
 }
 
 // PullReport is what a `forge pr` command did. It never carries a secret.
@@ -53,6 +57,9 @@ type PullReport struct {
 	Account    string         `json:"account"`
 	Pull       forge.Pull     `json:"pull"`
 	Comment    *forge.Comment `json:"comment,omitempty"`
+	// Watch says whether the launcher watches the pull request for forge
+	// events, or why not.
+	Watch string `json:"watch,omitempty"`
 }
 
 // MaxPullText bounds a pull request's body or a comment read from a file.
@@ -262,7 +269,9 @@ func (f *ForgePR) Open(ctx context.Context, o OpenPull) (PullReport, error) {
 	if err != nil {
 		return PullReport{}, fmt.Errorf("open a pull request from %s into %s on %s: %w", o.Head, o.Base, t.host, err)
 	}
-	return t.report(p), nil
+	rep := t.report(p)
+	rep.Watch = f.watch(ctx, t, p.Number)
+	return rep, nil
 }
 
 // Show reads pull request n.
@@ -271,7 +280,7 @@ func (f *ForgePR) Show(ctx context.Context, n int64) (PullReport, error) {
 	if err != nil {
 		return PullReport{}, err
 	}
-	return f.show(ctx, t, n)
+	return f.showWatched(ctx, t, n)
 }
 
 func (f *ForgePR) show(ctx context.Context, t pullTarget, n int64) (PullReport, error) {
@@ -316,7 +325,7 @@ func (f *ForgePR) Label(ctx context.Context, n int64, add bool, labels []string)
 	if err != nil {
 		return PullReport{}, fmt.Errorf("%s labels on pull request %d of %s on %s: %w", verb, n, t.path, t.host, err)
 	}
-	return f.show(ctx, t, n)
+	return f.showWatched(ctx, t, n)
 }
 
 // Comment posts body on pull request n.
@@ -340,5 +349,53 @@ func (f *ForgePR) Comment(ctx context.Context, n int64, body string) (PullReport
 		return PullReport{}, fmt.Errorf("comment on pull request %d of %s on %s: %w", n, t.path, t.host, err)
 	}
 	rep.Comment = &c
+	rep.Watch = f.watch(ctx, t, n)
 	return rep, nil
+}
+
+// showWatched reads pull request n and reports it to the launcher.
+func (f *ForgePR) showWatched(ctx context.Context, t pullTarget, n int64) (PullReport, error) {
+	rep, err := f.show(ctx, t, n)
+	if err != nil {
+		return PullReport{}, err
+	}
+	rep.Watch = f.watch(ctx, t, n)
+	return rep, nil
+}
+
+// The watch's answers.
+const (
+	WatchOn          = "watched: a change of its labels, CI or comments reaches you as a forge.event in your inbox"
+	watchNoLauncher  = "not watched: no launcher runs for this home"
+	watchUnavailable = "not watched: "
+)
+
+// watch reports pull request n's status, read after the command, to aicrewd
+// through the home's launcher: the baseline its forge events are measured
+// from (forgewatch.go). It never fails the command: it says why the pull
+// request is not watched instead.
+func (f *ForgePR) watch(ctx context.Context, t pullTarget, n int64) string {
+	st, err := f.API.GetPullStatus(ctx, t.host, t.kind(), t.token, t.path, n)
+	if err != nil {
+		return watchUnavailable + "read its status: " + err.Error()
+	}
+	o := observation(t.host, t.path, st)
+	o.Baseline = true
+	body, _ := json.Marshal(o)
+	step := f.Step
+	if step == nil {
+		step = CallStep
+	}
+	ans, err := step(ctx, f.Home, StepCall{Op: "watch-pull", Body: body})
+	switch {
+	case errors.Is(err, ErrNoLauncher):
+		return watchNoLauncher
+	case err != nil:
+		return watchUnavailable + err.Error()
+	case !ans.OK && ans.Error != nil:
+		return watchUnavailable + ans.Error.Message
+	case !ans.OK:
+		return watchUnavailable + "the launcher refused it"
+	}
+	return WatchOn
 }

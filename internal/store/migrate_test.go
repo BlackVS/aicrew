@@ -109,6 +109,7 @@ func downgradeToV10(t *testing.T, path string) {
 	stmts = append(stmts,
 		// Tables added after v10 that reference attempts go first.
 		`DROP TABLE scan_finals`, `DROP TABLE coordination_proofs`, `DROP TABLE superseded_updates`,
+		`DROP TABLE attempt_pulls`, `ALTER TABLE messages DROP COLUMN forge`,
 		`INSERT INTO attempts_v10 (`+attemptsV10Columns+`) SELECT `+attemptsV10Columns+` FROM attempts`,
 		`DROP TABLE attempts`,
 		`ALTER TABLE attempts_v10 RENAME TO attempts`,
@@ -498,10 +499,20 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 		PRIMARY KEY (team_id, hub_id, project_id)
 	)`
 
-// dropAttemptRepository takes a store back to v23.
+// dropForgeEvents takes a store back to v29.
+func dropForgeEvents(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	for _, stmt := range []string{`DROP TABLE attempt_pulls`, `ALTER TABLE messages DROP COLUMN forge`} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // dropPauses takes a store back to v28.
 func dropPauses(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropForgeEvents(t, raw)
 	for _, stmt := range []string{`DROP TABLE pauses`, `ALTER TABLE messages DROP COLUMN operator`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -542,6 +553,7 @@ func dropPendingRefusal(t *testing.T, raw *sql.DB) {
 	}
 }
 
+// dropAttemptRepository takes a store back to v23.
 func dropAttemptRepository(t *testing.T, raw *sql.DB) {
 	t.Helper()
 	dropPendingRefusal(t, raw)
@@ -639,6 +651,41 @@ func TestMigrationV26AddsThePendingRefusal(t *testing.T) {
 	}
 	if after != before || before == 0 || reported != 0 {
 		t.Fatalf("after v26: %d attempts (was %d), %d with a reported refusal", after, before, reported)
+	}
+}
+
+// Schema v30 adds the attempts' pull requests and the forge event a
+// message carries to a populated v29 store: every message is kept, carrying
+// none, and no pull request is recorded.
+func TestMigrationV30AddsForgeEvents(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropForgeEvents(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 29`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v29 store: %v", err)
+	}
+	defer s2.Close()
+	var after, carrying, pulls int
+	if err := s2.db.QueryRow(`SELECT COUNT(*), COUNT(NULLIF(forge, '')) FROM messages`).Scan(&after, &carrying); err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM attempt_pulls`).Scan(&pulls); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || before == 0 || carrying != 0 || pulls != 0 {
+		t.Fatalf("after v30: %d messages (was %d), %d carrying a forge event, %d pull requests", after, before, carrying, pulls)
 	}
 }
 

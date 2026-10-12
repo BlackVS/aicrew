@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 29
+const schemaVersion = 30
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -219,7 +219,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
 		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21,
-		schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29}
+		schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29, schemaV30}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -448,6 +448,25 @@ var schemaV29 = []string{
 		PRIMARY KEY (team_id, agent_id)
 	)`,
 	`ALTER TABLE messages ADD COLUMN operator TEXT NOT NULL DEFAULT ''`,
+}
+
+// schemaV30 adds forge events (docs/CREW-CONTRACT.md, "Forge events"): the
+// last observation of each attempt's pull request, which a later one is
+// compared with, and the pull request change a forge.event carries, as
+// JSON.
+var schemaV30 = []string{
+	`CREATE TABLE attempt_pulls (
+		attempt_id  TEXT PRIMARY KEY REFERENCES attempts (id),
+		number      INTEGER NOT NULL,
+		url         TEXT NOT NULL,
+		state       TEXT NOT NULL,
+		head_commit TEXT NOT NULL,
+		labels      TEXT NOT NULL,
+		checks      TEXT NOT NULL,
+		comments    INTEGER NOT NULL,
+		observed_at TEXT NOT NULL
+	)`,
+	`ALTER TABLE messages ADD COLUMN forge TEXT NOT NULL DEFAULT ''`,
 }
 
 // schemaV27 adds escalations (docs/DESIGN-CONTROL-PLANE.md, section 7.5):

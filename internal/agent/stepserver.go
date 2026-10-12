@@ -336,6 +336,14 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 			return answerErr(err)
 		}
 		return StepAnswer{OK: true, Status: StepDone, Result: out}
+	case call.Op == "watch-pull":
+		// A forge pr command's observation of the pull request it acted on:
+		// the baseline of its forge events (forgewatch.go).
+		out, err := s.observePull(ctx, call.Body)
+		if err != nil {
+			return answerErr(err)
+		}
+		return StepAnswer{OK: true, Status: StepDone, Result: out}
 	case call.Op == "escalate":
 		// Raise an escalation as the team's coordinator (docs/DESIGN-CONTROL-PLANE.md,
 		// section 7.5): the request's JSON object, passed through.
@@ -362,7 +370,7 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 	op, ok := stepOps[call.Op]
 	if !ok {
 		return refuse("invalid_request", "Unknown step "+call.Op+".", "Use offer, accept, withdraw, claim, work, release, finalize, "+
-			"decline, review, stop, confirm-stop, confirm-delivery, recover, pending, inbox, ack, capabilities or escalate.")
+			"decline, review, stop, confirm-stop, confirm-delivery, recover, pending, inbox, ack, capabilities, escalate or watch-pull.")
 	}
 	req := StepRequest{Body: bodyOrEmpty(call.Body), TaskID: call.TaskID}
 	if op.fromBody {

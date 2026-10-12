@@ -38,6 +38,11 @@ type Pull struct {
 	Draft       bool
 	Labels      []string
 	Comments    []string
+	// State is "" (open), "closed" or "merged".
+	State string
+	// CI is the head commit's CI as the test sets it: "" (none reported),
+	// "pending", "success" or "failure", served in the dialect's own shape.
+	CI string
 }
 
 // Forge is one fake forge.
@@ -90,6 +95,19 @@ func (f *Forge) Pull(n int64) *Pull {
 	c.Comments = append([]string(nil), p.Comments...)
 	return &c
 }
+
+// SetPull changes pull request n as another party would: its state, its
+// CI, labels added, and comments posted.
+func (f *Forge) SetPull(n int64, change func(p *Pull)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	change(f.pulls[n])
+}
+
+// AddLabel and Comment are the changes a reviewer makes.
+func (p *Pull) AddLabel(l string)    { p.addLabel(l) }
+func (p *Pull) RemoveLabel(l string) { p.removeLabel(l) }
+func (p *Pull) Comment(body string)  { p.Comments = append(p.Comments, body) }
 
 func (f *Forge) base() string {
 	return map[string]string{"github": "/api/v3", "gitea": "/api/v1", "gitlab": "/api/v4"}[f.Kind]
@@ -177,6 +195,8 @@ func (f *Forge) serve(w http.ResponseWriter, r *http.Request) {
 		f.open(w, in)
 	case strings.HasPrefix(rest, "/pulls/") || strings.HasPrefix(rest, "/merge_requests/"):
 		f.pullRoute(w, r, numRe.FindStringSubmatch(strings.TrimPrefix(strings.TrimPrefix(rest, "/pulls"), "/merge_requests")), in)
+	case strings.HasPrefix(rest, "/commits/") && r.Method == http.MethodGet && f.Kind != "gitlab":
+		f.commitRoute(w, r, strings.TrimPrefix(rest, "/commits/"))
 	case strings.HasPrefix(rest, "/issues/"):
 		f.issueRoute(w, r, numRe.FindStringSubmatch(strings.TrimPrefix(rest, "/issues")), in)
 	default:
@@ -239,17 +259,33 @@ func (f *Forge) writePull(w http.ResponseWriter, p *Pull) {
 	var out map[string]any
 	switch f.Kind {
 	case "gitlab":
+		state := map[string]string{"": "opened", "closed": "closed", "merged": "merged"}[p.State]
 		out = map[string]any{"iid": p.Number, "id": 9000 + p.Number, "web_url": f.pullURL(p), "title": p.Title,
-			"state": "opened", "draft": strings.HasPrefix(p.Title, "Draft: "), "source_branch": p.Head,
-			"target_branch": p.Base, "sha": HeadCommit, "labels": append([]string{}, p.Labels...)}
+			"state": state, "draft": strings.HasPrefix(p.Title, "Draft: "), "source_branch": p.Head,
+			"target_branch": p.Base, "sha": HeadCommit, "labels": append([]string{}, p.Labels...),
+			"user_notes_count": len(p.Comments)}
+		if p.State == "merged" {
+			out["merge_commit_sha"] = "fedcba9876543210fedcba9876543210fedcba98"
+		}
+		if p.CI != "" {
+			out["head_pipeline"] = map[string]any{"status": map[string]string{"pending": "running", "success": "success",
+				"failure": "failed"}[p.CI]}
+		}
 	default:
 		labels := []map[string]any{}
 		for _, l := range p.Labels {
 			labels = append(labels, map[string]any{"id": f.labelID(l), "name": l})
 		}
-		out = map[string]any{"number": p.Number, "html_url": f.pullURL(p), "title": p.Title, "state": "open",
-			"merged": false, "head": map[string]any{"ref": p.Head, "sha": HeadCommit},
-			"base": map[string]any{"ref": p.Base}, "labels": labels}
+		state := "open"
+		if p.State != "" {
+			state = "closed"
+		}
+		out = map[string]any{"number": p.Number, "html_url": f.pullURL(p), "title": p.Title, "state": state,
+			"merged": p.State == "merged", "head": map[string]any{"ref": p.Head, "sha": HeadCommit},
+			"base": map[string]any{"ref": p.Base}, "labels": labels, "comments": len(p.Comments)}
+		if p.State == "merged" {
+			out["merge_commit_sha"] = "fedcba9876543210fedcba9876543210fedcba98"
+		}
 		if f.Kind == "github" {
 			out["draft"] = p.Draft
 		}
@@ -331,6 +367,41 @@ func (f *Forge) pullRoute(w http.ResponseWriter, r *http.Request, m []string, in
 		p.Comments = append(p.Comments, str(in, "body"))
 		w.WriteHeader(http.StatusCreated)
 		fmt.Fprintf(w, `{"id":%d,"body":%q}`, 500+len(p.Comments), str(in, "body"))
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// commitRoute serves GitHub's and Gitea's /commits/SHA/status and GitHub's
+// /commits/SHA/check-runs for HeadCommit: the CI of the pull request whose
+// CI is set, GitHub's as a check run, Gitea's as a commit status.
+func (f *Forge) commitRoute(w http.ResponseWriter, r *http.Request, rest string) {
+	sha, what, _ := strings.Cut(rest, "/")
+	if sha != HeadCommit {
+		http.NotFound(w, r)
+		return
+	}
+	ci := ""
+	for _, p := range f.pulls {
+		if p.CI != "" {
+			ci = p.CI
+		}
+	}
+	switch {
+	case what == "status":
+		if f.Kind == "github" || ci == "" {
+			w.Write([]byte(`{"state":"pending","total_count":0,"statuses":[]}`))
+			return
+		}
+		fmt.Fprintf(w, `{"state":%q,"total_count":1}`, ci)
+	case what == "check-runs" && f.Kind == "github":
+		if ci == "" {
+			w.Write([]byte(`{"total_count":0,"check_runs":[]}`))
+			return
+		}
+		run := map[string]string{"pending": `{"status":"in_progress","conclusion":null}`,
+			"success": `{"status":"completed","conclusion":"success"}`, "failure": `{"status":"completed","conclusion":"failure"}`}[ci]
+		fmt.Fprintf(w, `{"total_count":2,"check_runs":[{"status":"completed","conclusion":"skipped"},%s]}`, run)
 	default:
 		http.NotFound(w, r)
 	}

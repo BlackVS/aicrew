@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/forge"
@@ -124,6 +125,9 @@ type StepServer struct {
 	sock os.FileInfo
 	mu   sync.Mutex // one step at a time
 	wg   sync.WaitGroup
+	// steps counts the attempt steps the channel ran, for the turn loop's
+	// progress rule.
+	steps atomic.Int64
 	// ctx ends at Close: a step it interrupts stays recorded.
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -357,6 +361,7 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 		}
 		return StepAnswer{OK: true, Status: StepDone, Result: out}
 	case localOps[call.Op]:
+		s.steps.Add(1)
 		if !attemptIDShape(call.AttemptID) {
 			return refuse("invalid_request", "A local step needs the attempt's ID.", "Pass -attempt.")
 		}
@@ -368,6 +373,9 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 		return StepAnswer{OK: true, Status: StepDone, Result: out}
 	}
 	op, ok := stepOps[call.Op]
+	if ok {
+		s.steps.Add(1)
+	}
 	if !ok {
 		return refuse("invalid_request", "Unknown step "+call.Op+".", "Use offer, accept, withdraw, claim, work, release, finalize, "+
 			"decline, review, stop, confirm-stop, confirm-delivery, recover, pending, inbox, ack, capabilities, escalate or watch-pull.")

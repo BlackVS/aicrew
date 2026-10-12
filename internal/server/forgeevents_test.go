@@ -61,3 +61,26 @@ func TestObservePullRoute(t *testing.T) {
 		"invalid_request")
 	refused(t, e.call(t, "", PullsPath, "", obs), http.StatusUnauthorized, "invalid_token")
 }
+
+// The session status names the member's open attempt as its worker, for the
+// turn loop's continuation: the worker's running attempt with its phase and
+// branch, and none for the coordinator.
+func TestSessionStatusNamesTheAttempt(t *testing.T) {
+	e := setupCoordination(t)
+	id := e.runningOffer(t)
+	var st struct {
+		Attempt *struct {
+			ID, State, Phase, Branch string
+		} `json:"attempt"`
+	}
+	got := e.get(t, e.worker.token, SessionPath)
+	if got.status != http.StatusOK || json.Unmarshal([]byte(got.raw), &st) != nil || st.Attempt == nil || st.Attempt.ID != id ||
+		st.Attempt.State != "running" || st.Attempt.Phase != "working" || st.Attempt.Branch != "work/task-1" {
+		t.Fatalf("the worker's status: %d %s", got.status, got.raw)
+	}
+	got = e.get(t, e.lead.token, SessionPath)
+	st.Attempt = nil
+	if json.Unmarshal([]byte(got.raw), &st) != nil || st.Attempt != nil {
+		t.Fatalf("the coordinator's status: %s", got.raw)
+	}
+}

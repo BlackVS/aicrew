@@ -251,6 +251,10 @@ in the provider profile (3.1):
   - sends a lifecycle message to the coordinator;
   - stops continuation turns until a message arrives for the worker.
 
+In A3 the stall is reported through the attempt's own block (the `work`
+step), whose lifecycle message reaches the coordinator: aicrewd has no
+message from a member's runner to its coordinator yet.
+
 A submitted or blocked attempt gets no continuation turns. It waits for
 messages: the coordinator's review, a forge event or an answer. The
 coordinator decides what a stall means, as it decides any block.

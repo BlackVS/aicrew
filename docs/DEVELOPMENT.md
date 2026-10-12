@@ -1498,6 +1498,110 @@ managed files from it:
 `check` notes a Stop hook left in a `turns` home, and each `turns.allow`
 addition it leaves out.
 
+### The turn loop: `aicrew-agent serve`
+
+```sh
+aicrew-agent join  --home H --wake turns
+aicrew-agent serve --home H
+```
+
+`serve` runs a home in `turns` mode without a terminal
+(`docs/DESIGN-CONTROL-PLANE.md`, 1.3 to 1.10, increment A3). It holds the
+member's team session as `run` does: the proof, the entry or resume, the
+handle refresh and the step socket. Instead of one interactive client, it
+runs one headless Claude Code turn at a time. An interrupt or SIGTERM ends
+the loop: a running turn is stopped and recorded, and the session is left
+as `run` leaves it. `serve` refuses a home in `stop-hook` mode, and `run`
+refuses one in `turns` mode, since its client would have no Stop hook to
+wake it.
+
+**When a turn starts.** Every 3 s the loop reads the member's pending
+messages and its session status. A turn starts when all of these hold:
+- the team and the member are not paused;
+- no limit holds the member (below);
+- one of:
+  - **a message:** the member has unacknowledged messages;
+  - **a continuation:** the member is a worker whose attempt is still in
+    work (`running`, phase `working` or `rework`) after its last turn, which
+    therefore ended without a block or a submit. The session status names
+    the member's open attempt for this.
+
+At most one turn starts per 5 s, so a burst of messages gives one turn.
+Messages that arrive during a turn wait for the next one.
+
+**The turn.**
+- **The command:** `claude -p "/crew-turn TRIGGER" --output-format
+  stream-json --verbose --permission-mode dontAsk --permission-prompts none
+  --settings .claude/turn-settings.json`, with `--session-id` or `--resume`,
+  `--model` and `--max-budget-usd`. Standard input is closed, and the turn
+  runs in the home with the environment `run` gives its client. No
+  dangerous flag, permission bypass or fallback model is ever passed.
+- **The trigger** names the messages' kinds and ids, or the continued
+  attempt, never a message's text.
+- **Conversations (D4):**
+  - a worker's attempt has one conversation, started by its first turn and
+    resumed by every later one;
+  - every other turn (a coordinator's, or a worker's without an attempt)
+    resumes the member's conversation until 50 turns, 70 % of the client's
+    context window, or a new UTC day, and then starts fresh from the
+    handoff;
+  - a turn that fails while resuming makes the next one start fresh.
+- **Outcomes:**
+  - `finished`: a normal `result` event;
+  - `failed`: an error result, or an exit without a result;
+  - `needs_login`: a refused key, or the client's first authentication
+    retry, which ends the turn at once;
+  - `limit_reached`: the turn's budget, or the provider's limit;
+  - `stopped`: the turn's time limit, or the loop's stop;
+  - `interrupted`: a turn the loop found running when it started again.
+
+**Limits,** from `agent.json`'s `turns` object until the provider profile
+(A5) exists, with the design's defaults:
+
+```json
+{"turns": {"turn_timeout": "30m", "turn_budget_usd": 2, "attempt_budget_usd": 20,
+           "daily_budget_usd": 50, "max_continuations": 20, "model": "",
+           "allow": ["Bash(go test *)"]}}
+```
+
+- A spent daily budget gives no turn until the next UTC day. A spent
+  attempt budget gives no turn while that attempt is open, and is checked
+  again each hour, for an operator who raised it.
+- `max_continuations` bounds one attempt's continuation turns. A message
+  still gets its turn.
+- A provider limit holds the member until the reset time the client
+  reported. Without one, and after a login failure, the hold is 1 hour,
+  then 2, 4 and 8. A failed turn holds it for 1 minute, doubling up to 30.
+  A finished turn clears the hold.
+- **The stall:** three turns of an attempt in a row with no step and no new
+  commit in `worktrees/<attempt>` stall it. The loop then blocks the
+  attempt through the `work` step. The block's message tells the
+  coordinator, which decides what the stall means, as it decides any block.
+  The attempt gets no continuation turns until a message arrives.
+
+**Records.**
+- **Each turn** is one line of `logs/turns.jsonl`: its trigger, client,
+  model, conversation, times, outcome, usage, cost and cost basis, the names
+  of the tools denied, the steps it ran, and the tail of its result text.
+  The text and the error are redacted of the home's forge tokens and of
+  aicrew's, aimem's, forge and provider token shapes. Records hold no
+  secret and no transcript.
+- **The raw stream** of each turn is kept in `logs/turns/<turn id>.jsonl`,
+  owner-only. It is the home's own log of the turn and never leaves the
+  host (D7).
+- **The loop's state** is `state/turns.json`, nonsecret: the conversations,
+  each attempt's turns, cost and progress, the cost per day, and any hold.
+
+**While idle,** the loop also reads the watched pull requests every 60 s
+("Forge events").
+
+**The smoke** with real Claude Code is
+`go test -tags realclaude -run TestRealClaudeTurns ./internal/agent`, with
+a logged-in `claude` on PATH. It uses a disposable home and aicrewd in the
+test. A message gives one turn that reads the inbox and acknowledges it; a
+second gives a turn that resumes the same conversation; idle ticks give no
+turn. `AICREW_SMOKE_KEEP=DIR` keeps the turns' logs.
+
 ### Driving steps: `aicrew-agent step`
 
 The launcher drives every attempt step for its client, which never holds the

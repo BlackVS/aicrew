@@ -661,6 +661,9 @@ func TestExposureGuard(t *testing.T) {
 		// The worker's observation of its running attempt's pull request, by
 		// its session token (forge events).
 		"ObservePullWithToken": true,
+		// The member's open attempt as its worker, in its session status,
+		// for the turn loop's continuation (A3).
+		"MemberAttemptFor": true,
 	}
 	// wrapperOnly are the store calls only the wrapper makes.
 	wrapperOnly := map[string]bool{"AuthenticateArchitect": true}

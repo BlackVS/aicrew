@@ -228,3 +228,45 @@ func TestStatusInsideTheClientShowsRoleAndProjects(t *testing.T) {
 		t.Fatalf("status with no home: exit %d", code)
 	}
 }
+
+// serve runs only a home in turns mode, and run only one that is not: an
+// interactive client in a turns home would have no Stop hook to wake it.
+// Each names the command that fits, and neither builds a session.
+func TestServeAndRunNeedTheirMode(t *testing.T) {
+	home := t.TempDir()
+	write := func(mode string) {
+		t.Helper()
+		cfg := `{"wake": {"mode": "` + mode + `"}, "aicrew": {"url": "https://aicrew.example", "tls_trust_mode": "ca_dns",
+			"tls_trust_value": "aicrew.example", "agent_id": "agent-1", "team_id": "team-1", "client_command": "/bin/true",
+			"aimem_command": "aimem-not-installed-here"}}`
+		if err := os.WriteFile(filepath.Join(home, "agent.json"), []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	built := 0
+	build := func(cfg agent.Config, log *slog.Logger) (*agent.Engine, error) {
+		built++
+		return &agent.Engine{Cfg: cfg, Log: log}, nil
+	}
+	write(agent.WakeStopHook)
+	var errb bytes.Buffer
+	if code := serveHome(context.Background(), []string{"-home", home}, &errb, nil, build, noEnv); code != exitUsage ||
+		!strings.Contains(errb.String(), "--wake turns") {
+		t.Errorf("serve on a stop-hook home: exit %d, %s", code, errb.String())
+	}
+	write(agent.WakeTurns)
+	errb.Reset()
+	stdio := agent.Stdio{In: strings.NewReader(""), Out: new(bytes.Buffer), Err: &errb}
+	if code := runClient(context.Background(), []string{"-client", "claude", "-home", home}, stdio, nil, build, noEnv); code != exitUsage ||
+		!strings.Contains(errb.String(), "aicrew-agent serve --home") || !strings.Contains(errb.String(), "--wake stop-hook") {
+		t.Errorf("run on a turns home: exit %d, %s", code, errb.String())
+	}
+	if built != 1 {
+		t.Errorf("%d engines built, want only serve's, which refuses before its session", built)
+	}
+	errb.Reset()
+	if code := serveHome(context.Background(), []string{"-home", home}, &errb, nil, build, launcherEnv(home)); code != exitUsage ||
+		!strings.Contains(errb.String(), "refused inside") {
+		t.Errorf("serve inside a client: exit %d, %s", code, errb.String())
+	}
+}

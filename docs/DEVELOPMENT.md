@@ -1452,6 +1452,47 @@ handing off with no human message is still open.
   it. Waking an idle session needs a channel or the launcher owning the
   terminal; both are later increments.
 
+### Wake modes: the Stop hook or the turn loop
+
+A home is woken in one of two ways, recorded in `agent.json` as
+`wake.mode` (`docs/DESIGN-CONTROL-PLANE.md`, 1.10, D3):
+- **`stop-hook`** (the default): an interactive client under
+  `aicrew-agent run`, woken by the Stop hook above.
+- **`turns`**: the turn loop, `aicrew-agent serve`, starts each headless
+  turn when a message waits, so the home has no Stop hook and no
+  keep-alive turns.
+
+`aicrew-agent join --home H --wake turns` (or `--wake stop-hook`) records
+the mode, keeping the `wake` object's other settings, and then rewrites the
+managed files from it:
+- **`.claude/settings.json`** holds the Stop hook only in `stop-hook` mode.
+  The deny rules are there in both modes.
+- **`.claude/turn-settings.json`** (managed, in both modes) is the settings
+  a headless turn runs under. The turn loop passes it with `--settings`,
+  because a home's own allow rules do not apply to a headless turn
+  (`docs/TURN-PROBE.md`). It holds the deny rules and an allow list:
+  - the base list: `Edit(/worktrees/**)`, `Edit(/docs/HANDOFF.md)`,
+    `Bash(git *)` and `aicrew-agent` (by name and by the path of the
+    `aicrew-agent` that wrote the file);
+  - the home's additions, `agent.json`'s `turns.allow`, for the project's
+    build and test commands, for example
+    `{"turns": {"allow": ["Bash(go test *)", "Bash(go build *)"]}}`. An
+    addition must be a Bash, Edit, Read or WebFetch rule with a pattern that
+    names something. A whole tool (`Bash`, `Bash(*)`, `Edit(/**)`) or a
+    PowerShell rule is left out, since PowerShell's allow rules admit
+    nothing narrower than the whole tool.
+
+  The commands the client judges read-only run without a rule, and a deny
+  rule beats every allow.
+- **`/crew-turn`**, a managed command, is the prompt each turn starts with.
+  It names what started the turn, never a message's text, and teaches the
+  turn's order: the handoff, `session status`, the inbox, the work within
+  the role, the acknowledgement, the handoff, and the end of the turn,
+  without ever waiting inside it.
+
+`check` notes a Stop hook left in a `turns` home, and each `turns.allow`
+addition it leaves out.
+
 ### Driving steps: `aicrew-agent step`
 
 The launcher drives every attempt step for its client, which never holds the

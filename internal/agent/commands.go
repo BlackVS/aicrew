@@ -39,6 +39,24 @@ var crewCommands = []crewCommand{
 			"Never run `aicrew-agent session start`, `session leave` or `run` here: the launcher holds this " +
 			"home's session, and they are refused inside the client.",
 		Ops: []string{"inbox"}},
+	{Name: "crew-turn", Hint: "<trigger>",
+		Desc: "One headless turn of your aicrew session: read your notes and inbox, act within your role, update your handoff, end",
+		Body: "The turn loop (`aicrew-agent serve`) started this turn. What started it: $ARGUMENTS. Nobody " +
+			"answers a question during a turn, and nothing reaches you until it ends.\n\n" +
+			"1. Read `docs/HANDOFF.md`, your own notes.\n" +
+			"2. If you have not read them in this conversation, read `docs/START.md` and `docs/ROLES.md`.\n" +
+			"3. Run `aicrew-agent session status`: your role and your team's projects.\n" +
+			"4. Run `aicrew-agent inbox`: the messages that started the turn.\n" +
+			"5. If you are the coordinator, read the board for the tasks those messages name.\n" +
+			"6. Act within your role, as `docs/ROLES.md` says. A worker with a running attempt goes on with " +
+			"its work: the loop gives it another turn after this one, until it submits or blocks.\n" +
+			"7. Acknowledge what you handled.\n" +
+			"8. Update `docs/HANDOFF.md` with what you did and what comes next.\n" +
+			"9. End the turn. Never wait inside it: no sleep, no polling, no background watch. The next " +
+			"message starts the next turn.\n\n" +
+			"Never run `aicrew-agent session start`, `session leave`, `run` or `serve` here: the loop holds this " +
+			"home's session.",
+		Ops: []string{"inbox"}},
 	{Name: "crew-inbox", Desc: "Read your aicrew inbox, act on it within your role, and acknowledge what you handled",
 		Body: "Run `aicrew-agent inbox`. Act only on what it shows, within your role and your accepted attempt. " +
 			"Acknowledge each message you handled with `aicrew-agent inbox --ack MESSAGE_ID,MESSAGE_ID`, the " +

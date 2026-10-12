@@ -269,7 +269,9 @@ reference is in aicrew's DEVELOPMENT.md and CREW-CONTRACT.md.
   your turn: the home's Stop hook waits on your inbox and, when a message
   arrives, gives you a turn that names it. Read it with
   ` + "`aicrew-agent inbox`" + ` then. A turn that only asks you to reply
-  "waiting" keeps you waiting: reply that one word and nothing else.
+  "waiting" keeps you waiting: reply that one word and nothing else. In a
+  home the turn loop runs (` + "`aicrew-agent serve`" + `, ` + "`/crew-turn`" + `), there is
+  no Stop hook: end the turn, and the next message starts the next one.
 - **The launcher holds your session.** Under ` + "`aicrew-agent run`" + `, act through
   ` + "`aicrew-agent inbox`" + ` and ` + "`aicrew-agent step`" + `. ` + "`session start`" + `,
   ` + "`session leave`" + ` and ` + "`run`" + ` are refused inside the client: a new proof

@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -83,9 +86,84 @@ func checkProbeEnv(env []string, home string) []string {
 // aimem installation, the Stop hook that wakes the member when its inbox
 // changes (task 01a0d6d7-1aed), and the deny rules.
 func claudeSettings(home string) string {
-	b, _ := json.MarshalIndent(map[string]any{"env": aimemVarMap(home), "hooks": wakeHooks(home),
-		"permissions": map[string]any{"deny": denyRules()}}, "", "  ")
+	doc := map[string]any{"env": aimemVarMap(home), "permissions": map[string]any{"deny": denyRules()}}
+	if ReadWakeSettings(home).Mode != WakeTurns {
+		doc["hooks"] = wakeHooks(home)
+	}
+	b, _ := json.MarshalIndent(doc, "", "  ")
 	return string(b) + "\n"
+}
+
+// TurnSettingsFile is the home's managed per-turn settings, relative to the
+// home: the allow list a headless turn runs under, beneath the deny rules.
+// The turn loop passes it with --settings, since a project's own allow rules
+// do not apply to a headless turn (docs/TURN-PROBE.md); the deny rules apply
+// from both files.
+const TurnSettingsFile = ".claude/turn-settings.json"
+
+// turnSettings is TurnSettingsFile's content.
+func turnSettings(home string) string {
+	b, _ := json.MarshalIndent(map[string]any{"permissions": map[string]any{"allow": turnAllow(home),
+		"deny": denyRules()}}, "", "  ")
+	return string(b) + "\n"
+}
+
+// baseTurnAllow is what every member's turn may do without asking, beyond
+// the commands the client itself judges read-only: edit its worktrees and
+// its handoff, run git, and run aicrew-agent by name or by the path of the
+// one writing the settings.
+func baseTurnAllow() []string {
+	rules := []string{"Edit(/worktrees/**)", "Edit(/docs/HANDOFF.md)", "Bash(git *)", "Bash(aicrew-agent *)"}
+	if self := filepath.ToSlash(selfExecutable()); self != "aicrew-agent" {
+		rules = append(rules, "Bash("+self+" *)")
+	}
+	return rules
+}
+
+// turnAllow is the base allow list and the home's own additions, agent.json's
+// turns.allow, which name the project's build and test commands. An addition
+// that is not a narrow rule (TurnRuleProblem) is left out, and check names it.
+func turnAllow(home string) []string {
+	rules := baseTurnAllow()
+	for _, r := range ReadTurnAllow(home) {
+		if TurnRuleProblem(r) == "" && !slices.Contains(rules, r) {
+			rules = append(rules, r)
+		}
+	}
+	return rules
+}
+
+// ReadTurnAllow is agent.json's turns.allow, as written.
+func ReadTurnAllow(home string) []string {
+	doc, ok, err := readAgentDoc(home)
+	if err != nil || !ok {
+		return nil
+	}
+	var t struct {
+		Allow []string `json:"allow"`
+	}
+	if raw, ok := doc.top["turns"]; ok {
+		_ = json.Unmarshal(raw, &t)
+	}
+	return t.Allow
+}
+
+// turnRuleShape is one Claude Code permission rule: a tool and a pattern.
+var turnRuleShape = regexp.MustCompile(`^(Bash|Edit|Read|WebFetch)\(([^()\r\n]{1,200})\)$`)
+
+// TurnRuleProblem says why an addition to the allow list is refused, or ""
+// when it is a narrow rule: a tool with a pattern that names something, never
+// a whole tool ("Bash", "Bash(*)") and never PowerShell, whose allow rules
+// admit nothing narrower than the whole tool (docs/TURN-PROBE.md).
+func TurnRuleProblem(rule string) string {
+	m := turnRuleShape.FindStringSubmatch(rule)
+	if m == nil {
+		return "not a Bash, Edit, Read or WebFetch rule with a pattern"
+	}
+	if strings.Trim(m[2], "*/ :") == "" {
+		return "a pattern that admits the whole tool"
+	}
+	return ""
 }
 
 // denyPatterns are what a member's shell commands never name: the home's

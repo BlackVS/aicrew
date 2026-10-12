@@ -45,7 +45,9 @@ is also independent of the model and client, both of which may change.
   agent.json         nonsecret configuration
   .mcp.json          Claude Code's project MCP file; one managed aimem entry
   .claude/settings.json  managed; points every Claude Code session here at aimem/,
-                         wakes the member (Stop hook), denies credential reads and TLS weakening
+                         wakes the member (Stop hook, except in turns mode), denies credential
+                         reads and TLS weakening
+  .claude/turn-settings.json  managed; the allow list and deny rules of a headless turn
   aimem/             the member's aimem installation; owner-only, secret
   creds/             credential material only
   docs/              agent guidance and handoff
@@ -151,6 +153,14 @@ survey, the options and the decision (D-STORE) are recorded in
   managed file: a `join` rerun refreshes it, a local edit gets
   `.aicrew-new`, and `check` notes a settings file that lacks a managed
   rule.
+
+  **In a headless turn** (`wake.mode: "turns"`, run by `aicrew-agent
+  serve`), the client runs in `dontAsk` mode, and a call that neither an
+  allow rule nor the client's read-only class admits is denied. The allow
+  list is the managed `.claude/turn-settings.json`, passed with each turn:
+  edits in `worktrees/` and of `docs/HANDOFF.md`, git, `aicrew-agent`, and
+  the narrow rules the home adds in `agent.json`'s `turns.allow`. The deny
+  rules stay above it (DEVELOPMENT, "Wake modes").
 
   **Its limit:** the rules match command text. They stop an accidental
   violation through the tools they name, as the texts' own rule asks. They
@@ -343,7 +353,7 @@ outside the home (`docs/DEVELOPMENT.md`, "Running aicrew-agent").
 
 | Class | Files | Setup may |
 | --- | --- | --- |
-| Managed | `AGENTS.md`, `CLAUDE.md`, `docs/START.md`, `docs/ROLES.md`, `.claude/settings.json`, `.claude/commands/crew-*.md` (unless one would shadow the member's own command or skill, then reported and not written), each client's `aimem` MCP entry, managed keys in `agent.json` | create; update only if unchanged since its last write |
+| Managed | `AGENTS.md`, `CLAUDE.md`, `docs/START.md`, `docs/ROLES.md`, `.claude/settings.json`, `.claude/turn-settings.json`, `.claude/commands/crew-*.md` (unless one would shadow the member's own command or skill, then reported and not written), each client's `aimem` MCP entry, managed keys in `agent.json` | create; update only if unchanged since its last write |
 | Agent-owned | `docs/HANDOFF.md`, other `docs/` notes | create once if missing; never change |
 | Protected | `creds/`, `aimem/` (its contents), `repos/`, `worktrees/`, `state/`, `logs/`, provider logins, unknown files | never change, move or delete |
 

@@ -18,7 +18,7 @@ const joinUsage = `usage: aicrew-agent join --label LABEL [--home DIR] --url htt
          --tls-trust-mode ca_dns|spki_sha256 --tls-trust-value VALUE --aimem-hub NAME
          --client claude|opencode[,…] [--aimem-command PATH] [--json]
          [--aimem-url https://HUB --aimem-token-file PATH|- [--aimem-ca-file PATH]]
-         [--cred HOST=PATH|- ...]
+         [--cred HOST=PATH|- ...] [--wake stop-hook|turns]
        The invitation code is read at a hidden prompt. The --aimem flags
        provision the home's aimem installation on the first run, the token
        read from its owner-only file or, with -, at a hidden prompt. Each
@@ -27,7 +27,9 @@ const joinUsage = `usage: aicrew-agent join --label LABEL [--home DIR] --url htt
        terminal); join verifies it with the forge and writes it to creds/.
        On a linked home, only --home (or --label) is needed: the run
        refreshes the home's files, takes any --cred, and checks its
-       dependencies and clients.`
+       dependencies and clients. --wake records how the member is woken:
+       stop-hook (the default) for an interactive client under run, turns for
+       the turn loop, serve, whose home has no Stop hook.`
 
 // joinDeps builds the bootstrap's collaborators on the real terminal,
 // aicrewd and aimem.
@@ -100,6 +102,7 @@ func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.W
 	fs.StringVar(&o.AimemCAFile, "aimem-ca-file", "", "")
 	var credRefused error
 	fs.Var(credFlags{&o.Creds, &credRefused}, "cred", "")
+	fs.StringVar(&o.Wake, "wake", "", "")
 	clients := fs.String("client", "", "")
 	asJSON := fs.Bool("json", false, "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || (o.Home == "" && o.Label == "") {

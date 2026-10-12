@@ -749,7 +749,7 @@ once this document is reviewed READY.
 | B3 | **`ensure-home` and `refresh-home`,** and installing the runner as a user service from the one-liners. | B2 | yes |
 | C1 | **`aicrew team state`; pause, resume and nudge** of a team or a member. Until B2, the turn loop reads the pause from the member's session status before each turn. | A4 (B2 for runner fields) | yes |
 | C2 | **01a11c8d-5598, escalations:** `aicrew-agent escalate`, the escalation records, the architect credential, `aicrew escalations list\|show\|answer`, the `escalation.answer` message, and the comment mirrors (7.5, D10, D14). | D1 | yes |
-| C3 | **`aicrew merges`:** PRs awaiting the human merge. | A4 | yes |
+| C3 | **`aicrew merges`:** PRs awaiting the human merge, readable with the architect credential (`/arch-merges`). It shipped before A4: the accepted result and the delivery state are aicrewd's own records. | none | yes |
 | C4 | **`aicrew turns log`,** through `fetch-log`. | B2 | yes |
 | E1 | **Delivery kinds:** the CREW-CONTRACT amendment and the code that make an offer name `delivery {kind, ...}`, with `code-pr` carrying today's repository fields and checks unchanged (8.1). | A4 | yes |
 | E2 | **Worker profiles:** the record on aicrewd and `aicrew profile`. `join` generates the home's managed files from a profile, and `check` verifies the home against it. The provider profile (A5) becomes its facet. | A5 | yes |

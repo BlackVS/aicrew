@@ -80,8 +80,18 @@ Then mirror it on the task as a comment whose first line is
 ` + "`[escalation.answer ID]`" + `, so the board keeps the decision. A comment alone
 answers nothing: only the recorded answer reaches the crew.
 
+## Pull requests waiting for the merge
+
+The merge is the operator's click on the forge, and nothing else tells the
+operator that a pull request waits for it. ` + "`/arch-merges`" + ` lists them with
+` + "`aicrew merges`" + `: each attempt whose result the coordinator reviewed and
+accepted, and whose delivery is not confirmed yet. For each, say in words
+the task, the worker, the pull request, its head and its gates (labels, CI,
+comments) as the worker last saw them. Never merge, and never change a pull
+request: tell the operator which ones wait, and stop.
+
 These commands use this directory's architect credential, which reads and
-answers escalations and nothing else. If they cannot connect, the directory
+answers escalations, reads the merges, and nothing else. If they cannot connect, the directory
 was set up without aicrewd's address or the credential is missing: tell the
 operator, and read the open requests from the tasks' comments headed
 ` + "`[escalation.request ID]`" + ` meanwhile.
@@ -134,4 +144,11 @@ var commands = []command{
 			"TEXT --rationale TEXT`, then mirror it on the task as a comment headed `[escalation.answer ID]`. " +
 			"If the command cannot connect, say so, and list the tasks' comments headed `[escalation.request ` " +
 			"that no `[escalation.answer ` comment with the same ID follows."},
+	{name: "arch-merges", desc: "Say which pull requests wait for the operator's merge",
+		body: "Run `aicrew merges`. For each entry, say in words: the task (project and ID), the worker, the pull " +
+			"request (`result_ref`, and `pull.url` when present), its head commit, and its gates as the worker last " +
+			"saw them (`pull.labels`, `pull.checks`, `pull.comments`, `pull.observed_at`), or that no observation " +
+			"was reported. Say plainly that these wait for the operator's merge. Never merge, never change a pull " +
+			"request, and never claim a gate the list does not show. If the list is empty, say that no pull " +
+			"request waits for a merge. If the command cannot connect, say so."},
 }

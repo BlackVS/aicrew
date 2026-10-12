@@ -620,6 +620,9 @@ func TestExposureGuard(t *testing.T) {
 		"ListArchitectCredentials": true, "IssueArchitectCredential": true, "RevokeArchitectCredential": true,
 		// The team's state, pauses and nudges (C1).
 		"GetTeamState": true, "SetPause": true, "Nudge": true,
+		// The pull requests waiting for the human merge, which the
+		// operator's caller or an architect's reads (C3).
+		"PendingMerges": true,
 	}
 	allowed := map[string]bool{
 		"AuthenticateIntrospection": true, "Introspect": true,
@@ -686,7 +689,7 @@ func TestExposureGuard(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		admin := name == "admin.go" || name == "escalations.go" || name == "control.go"
+		admin := name == "admin.go" || name == "escalations.go" || name == "control.go" || name == "merges.go"
 		for _, decl := range f.Decls {
 			fn, _ := decl.(*ast.FuncDecl)
 			inOperator := name == "admin.go" && fn != nil && fn.Name.Name == "adminRoute"
@@ -749,7 +752,7 @@ func TestRouteInventory(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{"GET /healthz", "GET /v1/admin/architect-credentials", "GET /v1/admin/escalation", "GET /v1/admin/escalations",
-		"GET /v1/admin/hub-credentials", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations",
+		"GET /v1/admin/hub-credentials", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations", "GET /v1/admin/merges",
 		"GET /v1/admin/team", "GET /v1/admin/team/state", "GET /v1/admin/teams", "GET /v1/crew/attempts", "GET /v1/crew/capabilities", "GET /v1/crew/escalations", "GET /v1/crew/inbox", "GET /v1/crew/inbox/pending",
 		"GET /v1/crew/projects", "GET /v1/crew/requirements", "GET /v1/crew/session",
 		"POST /v1/admin/architect-credentials", "POST /v1/admin/architect-credentials/revoke", "POST /v1/admin/escalations/answer",

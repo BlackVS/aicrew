@@ -436,3 +436,39 @@ type MemberAttempt struct {
 	ProjectID string `json:"project_id"`
 	TaskID    string `json:"task_id"`
 }
+
+// The pull requests waiting for the human merge (docs/DESIGN-CONTROL-PLANE.md,
+// section 4.2; increment C3): the attempts whose latest result the
+// coordinator accepted and whose delivery is not yet confirmed, read from
+// aicrewd's records with no forge call. The operator credential and an
+// architect credential may read it.
+const MergesPath = "/v1/admin/merges" // GET (?team=ID)
+
+// PendingMerge is one accepted result that waits for the human merge.
+type PendingMerge struct {
+	TeamID      string         `json:"team_id"`
+	TeamName    string         `json:"team_name"`
+	AttemptID   string         `json:"attempt_id"`
+	Task        EscalationTask `json:"task"`
+	WorkerID    string         `json:"worker_agent_id"`
+	WorkerLabel string         `json:"worker_label"`
+	ResultSeq   int64          `json:"result_seq"`
+	ResultRef   string         `json:"result_ref"`
+	SubmittedAt string         `json:"submitted_at"`
+	Branch      string         `json:"branch"`
+	// Pull is the pull request as the worker's launcher last observed it
+	// (forge events); absent when it never reported one.
+	Pull *PullSeen `json:"pull,omitempty"`
+}
+
+// PullSeen is a pull request as last observed.
+type PullSeen struct {
+	Number     int64    `json:"number"`
+	URL        string   `json:"url"`
+	State      string   `json:"state"`
+	HeadCommit string   `json:"head_commit"`
+	Labels     []string `json:"labels"`
+	Checks     string   `json:"checks"`
+	Comments   int64    `json:"comments"`
+	ObservedAt string   `json:"observed_at"`
+}

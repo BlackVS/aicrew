@@ -51,8 +51,10 @@ is also independent of the model and client, both of which may change.
   aimem/             the member's aimem installation; owner-only, secret
   creds/             credential material only
   docs/              agent guidance and handoff
-  state/             nonsecret recovery data; owner-only, holds the step socket
-  logs/              redacted logs
+  state/             nonsecret recovery data; owner-only, holds the step socket and
+                     the turn loop's state (turns.json)
+  logs/              redacted logs; turns.jsonl records each turn of the turn loop,
+                     turns/<turn id>.jsonl keeps its raw stream (owner-only, never sent)
   work/              temporary artifacts
   repos/             clean clones, one per repository key
   worktrees/         one isolated worktree per attempt

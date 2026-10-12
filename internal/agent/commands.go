@@ -54,6 +54,12 @@ var crewCommands = []crewCommand{
 			"8. Update `docs/HANDOFF.md` with what you did and what comes next.\n" +
 			"9. End the turn. Never wait inside it: no sleep, no polling, no background watch. The next " +
 			"message starts the next turn.\n\n" +
+			"A turn runs without prompts, under an allow list: git, `aicrew-agent`, the project's build and test " +
+			"commands, and edits in `worktrees/` and of `docs/HANDOFF.md`. Run each command alone, in one Bash " +
+			"call, from the home: no `cd`, `&&`, `;`, pipe or redirection, since a compound command is judged as " +
+			"a whole and denied. Use the Bash tool, not PowerShell. Read files with the Read tool and change them " +
+			"with the Edit tool, never with the shell. When a call is denied, run what you need again alone as " +
+			"these steps say; never work around a denial, and report one you cannot avoid in the handoff.\n\n" +
 			"Never run `aicrew-agent session start`, `session leave`, `run` or `serve` here: the loop holds this " +
 			"home's session.",
 		Ops: []string{"inbox"}},

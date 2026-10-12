@@ -207,6 +207,9 @@ type MemberAttempt struct {
 	State AttemptState `json:"state"`
 	Phase AttemptPhase `json:"phase,omitempty"`
 	Task  TaskRef      `json:"task"`
+	// Branch is the attempt's branch, which the turn loop reads progress
+	// from (a new commit).
+	Branch string `json:"branch,omitempty"`
 }
 
 // TeamState is a team's pause and its current members' state.
@@ -283,7 +286,20 @@ func memberOpenAttempt(ctx context.Context, q querier, teamID, agentID string) (
 	if err != nil {
 		return nil, err
 	}
-	return &MemberAttempt{ID: a.ID, State: a.State, Phase: a.Phase, Task: a.Task}, nil
+	return &MemberAttempt{ID: a.ID, State: a.State, Phase: a.Phase, Task: a.Task, Branch: a.Branch}, nil
+}
+
+// MemberAttemptFor is the member's newest attempt as its worker that is not
+// closed, or nil: what the turn loop reads to decide a worker's
+// continuation (docs/DESIGN-CONTROL-PLANE.md, 1.3 b).
+func (s *Store) MemberAttemptFor(ctx context.Context, teamID, agentID string) (*MemberAttempt, error) {
+	var a *MemberAttempt
+	err := s.snapshot(ctx, func(q querier) error {
+		var err error
+		a, err = memberOpenAttempt(ctx, q, teamID, agentID)
+		return err
+	})
+	return a, err
 }
 
 // Member states (docs/DESIGN-CONTROL-PLANE.md, section 1.6). needs_login

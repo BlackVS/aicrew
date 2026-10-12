@@ -44,6 +44,7 @@ const (
 
 const usage = `usage: aicrew-agent session start|status|leave --home DIR   (status: --home defaults to $AICREW_AGENT_HOME)
        aicrew-agent run --client claude|opencode --home DIR [--no-start] [-- CLIENT ARGS]
+       aicrew-agent serve --home DIR   (the turn loop: headless Claude Code turns; join --wake turns first)
        aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
        aicrew-agent inbox [--home DIR] [--limit N] [--ack ID,ID...] [--json]
        aicrew-agent escalate [--home DIR] --body FILE|-   (the coordinator, through the launcher)
@@ -86,6 +87,12 @@ func runClient(ctx context.Context, args []string, stdio agent.Stdio, sigs <-cha
 		log.Error("configuration refused", "error", err.Error())
 		return exitFailed
 	}
+	if agent.ReadWakeSettings(cfg.Home).Mode == agent.WakeTurns {
+		log.Error("this home is in turns mode: its settings have no Stop hook, so an interactive client would " +
+			"never be woken. Run `aicrew-agent serve --home " + cfg.Home + "`, or make it interactive again with " +
+			"`aicrew-agent join --home " + cfg.Home + " --wake stop-hook`")
+		return exitUsage
+	}
 	path := cfg.ClientCommand
 	if path == "" {
 		if path, err = exec.LookPath(*name); err != nil {
@@ -105,7 +112,52 @@ func runClient(ctx context.Context, args []string, stdio agent.Stdio, sigs <-cha
 	return code
 }
 
+// serveHome runs the home's turn loop (aicrew-agent serve) until a stop or
+// the session's end.
+func serveHome(ctx context.Context, args []string, stderr io.Writer, sigs <-chan os.Signal, build engineFor,
+	getenv func(string) string) int {
+	if refusedInsideLauncher("serve", getenv, stderr) {
+		return exitUsage
+	}
+	fs := flag.NewFlagSet("aicrew-agent serve", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	home := fs.String("home", "", "the agent home directory")
+	if err := fs.Parse(args); err != nil || *home == "" || fs.NArg() != 0 {
+		fmt.Fprintln(stderr, usage)
+		return exitUsage
+	}
+	log := slog.New(slog.NewTextHandler(stderr, nil))
+	cfg, err := agent.LoadConfig(*home)
+	if err != nil {
+		log.Error("configuration refused", "error", err.Error())
+		return exitFailed
+	}
+	path := cfg.ClientCommand
+	if path == "" {
+		if path, err = exec.LookPath("claude"); err != nil {
+			log.Error("client not found", "client", "claude", "error", err.Error())
+			return exitFailed
+		}
+	}
+	e, err := build(cfg, log)
+	if err != nil {
+		log.Error("client refused", "error", err.Error())
+		return exitFailed
+	}
+	err = agent.ServeHome(ctx, e, path, sigs)
+	if errors.Is(err, agent.ErrNotTurnsHome) {
+		log.Error(err.Error())
+		return exitUsage
+	}
+	return finish(log, err)
+}
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		sigs := make(chan os.Signal, 4)
+		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+		os.Exit(serveHome(context.Background(), os.Args[2:], os.Stderr, sigs, defaultEngine, os.Getenv))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "run" {
 		// The client handles the terminal's interrupts; the launcher only
 		// watches signals, forwarding SIGTERM, and outlives the client.

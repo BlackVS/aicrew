@@ -525,11 +525,16 @@ func (s *Server) sessionStatus(w http.ResponseWriter, r *http.Request) {
 		s.refuseSession(w, r, refusalCode(err), false, 0)
 		return
 	}
+	attempt, err := s.store.MemberAttemptFor(r.Context(), b.TeamID, b.AgentID)
+	if err != nil {
+		s.refuseSession(w, r, refusalCode(err), false, 0)
+		return
+	}
 	writeJSON(w, http.StatusOK, statusReply{
 		Session: sessionView{ID: b.SessionID, TeamID: b.TeamID, AgentID: b.AgentID, Role: string(b.Role),
 			State: string(store.SessionActive), Generation: strconv.FormatInt(b.Generation, 10),
 			TokenExpiresAt: rfc3339(b.ExpiresAt)},
-		HubID: b.HubID, UserID: b.UserID, TokenID: b.TokenID, Paused: pauseOf(paused),
+		HubID: b.HubID, UserID: b.UserID, TokenID: b.TokenID, Paused: pauseOf(paused), Attempt: attempt,
 	})
 }
 
@@ -541,6 +546,9 @@ type statusReply struct {
 	// Paused is the pause in force for the member, the team's or its own:
 	// the turn loop reads it before a turn (control.go).
 	Paused *opapi.Pause `json:"paused,omitempty"`
+	// Attempt is the member's open attempt as its worker, if any: the turn
+	// loop gives a worker whose attempt is in work another turn (A3).
+	Attempt *store.MemberAttempt `json:"attempt,omitempty"`
 }
 
 // leave ends the token's session under the store's leave rules. The body is

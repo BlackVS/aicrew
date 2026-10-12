@@ -493,7 +493,8 @@ func TestJoinRerunLinkedHome(t *testing.T) {
 		t.Fatalf("rerun after edits: %+v", rep)
 	}
 	want := map[string]string{"AGENTS.md": "conflict", "CLAUDE.md": "update", "docs/START.md": "unchanged",
-		"docs/ROLES.md": "unchanged", "docs/HANDOFF.md": "kept", ".claude/settings.json": "conflict"}
+		"docs/ROLES.md": "unchanged", "docs/HANDOFF.md": "kept", ".claude/settings.json": "conflict",
+		TurnSettingsFile: "unchanged"}
 	for _, c := range commandFiles() {
 		want[c.Path] = "unchanged"
 	}

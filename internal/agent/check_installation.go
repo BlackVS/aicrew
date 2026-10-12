@@ -105,12 +105,31 @@ func (c *checker) checkCarrier(label string, env func(map[string]json.RawMessage
 
 // checkWakeHook notes a home whose managed Claude Code settings do not hold
 // the wake-up's Stop hook as join writes it: the member then waits for a
-// human message after each turn. A notice, never a blocker.
+// human message after each turn. In turns mode it notes the opposite, a
+// Stop hook the turn loop does not want, and each turns.allow rule left out
+// of the turn's allow list. A notice, never a blocker.
 func (c *checker) checkWakeHook() {
 	raw, err := os.ReadFile(filepath.Join(c.o.Home, ".claude", "settings.json"))
 	var doc map[string]json.RawMessage
 	if err == nil {
 		_ = json.Unmarshal(raw, &doc)
+	}
+	if ReadWakeSettings(c.o.Home).Mode == WakeTurns {
+		// The turn loop starts this home's turns: a Stop hook would keep a
+		// turn alive waiting on the inbox.
+		var hooks map[string]json.RawMessage
+		_ = json.Unmarshal(doc["hooks"], &hooks)
+		if _, ok := hooks["Stop"]; ok {
+			c.notice(fmt.Sprintf(".claude/settings.json holds a Stop hook, but this home is in turns mode "+
+				"(wake.mode %q), where the turn loop starts each turn: rerun `aicrew-agent join --home %s`, and "+
+				"merge any .claude/settings.json.aicrew-new it writes", WakeTurns, quoteArg(c.o.Home)))
+		}
+		for _, r := range ReadTurnAllow(c.o.Home) {
+			if p := TurnRuleProblem(r); p != "" {
+				c.notice(fmt.Sprintf("agent.json turns.allow %q is left out of the turn's allow list: %s", r, p))
+			}
+		}
+		return
 	}
 	want, _ := json.Marshal(wakeHooks(c.o.Home))
 	var got, exp any

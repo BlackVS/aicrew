@@ -133,8 +133,19 @@ func wakeWait(seconds int) time.Duration {
 	return min(time.Duration(seconds)*time.Second, maxWakeWait)
 }
 
+// The wake modes (docs/DESIGN-CONTROL-PLANE.md, 1.10): an interactive
+// client under `aicrew-agent run` waits on its inbox through the Stop hook;
+// a home run by the turn loop (`aicrew-agent serve`) has no Stop hook, and
+// each turn gets the managed per-turn settings (TurnSettingsFile).
+const (
+	WakeStopHook = "stop-hook"
+	WakeTurns    = "turns"
+)
+
 // WakeSettings are the home's wake-up settings, agent.json's "wake" object.
 type WakeSettings struct {
+	// Mode is WakeStopHook (the default) or WakeTurns.
+	Mode string
 	// KeepAlive asks the member for a one-word reply when a wait ends with
 	// nothing pending, so its next turn end waits again.
 	KeepAlive bool
@@ -147,17 +158,21 @@ type WakeSettings struct {
 // ReadWakeSettings reads the home's wake-up settings, with their defaults
 // for what agent.json does not name.
 func ReadWakeSettings(home string) WakeSettings {
-	ws := WakeSettings{KeepAlive: true, IdleHours: DefaultIdleHours, Wait: DefaultWakeWait}
+	ws := WakeSettings{Mode: WakeStopHook, KeepAlive: true, IdleHours: DefaultIdleHours, Wait: DefaultWakeWait}
 	doc, ok, err := readAgentDoc(home)
 	if err != nil || !ok {
 		return ws
 	}
 	var w struct {
-		KeepAlive   *bool `json:"keep_alive"`
-		IdleHours   *int  `json:"idle_hours"`
-		WaitSeconds *int  `json:"wait_seconds"`
+		Mode        string `json:"mode"`
+		KeepAlive   *bool  `json:"keep_alive"`
+		IdleHours   *int   `json:"idle_hours"`
+		WaitSeconds *int   `json:"wait_seconds"`
 	}
 	if raw, ok := doc.top["wake"]; ok && json.Unmarshal(raw, &w) == nil {
+		if w.Mode == WakeTurns {
+			ws.Mode = WakeTurns
+		}
 		if w.KeepAlive != nil {
 			ws.KeepAlive = *w.KeepAlive
 		}

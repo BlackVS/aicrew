@@ -40,6 +40,7 @@ func homeFiles(home string) []homeFile {
 		{Path: "docs/ROLES.md", Content: rolesMD(), Managed: true},
 		{Path: "docs/HANDOFF.md", Content: handoffMD},
 		{Path: ".claude/settings.json", Content: claudeSettings(home), Managed: true},
+		{Path: TurnSettingsFile, Content: turnSettings(home), Managed: true},
 	}, commandFiles()...)
 }
 
@@ -122,6 +123,18 @@ func (d agentDoc) managed() map[string]string {
 func (d agentDoc) set(m map[string]json.RawMessage, key string, v any) {
 	raw, _ := json.Marshal(v)
 	m[key] = raw
+}
+
+// setWakeMode sets agent.json's wake.mode, keeping the wake object's other
+// settings.
+func (d agentDoc) setWakeMode(mode string) {
+	wake := map[string]json.RawMessage{}
+	_ = json.Unmarshal(d.top["wake"], &wake)
+	if wake == nil {
+		wake = map[string]json.RawMessage{}
+	}
+	d.set(wake, "mode", mode)
+	d.set(d.top, "wake", wake)
 }
 
 // linked reports whether the home already names its agent and team.
@@ -230,7 +243,8 @@ Repository instructions live in each repository, not here.
 9. **Your commands.** The home's ` + "`/crew-*`" + ` commands carry these steps: ` + "`/crew-start`" + `,
    ` + "`/crew-inbox`" + `, ` + "`/crew-handoff`" + `; for a coordinator ` + "`/crew-triage`" + `, ` + "`/crew-offer`" + `,
    ` + "`/crew-review`" + ` and ` + "`/crew-escalate`" + `; for a worker ` + "`/crew-accept`" + ` and ` + "`/crew-submit`" + `; for an independent
-   member ` + "`/crew-claim`" + `.
+   member ` + "`/crew-claim`" + `. In a home the turn loop runs (` + "`aicrew-agent serve`" + `), each
+   turn starts with ` + "`/crew-turn`" + `.
 
 ` + managedNote
 

@@ -73,6 +73,10 @@ type JoinOptions struct {
 	// Creds are the member's own forge credentials, one per host
 	// (forgecred.go); allowed on a first join and on a linked home's rerun.
 	Creds []ForgeCred
+	// Wake records the home's wake mode (WakeStopHook or WakeTurns) in
+	// agent.json's wake.mode before the managed files are written; empty
+	// keeps the recorded one.
+	Wake string
 }
 
 // JoinDeps are the bootstrap's collaborators; tests replace them.
@@ -239,6 +243,10 @@ func (j *joiner) options() error {
 	}
 	if err := checkForgeCreds(o.Creds); err != nil {
 		return err
+	}
+	if o.Wake != "" && o.Wake != WakeStopHook && o.Wake != WakeTurns {
+		return errors.New("--wake must be " + WakeStopHook + " (an interactive client under run) or " + WakeTurns +
+			" (the turn loop, serve)")
 	}
 	if err := o.checkProvisionOptions(j.doc.linked()); err != nil {
 		return err
@@ -569,6 +577,14 @@ func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error)
 	o := j.o
 	if err := makeLayout(o.Home); err != nil {
 		return JoinReport{}, err
+	}
+	if o.Wake != "" {
+		// The managed settings are rendered from agent.json: the mode is
+		// recorded first.
+		j.doc.setWakeMode(o.Wake)
+		if err := j.doc.write(o.Home); err != nil {
+			return JoinReport{}, err
+		}
 	}
 	rec := j.doc.managed()
 	plan, err := planFiles(o.Home, rec)

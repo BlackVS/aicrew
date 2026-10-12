@@ -12,6 +12,106 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.5.5] - 2026-10-12
+
+The operator's control of a running team (increment C1 of the control
+plane design). `aicrew team state` shows each member's state. `aicrew team
+pause|resume` and `aicrew member pause|resume` hold and release members'
+turns. `aicrew member nudge` writes the operator's note into one member's
+inbox, which wakes it. A nudge is how the operator tells a member something
+the board does not carry, for example that its upgraded agent is installed.
+
+aicrewd and its store change: the hub needs 0.5.5 for these commands. A
+member of an earlier release is still held by a pause, because aicrewd
+enforces it. The managed `docs/ROLES.md` changed, so each home takes it on a
+`join` rerun.
+
+### Breaking changes
+
+- **The aicrew store moves to schema 29** (#136): the operator's pauses,
+  and the note a nudge's message carries. The migration is additive and
+  runs when aicrewd starts. A 0.5.4 aicrewd refuses a store at schema 29,
+  so a rollback must restore the store copy the installer keeps, as its
+  automatic rollback does.
+- aimem 0.10.0 stays required.
+
+### Upgrade steps
+
+All of them use product commands and one-liners.
+
+1. **aicrewd.** On the hub host, as root, run the hub one-liner:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.5/install-aicrewd.sh | bash
+   ```
+
+   As before, it backs up the configuration and the store, swaps the
+   binaries, waits for health at 0.5.5, and rolls back if the new release
+   does not come up.
+2. **The operator's machine and each member.** As that user, rerun the
+   member one-liner, which installs `aicrew` beside `aicrew-agent`:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.5/boot.sh | bash
+     ```
+
+   - Windows:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.5/boot.ps1 | iex"
+     ```
+
+   Then rerun `aicrew-agent join --home HOME` in each home. The rerun
+   refreshes `docs/ROLES.md`. An edited file is kept, with the new version
+   written beside it with the suffix `.aicrew-new`.
+3. **Restart each member** with `aicrew-agent run --client <client> --home
+   HOME`, so its client reads the new guidance at session start. Once a
+   member is upgraded, `aicrew member nudge` can tell it so.
+
+### Team state, pause and nudge
+
+- **`aicrew team state --team-name T`** (#136) prints the team's pause and,
+  for each current member:
+  - its label, role, client and model;
+  - its session, with when aicrewd last heard from it and last saw its
+    wake wait on the inbox;
+  - its own pause, its newest open attempt and its unacknowledged messages;
+  - its state: `paused`, `offline` (no session, or nothing heard for 30
+    minutes), `waiting` (its wake waits on the inbox), or `working`.
+
+  The current turn, `needs_login` and `limit_reached`, and the runner and
+  host arrive with later increments.
+- **Pause and resume.** `aicrew team pause|resume` covers the team, and
+  `aicrew member pause|resume --agent A` one member. `--reason` is kept
+  with a pause.
+  - While paused, aicrewd lists nothing in the member's pending read, so
+    the Stop hook starts no turn on a new message. A 0.5.5 agent's
+    keep-alive says the operator paused it.
+  - The session status names the pause.
+  - A pause never touches attempts, reservations or sessions. A running
+    turn ends normally, and messages wait in the inbox for the resume.
+  - Repeating a pause or a resume changes nothing and says so.
+- **`aicrew member nudge --agent A --note TEXT`** (or `--note-file
+  PATH|-`) writes one lifecycle message to that member alone. The message
+  carries the note in `operator`. ROLES.md tells a member to act on a note
+  within its role and acknowledge it: a note assigns no task.
+- **`--agent`** takes an agent ID, or a label that exactly one member has.
+- **Routes.** `GET /v1/admin/team/state`,
+  `POST /v1/admin/team/pause|resume` and
+  `POST /v1/admin/member/pause|resume|nudge` take the operator credential
+  only. DEVELOPMENT ("Team state, pause and nudge") documents them.
+- **Tests.** The real-aimem end-to-end run gains scenario C1. A paused
+  crew starts no turn on a new message, and wakes on it after the resume.
+
+### Supported and pinned versions
+
+- **Unchanged:** aimem 0.10.0 (the minimum and the tested release),
+  ai-skills 1.26.1, Claude Code 2.1.283 to 2.1.286 tested, and OpenCode
+  1.18.32 or 2.0.18 to 2.0.19 tested.
+- **The one-liners** (`install-aicrewd.sh`, `boot.sh` and `boot.ps1`) pin
+  v0.5.5.
+
 ## [0.5.4] - 2026-10-11
 
 A member-side release from a pilot finding. A worker pushed its branch

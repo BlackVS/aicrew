@@ -1471,7 +1471,7 @@ managed files from it:
   a headless turn runs under. The turn loop passes it with `--settings`,
   because a home's own allow rules do not apply to a headless turn
   (`docs/TURN-PROBE.md`). It holds the deny rules and an allow list:
-  - the base list: `Edit(/worktrees/**)`, `Edit(/docs/HANDOFF.md)`,
+  - the base list: `Edit(./worktrees/**)`, `Edit(./docs/HANDOFF.md)`,
     `Bash(git *)` and `aicrew-agent` (by name and by the path of the
     `aicrew-agent` that wrote the file);
   - the home's additions, `agent.json`'s `turns.allow`, for the project's
@@ -1482,8 +1482,13 @@ managed files from it:
     PowerShell rule is left out, since PowerShell's allow rules admit
     nothing narrower than the whole tool.
 
-  The commands the client judges read-only run without a rule, and a deny
-  rule beats every allow.
+  Its path rules are anchored at the home with `./`, the turn's working
+  directory: a file passed with `--settings` anchors a leading `/` at its
+  own directory, `.claude/`, unlike the home's `.claude/settings.json`,
+  which anchors it at the home (measured with Claude Code 2.1.296). A
+  `turns.allow` rule written with `/` is rewritten to `./`, and so are the
+  copied deny rules. The commands the client judges read-only run without a
+  rule, and a deny rule beats every allow.
 - **`/crew-turn`**, a managed command, is the prompt each turn starts with.
   It names what started the turn, never a message's text, and teaches the
   turn's order: the handoff, `session status`, the inbox, the work within

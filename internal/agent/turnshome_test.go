@@ -38,7 +38,7 @@ func TestTurnsModeSettings(t *testing.T) {
 	}
 	writeAgentDoc(t, home, map[string]any{"wake": map[string]any{"mode": "turns", "wait_seconds": 30},
 		"turns": map[string]any{"allow": []string{"Bash(go test *)", "Bash", "Bash(*)", "PowerShell(Get-*)",
-			"Edit(/worktrees/**)", "Bash(make *)"}}})
+			"Edit(/worktrees/**)", "Bash(make *)", "Read(/docs/**)"}}})
 	doc := settings()
 	if _, ok := doc["hooks"]; ok || ReadWakeSettings(home).Mode != WakeTurns || ReadWakeSettings(home).Wait.Seconds() != 30 {
 		t.Fatalf("turns mode: %v", doc)
@@ -55,7 +55,7 @@ func TestTurnsModeSettings(t *testing.T) {
 	if err := json.Unmarshal([]byte(turnSettings(home)), &turn); err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range append(baseTurnAllow(), "Bash(go test *)", "Bash(make *)") {
+	for _, r := range append(baseTurnAllow(), "Bash(go test *)", "Bash(make *)", "Read(./docs/**)") {
 		if !slices.Contains(turn.Permissions.Allow, r) {
 			t.Errorf("the allow list lacks %s: %v", r, turn.Permissions.Allow)
 		}
@@ -65,14 +65,15 @@ func TestTurnsModeSettings(t *testing.T) {
 			t.Errorf("the allow list holds %s", r)
 		}
 	}
-	if n := strings.Count(strings.Join(turn.Permissions.Allow, "\n"), "Edit(/worktrees/**)"); n != 1 {
+	if n := strings.Count(strings.Join(turn.Permissions.Allow, "\n"), "Edit(./worktrees/**)"); n != 1 {
 		t.Errorf("a repeated rule appears %d times", n)
 	}
-	if !slices.Equal(turn.Permissions.Deny, denyRules()) {
-		t.Error("the per-turn settings lack the deny rules")
+	if len(turn.Permissions.Deny) != len(denyRules()) || !slices.Contains(turn.Permissions.Deny, "Read(./creds/**)") ||
+		!slices.Contains(turn.Permissions.Deny, "Bash(*creds/*)") {
+		t.Errorf("the per-turn deny rules, anchored at the home: %v", turn.Permissions.Deny)
 	}
 	for rule, ok := range map[string]bool{"Bash(go test ./...)": true, "Read(/docs/**)": true, "WebFetch(domain:example.org)": true,
-		"Bash": false, "Bash(*)": false, "Edit(/**)": false, "Bash( * )": false, "PowerShell(Get-*)": false,
+		"Bash": false, "Bash(*)": false, "Edit(/**)": false, "Edit(./**)": false, "Bash( * )": false, "PowerShell(Get-*)": false,
 		"Bash(a\nb)": false, "Write(/x)": false} {
 		if got := TurnRuleProblem(rule) == ""; got != ok {
 			t.Errorf("TurnRuleProblem(%q) accepts=%v, want %v", rule, got, ok)

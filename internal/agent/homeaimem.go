@@ -101,19 +101,38 @@ func claudeSettings(home string) string {
 // from both files.
 const TurnSettingsFile = ".claude/turn-settings.json"
 
-// turnSettings is TurnSettingsFile's content.
+// turnSettings is TurnSettingsFile's content. A file passed with --settings
+// anchors a rule's leading "/" at its own directory, .claude/, not at the
+// home as the home's .claude/settings.json does (measured with Claude Code
+// 2.1.296), so its path rules are anchored with "./" at the turn's working
+// directory, the home.
 func turnSettings(home string) string {
+	deny := denyRules()
+	for i, r := range deny {
+		deny[i] = homeAnchored(r)
+	}
 	b, _ := json.MarshalIndent(map[string]any{"permissions": map[string]any{"allow": turnAllow(home),
-		"deny": denyRules()}}, "", "  ")
+		"deny": deny}}, "", "  ")
 	return string(b) + "\n"
+}
+
+// homeAnchored rewrites a Read or Edit rule anchored with "/" at the
+// settings' project into one anchored with "./" at the working directory.
+func homeAnchored(rule string) string {
+	for _, tool := range []string{"Read(", "Edit("} {
+		if strings.HasPrefix(rule, tool+"/") && !strings.HasPrefix(rule, tool+"//") {
+			return tool + "./" + strings.TrimPrefix(rule, tool+"/")
+		}
+	}
+	return rule
 }
 
 // baseTurnAllow is what every member's turn may do without asking, beyond
 // the commands the client itself judges read-only: edit its worktrees and
-// its handoff, run git, and run aicrew-agent by name or by the path of the
-// one writing the settings.
+// its handoff (anchored at the home with "./"), run git, and run
+// aicrew-agent by name or by the path of the one writing the settings.
 func baseTurnAllow() []string {
-	rules := []string{"Edit(/worktrees/**)", "Edit(/docs/HANDOFF.md)", "Bash(git *)", "Bash(aicrew-agent *)"}
+	rules := []string{"Edit(./worktrees/**)", "Edit(./docs/HANDOFF.md)", "Bash(git *)", "Bash(aicrew-agent *)"}
 	if self := filepath.ToSlash(selfExecutable()); self != "aicrew-agent" {
 		rules = append(rules, "Bash("+self+" *)")
 	}
@@ -126,7 +145,7 @@ func baseTurnAllow() []string {
 func turnAllow(home string) []string {
 	rules := baseTurnAllow()
 	for _, r := range ReadTurnAllow(home) {
-		if TurnRuleProblem(r) == "" && !slices.Contains(rules, r) {
+		if r = homeAnchored(r); TurnRuleProblem(r) == "" && !slices.Contains(rules, r) {
 			rules = append(rules, r)
 		}
 	}
@@ -160,7 +179,7 @@ func TurnRuleProblem(rule string) string {
 	if m == nil {
 		return "not a Bash, Edit, Read or WebFetch rule with a pattern"
 	}
-	if strings.Trim(m[2], "*/ :") == "" {
+	if strings.Trim(m[2], "*/. :") == "" {
 		return "a pattern that admits the whole tool"
 	}
 	return ""

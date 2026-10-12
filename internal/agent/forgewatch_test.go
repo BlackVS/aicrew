@@ -32,6 +32,12 @@ func (f *fakeStatus) GetPullStatus(_ context.Context, host string, k forge.Kind,
 	return f.st, nil
 }
 
+func (f *fakeStatus) readCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads
+}
+
 func (f *fakeStatus) set(change func(st *forge.PullStatus)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -61,7 +67,9 @@ func TestWaitWakesOnAForgeEvent(t *testing.T) {
 	s.serve(t)
 
 	var answers []byte
+	fake.mu.Lock()
 	obs, _ := json.Marshal(observation("git.example.test", "crew/project-t", fake.st))
+	fake.mu.Unlock()
 	ans := s.call(t, &answers, StepCall{Op: "watch-pull", Body: obs})
 	var res store.ObserveResult
 	if !ans.OK || json.Unmarshal(ans.Result, &res) != nil || !res.Baseline || res.AttemptID != id {
@@ -73,8 +81,8 @@ func TestWaitWakesOnAForgeEvent(t *testing.T) {
 	one, _ := json.Marshal(map[string]int{"seconds": 1})
 	var wake WakeResult
 	ans = s.call(t, &answers, StepCall{Op: "wait-inbox", Body: one})
-	if json.Unmarshal(ans.Result, &wake) != nil || len(wake.Pending) != 0 || fake.reads == 0 {
-		t.Fatalf("an unchanged pull request woke the member: %s (reads %d)", ans.Result, fake.reads)
+	if json.Unmarshal(ans.Result, &wake) != nil || len(wake.Pending) != 0 || fake.readCount() == 0 {
+		t.Fatalf("an unchanged pull request woke the member: %s (reads %d)", ans.Result, fake.readCount())
 	}
 
 	go func() {

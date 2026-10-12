@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/opapi"
 	"github.com/BlackVS/aicrew/internal/store"
 	"github.com/BlackVS/aicrew/internal/verifier"
 )
@@ -515,11 +516,17 @@ func (s *Server) sessionStatus(w http.ResponseWriter, r *http.Request) {
 		s.refuseSession(w, r, refusalCode(err), false, 0)
 		return
 	}
+	s.live.saw(b.SessionID, false, time.Now())
+	paused, err := s.store.PauseFor(r.Context(), b.TeamID, b.AgentID)
+	if err != nil {
+		s.refuseSession(w, r, refusalCode(err), false, 0)
+		return
+	}
 	writeJSON(w, http.StatusOK, statusReply{
 		Session: sessionView{ID: b.SessionID, TeamID: b.TeamID, AgentID: b.AgentID, Role: string(b.Role),
 			State: string(store.SessionActive), Generation: strconv.FormatInt(b.Generation, 10),
 			TokenExpiresAt: rfc3339(b.ExpiresAt)},
-		HubID: b.HubID, UserID: b.UserID, TokenID: b.TokenID,
+		HubID: b.HubID, UserID: b.UserID, TokenID: b.TokenID, Paused: pauseOf(paused),
 	})
 }
 
@@ -528,6 +535,9 @@ type statusReply struct {
 	HubID   string      `json:"hub_id"`
 	UserID  string      `json:"user_id"`
 	TokenID string      `json:"token_id"`
+	// Paused is the pause in force for the member, the team's or its own:
+	// the turn loop reads it before a turn (control.go).
+	Paused *opapi.Pause `json:"paused,omitempty"`
 }
 
 // leave ends the token's session under the store's leave rules. The body is

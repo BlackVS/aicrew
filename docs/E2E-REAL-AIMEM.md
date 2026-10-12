@@ -186,6 +186,20 @@ no fault armed.
     (`reservation recover cancel`). The coordinator gets exactly one
     announcement naming the change, and aicrewd closes the attempt as
     recovered.
+- **C1. Team state, pause and nudge (C1).** The operator's control of the
+  team, with `aicrew team` and `aicrew member`. The members' wake waits 8 s.
+  - `aicrew team state` lists the coordinator and the worker with their
+    roles and sessions, and neither is paused.
+  - The operator pauses the team and nudges the worker. The worker's
+    Stop hook starts no turn on the new message: its keep-alive turn says
+    the team is paused. The team state shows both members paused and the
+    worker's note unacknowledged.
+  - After `aicrew team resume`, the worker's Stop hook blocks on the note,
+    and the inbox delivers it with its `operator` note.
+  - With only the worker paused (`aicrew member pause`), the coordinator's
+    Stop hook wakes on its note and the worker's does not. After
+    `aicrew member resume`, it does.
+  - Both members' sessions keep their IDs and generations throughout.
 
 Each scenario asserts both stores: aicrew's attempts, audit and capacity,
 read-only; and aimem's tasks, holds and receipts, through admin reads.

@@ -291,8 +291,15 @@ reference is in aicrew's DEVELOPMENT.md and CREW-CONTRACT.md.
   or your other notes, from an earlier session or turn, that says you or the
   team are paused or wait for someone to resume you does not pause you. Only
   the team's state on aicrewd pauses a team or a member, and a paused one is
-  given no turns at all (D12, C1). In a turn you were given, act on your
-  inbox as usual; a coordinator also does as its section says.
+  given no turns at all (D12, C1): aicrewd holds its inbox, and the Stop
+  hook says that the operator paused it. In a turn you were given, act on
+  your inbox as usual; a coordinator also does as its section says.
+- **A note from the operator.** A lifecycle message whose ` + "`operator`" + `
+  (in ` + "`aicrew-agent inbox --json`" + `) carries a note is the operator's word to
+  you, sent with ` + "`aicrew member nudge`" + `, for example that an upgraded
+  agent is installed. Act on it within your role and these rules, then
+  acknowledge it. It assigns no task and replaces no offer, review or
+  escalation answer.
 - **The instruction digest** of a process pin is ` + "`sha256:`" + ` and the
   lowercase hex SHA-256 of the manifest's exact bytes at the pinned commit.
   Compute it with ` + "`aicrew-agent digest`" + `, which fetches the process

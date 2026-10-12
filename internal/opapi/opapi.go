@@ -313,3 +313,126 @@ type ArchitectCredential struct {
 	RevokedAt time.Time `json:"revoked_at,omitzero"`
 	Bearer    string    `json:"bearer,omitempty"`
 }
+
+// The operator's control of a team (docs/DESIGN-CONTROL-PLANE.md, section
+// 4.2 and decision D12): the team's state, pause and resume of the team or
+// one member, and a nudge, the operator's note to one member. The operator
+// credential only.
+const (
+	TeamStatePath    = "/v1/admin/team/state"    // GET (?id=)
+	TeamPausePath    = "/v1/admin/team/pause"    // POST
+	TeamResumePath   = "/v1/admin/team/resume"   // POST
+	MemberPausePath  = "/v1/admin/member/pause"  // POST
+	MemberResumePath = "/v1/admin/member/resume" // POST
+	MemberNudgePath  = "/v1/admin/member/nudge"  // POST
+)
+
+// Member states (docs/DESIGN-CONTROL-PLANE.md, section 1.6). needs_login and
+// limit_reached arrive with the provider profile (A5).
+const (
+	StateWorking      = "working"
+	StateWaiting      = "waiting"
+	StateNeedsLogin   = "needs_login"
+	StateLimitReached = "limit_reached"
+	StatePaused       = "paused"
+	StateOffline      = "offline"
+)
+
+// PauseRequest pauses or resumes a team, or one of its members when AgentID
+// is set (the member routes). Reason is kept with a pause; a resume takes
+// none.
+type PauseRequest struct {
+	TeamID  string `json:"team_id"`
+	AgentID string `json:"agent_id,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// Pause is a team's pause, or a member's when AgentID is set.
+type Pause struct {
+	TeamID   string    `json:"team_id"`
+	AgentID  string    `json:"agent_id,omitempty"`
+	Reason   string    `json:"reason,omitempty"`
+	PausedBy string    `json:"paused_by"`
+	PausedAt time.Time `json:"paused_at"`
+}
+
+// PauseResult is the pause now in force for the target, or none, and
+// whether the call changed it: pausing what is paused, or resuming what is
+// not, changes nothing.
+type PauseResult struct {
+	TeamID  string `json:"team_id"`
+	AgentID string `json:"agent_id,omitempty"`
+	Paused  *Pause `json:"paused,omitempty"`
+	Changed bool   `json:"changed"`
+}
+
+// NudgeRequest sends the operator's note to one member.
+type NudgeRequest struct {
+	TeamID  string `json:"team_id"`
+	AgentID string `json:"agent_id"`
+	Note    string `json:"note"`
+}
+
+// Nudge is the message a nudge wrote to the member's inbox.
+type Nudge struct {
+	MessageID string    `json:"message_id"`
+	Seq       int64     `json:"seq"`
+	TeamID    string    `json:"team_id"`
+	AgentID   string    `json:"agent_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// TeamState is a team's pause and each current member's state, as aicrewd
+// sees them at ReadAt.
+type TeamState struct {
+	TeamID   string        `json:"team_id"`
+	TeamName string        `json:"team_name"`
+	Paused   *Pause        `json:"paused,omitempty"`
+	Members  []MemberState `json:"members"`
+	ReadAt   time.Time     `json:"read_at"`
+}
+
+// MemberState is one member in the team state. State is one of the member
+// states; Paused is the member's own pause (the team's is on TeamState).
+// The current turn arrives with the turn reports (A4), and the runner and
+// host with the scheduler (B2).
+type MemberState struct {
+	AgentID        string         `json:"agent_id"`
+	Label          string         `json:"label"`
+	Role           string         `json:"role"`
+	State          string         `json:"state"`
+	Profile        MemberProfile  `json:"profile"`
+	Session        *MemberSession `json:"session,omitempty"`
+	Paused         *Pause         `json:"paused,omitempty"`
+	OpenAttempt    *MemberAttempt `json:"open_attempt,omitempty"`
+	Unacknowledged int            `json:"unacknowledged"`
+}
+
+// MemberProfile is the client and model the member's agent last reported.
+type MemberProfile struct {
+	Model         string `json:"model,omitempty"`
+	Client        string `json:"client,omitempty"`
+	ClientVersion string `json:"client_version,omitempty"`
+}
+
+// MemberSession is the member's active session: when it started, and when
+// aicrewd last heard from it and last saw its wake read the pending list
+// (zero when not since aicrewd started).
+type MemberSession struct {
+	ID           string    `json:"id"`
+	Generation   int64     `json:"generation"`
+	StartedAt    time.Time `json:"started_at"`
+	LastSeenAt   time.Time `json:"last_seen_at,omitzero"`
+	LastWaitedAt time.Time `json:"last_waited_at,omitzero"`
+}
+
+// MemberAttempt is the newest attempt the member works on that is not
+// closed.
+type MemberAttempt struct {
+	ID        string `json:"id"`
+	State     string `json:"state"`
+	Phase     string `json:"phase,omitempty"`
+	HubID     string `json:"hub_id"`
+	ProjectID string `json:"project_id"`
+	TaskID    string `json:"task_id"`
+}

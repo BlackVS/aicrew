@@ -13,7 +13,9 @@ import (
 
 // aicrew team: the operator's teams, their hubs and the projects the hubs
 // grant them (01a0f611-9e71, 354c-1a), through aicrewd's operator API.
-// Membership comes from invitations; this command only reads it.
+// Membership comes from invitations; this command only reads it. state,
+// pause and resume are the operator's control of the team
+// (docs/DESIGN-CONTROL-PLANE.md, section 4.2; member.go has a member's).
 
 const teamUsage = `usage:
   aicrew team create   --name NAME [--hub ALIAS]
@@ -22,6 +24,9 @@ const teamUsage = `usage:
   aicrew team rename   (--team TEAM | --team-name NAME) --expect-revision N --name NAME
   aicrew team register (--team TEAM | --team-name NAME) [--hub ALIAS]
   aicrew team setup    TEAM --hub ALIAS --project PROJECT [--project PROJECT ...]
+  aicrew team state    (--team TEAM | --team-name NAME)
+  aicrew team pause    (--team TEAM | --team-name NAME) [--reason TEXT]
+  aicrew team resume   (--team TEAM | --team-name NAME)
 ` + connUsage
 
 // projectsRemoved explains the project list of earlier releases.
@@ -64,6 +69,7 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	tf := addTeamFlags(fs)
 	expect := fs.Int64("expect-revision", 0, "the team revision the change applies to, as show or list printed it")
 	hub := fs.String("hub", "", "the alias of the team's aimem block (aicrewd.json aimem_hubs[].name)")
+	reason := fs.String("reason", "", "why the team is paused, kept with the pause")
 	fs.Var(removedFlag{}, "project", "removed: a team's projects are its hub's grants")
 	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
 		fmt.Fprint(stderr, teamUsage)
@@ -99,6 +105,14 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	case "register":
 		if !allowedFlags(set, "team", "team-name", "hub") || !teamGiven || (set["hub"] && *hub == "") {
+			return usage()
+		}
+	case "state", "resume":
+		if !allowedFlags(set, "team", "team-name") || !teamGiven {
+			return usage()
+		}
+	case "pause":
+		if !allowedFlags(set, "team", "team-name", "reason") || !teamGiven {
 			return usage()
 		}
 	default:
@@ -152,6 +166,29 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if !registrationNote(stderr, t) {
 			return 1
 		}
+	case "state":
+		var st opapi.TeamState
+		if err := cl.Get(ctx, opapi.TeamStatePath, url.Values{"id": {team}}, &st); err != nil {
+			return failed(stderr, err)
+		}
+		_ = out.Encode(st)
+	case "pause", "resume":
+		path := map[string]string{"pause": opapi.TeamPausePath, "resume": opapi.TeamResumePath}[verb]
+		var res opapi.PauseResult
+		if err := cl.Post(ctx, path, opapi.PauseRequest{TeamID: team, Reason: *reason}, &res); err != nil {
+			return failed(stderr, err)
+		}
+		_ = out.Encode(res)
+		pauseNote(stderr, "team", verb, res)
 	}
 	return 0
+}
+
+// pauseNote says on stderr when a pause or resume changed nothing.
+func pauseNote(stderr io.Writer, what, verb string, res opapi.PauseResult) {
+	if res.Changed {
+		return
+	}
+	state := map[string]string{"pause": "already paused", "resume": "not paused"}[verb]
+	fmt.Fprintf(stderr, "aicrew: the %s was %s; nothing changed\n", what, state)
 }

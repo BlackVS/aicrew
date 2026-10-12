@@ -106,7 +106,8 @@ var crewCommands = []crewCommand{
 			"\"The instruction digest\"). It must equal the offer's. If it does not, if the command fails, or if " +
 			"the pinned process's skills are not available to you, decline instead.\n" +
 			"3. Accept with the step below, then start your worktree with `aicrew-agent clone`, from the offer's " +
-			"base commit on its branch.\n" +
+			"base commit on its branch. If the clone fails, the attempt is already accepted and decline is " +
+			"refused: block it with " + blockAfterAccept + ", the failure as the reason, then stop.\n" +
 			"4. Only then acknowledge the offer's message with `aicrew-agent inbox --ack MESSAGE_ID`, the " +
 			"message's `id` from `aicrew-agent inbox --json` (acknowledging is not a `step`): until you " +
 			"acknowledge it, the inbox keeps showing it.",
@@ -180,12 +181,21 @@ func commandMD(c crewCommand) string {
 // credentialRule closes every command and is one of ROLES.md's rules: smoke
 // runs showed a member with broad tool access reach for a credential file
 // when a clone was refused (ef73), and turn off TLS verification in git's
-// global configuration when one failed (6006).
+// global configuration when one failed (6006). A failure before an offer is
+// accepted declines it; one after accepting blocks the attempt, since an
+// accepted attempt is RUNNING and decline is refused there (1171d).
 const credentialRule = "Never read `creds/`, and never put a credential into a command, URL, environment " +
 	"variable or git configuration. Never change git's global or system configuration, and never weaken " +
 	"TLS verification (`http.sslVerify`, `GIT_SSL_NO_VERIFY` or an unverified connection). When an access, " +
-	"a clone or a fetch is refused or fails, stop and report it (an offer you cannot verify is declined); " +
-	"never work around it."
+	"a clone or a fetch is refused or fails, stop and report it; never work around it. Before you accept " +
+	"an offer, report it by declining the offer (an offer you cannot verify is declined). After you " +
+	"accepted it, decline is refused: block the attempt with " + blockAfterAccept + ", the failure as the " +
+	"reason."
+
+// blockAfterAccept is the step, in the form the steps are taught, that
+// reports an accepted attempt which cannot proceed.
+const blockAfterAccept = "`aicrew-agent step work --attempt ATTEMPT_ID --task TASK_ID` with the body " +
+	"`{\"intent\": \"block\", \"detail\": \"REASON\"}`"
 
 // pullRequestNever is what every pull request instruction says about other
 // forge clients (pilot finding 2026-10-11).

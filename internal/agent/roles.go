@@ -151,7 +151,9 @@ var guideRoles = []guideRole{
 				"offer from your inbox. Read its details with `aicrew-agent inbox --json`. Compute the digest " +
 				"yourself with `aicrew-agent digest` from the pin the offer names (see \"The instruction digest\" " +
 				"above); it must " +
-				"equal the offer's. Then start your worktree in the offer's `repository`: its `base_commit` on its `branch`."},
+				"equal the offer's. Then start your worktree in the offer's `repository`: its `base_commit` on its `branch`. " +
+				"If the worktree cannot be made, decline is refused once you accepted: block the attempt with " +
+				blockAfterAccept + ", the failure as the reason."},
 			{"decline", "--attempt ATTEMPT_ID", "", "Decline an offer you cannot take, for example when the pinned " +
 				"process or its required skills are not available to you."},
 			{"work", "--attempt ATTEMPT_ID --task TASK_ID", `{"intent": "submit", "detail": "RESULT_URL"}`, "Report " +

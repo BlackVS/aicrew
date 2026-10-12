@@ -134,4 +134,7 @@ func printPull(w io.Writer, rep agent.PullReport) {
 	if rep.Comment != nil {
 		fmt.Fprintf(w, "comment: %s\n", rep.Comment.URL)
 	}
+	if rep.Watch != "" {
+		fmt.Fprintf(w, "watch: %s\n", rep.Watch)
+	}
 }

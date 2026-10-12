@@ -76,6 +76,18 @@ func TestObservePull(t *testing.T) {
 	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.MessageID != "" || len(res.Changes) != 0 {
 		t.Fatalf("a new head: %+v, %v", res, err)
 	}
+	// A conclusion on a new head is announced even when it equals the old
+	// head's and no pending read came between.
+	o.Checks = "success"
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.MessageID == "" ||
+		res.Changes[0] != "CI concluded success at 89abcdef0123" {
+		t.Fatalf("CI on the new head: %+v, %v", res, err)
+	}
+	o.HeadCommit = "fedcba9876543210fedcba9876543210fedcba98"
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.MessageID == "" ||
+		res.Changes[0] != "CI concluded success at fedcba987654" {
+		t.Fatalf("a success on a head pushed after a success: %+v, %v", res, err)
+	}
 	// Submitted: CI failing reaches the coordinator too.
 	if _, err := e.s.db.Exec(`UPDATE attempts SET phase = ? WHERE id = ?`, string(PhaseSubmitted), a.ID); err != nil {
 		t.Fatal(err)
@@ -95,7 +107,7 @@ func TestObservePull(t *testing.T) {
 	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.Changes[0] != "the pull request was merged" {
 		t.Fatalf("the merge: %+v, %v", res, err)
 	}
-	if w, l := forgeEvents(t, e.s, e.indepTk), forgeEvents(t, e.s, e.leadTok); len(w) != 3 || len(l) != 2 {
+	if w, l := forgeEvents(t, e.s, e.indepTk), forgeEvents(t, e.s, e.leadTok); len(w) != 5 || len(l) != 2 {
 		t.Fatalf("after the merge the worker has %d forge events and the coordinator %d", len(w), len(l))
 	}
 }

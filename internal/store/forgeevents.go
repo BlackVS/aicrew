@@ -257,7 +257,7 @@ func lastObservation(ctx context.Context, tx *sql.Tx, attemptID string) (*PullOb
 // that a member acts on, and whether it bears on a submit whatever the
 // attempt's phase: a merge or close. A label removed, a new head commit or
 // a CI run starting is recorded and announces nothing: the member made it,
-// or a result follows.
+// or a result follows. A concluded CI is announced once per head commit.
 func pullChanges(prev, cur PullObservation) (changes []string, submit bool) {
 	if cur.State != prev.State {
 		switch cur.State {
@@ -275,7 +275,10 @@ func pullChanges(prev, cur PullObservation) (changes []string, submit bool) {
 			changes = append(changes, "label "+l+" added")
 		}
 	}
-	if cur.Checks != prev.Checks && (cur.Checks == forge.ChecksSuccess || cur.Checks == forge.ChecksFailure) {
+	// A conclusion is the head's: one on a new head is news even when it
+	// equals the previous head's.
+	if (cur.Checks != prev.Checks || cur.HeadCommit != prev.HeadCommit) &&
+		(cur.Checks == forge.ChecksSuccess || cur.Checks == forge.ChecksFailure) {
 		changes = append(changes, fmt.Sprintf("CI concluded %s at %s", cur.Checks, short(cur.HeadCommit)))
 	}
 	if n := cur.Comments - prev.Comments; n > 0 {

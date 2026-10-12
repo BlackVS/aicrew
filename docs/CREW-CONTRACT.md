@@ -1384,8 +1384,9 @@ its message, so a change is announced once however often it is reported.
 A change is announced when it is one of:
 - the pull request was merged, closed, or reopened;
 - a label was added (a label removed is not announced);
-- the CI of the head concluded `success` or `failure` (a new head, or CI
-  starting, is not announced);
+- the CI of the head concluded `success` or `failure`, once per head
+  commit, so a conclusion on a new head is announced even when it equals
+  the old head's (a new head, or CI starting, is not announced by itself);
 - the comment count grew.
 
 **The message.** It is a lifecycle message of the team that names the

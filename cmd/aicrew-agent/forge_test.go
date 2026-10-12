@@ -82,7 +82,8 @@ func TestForgePRCommand(t *testing.T) {
 				t.Fatalf("the forge holds %+v", p)
 			}
 			code, out, _ = runForge(t, home, "", "pr", "label", "add", repo, "--pr", "1", "review-this")
-			if code != exitOK || !strings.HasPrefix(out, "Pull request 1: ") || !strings.Contains(out, "labels: review-this\n") {
+			if code != exitOK || !strings.HasPrefix(out, "Pull request 1: ") || !strings.Contains(out, "labels: review-this\n") ||
+				!strings.Contains(out, "watch: not watched: no launcher runs for this home\n") {
 				t.Fatalf("label add: %d\n%s", code, out)
 			}
 			code, _, errOut = runForge(t, home, "", "pr", "label", "add", repo, "--pr", "1", "review-this:other")
@@ -221,5 +222,16 @@ func TestForgePRCommandRefusalsAndCheckout(t *testing.T) {
 	}
 	if p := f.Pull(1); p.Head != "feat/checkout" || p.Base != "main" {
 		t.Errorf("open in a checkout opened %+v", p)
+	}
+}
+
+// The text output says whether the pull request is watched, or why not.
+func TestPrintPullWatch(t *testing.T) {
+	for _, watch := range []string{agent.WatchOn, "not watched: No running attempt of yours."} {
+		var b strings.Builder
+		printPull(&b, agent.PullReport{Pull: forge.Pull{Number: 3, URL: "https://example.test/pull/3"}, Watch: watch})
+		if !strings.HasSuffix(b.String(), "watch: "+watch+"\n") {
+			t.Errorf("printed %q", b.String())
+		}
 	}
 }

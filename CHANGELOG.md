@@ -12,6 +12,107 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.5.4] - 2026-10-11
+
+A member-side release from a pilot finding. A worker pushed its branch
+with its home's own forge credential, then correctly blocked. No product
+command opened a pull request with that credential: `gh` holds another
+account, and handling the token by hand is forbidden. `aicrew-agent forge
+pr` now opens, reads, labels and comments on pull requests with the
+home's credential. The Windows member one-liner also reads an installed
+binary's version reliably.
+
+aicrewd and its store are unchanged from 0.5.3. The managed
+`docs/ROLES.md` and the `/crew-submit` and `/crew-review` commands
+changed, so each home takes them on a `join` rerun.
+
+### Breaking changes
+
+- None. The store stays at schema 28, and aimem 0.10.0 stays required.
+- `/crew-submit` now takes only the attempt ID. It opens the pull request
+  itself, then submits its URL.
+
+### Upgrade steps
+
+1. **Each member, and the operator's machine.** As that user, rerun the
+   member one-liner:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.4/boot.sh | bash
+     ```
+
+   - Windows:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.4/boot.ps1 | iex"
+     ```
+
+   Then rerun `aicrew-agent join --home HOME` in each home. The rerun
+   refreshes `docs/ROLES.md` and the client commands. An edited file is
+   kept, with the new version written beside it with the suffix
+   `.aicrew-new`.
+2. **Restart each member** with `aicrew-agent run --client <client> --home
+   HOME`, so its client reads the new guidance at session start.
+3. **The hub, optionally.** aicrewd changes only in the version it reports.
+   The hub one-liner at v0.5.4 keeps the releases aligned:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.4/install-aicrewd.sh | bash
+   ```
+
+### Pull requests with the member's credential
+
+- **`aicrew-agent forge pr`** (#133) has four commands:
+  - `open --title TITLE --body-file FILE [--draft]`;
+  - `show --pr N`;
+  - `label add|remove --pr N LABEL...`;
+  - `comment --pr N --body-file FILE`.
+
+  Each prints the pull request's number and URL first, and takes `--json`.
+  They use the home's own forge credential for the repository's host, read
+  as the clone's credential helper reads it. The repository is the current
+  checkout's `origin`, or `--repository`. GitHub, Gitea and GitLab are
+  supported.
+- **`open`.** The head is the checkout's branch and the base the
+  repository's default branch, unless `--head` and `--base` name them.
+  `--draft` is GitHub's draft flag, or a `WIP: ` (Gitea) or `Draft: `
+  (GitLab) title prefix. A forge's refusal, such as a pull request that
+  already exists, is reported with the forge's own message.
+- **`label`** adds only labels the repository, or its organization or
+  group, already defines, and never creates one. Removing a label the pull
+  request does not carry changes nothing.
+- **A credential is never posted.**
+  - A body file in the home's `creds/` is refused, whether named directly
+    or through a link.
+  - Any input that holds the token is refused before anything is sent:
+    the repository path, title, body, head, base, labels and comment.
+  - Everything the command prints passes through a filter that replaces
+    each of the home's recorded forge tokens.
+- **The guidance uses it.** ROLES.md gains a "Pull requests" rule for
+  every member. `/crew-submit` opens the pull request, takes it through
+  the project's gates, then submits its URL. `/crew-review` reads, comments
+  and labels with these commands. Each says never to use `gh`, `tea`,
+  `glab` or a forge's API with a credential.
+
+### The Windows installer
+
+- **`boot.ps1` reads an installed binary's version reliably** (#135).
+  It read the version through a pipeline cut short after the first line.
+  That abandoned a binary that had printed its version but not yet exited,
+  and read its exit code as -1. So under load, the installer could
+  reinstall the current release, or report an upgrade as a fresh install.
+  It now lets `version` run to its end before reading the line. No
+  installed version was ever wrong: the reinstall wrote the same release.
+
+### Supported and pinned versions
+
+- **Unchanged:** aimem 0.10.0 (the minimum and the tested release),
+  ai-skills 1.26.1, Claude Code 2.1.283 to 2.1.286 tested, and OpenCode
+  1.18.32 or 2.0.18 to 2.0.19 tested.
+- **The one-liners** (`install-aicrewd.sh`, `boot.sh` and `boot.ps1`) pin
+  v0.5.4.
+
 ## [0.5.3] - 2026-10-11
 
 A release from a pilot finding: a cycle stuck on a stale offer. The

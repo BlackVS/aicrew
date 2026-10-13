@@ -12,6 +12,194 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.5.6] - 2026-10-13
+
+The fixes from the first full pilot cycle, and the first turn loop. A
+member's pull request now wakes it: a label, CI, a comment or a merge
+arrives in its inbox as a forge.event (A6). `aicrew-agent serve` runs a
+home's turns headless, one at a time, instead of the Stop-hook keep-alive
+(A3). From the architect seat, `aicrew merges` lists the pull requests
+waiting for the human merge (C3), and `aicrew status` shows each member's
+state with stalled members marked. Members mark their own drafts ready
+with `aicrew-agent forge pr ready`.
+
+aicrewd and its store change: the hub needs 0.5.6 first. The managed
+member files (`docs/ROLES.md`, the crew commands and the Claude Code
+settings) and the architect kit changed, so each home takes them on a
+`join` rerun and the architect directory on an `architect init` rerun.
+
+### Breaking changes
+
+- **The aicrew store moves to schema 30** (#139). It adds the last
+  observation of each attempt's pull request, and the change a forge.event
+  carries. The migration is additive and runs when aicrewd starts. A 0.5.5
+  aicrewd refuses a store at schema 30, so a rollback must restore the
+  store copy the installer keeps, as its automatic rollback does.
+- aimem 0.10.0 stays required.
+
+### Upgrade steps
+
+All of them use product commands and one-liners.
+
+1. **aicrewd.** On the hub host, as root, run the hub one-liner:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.6/install-aicrewd.sh | bash
+   ```
+
+   As before, it backs up the configuration and the store, swaps the
+   binaries, waits for health at 0.5.6, and rolls back if the new release
+   does not come up.
+2. **The operator's machine and each member.** As that user, rerun the
+   member one-liner:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.6/boot.sh | bash
+     ```
+
+   - Windows:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.6/boot.ps1 | iex"
+     ```
+
+   Then rerun `aicrew-agent join --home HOME` in each home. The rerun
+   refreshes `docs/ROLES.md`, `docs/START.md`, the crew commands (with the
+   new `/crew-turn`) and `.claude/settings.json`, and writes the new
+   `.claude/turn-settings.json`. An edited file is kept, with the new
+   version written beside it with the suffix `.aicrew-new`.
+3. **The architect directory.** Rerun `aicrew architect init` there. It
+   adds `/arch-merges` and `/arch-status` to an existing kit.
+4. **Restart each member** with `aicrew-agent run --client <client> --home
+   HOME`, so its client reads the new guidance at session start and gets
+   the new environment (its own `aicrew-agent` first on `PATH`, and the
+   raised Stop-hook block cap). Once a member is upgraded, `aicrew member
+   nudge` can tell it so.
+
+A home can instead move to the turn loop: `aicrew-agent join --home HOME
+--wake turns`, then `aicrew-agent serve --home HOME` in place of `run`.
+`run` refuses a home in turns mode, and `serve` one in stop-hook mode.
+
+### Forge events wake members (A6)
+
+- **The launcher watches the attempt's pull request** (#139). Every
+  `aicrew-agent forge pr` command reads the pull request after it acts and
+  reports it to aicrewd through the launcher. It prints `watch:` to say
+  whether the pull request is now watched.
+- **While the member waits** on its inbox, the launcher reads each watched
+  pull request with the home's own forge credential, at the start of the
+  wait and every 60 seconds after. aicrewd still holds no forge credential
+  and reads no forge.
+- **A change** becomes one `forge.event` lifecycle message, which ends the
+  wait: a label added, CI concluding success or failure, a new comment, a
+  merge, a close or a reopen. It goes to the worker, and to the
+  coordinators when the result is submitted or the pull request is merged
+  or closed. A repeated report announces nothing.
+- **The member route** `POST /v1/crew/pulls` takes one observation and
+  matches it to the member's running attempt. CREW-CONTRACT has a new
+  "Forge events" section.
+- **ROLES.md** tells members never to wait for a review or CI with a
+  background watch, a sleep loop or a polling script, and to end the turn
+  after `label add review-this`.
+
+### The turn loop: `aicrew-agent serve` (A3)
+
+- **Turns mode** (#141). `agent.json`'s `wake.mode` is `stop-hook` (the
+  default, an interactive client under `run`) or `turns`. `join --wake
+  stop-hook|turns` records it. A home in turns mode has no Stop hook. In
+  both modes `join` writes `.claude/turn-settings.json`: the deny rules and
+  the allow list a headless turn runs under, plus narrow additions from
+  `agent.json`'s `turns.allow`. `/crew-turn` is the managed prompt each
+  turn starts with. `check` notes a Stop hook left in a turns home, and each
+  `turns.allow` rule it leaves out.
+- **`aicrew-agent serve --home H`** (#142) holds the team session as `run`
+  does and runs one headless Claude Code turn at a time:
+  - a turn starts when the member has unacknowledged messages, or when a
+    worker's attempt is still in work after its last turn; never while the
+    member or its team is paused, and at most one start per 5 seconds;
+  - each attempt has one conversation that its later turns resume; other
+    turns resume the member's conversation until 50 turns, 70 % of the
+    context window, or a new UTC day;
+  - the turn timeout, the turn, attempt and daily budgets and
+    `max_continuations` come from `agent.json`'s `turns` object until A5. A
+    provider limit, a login failure or a failed turn holds the member for
+    a growing time;
+  - three turns of an attempt in a row with no step and no new commit
+    block the attempt, which tells the coordinator;
+  - each turn is one line of `logs/turns.jsonl`, and its raw stream stays
+    owner-only on the host under `logs/turns/`;
+  - while idle, the loop watches the attempts' pull requests (A6).
+- **aicrewd's session status** names the member's open attempt (`id`,
+  `state`, `phase`, `task`, `branch`), which the continuation rule reads.
+  With an older aicrewd, `serve` runs message turns but no continuation
+  turns.
+- **Measured** with real Claude Code 2.1.296, headless, with Haiku: a
+  message gives one turn that reads and acknowledges the inbox, a second
+  message resumes the same conversation, and idle ticks give no turn.
+
+### The architect seat
+
+- **`aicrew merges [--team TEAM]`** (#143) and `GET /v1/admin/merges` list
+  the attempts whose result the coordinator accepted and whose delivery is
+  not confirmed yet, oldest first. Each entry gives the task, the worker,
+  the accepted result's pull request and branch, and the pull request as
+  the worker's launcher last observed it (state, head, labels, CI and
+  comments). aicrewd reads only its own records.
+- **`aicrew status [--team TEAM]`** (#144) and `GET /v1/admin/team-states`
+  show every team's state, at most 100 teams, ordered by name. Each open
+  attempt carries `updated_at`. A member is marked `stalled` when it is
+  working or waiting on an open attempt unchanged for over an hour, unless
+  the attempt waits for the human merge (accepted) or an escalation's
+  answer (blocked), or is finalized.
+- **Both reads take the operator credential or an architect credential.**
+  The architect credential still gets unauthorized on every write: pause,
+  resume, nudge, invitations and credentials stay the operator's. A team
+  is named by its ID; without `--team`, the reads cover every team.
+- **The architect kit** gains `/arch-merges` and `/arch-status`, which say
+  in words which pull requests wait for the operator's merge, and what
+  each member is doing or whether it looks stalled. Neither ever merges,
+  pauses, resumes or nudges.
+
+### Members
+
+- **`aicrew-agent forge pr ready --pr N`** (#145) marks a pull request
+  ready with the member's own forge credential. On GitHub it drops the
+  draft flag through GraphQL's `markPullRequestReadyForReview`. In every
+  dialect it drops the title's draft prefixes (`WIP:`, `[WIP]`, `Draft:`,
+  `[Draft]`, `(Draft)`). A pull request that is ready already is not
+  written; a closed or merged one is refused. ROLES.md, `/crew-submit` and
+  `/crew-review` name it. The merge stays a person's.
+- **The client's `PATH`** (#146). `run`, each `serve` turn and every
+  `check` probe put the directory of the running `aicrew-agent` first on
+  the client's `PATH`, so the client runs the same `aicrew-agent` that
+  launched it.
+- **Claude Code's Stop-hook block cap** (#147). Claude Code ended the
+  keep-alive after 9 blocked stops in a row, which left members idle in the
+  pilot. `run` sets `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP=100000` for its client
+  unless a larger value is already set. The keep-alive stays bounded by
+  `idle_hours`. This is interim, until homes move to the turn loop.
+- **A failed clone after an accepted offer** (#138). The guidance now
+  says to block the attempt, since a decline is refused once the offer is
+  accepted.
+
+### Tests
+
+- **The exposure guard** (#140) type-checks the server package with
+  `go/types`, so an aliased or dot import of the store, or a store value
+  held in a variable, no longer gets past it.
+- The real-aimem end-to-end scenario E1 reads `aicrew status` with the
+  architect credential and checks that a pause with it is refused.
+
+### Supported and pinned versions
+
+- **Unchanged:** aimem 0.10.0 (the minimum and the tested release),
+  ai-skills 1.26.1, Claude Code 2.1.283 to 2.1.286 tested, and OpenCode
+  1.18.32 or 2.0.18 to 2.0.19 tested. The turn loop's per-turn settings
+  were measured with Claude Code 2.1.296.
+- **The one-liners** (`install-aicrewd.sh`, `boot.sh` and `boot.ps1`) pin
+  v0.5.6.
+
 ## [0.5.5] - 2026-10-12
 
 The operator's control of a running team (increment C1 of the control

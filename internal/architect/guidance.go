@@ -90,8 +90,19 @@ the task, the worker, the pull request, its head and its gates (labels, CI,
 comments) as the worker last saw them. Never merge, and never change a pull
 request: tell the operator which ones wait, and stop.
 
+## The team's state
+
+The crew's members work in their own sessions, and the operator sees them
+only through you. ` + "`/arch-status`" + ` reads each team's state with
+` + "`aicrew status`" + ` and says, for each member, its role, its state and since
+when, its open attempt and phase, its unread messages and any pause with its
+reason. A member marked ` + "`stalled`" + ` is working or waiting with an open
+attempt that has not changed for over an hour: point it out, with what it
+works on, so the operator can look. Pausing, resuming and nudging are the
+operator's, with the operator credential: you never do them.
+
 These commands use this directory's architect credential, which reads and
-answers escalations, reads the merges, and nothing else. If they cannot connect, the directory
+answers escalations, reads the merges and the team states, and nothing else. If they cannot connect, the directory
 was set up without aicrewd's address or the credential is missing: tell the
 operator, and read the open requests from the tasks' comments headed
 ` + "`[escalation.request ID]`" + ` meanwhile.
@@ -151,4 +162,12 @@ var commands = []command{
 			"was reported. Say plainly that these wait for the operator's merge. Never merge, never change a pull " +
 			"request, and never claim a gate the list does not show. If the list is empty, say that no pull " +
 			"request waits for a merge. If the command cannot connect, say so."},
+	{name: "arch-status", desc: "Say what each member of the crew is doing, and which looks stalled",
+		body: "Run `aicrew status`. For each team, say whether it is paused and why. For each member, say in words: " +
+			"its label and role, its `state` (working, waiting, paused, offline) and since when (`session.last_seen_at`, " +
+			"`session.last_waited_at` or `session.started_at`, against `read_at`), its open attempt (task, `state`, " +
+			"`phase`, and `updated_at`) or that it has none, its `unacknowledged` messages, and its own pause with " +
+			"the reason. Then name each member marked `stalled`: working or waiting with an open attempt unchanged " +
+			"for over an hour; say what it works on and since when nothing changed, so the operator can look. Never " +
+			"pause, resume or nudge a member: those are the operator's. If the command cannot connect, say so."},
 }

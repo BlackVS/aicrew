@@ -26,8 +26,8 @@ const (
 // The routes agents and aimem reach call only the store operations that
 // authenticate by proof, session token or peer credential: never one that
 // trusts a caller it is given. The operator API (admin.go, the escalation
-// routes of escalations.go, the control routes of control.go and the merges
-// read of merges.go) alone calls the operator's store operations, only in
+// routes of escalations.go, the control routes and team states read of
+// control.go and the merges read of merges.go) alone calls the operator's store operations, only in
 // functions handed the operator's caller, and gets that caller only inside
 // the wrapper (adminRoute): it builds the operator's caller there after
 // comparing the operator credential, and has the store authenticate an
@@ -93,8 +93,9 @@ var (
 		// reads and answers, and the architect credentials (5598).
 		"ListEscalations": true, "GetEscalation": true, "AnswerEscalation": true,
 		"ListArchitectCredentials": true, "IssueArchitectCredential": true, "RevokeArchitectCredential": true,
-		// The team's state, pauses and nudges (C1).
-		"GetTeamState": true, "SetPause": true, "Nudge": true,
+		// The team's state, pauses and nudges (C1), and the team states the
+		// operator's caller or an architect's reads (d56a).
+		"GetTeamState": true, "SetPause": true, "Nudge": true, "TeamStates": true,
 		// The pull requests waiting for the human merge, which the
 		// operator's caller or an architect's reads (C3).
 		"PendingMerges": true,
@@ -110,6 +111,7 @@ var (
 		"store.NewSecret": true, "store.Secret.Reveal": true, "store.GenerateInvitationCode": true,
 		"store.IntrospectionCredential.Active": true, "store.ArchitectCredential.Active": true,
 		"store.TeamGrant.Valid": true, "store.CapabilityGap": true, "store.DeriveState": true,
+		"store.LooksStalled": true,
 		// The configured verifier, which redeems aimem proof receipts.
 		"store.Verifier.Redeem":  true,
 		"store.ReconcilerCaller": true,

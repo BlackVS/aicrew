@@ -184,3 +184,41 @@ func TestLiveness(t *testing.T) {
 		t.Fatalf("a full liveness kept %d sessions", len(l.seen))
 	}
 }
+
+// GET /v1/admin/team-states reads every team's state, or one team's, for the
+// operator and an architect credential, with the open attempt's last change;
+// the operator's own team state route stays the operator's, and an unknown
+// parameter or team is refused.
+func TestTeamStatesRoute(t *testing.T) {
+	e := setupCoordination(t)
+	id := e.runningOffer(t)
+	var cred opapi.ArchitectCredential
+	if got := e.adminCall(t, http.MethodPost, opapi.ArchitectCredentialsPath, e.opToken, nil,
+		opapi.ArchitectCredentialRequest{Label: "planning"}, &cred); got.status != http.StatusCreated {
+		t.Fatalf("issue: %d %s", got.status, got.raw)
+	}
+	for _, bearer := range []string{e.opToken, cred.Bearer} {
+		for _, q := range []url.Values{nil, {"team": {e.team.ID}}} {
+			var list []opapi.TeamState
+			got := e.adminCall(t, http.MethodGet, opapi.TeamStatesPath, bearer, q, nil, &list)
+			if got.status != http.StatusOK || len(list) != 1 || list[0].TeamID != e.team.ID || len(list[0].Members) == 0 {
+				t.Fatalf("team states (%v): %d %s", q, got.status, got.raw)
+			}
+			found := false
+			for _, m := range list[0].Members {
+				if m.AgentID == e.worker.agent.ID {
+					found = m.OpenAttempt != nil && m.OpenAttempt.ID == id && !m.OpenAttempt.UpdatedAt.IsZero() && !m.Stalled
+				}
+			}
+			if !found {
+				t.Fatalf("the worker's open attempt: %s", got.raw)
+			}
+		}
+	}
+	adminRefused(t, e.adminCall(t, http.MethodGet, opapi.TeamStatePath, cred.Bearer, url.Values{"id": {e.team.ID}}, nil, nil),
+		http.StatusUnauthorized, opapi.CodeUnauthorized)
+	adminRefused(t, e.adminCall(t, http.MethodGet, opapi.TeamStatesPath, e.opToken, url.Values{"team": {"no-such-team"}}, nil, nil),
+		http.StatusNotFound, opapi.CodeNotFound)
+	adminRefused(t, e.adminCall(t, http.MethodGet, opapi.TeamStatesPath, e.opToken, url.Values{"id": {e.team.ID}}, nil, nil),
+		http.StatusBadRequest, opapi.CodeInvalid)
+}

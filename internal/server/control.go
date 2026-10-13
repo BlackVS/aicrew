@@ -18,6 +18,7 @@ import (
 
 func (s *Server) registerControl() {
 	s.handle(http.MethodGet, opapi.TeamStatePath, s.operator("team.state", s.teamState))
+	s.handle(http.MethodGet, opapi.TeamStatesPath, s.adminRoute("team.states", true, s.teamStates))
 	s.handle(http.MethodPost, opapi.TeamPausePath, s.operator("team.pause", s.pauseRoute(false, true)))
 	s.handle(http.MethodPost, opapi.TeamResumePath, s.operator("team.resume", s.pauseRoute(false, false)))
 	s.handle(http.MethodPost, opapi.MemberPausePath, s.operator("member.pause", s.pauseRoute(true, true)))
@@ -87,6 +88,29 @@ func (s *Server) teamState(w http.ResponseWriter, r *http.Request, op store.Call
 	return "ok", st.TeamID
 }
 
+// teamStates is GET /v1/admin/team-states[?team=ID], for the operator and
+// an architect credential.
+func (s *Server) teamStates(w http.ResponseWriter, r *http.Request, op store.Caller) (string, string) {
+	q := r.URL.Query()
+	for name := range q {
+		if name != "team" {
+			adminRefuse(w, http.StatusBadRequest, opapi.CodeInvalid, "the only parameter is team")
+			return opapi.CodeInvalid, ""
+		}
+	}
+	list, err := s.store.TeamStates(r.Context(), op, q.Get("team"))
+	if err != nil {
+		return adminFail(w, err), ""
+	}
+	now := time.Now()
+	out := make([]opapi.TeamState, 0, len(list))
+	for _, st := range list {
+		out = append(out, s.teamStateOf(st, now))
+	}
+	writeJSON(w, http.StatusOK, out)
+	return "ok", ""
+}
+
 // teamStateOf converts the store's team state and derives each member's
 // state from its pause and what the service saw of its session.
 func (s *Server) teamStateOf(st store.TeamState, now time.Time) opapi.TeamState {
@@ -106,11 +130,14 @@ func (s *Server) teamStateOf(st store.TeamState, now time.Time) opapi.TeamState 
 			v.Session = &opapi.MemberSession{ID: sess.ID, Generation: sess.Generation, StartedAt: sess.CreatedAt,
 				LastSeenAt: seen.seen, LastWaitedAt: seen.waited}
 		}
+		var changed time.Time
 		if a := m.OpenAttempt; a != nil {
 			v.OpenAttempt = &opapi.MemberAttempt{ID: a.ID, State: string(a.State), Phase: string(a.Phase),
-				HubID: a.Task.HubID, ProjectID: a.Task.ProjectID, TaskID: a.Task.TaskID}
+				HubID: a.Task.HubID, ProjectID: a.Task.ProjectID, TaskID: a.Task.TaskID, UpdatedAt: a.UpdatedAt}
+			changed = a.UpdatedAt
 		}
 		v.State = store.DeriveState(st.Paused != nil || m.Paused != nil, m.Session != nil, seen.seen, seen.waited, now)
+		v.Stalled = store.LooksStalled(v.State, changed, now)
 		out.Members = append(out.Members, v)
 	}
 	return out

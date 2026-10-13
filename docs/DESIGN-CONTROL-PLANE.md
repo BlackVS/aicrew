@@ -590,7 +590,7 @@ passkeys.
 | --- | --- | --- |
 | Operator token | the operator's machine; aicrewd keeps its file | the operator API |
 | Runner credential (new) | the runner's state directory, owner-only | `/v1/runner/*` for its own bound members |
-| Architect credential (new) | the architect directory's owner-only credential file | the operator API's reads and escalation answers, nothing else (D10); never an ops approval (D18) |
+| Architect credential (new) | the architect directory's owner-only credential file | the escalation, merges and team state reads and escalation answers, nothing else (D10); never an ops approval (D18) |
 | Ops identities (SSH, PowerShell remoting) | the ops member's home `creds/`, on the operator-prepared host | the hosts the profile names, limited there by sudoers or JEA (D19) |
 | Member session token | the runner's memory | the member's session API, as today |
 | Member aimem credential | the home's `aimem/` | the member's team-mode and personal-mode aimem access |
@@ -1271,7 +1271,7 @@ Each has a recommendation, and the design above assumes it.
 | D7 | Turn transcripts | They stay on the host; aicrewd keeps a redacted summary and fetches logs on demand |
 | D8 | Several homes per runner | Only with `--shared-user`, accepted explicitly and shown in team state |
 | D9 | The architect's identity on aimem | The human's own aimem user |
-| D10 | How the architect reads and answers escalations | A separate architect credential (reads and escalation answers only); the full operator token never enters an AI session |
+| D10 | How the architect reads and answers escalations | A separate architect credential (escalation, merges and team state reads, and escalation answers, only); the full operator token never enters an AI session |
 | D11 | The architect and OPERATOR-SEAT | The architect receives escalations; the seat's records and categories are kept; receipts deferred |
 | D12 | Pause and resume | A scheduler state (C1); amend 5598's criterion 2 |
 | D13 | The board trigger's source | Ask the aimem session for the `board.read` cursor feed of task state changes (A0) |

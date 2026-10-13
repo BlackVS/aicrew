@@ -327,6 +327,12 @@ const (
 	MemberNudgePath  = "/v1/admin/member/nudge"  // POST
 )
 
+// TeamStatesPath is every team's state, or one team's with ?team=ID: the
+// team state the architect seat reads (/arch-status). The operator
+// credential and an architect credential may read it; an architect
+// credential reaches no pause, resume or nudge.
+const TeamStatesPath = "/v1/admin/team-states" // GET (?team=ID)
+
 // Member states (docs/DESIGN-CONTROL-PLANE.md, section 1.6). needs_login and
 // limit_reached arrive with the provider profile (A5).
 const (
@@ -406,6 +412,10 @@ type MemberState struct {
 	Paused         *Pause         `json:"paused,omitempty"`
 	OpenAttempt    *MemberAttempt `json:"open_attempt,omitempty"`
 	Unacknowledged int            `json:"unacknowledged"`
+	// Stalled marks a member that looks stalled: working or waiting, with
+	// an open attempt that has not changed for longer than the stall
+	// window (store.StallWindow).
+	Stalled bool `json:"stalled,omitempty"`
 }
 
 // MemberProfile is the client and model the member's agent last reported.
@@ -427,14 +437,15 @@ type MemberSession struct {
 }
 
 // MemberAttempt is the newest attempt the member works on that is not
-// closed.
+// closed, and when it last changed.
 type MemberAttempt struct {
-	ID        string `json:"id"`
-	State     string `json:"state"`
-	Phase     string `json:"phase,omitempty"`
-	HubID     string `json:"hub_id"`
-	ProjectID string `json:"project_id"`
-	TaskID    string `json:"task_id"`
+	ID        string    `json:"id"`
+	State     string    `json:"state"`
+	Phase     string    `json:"phase,omitempty"`
+	HubID     string    `json:"hub_id"`
+	ProjectID string    `json:"project_id"`
+	TaskID    string    `json:"task_id"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // The pull requests waiting for the human merge (docs/DESIGN-CONTROL-PLANE.md,

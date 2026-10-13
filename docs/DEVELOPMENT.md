@@ -1083,6 +1083,14 @@ no secret; other sections belong to onboarding:
   starts the client (from `PATH`, or `client_command` in the `aicrew`
   section) as its child in the agent home, with `AIMEM_TEAM_SESSION` set in
   that child's environment only; arguments after `--` go to the client.
+- **The client's PATH.** `run`, each turn of `serve`, and every `check`
+  probe put the directory of the running `aicrew-agent` first on the
+  client's `PATH`, ahead of the inherited entries, which stay as they were.
+  The guidance has a member run `aicrew-agent` by name, and the user's
+  `PATH` need not hold the installed one, or may hold another. A `PATH`
+  that already starts with that directory is left alone. On Windows the
+  variable keeps its name (`Path` or `PATH`). The user's shell and profile
+  do not change.
 - **The first turn.** For Claude Code, `run` passes a first instruction as
   the client's initial prompt, ahead of the arguments after `--`. The
   member's first turn then needs no typed message: it reads

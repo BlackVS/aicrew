@@ -64,6 +64,48 @@ func InsideLauncher(getenv func(string) string) bool {
 	return getenv(SessionEnv) != "" && getenv(HomeEnv) != ""
 }
 
+// clientEnviron is the environment of the client a launcher starts for
+// home, `run`'s or each `serve` turn's: this process's environment with the
+// session file, the home's aimem installation and HomeEnv, and this
+// aicrew-agent's directory first on PATH.
+func clientEnviron(e *Engine, home string) []string {
+	return withSelfOnPath(withEnv(HomeAimemEnv(ScopedEnv(os.Environ(), e.AimemFile()), home), HomeEnv, home))
+}
+
+// withSelfOnPath returns env with the directory of this aicrew-agent first
+// on PATH (pilot finding 2026-10-12): the guidance has a member run
+// `aicrew-agent` by name, and the user's PATH need not hold this one, or
+// holds another. The rest of PATH is kept as it was. On Windows the
+// variable keeps the name it had (Path or PATH), and one remains.
+func withSelfOnPath(env []string) []string {
+	dir := filepath.Dir(selfExecutable())
+	if !filepath.IsAbs(dir) {
+		return env
+	}
+	name, cur := "PATH", ""
+	for _, kv := range env {
+		n, v, _ := strings.Cut(kv, "=")
+		if n == "PATH" || (runtime.GOOS == "windows" && strings.EqualFold(n, "PATH")) {
+			name, cur = n, v
+		}
+	}
+	if list := filepath.SplitList(cur); len(list) > 0 && samePathDir(list[0], dir) {
+		return env
+	}
+	v := dir
+	if cur != "" {
+		v += string(os.PathListSeparator) + cur
+	}
+	return withEnv(env, name, v)
+}
+
+// samePathDir reports whether two PATH entries name one directory as
+// written, in any case on Windows.
+func samePathDir(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	return a == b || (runtime.GOOS == "windows" && strings.EqualFold(a, b))
+}
+
 // withEnv returns env with name set to value, replacing any value it had.
 func withEnv(env []string, name, value string) []string {
 	return append(withoutEnv(env, name), name+"="+value)
@@ -155,7 +197,7 @@ func RunClient(ctx context.Context, e *Engine, c Client, stdio Stdio, signals <-
 	}
 	cmd := exec.Command(c.Path, c.Args...)
 	cmd.Dir = e.Cfg.Home
-	cmd.Env = withEnv(HomeAimemEnv(ScopedEnv(os.Environ(), e.AimemFile()), home), HomeEnv, home)
+	cmd.Env = clientEnviron(e, home)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio.In, stdio.Out, stdio.Err
 	bindToLauncher(cmd)
 	// A stop that arrived after the startup ended keeps the client from

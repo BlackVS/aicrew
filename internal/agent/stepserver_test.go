@@ -9,6 +9,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -283,6 +285,9 @@ func TestRunClientServesSteps(t *testing.T) {
 	}
 	if paths != 1 {
 		t.Fatalf("%d PATH entries in the client's environment", paths)
+	}
+	if !slices.Contains(r.Env, StopHookBlockCapEnv+"="+strconv.Itoa(StopHookBlockCap)) {
+		t.Fatalf("the client's environment lacks the Stop-hook block cap")
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "step.json"))
 	var ans StepAnswer

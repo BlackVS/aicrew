@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -70,6 +71,31 @@ func InsideLauncher(getenv func(string) string) bool {
 // aicrew-agent's directory first on PATH.
 func clientEnviron(e *Engine, home string) []string {
 	return withSelfOnPath(withEnv(HomeAimemEnv(ScopedEnv(os.Environ(), e.AimemFile()), home), HomeEnv, home))
+}
+
+// StopHookBlockCapEnv is Claude Code's limit on consecutive stops a Stop
+// hook blocks: past it, Claude Code overrides the hook and ends the turn
+// (9 by default), which ended the keep-alive and left the member idle in
+// the pilot (2026-10-12). StopHookBlockCap is what `run` sets: the
+// keep-alive's own bound is the home's idle_hours (WakeSettings).
+const (
+	StopHookBlockCapEnv = "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"
+	StopHookBlockCap    = 100000
+)
+
+// withStopHookCap returns env with StopHookBlockCapEnv at StopHookBlockCap,
+// unless it holds a larger number already. An interim measure until every
+// home runs the turn loop (`serve`), which has no Stop hook.
+func withStopHookCap(env []string) []string {
+	for _, kv := range env {
+		n, v, _ := strings.Cut(kv, "=")
+		if n == StopHookBlockCapEnv || (runtime.GOOS == "windows" && strings.EqualFold(n, StopHookBlockCapEnv)) {
+			if cur, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && cur >= StopHookBlockCap {
+				return env
+			}
+		}
+	}
+	return withEnv(env, StopHookBlockCapEnv, strconv.Itoa(StopHookBlockCap))
 }
 
 // withSelfOnPath returns env with the directory of this aicrew-agent first
@@ -197,7 +223,7 @@ func RunClient(ctx context.Context, e *Engine, c Client, stdio Stdio, signals <-
 	}
 	cmd := exec.Command(c.Path, c.Args...)
 	cmd.Dir = e.Cfg.Home
-	cmd.Env = clientEnviron(e, home)
+	cmd.Env = withStopHookCap(clientEnviron(e, home))
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio.In, stdio.Out, stdio.Err
 	bindToLauncher(cmd)
 	// A stop that arrived after the startup ended keeps the client from

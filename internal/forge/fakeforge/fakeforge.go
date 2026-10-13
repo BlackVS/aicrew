@@ -64,6 +64,9 @@ type Forge struct {
 	Created []string
 	// Unauthorized counts requests without the token.
 	Unauthorized int
+	// GraphQLError, when set, is the type of the error GitHub's GraphQL
+	// endpoint answers every mutation with, such as FORBIDDEN.
+	GraphQLError string
 }
 
 // New starts a fake forge of the dialect kind. The repository defines the
@@ -136,6 +139,10 @@ func (f *Forge) serve(w http.ResponseWriter, r *http.Request) {
 	if !f.authorized(r) {
 		f.Unauthorized++
 		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	if f.Kind == "github" && r.URL.EscapedPath() == "/api/graphql" && r.Method == http.MethodPost {
+		f.graphql(w, r)
 		return
 	}
 	p, ok := strings.CutPrefix(r.URL.EscapedPath(), f.base())
@@ -288,6 +295,7 @@ func (f *Forge) writePull(w http.ResponseWriter, p *Pull) {
 		}
 		if f.Kind == "github" {
 			out["draft"] = p.Draft
+			out["node_id"] = fmt.Sprintf("PR_node%d", p.Number)
 		}
 	}
 	json.NewEncoder(w).Encode(out)
@@ -348,7 +356,16 @@ func (f *Forge) pullRoute(w http.ResponseWriter, r *http.Request, m []string, in
 	switch {
 	case m[2] == "" && r.Method == http.MethodGet:
 		f.writePull(w, p)
+	case m[2] == "" && r.Method == http.MethodPatch && f.Kind != "gitlab":
+		if t, ok := in["title"].(string); ok {
+			p.Title = t
+		}
+		w.WriteHeader(map[string]int{"github": http.StatusOK, "gitea": http.StatusCreated}[f.Kind])
+		f.writePull(w, p)
 	case m[2] == "" && r.Method == http.MethodPut && f.Kind == "gitlab":
+		if t, ok := in["title"].(string); ok {
+			p.Title = t
+		}
 		for l := range strings.SplitSeq(str(in, "add_labels"), ",") {
 			if l != "" {
 				if !f.known(l) {
@@ -370,6 +387,28 @@ func (f *Forge) pullRoute(w http.ResponseWriter, r *http.Request, m []string, in
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// graphql serves GitHub's markPullRequestReadyForReview mutation, by the
+// pull request's node ID.
+func (f *Forge) graphql(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Query     string            `json:"query"`
+		Variables map[string]string `json:"variables"`
+	}
+	json.NewDecoder(r.Body).Decode(&in)
+	if f.GraphQLError != "" {
+		fmt.Fprintf(w, `{"data":{"markPullRequestReadyForReview":null},"errors":[{"type":%q,"message":"Resource not accessible by personal access token"}]}`, f.GraphQLError)
+		return
+	}
+	var n int64
+	if !strings.Contains(in.Query, "markPullRequestReadyForReview") ||
+		func() bool { _, err := fmt.Sscanf(in.Variables["id"], "PR_node%d", &n); return err != nil }() || f.pulls[n] == nil {
+		w.Write([]byte(`{"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a node"}]}`))
+		return
+	}
+	f.pulls[n].Draft = false
+	w.Write([]byte(`{"data":{"markPullRequestReadyForReview":{"pullRequest":{"isDraft":false}}}}`))
 }
 
 // commitRoute serves GitHub's and Gitea's /commits/SHA/status and GitHub's

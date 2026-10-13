@@ -88,6 +88,32 @@ func hasDraftPrefix(k Kind, title string) bool {
 	return false
 }
 
+// draftPrefixes are the title prefixes that mark a draft in any dialect:
+// Gitea's and GitLab's, which a process may also use on GitHub.
+var draftPrefixes = []string{"wip:", "[wip]", "draft:", "[draft]", "(draft)"}
+
+// stripDraft is title without its draft prefixes, in any case, and whether
+// it had one.
+func stripDraft(title string) (string, bool) {
+	t, cut := strings.TrimSpace(title), false
+	for {
+		found := false
+		for _, p := range draftPrefixes {
+			if len(t) >= len(p) && strings.EqualFold(t[:len(p)], p) {
+				t, cut, found = strings.TrimSpace(t[len(p):]), true, true
+				break
+			}
+		}
+		if !found {
+			return t, cut
+		}
+	}
+}
+
+// ErrNotOpen is a pull request that is closed or merged: it cannot be
+// marked ready.
+var ErrNotOpen = errors.New("the pull request is not open")
+
 // ErrLabelUnknown is a label the repository (or its organization or group)
 // does not define. Labels are never created here: a typo would otherwise
 // make a new, inert label.
@@ -124,6 +150,101 @@ func (c *Client) GetPull(ctx context.Context, host string, k Kind, token, path s
 		return Pull{}, err
 	}
 	return raw.pull(k)
+}
+
+// ReadyPull marks pull request n ready for review and merge: it drops
+// GitHub's draft flag, and in every dialect the draft prefixes of its title
+// (stripDraft), which is how Gitea and GitLab mark a draft and how a
+// process may mark one on GitHub. A pull request that is ready already is
+// not written. One that is closed or merged is ErrNotOpen, unchanged.
+func (c *Client) ReadyPull(ctx context.Context, host string, k Kind, token, path string, n int64) (Pull, error) {
+	var raw wirePull
+	if err := c.get(ctx, host, k, token, pullPath(k, path, n), &raw); err != nil {
+		return Pull{}, err
+	}
+	p, err := raw.pull(k)
+	if err != nil {
+		return Pull{}, err
+	}
+	if p.State != PullOpen {
+		return Pull{}, fmt.Errorf("%w: it is %s", ErrNotOpen, p.State)
+	}
+	title, prefixed := stripDraft(p.Title)
+	if prefixed && title == "" {
+		return Pull{}, fmt.Errorf("its title %q is only a draft prefix", p.Title)
+	}
+	if !prefixed && !(k == GitHub && raw.Draft) {
+		return p, nil
+	}
+	if k == GitHub && raw.Draft {
+		if err := c.markReady(ctx, host, token, raw.NodeID); err != nil {
+			return Pull{}, err
+		}
+	}
+	if prefixed {
+		method := http.MethodPatch
+		if k == GitLab {
+			method = http.MethodPut
+		}
+		if err := c.do(ctx, method, host, k, token, pullPath(k, path, n), map[string]any{"title": title}, nil); err != nil {
+			return Pull{}, err
+		}
+	}
+	return c.GetPull(ctx, host, k, token, path, n)
+}
+
+// graphqlURL is GitHub's GraphQL endpoint on host.
+func graphqlURL(host string) string {
+	if host == "github.com" {
+		return "https://api.github.com/graphql"
+	}
+	return "https://" + host + "/api/graphql"
+}
+
+// markReady drops the draft flag of the GitHub pull request with the node
+// ID id: GitHub's REST API cannot, its GraphQL mutation can. A refusal
+// GraphQL types FORBIDDEN is ErrForbidden.
+func (c *Client) markReady(ctx context.Context, host, token, id string) error {
+	if id == "" {
+		return errors.New("the forge's answer names no pull request ID")
+	}
+	in := map[string]any{
+		"query":     "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}",
+		"variables": map[string]any{"id": id},
+	}
+	var out struct {
+		Data struct {
+			Mark *struct {
+				PullRequest struct {
+					IsDraft bool `json:"isDraft"`
+				} `json:"pullRequest"`
+			} `json:"markPullRequestReadyForReview"`
+		} `json:"data"`
+		Errors []struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := c.doURL(ctx, http.MethodPost, graphqlURL(host), GitHub, token, in, &out); err != nil {
+		return err
+	}
+	if len(out.Errors) > 0 {
+		forbidden := false
+		msgs := make([]string, 0, len(out.Errors))
+		for _, e := range out.Errors {
+			forbidden = forbidden || e.Type == "FORBIDDEN"
+			msgs = append(msgs, e.Message)
+		}
+		msg := oneLine(strings.Join(msgs, "; "))
+		if forbidden {
+			return fmt.Errorf("%w: %s", ErrForbidden, msg)
+		}
+		return fmt.Errorf("the forge refused it: %s", msg)
+	}
+	if out.Data.Mark == nil || out.Data.Mark.PullRequest.IsDraft {
+		return errors.New("the forge's answer does not show the pull request ready")
+	}
+	return nil
 }
 
 // AddLabels adds labels the repository already defines to pull request n.
@@ -301,6 +422,7 @@ func issueLabelsPath(k Kind, path string, n int64) string {
 type wirePull struct {
 	Number  int64  `json:"number"`
 	IID     int64  `json:"iid"`
+	NodeID  string `json:"node_id"`
 	HTMLURL string `json:"html_url"`
 	WebURL  string `json:"web_url"`
 	Title   string `json:"title"`

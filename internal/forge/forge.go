@@ -383,6 +383,12 @@ func (c *Client) get(ctx context.Context, host string, k Kind, token, path strin
 // refuses with 403 is ErrForbidden, not ErrRejected: the token is valid but
 // may not do this. Any other refusal carries the forge's own message.
 func (c *Client) do(ctx context.Context, method, host string, k Kind, token, path string, in, out any) error {
+	return c.doURL(ctx, method, apiBase(host, k)+path, k, token, in, out)
+}
+
+// doURL is do at the full URL u, for an endpoint outside the dialect's API
+// root (GitHub's GraphQL).
+func (c *Client) doURL(ctx context.Context, method, u string, k Kind, token string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
@@ -391,7 +397,7 @@ func (c *Client) do(ctx context.Context, method, host string, k Kind, token, pat
 		}
 		body = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, apiBase(host, k)+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
 		return err
 	}
@@ -482,20 +488,26 @@ func refusal(body io.Reader) string {
 	for _, e := range r.Errors {
 		parts = append(parts, e.Message)
 	}
+	if msg := oneLine(strings.Join(parts, "; ")); msg != "" {
+		return ": " + msg
+	}
+	return ""
+}
+
+// oneLine is a forge's message as one printable line of at most maxRefusal
+// bytes.
+func oneLine(s string) string {
 	msg := strings.Map(func(c rune) rune {
 		if c < 0x20 || c == 0x7f {
 			return ' '
 		}
 		return c
-	}, strings.Join(parts, "; "))
+	}, s)
 	msg = strings.TrimSpace(msg)
 	if len(msg) > maxRefusal {
 		msg = strings.ToValidUTF8(msg[:maxRefusal], "") + "…"
 	}
-	if msg == "" {
-		return ""
-	}
-	return ": " + msg
+	return msg
 }
 
 // reason is a transport error without its URL, which is harmless but long.

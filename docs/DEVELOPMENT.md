@@ -1793,11 +1793,12 @@ aicrew-agent forge pr show --pr 12
 aicrew-agent forge pr label add --pr 12 review-this
 aicrew-agent forge pr label remove --pr 12 hands-reviewed
 aicrew-agent forge pr comment --pr 12 --body-file review.md
+aicrew-agent forge pr ready --pr 12
 ```
 
 A member pushes its branch with the clone's credential helper. It opens,
-reads, labels and comments on the pull request with the same credential,
-through these commands. Before them, no product command used that
+reads, labels, comments on and marks ready the pull request with the same
+credential, through these commands. Before them, no product command used that
 credential for a pull request, and a worker that had pushed its branch
 correctly blocked: `gh` holds another account, and handling the token by
 hand is forbidden. ROLES.md, `/crew-submit` and `/crew-review` use these
@@ -1840,6 +1841,16 @@ credential.
   label the pull request does not carry changes nothing.
 - **`comment`** posts the file's text, or standard input's for `-`. A body
   or comment is UTF-8 of at most 256 KiB.
+- **`ready`** marks a draft ready once the gates are green. On GitHub it
+  drops the draft flag through GraphQL's `markPullRequestReadyForReview`,
+  since the REST API cannot. In every dialect it drops the draft prefixes
+  of the title, in any case: `WIP:`, `[WIP]`, `Draft:`, `[Draft]` and
+  `(Draft)`. That is how Gitea and GitLab mark a draft, and how a process
+  may mark one on GitHub. A pull request that is ready already is not
+  written. A closed or merged one is refused, and so is a title that is
+  nothing but a draft prefix. The pilot's coordinator had to answer that
+  marking ready "needs a person"; it needs none, while the merge stays a
+  person's.
 - **Not here:** merging, which stays a person's, pull requests across forks,
   and creating labels.
 

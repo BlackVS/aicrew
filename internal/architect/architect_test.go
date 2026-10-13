@@ -41,7 +41,8 @@ func TestInitWritesTheDirectory(t *testing.T) {
 	}
 	want := []string{"AGENTS.md", "CLAUDE.md", "docs/ARCHITECT.md", ".claude/settings.json", ".mcp.json",
 		"docs/NOTES.md", ".aimem.json", ".claude/commands/arch-plan.md", ".claude/commands/arch-task.md",
-		".claude/commands/arch-ready.md", ".claude/commands/arch-escalations.md", ".claude/commands/arch-merges.md"}
+		".claude/commands/arch-ready.md", ".claude/commands/arch-escalations.md", ".claude/commands/arch-merges.md",
+		".claude/commands/arch-status.md"}
 	var got []string
 	for _, f := range Files(o) {
 		got = append(got, f.Path)
@@ -288,5 +289,29 @@ func TestInitRerunAddsArchMerges(t *testing.T) {
 	}
 	if !strings.Contains(read(t, dir, "docs/ARCHITECT.md"), "`/arch-merges`") {
 		t.Fatal("the guidance does not name /arch-merges")
+	}
+}
+
+// A directory from a release without /arch-status gains it, and the guidance
+// that names it, on a rerun.
+func TestInitRerunAddsArchStatus(t *testing.T) {
+	dir := t.TempDir()
+	o := Options{Dir: dir, Projects: []string{"crew-app"}}
+	if _, err := Init(o); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, ".claude", "commands", "arch-status.md")); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Init(o)
+	if err != nil || actions(rep)[".claude/commands/arch-status.md"] != "create" {
+		t.Fatalf("rerun: %v, %v", actions(rep), err)
+	}
+	if got := read(t, dir, ".claude/commands/arch-status.md"); !strings.Contains(got, "aicrew status") ||
+		!strings.Contains(got, "stalled") || !strings.Contains(got, "Never pause, resume or nudge") {
+		t.Fatalf("arch-status.md: %s", got)
+	}
+	if !strings.Contains(read(t, dir, "docs/ARCHITECT.md"), "`/arch-status`") {
+		t.Fatal("the guidance does not name /arch-status")
 	}
 }

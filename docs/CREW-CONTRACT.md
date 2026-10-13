@@ -1252,9 +1252,11 @@ only its mirror, and a comment without a recorded answer authorizes nothing.
 - **Who answers:** the operator credential, or an **architect credential**:
   - an `aar_` bearer that aicrewd issues and keeps only as a digest;
   - 90 days at most, and revocable;
-  - it reaches the three escalation routes and nothing else. Every other
-    operator route compares its bearer with the operator credential alone
-    and answers `401`.
+  - it reaches the three escalation routes and two reads, the merges
+    (`GET /v1/admin/merges`) and the team states
+    (`GET /v1/admin/team-states`), and nothing else. Every other operator
+    route compares its bearer with the operator credential alone and
+    answers `401`.
 - **Its fields:** `{id, decision, rationale}`. The decision is at most
   1 KiB, the rationale at most 4 KiB.
 - **Once only:** an escalation is answered once. A second answer is

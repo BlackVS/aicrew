@@ -210,6 +210,9 @@ type MemberAttempt struct {
 	// Branch is the attempt's branch, which the turn loop reads progress
 	// from (a new commit).
 	Branch string `json:"branch,omitempty"`
+	// UpdatedAt is when the attempt last changed, for the team state. The
+	// member's session status, which carries this struct, leaves it out.
+	UpdatedAt time.Time `json:"-"`
 }
 
 // TeamState is a team's pause and its current members' state.
@@ -227,48 +230,102 @@ func (s *Store) GetTeamState(ctx context.Context, c Caller, teamID string) (Team
 	}
 	var out TeamState
 	err := s.snapshot(ctx, func(q querier) error {
-		t, err := getTeam(ctx, q, teamID)
-		if err != nil {
-			return err
+		var err error
+		out, err = teamStateIn(ctx, q, teamID)
+		return err
+	})
+	return out, err
+}
+
+// maxTeamStates bounds the teams one TeamStates read returns.
+const maxTeamStates = 100
+
+// TeamStates reads the state of one team, or of every team (at most
+// maxTeamStates, by name) when teamID is empty, in one snapshot: the read
+// the architect seat makes (/arch-status). The operator and an architect
+// credential.
+func (s *Store) TeamStates(ctx context.Context, c Caller, teamID string) ([]TeamState, error) {
+	if err := requireEscalationReader(c); err != nil {
+		return nil, err
+	}
+	if len(teamID) > maxRefLen {
+		return nil, fmt.Errorf("%w: the team's ID is too long", ErrInvalid)
+	}
+	out := []TeamState{}
+	err := s.snapshot(ctx, func(q querier) error {
+		ids := []string{teamID}
+		if teamID == "" {
+			rows, err := q.QueryContext(ctx, `SELECT id FROM teams ORDER BY name, id LIMIT ?`, maxTeamStates)
+			if err != nil {
+				return fmt.Errorf("list teams: %w", err)
+			}
+			ids = ids[:0]
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return err
+				}
+				ids = append(ids, id)
+			}
+			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+				return err
+			}
 		}
-		out = TeamState{TeamID: t.ID, TeamName: t.Name, Members: []MemberState{}}
-		if out.Paused, err = getPause(ctx, q, teamID, ""); err != nil {
-			return err
-		}
-		members, err := listMembers(ctx, q, teamID)
-		if err != nil {
-			return err
-		}
-		for _, m := range members {
-			a, err := getAgent(ctx, q, m.AgentID)
+		for _, id := range ids {
+			st, err := teamStateIn(ctx, q, id)
 			if err != nil {
 				return err
 			}
-			ms := MemberState{AgentID: m.AgentID, Label: a.Label, Role: m.Role, Profile: a.Profile}
-			if sess, err := activeSession(ctx, q, teamID, m.AgentID); err == nil {
-				ms.Session = &sess
-			} else if !errors.Is(err, ErrNotFound) {
-				return err
-			}
-			if ms.Paused, err = getPause(ctx, q, teamID, m.AgentID); err != nil {
-				return err
-			}
-			if ms.OpenAttempt, err = memberOpenAttempt(ctx, q, teamID, m.AgentID); err != nil {
-				return err
-			}
-			if err := q.QueryRowContext(ctx,
-				`SELECT COUNT(*) FROM message_recipients r JOIN messages m ON m.id = r.message_id
-				 WHERE r.agent_id = ? AND m.team_id = ? AND r.acknowledged_at IS NULL
-				   AND (m.project_id = '' OR EXISTS (SELECT 1 FROM team_grants g
-				        WHERE g.team_id = m.team_id AND g.hub_id = m.project_hub_id AND g.project_id = m.project_id))`,
-				m.AgentID, teamID).Scan(&ms.Unacknowledged); err != nil {
-				return fmt.Errorf("count unacknowledged messages: %w", err)
-			}
-			out.Members = append(out.Members, ms)
+			out = append(out, st)
 		}
 		return nil
 	})
 	return out, err
+}
+
+// teamStateIn reads one team's state inside a snapshot.
+func teamStateIn(ctx context.Context, q querier, teamID string) (TeamState, error) {
+	t, err := getTeam(ctx, q, teamID)
+	if err != nil {
+		return TeamState{}, err
+	}
+	out := TeamState{TeamID: t.ID, TeamName: t.Name, Members: []MemberState{}}
+	if out.Paused, err = getPause(ctx, q, teamID, ""); err != nil {
+		return TeamState{}, err
+	}
+	members, err := listMembers(ctx, q, teamID)
+	if err != nil {
+		return TeamState{}, err
+	}
+	for _, m := range members {
+		a, err := getAgent(ctx, q, m.AgentID)
+		if err != nil {
+			return TeamState{}, err
+		}
+		ms := MemberState{AgentID: m.AgentID, Label: a.Label, Role: m.Role, Profile: a.Profile}
+		if sess, err := activeSession(ctx, q, teamID, m.AgentID); err == nil {
+			ms.Session = &sess
+		} else if !errors.Is(err, ErrNotFound) {
+			return TeamState{}, err
+		}
+		if ms.Paused, err = getPause(ctx, q, teamID, m.AgentID); err != nil {
+			return TeamState{}, err
+		}
+		if ms.OpenAttempt, err = memberOpenAttempt(ctx, q, teamID, m.AgentID); err != nil {
+			return TeamState{}, err
+		}
+		if err := q.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM message_recipients r JOIN messages m ON m.id = r.message_id
+			 WHERE r.agent_id = ? AND m.team_id = ? AND r.acknowledged_at IS NULL
+			   AND (m.project_id = '' OR EXISTS (SELECT 1 FROM team_grants g
+			        WHERE g.team_id = m.team_id AND g.hub_id = m.project_hub_id AND g.project_id = m.project_id))`,
+			m.AgentID, teamID).Scan(&ms.Unacknowledged); err != nil {
+			return TeamState{}, fmt.Errorf("count unacknowledged messages: %w", err)
+		}
+		out.Members = append(out.Members, ms)
+	}
+	return out, nil
 }
 
 func memberOpenAttempt(ctx context.Context, q querier, teamID, agentID string) (*MemberAttempt, error) {
@@ -286,7 +343,7 @@ func memberOpenAttempt(ctx context.Context, q querier, teamID, agentID string) (
 	if err != nil {
 		return nil, err
 	}
-	return &MemberAttempt{ID: a.ID, State: a.State, Phase: a.Phase, Task: a.Task, Branch: a.Branch}, nil
+	return &MemberAttempt{ID: a.ID, State: a.State, Phase: a.Phase, Task: a.Task, Branch: a.Branch, UpdatedAt: a.UpdatedAt}, nil
 }
 
 // MemberAttemptFor is the member's newest attempt as its worker that is not
@@ -344,6 +401,28 @@ func DeriveState(paused, session bool, lastSeen, lastWaited, now time.Time) stri
 	default:
 		return StateWorking
 	}
+}
+
+// StallWindow is how long an open attempt may stay unchanged while its
+// member is working or waiting before the member looks stalled: twice the
+// working window, so one long turn alone never marks it.
+const StallWindow = 2 * WorkingWindow
+
+// LooksStalled reports whether a member in state, whose open attempt is in
+// phase and last changed at attemptUpdated (zero without an open attempt),
+// looks stalled at now: working or waiting, with an open attempt unchanged
+// for longer than StallWindow. A paused or offline member is not stalled:
+// its state says why it does nothing. Nor is one whose attempt waits on
+// someone else with a channel of its own: an accepted result waits for the
+// human merge (the merges list), a blocked one for an escalation's answer,
+// and a finalized one is done.
+func LooksStalled(state string, phase AttemptPhase, attemptUpdated, now time.Time) bool {
+	switch phase {
+	case PhaseAccepted, PhaseBlocked, PhaseFinalized:
+		return false
+	}
+	return (state == StateWorking || state == StateWaiting) && !attemptUpdated.IsZero() &&
+		now.Sub(attemptUpdated) > StallWindow
 }
 
 // encodeOperator is a message's operator column.

@@ -441,6 +441,7 @@ in `internal/opapi`:
 | `POST /v1/admin/architect-credentials` | issue: `{"label"}`; the answer carries the bearer, once |
 | `POST /v1/admin/architect-credentials/revoke` | revoke: `{"id"}` |
 | `GET /v1/admin/team/state?id=TEAM` | the team's pause and each current member's state ("Team state, pause and nudge", below) |
+| `GET /v1/admin/team-states?team=TEAM` | the same state for every team, or for one: a list ("The team's state from the architect seat", below); the operator or an architect credential |
 | `POST /v1/admin/team/pause` | `{"team_id", "reason"}`: pause the team |
 | `POST /v1/admin/team/resume` | `{"team_id"}`: resume the team |
 | `POST /v1/admin/member/pause` | `{"team_id", "agent_id", "reason"}`: pause one member |
@@ -733,7 +734,8 @@ member:
   from it (`last_seen_at`) and last saw its wake read the pending list
   (`last_waited_at`);
 - its own pause;
-- its newest open attempt: ID, state, phase and task;
+- its newest open attempt: ID, state, phase, task, and when it last
+  changed (`updated_at`);
 - its unacknowledged messages;
 - its `state`, derived as follows until the runner reports it (B2):
   - `paused`: the team or the member is paused;
@@ -814,6 +816,31 @@ write. A team is named by its ID, since an architect credential cannot
 resolve a name through the team routes; without `--team` the list covers
 every team.
 
+### The team's state from the architect seat: `aicrew status`
+
+```sh
+bin/aicrew status [--team TEAM]
+```
+
+The operator sees the crew's members, who work in their own sessions,
+through the architect seat. `aicrew status`
+(`GET /v1/admin/team-states[?team=ID]`) lists each team's state, as
+`aicrew team state` prints it ("Team state, pause and nudge", above), for
+every team (at most 100, by name) or for the one named:
+- **What it adds.** Each open attempt's `updated_at`, and `stalled: true`
+  on a member that looks stalled.
+- **Stalled.** A member is stalled when it is working or waiting, has an
+  open attempt, and that attempt has not changed for over an hour (twice
+  the working window). A paused or offline member is never stalled, since
+  its state already says why it does nothing. Nor is one whose attempt
+  waits on someone else through a channel of its own: an accepted result
+  waits for the human merge (`aicrew merges`), a blocked one for an
+  escalation's answer, and a finalized one is done.
+- **Who reads it.** The operator credential reads it, and so does an
+  architect credential (`/arch-status`). The architect credential still
+  reaches no pause, resume or nudge, and not `GET /v1/admin/team/state`.
+- **Naming the team.** A team is named by its ID, as for the merges.
+
 ## Invitations
 
 An invitation lets one agent join a team, or link or rebind an agent record
@@ -892,6 +919,10 @@ command then exits 1 and names the merge to do.
   - `/arch-merges` says in words which pull requests wait for the
     operator's merge, with `aicrew merges` ("Pull requests waiting for the
     merge", below). It never merges and never changes a pull request.
+  - `/arch-status` says in words what each member is doing, with
+    `aicrew status` ("The team's state from the architect seat", above),
+    and points out a member that looks stalled. It never pauses, resumes
+    or nudges.
 - `.claude/settings.json` denies the session the directory's `creds/`,
   through the Read and Edit tools and in Bash or PowerShell command text,
   with the limit `docs/WORKSPACE.md` states. `creds/` is created
@@ -926,7 +957,8 @@ bin/aicrew architect credential revoke --id ID
 ```
 
 An architect credential reads and answers escalations and reads the
-merges list (`aicrew merges`), and nothing else, so the full operator token
+merges list (`aicrew merges`) and the team states (`aicrew status`), and
+nothing else, so the full operator token
 never enters an AI session. It lives 90 days.
 
 **First start.** The first `claude` in the directory asks to trust it and

@@ -16,8 +16,9 @@ import (
 // answer reaches the coordinator's and the blocked worker's inbox, where
 // the keep-alive loop (the Stop hook's wait-inbox) acts on it. Until the
 // headless turns exist (A3), that is what "their turns start" means. The
-// architect credential reaches nothing else, and an answer comment on the
-// board without a recorded answer authorizes nothing.
+// architect reads the team state (d56a), its credential reaches nothing
+// else, and an answer comment on the board without a recorded answer
+// authorizes nothing.
 func (h *harness) e1Escalation(t *testing.T) {
 	sc := h.report.scenario(t, "E1")
 	coord, worker := h.members["coord"], h.members["worker"]
@@ -62,12 +63,18 @@ func (h *harness) e1Escalation(t *testing.T) {
 	open := h.must(archEnv, nil, aicrew, "escalations", "list", "--open")
 	sc.check("the architect lists it with its credential (aicrew escalations list --open)",
 		strings.Contains(open, esc.ID) && strings.Contains(open, `"blocked": "`+worker.agentID+`"`), open)
+	status := h.must(archEnv, nil, aicrew, "status", "--team", h.teamID)
+	sc.check("the architect reads the team's state with its credential (aicrew status)",
+		strings.Contains(status, `"team_id": "`+h.teamID+`"`) && strings.Contains(status, `"agent_id": "`+coord.agentID+`"`) &&
+			strings.Contains(status, `"agent_id": "`+worker.agentID+`"`), status)
 	tr := h.run(archEnv, nil, aicrew, "team", "list")
 	ir := h.run(archEnv, nil, aicrew, "invitation", "list")
 	cr := h.run(archEnv, nil, aicrew, "architect", "credential", "list")
-	sc.check("the architect credential reaches nothing else: teams, invitations and credentials are unauthorized",
-		tr.code == 1 && ir.code == 1 && cr.code == 1 && strings.Contains(tr.stderr+ir.stderr+cr.stderr, "unauthorized"),
-		tr.stderr+ir.stderr+cr.stderr)
+	pr := h.run(archEnv, nil, aicrew, "team", "pause", "--team", h.teamID)
+	sc.check("the architect credential reaches nothing else: teams, invitations, credentials and a pause are unauthorized",
+		tr.code == 1 && ir.code == 1 && cr.code == 1 && pr.code == 1 &&
+			strings.Count(tr.stderr+ir.stderr+cr.stderr+pr.stderr, "unauthorized") >= 4,
+		tr.stderr+ir.stderr+cr.stderr+pr.stderr)
 
 	// A second request stays open; an answer comment for it on the board,
 	// without a recorded answer, reaches no one.

@@ -101,6 +101,14 @@ func TestForgePRCommand(t *testing.T) {
 			if got := f.Pull(1).Comments; !slices.Equal(got, []string{"Reviewed at the head.\n"}) {
 				t.Errorf("the forge holds the comments %q", got)
 			}
+			code, out, errOut = runForge(t, home, "", "pr", "ready", repo, "--pr", "1")
+			if code != exitOK || !strings.HasPrefix(out, "Pull request 1: ") || !strings.Contains(out, "title: Fix the parser\nstate: open\n") ||
+				!strings.Contains(out, "watch: ") {
+				t.Fatalf("ready: %d\n%s%s", code, out, errOut)
+			}
+			if p := f.Pull(1); p.Draft || p.Title != "Fix the parser" {
+				t.Fatalf("after ready the forge holds %+v", p)
+			}
 			code, out, _ = runForge(t, home, "", "pr", "show", repo, "--pr", "1", "--json")
 			var rep agent.PullReport
 			if code != exitOK || json.Unmarshal([]byte(out), &rep) != nil || rep.Pull.Number != 1 || rep.Account != "example-bot" ||
@@ -129,6 +137,8 @@ func TestForgePRCommandRefusalsAndCheckout(t *testing.T) {
 		{"pr", "label", repo, "--pr", "1", "x"},
 		{"pr", "label", "add", repo, "--pr", "1"},
 		{"pr", "comment", repo, "--pr", "1"},
+		{"pr", "ready", repo},
+		{"pr", "ready", repo, "--pr", "1", "extra"},
 	} {
 		if code, _, _ := runForge(t, home, "", args...); code != exitUsage {
 			t.Errorf("forge %v: %d, not a usage error", args, code)

@@ -349,8 +349,9 @@ func TestGuidancePullRequestsUseForgePR(t *testing.T) {
 	flat := func(s string) string { return strings.Join(strings.Fields(s), " ") }
 	md := flat(rolesMD())
 	every := md[strings.Index(md, "## Every member"):strings.Index(md, "## Coordinator")]
-	for _, want := range []string{"**Pull requests.** Open, read, label and comment on pull requests with `aicrew-agent forge pr`",
+	for _, want := range []string{"**Pull requests.** Open, read, label, comment on and mark ready pull requests with `aicrew-agent forge pr`",
 		"`open --title TITLE --body-file FILE [--draft]`", "`label add|remove --pr N LABEL`", "`comment --pr N --body-file FILE`",
+		"`ready --pr N`, which drops the draft flag",
 		"Never use `gh`, `tea`, `glab` or another forge client"} {
 		if !strings.Contains(every, want) {
 			t.Errorf("ROLES.md's rules for every member lack %q", want)
@@ -362,12 +363,13 @@ func TestGuidancePullRequestsUseForgePR(t *testing.T) {
 	}
 	submit := bodies["crew-submit"]
 	open, step := strings.Index(submit, "`aicrew-agent forge pr open --title TITLE --body-file FILE`"), strings.Index(submit, "work step below with `submit`")
-	if open < 0 || step < 0 || open > step || !strings.Contains(submit, "Never use `gh`") {
+	if open < 0 || step < 0 || open > step || !strings.Contains(submit, "Never use `gh`") ||
+		!strings.Contains(submit, "`aicrew-agent forge pr ready --pr N`") {
 		t.Errorf("/crew-submit does not open the pull request with forge pr before submitting: %s", submit)
 	}
 	review := bodies["crew-review"]
 	for _, want := range []string{"`aicrew-agent forge pr comment --pr N --body-file FILE`", "`aicrew-agent forge pr label add --pr N LABEL`",
-		"`aicrew-agent forge pr show --pr N`", "Never use `gh`"} {
+		"`aicrew-agent forge pr show --pr N`", "Never use `gh`", "`aicrew-agent forge pr ready --pr N`: it needs no person"} {
 		if !strings.Contains(review, want) {
 			t.Errorf("/crew-review lacks %q: %s", want, review)
 		}

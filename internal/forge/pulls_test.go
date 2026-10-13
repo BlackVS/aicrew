@@ -93,6 +93,90 @@ func TestPulls(t *testing.T) {
 	}
 }
 
+// Each dialect marks a draft ready: GitHub's flag and every draft title
+// prefix go, a ready pull request is not written again, and a closed one
+// is refused unchanged.
+func TestReadyPull(t *testing.T) {
+	ctx := context.Background()
+	for _, k := range []Kind{GitHub, Gitea, GitLab} {
+		t.Run(string(k), func(t *testing.T) {
+			f := fakeforge.New(t, string(k))
+			c := &Client{HTTP: f.Client}
+			if _, err := c.OpenPull(ctx, f.Host, k, fakeforge.Token, fakeforge.Repo,
+				NewPull{Title: "WIP: [draft] Fix the parser", Head: "feat/parser", Base: "main", Draft: true}); err != nil {
+				t.Fatal(err)
+			}
+			p, err := c.ReadyPull(ctx, f.Host, k, fakeforge.Token, fakeforge.Repo, 1)
+			if err != nil || p.Draft || p.Title != "Fix the parser" || p.State != PullOpen {
+				t.Fatalf("ready: %+v, %v", p, err)
+			}
+			if got := f.Pull(1); got.Draft || got.Title != "Fix the parser" {
+				t.Fatalf("the forge holds %+v", got)
+			}
+			before := len(f.Requests)
+			if p, err = c.ReadyPull(ctx, f.Host, k, fakeforge.Token, fakeforge.Repo, 1); err != nil || p.Draft {
+				t.Fatalf("ready again: %+v, %v", p, err)
+			}
+			if len(f.Requests) != before+1 {
+				t.Errorf("a ready pull request was written: %v", f.Requests[before:])
+			}
+			f.SetPull(1, func(p *fakeforge.Pull) { p.State, p.Title = "closed", "WIP: Fix the parser" })
+			if _, err := c.ReadyPull(ctx, f.Host, k, fakeforge.Token, fakeforge.Repo, 1); !errors.Is(err, ErrNotOpen) ||
+				f.Pull(1).Title != "WIP: Fix the parser" {
+				t.Errorf("a closed pull request: %v, %+v", err, f.Pull(1))
+			}
+			if _, err := c.ReadyPull(ctx, f.Host, k, fakeforge.Token, fakeforge.Repo, 99); !errors.Is(err, ErrNotFound) {
+				t.Errorf("an unknown pull request: %v", err)
+			}
+		})
+	}
+}
+
+// GitHub's GraphQL refusal of the draft flag is reported, as ErrForbidden
+// when GraphQL types it FORBIDDEN, and the title is left as it was.
+func TestReadyPullGraphQLRefusal(t *testing.T) {
+	ctx := context.Background()
+	for typ, forbidden := range map[string]bool{"FORBIDDEN": true, "UNPROCESSABLE": false} {
+		f := fakeforge.New(t, "github")
+		c := &Client{HTTP: f.Client}
+		if _, err := c.OpenPull(ctx, f.Host, GitHub, fakeforge.Token, fakeforge.Repo,
+			NewPull{Title: "WIP: Fix", Head: "feat/x", Base: "main", Draft: true}); err != nil {
+			t.Fatal(err)
+		}
+		f.GraphQLError = typ
+		_, err := c.ReadyPull(ctx, f.Host, GitHub, fakeforge.Token, fakeforge.Repo, 1)
+		if err == nil || errors.Is(err, ErrForbidden) != forbidden || !strings.Contains(err.Error(), "Resource not accessible") {
+			t.Errorf("%s: %v", typ, err)
+		}
+		if got := f.Pull(1); !got.Draft || got.Title != "WIP: Fix" {
+			t.Errorf("%s: the forge holds %+v", typ, got)
+		}
+	}
+}
+
+// stripDraft drops every leading draft prefix in any case, and nothing else.
+func TestStripDraft(t *testing.T) {
+	for in, want := range map[string]struct {
+		title string
+		cut   bool
+	}{
+		"WIP: Fix":           {"Fix", true},
+		"wip:Fix":            {"Fix", true},
+		"[WIP] Fix":          {"Fix", true},
+		"Draft: (Draft) Fix": {"Fix", true},
+		"  [draft]   Fix  ":  {"Fix", true},
+		"Fix: WIP: later":    {"Fix: WIP: later", false},
+		"Wipe the cache":     {"Wipe the cache", false},
+		"Drafting the docs":  {"Drafting the docs", false},
+		"WIP:":               {"", true},
+		"WIPE: the cache":    {"WIPE: the cache", false},
+	} {
+		if title, cut := stripDraft(in); title != want.title || cut != want.cut {
+			t.Errorf("stripDraft(%q) = %q, %v; want %q, %v", in, title, cut, want.title, want.cut)
+		}
+	}
+}
+
 // A refusal quotes the forge's message on one bounded line, and nothing
 // when the answer has none.
 func TestRefusal(t *testing.T) {

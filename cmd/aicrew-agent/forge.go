@@ -16,14 +16,17 @@ const forgeUsage = `usage: aicrew-agent forge pr open    [--home DIR] [--reposit
        aicrew-agent forge pr show    [--home DIR] [--repository URL] --pr NUMBER [--json]
        aicrew-agent forge pr label   add|remove [--home DIR] [--repository URL] --pr NUMBER LABEL... [--json]
        aicrew-agent forge pr comment [--home DIR] [--repository URL] --pr NUMBER --body-file FILE|- [--json]
+       aicrew-agent forge pr ready   [--home DIR] [--repository URL] --pr NUMBER [--json]
   Opens, reads, labels and comments on a pull request with this home's own
   forge credential for the repository's host (join --cred), and prints the
   pull request's number and URL. The repository is the current directory's
   origin unless --repository names it; open's head is the current branch
   and its base the repository's default branch unless --head and --base
   name them. --draft opens a draft: GitHub's draft flag, or the title prefix
-  "WIP: " on Gitea and "Draft: " on GitLab. Labels must exist already: none
-  is created. Never use another forge client or a credential by hand.
+  "WIP: " on Gitea and "Draft: " on GitLab. ready marks it ready once the
+  gates are green: it drops GitHub's draft flag and, in every dialect, a
+  draft title prefix (WIP:, [WIP], Draft:, [Draft], (Draft)). Labels must
+  exist already: none is created. Never use another forge client or a credential by hand.
   Each command reports the pull request to the launcher, which then watches
   it: a later change of its labels, CI or comments arrives in the inbox as a
   forge.event and wakes the member. Do not wait with a background watch:
@@ -64,7 +67,7 @@ func forgeCmd(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		fs.BoolVar(&o.Draft, "draft", false, "")
 		fs.StringVar(&o.Head, "head", "", "")
 		fs.StringVar(&o.Base, "base", "", "")
-	case "show", "label", "comment":
+	case "show", "label", "comment", "ready":
 		fs.Int64Var(&pr, "pr", 0, "")
 		if verb == "comment" {
 			fs.StringVar(&bodyFile, "body-file", "", "")
@@ -77,7 +80,7 @@ func forgeCmd(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	usage := err != nil || f.Home == "" ||
 		(verb == "open" && (o.Title == "" || bodyFile == "" || fs.NArg() != 0)) ||
 		(verb != "open" && pr <= 0) ||
-		(verb == "show" && fs.NArg() != 0) ||
+		((verb == "show" || verb == "ready") && fs.NArg() != 0) ||
 		(verb == "comment" && (bodyFile == "" || fs.NArg() != 0)) ||
 		(verb == "label" && fs.NArg() == 0)
 	if usage {
@@ -93,6 +96,8 @@ func forgeCmd(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		}
 	case "show":
 		rep, err = f.Show(ctx, pr)
+	case "ready":
+		rep, err = f.Ready(ctx, pr)
 	case "label":
 		rep, err = f.Label(ctx, pr, add, fs.Args())
 	case "comment":

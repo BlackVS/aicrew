@@ -99,7 +99,9 @@ var crewCommands = []crewCommand{
 			"`aicrew-agent forge pr comment --pr N --body-file FILE`, and request an external review with " +
 			"`aicrew-agent forge pr label add --pr N LABEL` where the project's process asks for one. " +
 			pullRequestNever + "\n" +
-			"3. Decide with the review step below: `accept`, or `rework` to send it back.\n" +
+			"3. Decide with the review step below: `accept`, or `rework` to send it back. Before you accept a pull " +
+			"request that is still a draft, when the project's process marks it ready once its gates are green, mark " +
+			"it with `aicrew-agent forge pr ready --pr N`: it needs no person.\n" +
 			"4. Stop there. A person merges the pull request; only after that, record the delivery evidence " +
 			"(`aicrew-agent forge pr show --pr N` names the merge commit).",
 		Ops: []string{"review", "confirm-delivery"}},
@@ -143,8 +145,9 @@ var crewCommands = []crewCommand{
 			"--title TITLE --body-file FILE`, with `--draft` while a gate is open if the project's process says " +
 			"so. It prints the pull request's number and URL.\n" +
 			"2. Take it through the gates the project's process requires: `aicrew-agent forge pr show --pr N` " +
-			"reads it, `aicrew-agent forge pr label add|remove --pr N LABEL` labels it, and `aicrew-agent forge " +
-			"pr comment --pr N --body-file FILE` comments on it. " + pullRequestNever + "\n" +
+			"reads it, `aicrew-agent forge pr label add|remove --pr N LABEL` labels it, `aicrew-agent forge " +
+			"pr comment --pr N --body-file FILE` comments on it, and `aicrew-agent forge pr ready --pr N` marks a " +
+			"draft ready when the process says its gates are green. " + pullRequestNever + "\n" +
 			"3. Submit its URL with the work step below with `submit`; `block` with the reason, or `resume` " +
 			"after a block, use the same step.",
 		Ops: []string{"work"}},
@@ -228,10 +231,11 @@ const pullRequestNever = "Never use `gh`, `tea`, `glab` or another forge client,
 
 // pullRequestRule is ROLES.md's rule on pull requests, which every member
 // follows.
-const pullRequestRule = "Open, read, label and comment on pull requests with `aicrew-agent forge pr`, which " +
-	"uses your home's own forge credential for the repository's host: `open --title TITLE --body-file FILE " +
+const pullRequestRule = "Open, read, label, comment on and mark ready pull requests with `aicrew-agent forge pr`, " +
+	"which uses your home's own forge credential for the repository's host: `open --title TITLE --body-file FILE " +
 	"[--draft]` in your worktree after pushing your branch, `show --pr N`, `label add|remove --pr N LABEL`, " +
-	"and `comment --pr N --body-file FILE`. Each prints the pull request's number and URL, and whether your " +
+	"`comment --pr N --body-file FILE`, and `ready --pr N`, which drops the draft flag and a `WIP:` or `Draft:` " +
+	"title prefix once the gates the project's process requires are green (the merge stays a person's). Each prints the pull request's number and URL, and whether your " +
 	"launcher watches it (`watch:`): a later change of a watched pull request (a label added, its CI concluding, " +
 	"a new comment, a merge or a close) arrives in your inbox as a lifecycle message whose `forge` names the " +
 	"change, a forge.event, which wakes you. Never wait for a review or CI with a background watch, a sleep loop " +

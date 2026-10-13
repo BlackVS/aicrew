@@ -30,6 +30,7 @@ type PullAPI interface {
 	AddLabels(ctx context.Context, host string, k forge.Kind, token, path string, n int64, labels []string) error
 	RemoveLabels(ctx context.Context, host string, k forge.Kind, token, path string, n int64, labels []string) error
 	CommentPull(ctx context.Context, host string, k forge.Kind, token, path string, n int64, body string) (forge.Comment, error)
+	ReadyPull(ctx context.Context, host string, k forge.Kind, token, path string, n int64) (forge.Pull, error)
 	GetPullStatus(ctx context.Context, host string, k forge.Kind, token, path string, n int64) (forge.PullStatus, error)
 }
 
@@ -349,6 +350,25 @@ func (f *ForgePR) Comment(ctx context.Context, n int64, body string) (PullReport
 		return PullReport{}, fmt.Errorf("comment on pull request %d of %s on %s: %w", n, t.path, t.host, err)
 	}
 	rep.Comment = &c
+	rep.Watch = f.watch(ctx, t, n)
+	return rep, nil
+}
+
+// Ready marks pull request n ready for review and merge: GitHub's draft
+// flag and any draft prefix of its title are dropped (forge.ReadyPull).
+func (f *ForgePR) Ready(ctx context.Context, n int64) (PullReport, error) {
+	t, err := f.target(ctx)
+	if err != nil {
+		return PullReport{}, err
+	}
+	if n <= 0 {
+		return PullReport{}, errors.New("--pr must be a pull request number")
+	}
+	p, err := f.API.ReadyPull(ctx, t.host, t.kind(), t.token, t.path, n)
+	if err != nil {
+		return PullReport{}, fmt.Errorf("mark pull request %d of %s on %s ready: %w", n, t.path, t.host, err)
+	}
+	rep := t.report(p)
 	rep.Watch = f.watch(ctx, t, n)
 	return rep, nil
 }

@@ -76,10 +76,11 @@ func HomeAimemEnv(env []string, home string) []string {
 }
 
 // checkProbeEnv is the environment of a check probe: the home's installation,
-// and no team session, since a probe joins none and an inherited session
-// file belongs to another installation.
+// no team session, since a probe joins none and an inherited session file
+// belongs to another installation, and this aicrew-agent first on PATH, as
+// a launched client has it (withSelfOnPath).
 func checkProbeEnv(env []string, home string) []string {
-	return withoutEnv(HomeAimemEnv(env, home), SessionEnv)
+	return withSelfOnPath(withoutEnv(HomeAimemEnv(env, home), SessionEnv))
 }
 
 // claudeSettings is the home's managed .claude/settings.json: the home's

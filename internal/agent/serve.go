@@ -486,7 +486,7 @@ func ServeHome(ctx context.Context, e *Engine, client string, signals <-chan os.
 	loopCtx, stopLoop := context.WithCancel(ctx)
 	defer stopLoop()
 	loop := &TurnLoop{Home: home, Client: client, Host: steps, Run: RunClaudeTurn, Log: e.Log, Now: time.Now,
-		Head: worktreeHead, Env: withEnv(HomeAimemEnv(ScopedEnv(os.Environ(), e.AimemFile()), home), HomeEnv, home)}
+		Head: worktreeHead, Env: clientEnviron(e, home)}
 	looped := make(chan error, 1)
 	go func() { looped <- loop.Loop(loopCtx) }()
 	e.Log.Info("the turn loop runs", "home", home)

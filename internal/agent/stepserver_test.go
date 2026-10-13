@@ -271,6 +271,19 @@ func TestRunClientServesSteps(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("%d %s entries in the client's environment", n, HomeEnv)
 	}
+	self, _ := os.Executable()
+	paths := 0
+	for _, kv := range r.Env {
+		if name, v, _ := strings.Cut(kv, "="); strings.EqualFold(name, "PATH") {
+			paths++
+			if first := filepath.SplitList(v)[0]; !samePathDir(first, filepath.Dir(self)) {
+				t.Fatalf("the client's PATH starts with %q, not its launcher's directory", first)
+			}
+		}
+	}
+	if paths != 1 {
+		t.Fatalf("%d PATH entries in the client's environment", paths)
+	}
 	b, _ := os.ReadFile(filepath.Join(dir, "step.json"))
 	var ans StepAnswer
 	if json.Unmarshal(b, &ans) != nil || ans.Status != StepDone {

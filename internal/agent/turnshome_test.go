@@ -52,13 +52,49 @@ func TestTurnsModeSettings(t *testing.T) {
 			Deny  []string `json:"deny"`
 		} `json:"permissions"`
 	}
-	if err := json.Unmarshal([]byte(turnSettings(home)), &turn); err != nil {
+	if err := json.Unmarshal([]byte(turnSettings(home, false)), &turn); err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range append(baseTurnAllow(), "Bash(go test *)", "Bash(make *)", "Read(./docs/**)") {
+	for _, r := range append(baseTurnAllow(false), "Bash(go test *)", "Bash(make *)", "Read(./docs/**)",
+		"mcp__aimem__get_task", "Read(./**)", "Grep(./**)", "Glob(./**)") {
 		if !slices.Contains(turn.Permissions.Allow, r) {
 			t.Errorf("the allow list lacks %s: %v", r, turn.Permissions.Allow)
 		}
+	}
+	// A worker's turn reads the board; only a coordinator's comments and
+	// triages (pilot finding #15).
+	for _, r := range coordinatorTurnAllow {
+		if slices.Contains(turn.Permissions.Allow, r) {
+			t.Errorf("a member's turn may %s", r)
+		}
+	}
+	var coord struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+			Deny  []string `json:"deny"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal([]byte(turnSettings(home, true)), &coord); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range append(append([]string{}, turn.Permissions.Allow...), "mcp__aimem__triage_task",
+		"mcp__aimem__add_task_comment", "Bash(aimem process show*)", "Bash(aimem project show*)") {
+		if !slices.Contains(coord.Permissions.Allow, r) {
+			t.Errorf("the coordinator's allow list lacks %s", r)
+		}
+	}
+	if !slices.Equal(coord.Permissions.Deny, turn.Permissions.Deny) {
+		t.Errorf("the coordinator's deny rules differ: %v", coord.Permissions.Deny)
+	}
+	for _, r := range coord.Permissions.Allow {
+		if strings.HasPrefix(r, "mcp__") && r != "mcp__aimem__add_task_comment" && r != "mcp__aimem__triage_task" &&
+			!slices.Contains(aimemReadTools, strings.TrimPrefix(r, "mcp__aimem__")) {
+			t.Errorf("an MCP rule beyond the reads, the comment and the triage: %s", r)
+		}
+	}
+	if TurnSettingsFor("coordinator") != CoordinatorTurnSettingsFile || TurnSettingsFor("worker") != TurnSettingsFile ||
+		TurnSettingsFor("independent") != TurnSettingsFile || TurnSettingsFor("") != TurnSettingsFile {
+		t.Error("TurnSettingsFor picks the wrong file")
 	}
 	for _, r := range []string{"Bash", "Bash(*)", "PowerShell(Get-*)"} {
 		if slices.Contains(turn.Permissions.Allow, r) {
@@ -90,8 +126,11 @@ func TestJoinWakeMode(t *testing.T) {
 	code := e.invite(t, "inv-1", store.RoleWorker)
 	e.join(t, e.opts(), &recCrew{}, activeAimem(), code)
 	path := func(p string) string { return filepath.Join(e.home, filepath.FromSlash(p)) }
-	if b, _ := os.ReadFile(path(TurnSettingsFile)); string(b) != turnSettings(e.home) {
+	if b, _ := os.ReadFile(path(TurnSettingsFile)); string(b) != turnSettings(e.home, false) {
 		t.Fatal("join did not write the per-turn settings")
+	}
+	if b, _ := os.ReadFile(path(CoordinatorTurnSettingsFile)); string(b) != turnSettings(e.home, true) {
+		t.Fatal("join did not write the coordinator's per-turn settings")
 	}
 	doc := readJSON(t, path("agent.json"))
 	doc["wake"] = map[string]any{"wait_seconds": 45}

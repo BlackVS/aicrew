@@ -169,6 +169,23 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 }
 
 // hold gives the member no turn before until, and says why once.
+// settingsFile is the per-turn settings of a member in role. A coordinator's
+// file that is missing, in a home not rejoined since an upgrade, falls back
+// to the common one, which admits less, and says so: a missing --settings
+// file would fail every turn.
+func (l *TurnLoop) settingsFile(role string) string {
+	f := TurnSettingsFor(role)
+	if f == TurnSettingsFile {
+		return f
+	}
+	if _, err := os.Stat(filepath.Join(l.Home, filepath.FromSlash(f))); err != nil {
+		l.Log.Warn("the role's per-turn settings are missing: the turn runs with the common ones; rerun "+
+			"`aicrew-agent join --home HOME` to write them", "file", f)
+		return TurnSettingsFile
+	}
+	return f
+}
+
 func (l *TurnLoop) hold(st *turnState, until time.Time, why string) {
 	if st.Hold != why {
 		l.Log.Warn("no turn: "+why, "until", until.Format(time.RFC3339))
@@ -213,7 +230,7 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	l.Log.Info("turn started", "turn", rec.ID, "trigger", trigger, "conversation", conv.ID, "resumed", resume)
 	transcript, closeTranscript := openTranscript(l.Home, rec.ID)
 	res := l.Run(ctx, TurnSpec{Client: l.Client, Home: l.Home, Env: l.Env, Prompt: "/crew-turn " + trigger,
-		Conversation: conv.ID, Resume: resume, Model: limits.Model, BudgetUSD: limits.TurnBudgetUSD,
+		Settings: l.settingsFile(status.Session.Role), Conversation: conv.ID, Resume: resume, Model: limits.Model, BudgetUSD: limits.TurnBudgetUSD,
 		Timeout: limits.TurnTimeout, Transcript: transcript})
 	closeTranscript()
 	rec.EndedAt = l.Now()

@@ -40,7 +40,8 @@ func homeFiles(home string) []homeFile {
 		{Path: "docs/ROLES.md", Content: rolesMD(), Managed: true},
 		{Path: "docs/HANDOFF.md", Content: handoffMD},
 		{Path: ".claude/settings.json", Content: claudeSettings(home), Managed: true},
-		{Path: TurnSettingsFile, Content: turnSettings(home), Managed: true},
+		{Path: TurnSettingsFile, Content: turnSettings(home, false), Managed: true},
+		{Path: CoordinatorTurnSettingsFile, Content: turnSettings(home, true), Managed: true},
 	}, commandFiles()...)
 }
 

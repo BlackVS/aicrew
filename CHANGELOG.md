@@ -12,6 +12,85 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.5.7] - 2026-10-13
+
+A fix for the first turns-mode turns on v0.5.6 (pilot finding #15). A
+headless turn runs in Claude Code's `dontAsk` mode, where an MCP tool
+without an allow rule is denied. The per-turn allow list named none of
+aimem's tools, so a coordinator's turn could not read the READY task it was
+to offer. Each turn now admits aimem's reads, and a coordinator's turn its
+comment and triage too.
+
+Only the member side changes: aicrewd, its store and the routes are as in
+0.5.6, so the hub may stay on 0.5.6. The managed per-turn settings changed,
+and a new one is added, so each home takes them on a `join` rerun.
+
+### Upgrade steps
+
+All of them use product commands and one-liners.
+
+1. **Each member.** As that user, rerun the member one-liner:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.7/boot.sh | bash
+     ```
+
+   - Windows:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.7/boot.ps1 | iex"
+     ```
+
+   Then rerun `aicrew-agent join --home HOME` in each home. The rerun
+   rewrites `.claude/turn-settings.json` and writes the new
+   `.claude/turn-settings-coordinator.json`. An edited file is kept, with
+   the new version written beside it with the suffix `.aicrew-new`.
+2. **Restart each member** with `aicrew-agent serve --home HOME` (a home in
+   turns mode) or `aicrew-agent run --client <client> --home HOME`.
+3. **The hub** may stay on 0.5.6. Its one-liner moves it to 0.5.7 when
+   convenient:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.7/install-aicrewd.sh | bash
+   ```
+
+### The per-turn allow list by role
+
+- **Every member's turn** (`.claude/turn-settings.json`) now also admits
+  (#149):
+  - `Read(./**)`, `Grep(./**)` and `Glob(./**)` in the home and its
+    worktrees, while the deny rules keep `creds/` and `aimem/hub.json` out;
+  - aimem's read tools: `get_task`, `list_tasks`, `get_task_comment`,
+    `list_task_comments`, `get_task_history`, `get_epic`, `list_epics`,
+    `list_docs`, `read_doc`, `get_design_doc`, `process_context`,
+    `project_repository` and `writing_rule`.
+- **A coordinator's turn** runs with the new managed
+  `.claude/turn-settings-coordinator.json`. It holds the same rules plus
+  `add_task_comment`, `triage_task`, and the aimem reads `/crew-offer`
+  names, `aimem process show` and `aimem project show`. `serve` picks the
+  file by the session's role. A worker's turn is denied triage.
+- **A home not rejoined** since the upgrade has no coordinator file. The
+  coordinator's turn then runs with the common file, which admits less, and
+  `serve` logs that `join` should be rerun.
+- The deny rules and the home's `turns.allow` additions stay in both files.
+  Other aimem writes, PowerShell and blanket Bash rules are not admitted.
+- **Measured** with real Claude Code 2.1.296, headless, with the files
+  `join` writes and a fake aimem MCP server. A member's turn reads
+  `get_task` and is denied `triage_task`; a coordinator's runs `get_task`,
+  `triage_task` and `add_task_comment`; an unlisted `aimem` command is
+  denied; and `creds/` stays denied through Read, Grep and Bash.
+  `docs/TURN-PROBE.md` records the table.
+
+### Supported and pinned versions
+
+- **Unchanged:** aimem 0.10.0 (the minimum and the tested release),
+  ai-skills 1.26.1, Claude Code 2.1.283 to 2.1.286 tested, and OpenCode
+  1.18.32 or 2.0.18 to 2.0.19 tested. The turn loop's per-turn settings
+  were measured with Claude Code 2.1.296.
+- **The one-liners** (`install-aicrewd.sh`, `boot.sh` and `boot.ps1`) pin
+  v0.5.7.
+
 ## [0.5.6] - 2026-10-13
 
 The fixes from the first full pilot cycle, and the first turn loop. A

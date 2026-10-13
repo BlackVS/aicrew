@@ -63,6 +63,7 @@ const usage = `usage:
   aicrew operator-token new --output PATH|-
   aicrew architect init|credential ...   (run "aicrew architect" for its usage)
   aicrew escalations list|show|answer ...   (run "aicrew escalations" for its usage)
+  aicrew merges [--team TEAM]   (the pull requests waiting for the human merge)
   aicrew version [--json]
 ` + connUsage
 
@@ -82,6 +83,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) >= 1 && args[0] == "escalations" {
 		return runEscalations(ctx, args[1:], stdout, stderr)
+	}
+	if len(args) >= 1 && args[0] == "merges" {
+		return runMerges(ctx, args[1:], stdout, stderr)
 	}
 	if len(args) >= 1 && args[0] == "architect" {
 		return runArchitect(ctx, args[1:], stdout, stderr)

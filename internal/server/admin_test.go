@@ -74,9 +74,9 @@ func TestAdminRefusesEveryOtherCredential(t *testing.T) {
 	routes := adminRoutes(e.srv)
 	// 13, the four credential routes under their names before 0.3.0, the
 	// three escalation routes, the three architect-credential routes and
-	// the six control routes.
-	if len(routes) != 29 {
-		t.Fatalf("%d operator routes, want 29", len(routes))
+	// the six control routes and the merges read.
+	if len(routes) != 30 {
+		t.Fatalf("%d operator routes, want 30", len(routes))
 	}
 	before, _ := e.store.ListTeams(context.Background())
 	for _, cred := range []struct{ name, token string }{{"none", ""}, {"wrong", wrong},

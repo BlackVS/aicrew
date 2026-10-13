@@ -40,7 +40,7 @@ func TestArchitectInit(t *testing.T) {
 }
 
 // The operator issues an architect credential to a file; with that file as
-// its token file, aicrew reads and answers escalations and is refused
+// its token file, aicrew reads and answers escalations, reads the merges, and is refused
 // everything else; once revoked, it is refused everywhere.
 func TestArchitectCredentialCommands(t *testing.T) {
 	s := serve(t)
@@ -77,6 +77,15 @@ func TestArchitectCredentialCommands(t *testing.T) {
 	if code, _, errs := call("escalations", "answer", "--id", "no-such", "--decision", "d", "--rationale", "r"); code != 1 ||
 		!strings.Contains(errs, "not_found") {
 		t.Fatalf("an unknown escalation: %d %s", code, errs)
+	}
+	if code, out, errs := call("merges"); code != 0 || strings.TrimSpace(out) != "[]" {
+		t.Fatalf("the architect reads the merges: %d %s %s", code, out, errs)
+	}
+	if code, _, errs := call("merges", "--team", "no-such"); code != 1 || !strings.Contains(errs, "not_found") {
+		t.Fatalf("an unknown team's merges: %d %s", code, errs)
+	}
+	if code, _, _ := call("merges", "extra"); code != 2 {
+		t.Fatalf("merges with an argument: exit %d, want 2", code)
 	}
 	if code, _, errs := call("team", "list"); code != 1 || !strings.Contains(errs, "unauthorized") {
 		t.Fatalf("the architect reaches the team routes: %d %s", code, errs)

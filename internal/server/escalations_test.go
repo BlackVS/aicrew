@@ -161,10 +161,10 @@ func TestEscalationRaiseRefusals(t *testing.T) {
 	refused(t, e.call(t, "", EscalationsPath, "n-1", escalationBody()), http.StatusUnauthorized, "invalid_token")
 }
 
-// An architect credential reaches the three escalation routes and nothing
-// else: every other operator route refuses it as unauthorized, and so do the
-// escalation routes once it is revoked. A member's session token reaches
-// none of them.
+// An architect credential reaches the three escalation routes and the
+// merges read (C3), and nothing else: every other operator route refuses it
+// as unauthorized, and so do the escalation routes once it is revoked. A
+// member's session token reaches none of them.
 func TestArchitectCredentialReachesOnlyEscalations(t *testing.T) {
 	e := setupCoordination(t)
 	var cred opapi.ArchitectCredential
@@ -172,7 +172,8 @@ func TestArchitectCredentialReachesOnlyEscalations(t *testing.T) {
 		opapi.ArchitectCredentialRequest{Label: "planning"}, &cred); got.status != http.StatusCreated {
 		t.Fatalf("issue: %d %s", got.status, got.raw)
 	}
-	escalation := map[string]bool{opapi.EscalationsPath: true, opapi.EscalationPath: true, opapi.EscalationAnswerPath: true}
+	escalation := map[string]bool{opapi.EscalationsPath: true, opapi.EscalationPath: true, opapi.EscalationAnswerPath: true,
+		opapi.MergesPath: true}
 	for _, rt := range adminRoutes(e.srv) {
 		e.srv.admin.failures = newLimiter(AdminFailuresPerMinute, 1)
 		got := e.adminCall(t, rt[0], rt[1], cred.Bearer, nil, map[string]string{"name": "x"}, nil)

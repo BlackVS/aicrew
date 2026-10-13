@@ -41,7 +41,7 @@ func TestInitWritesTheDirectory(t *testing.T) {
 	}
 	want := []string{"AGENTS.md", "CLAUDE.md", "docs/ARCHITECT.md", ".claude/settings.json", ".mcp.json",
 		"docs/NOTES.md", ".aimem.json", ".claude/commands/arch-plan.md", ".claude/commands/arch-task.md",
-		".claude/commands/arch-ready.md", ".claude/commands/arch-escalations.md"}
+		".claude/commands/arch-ready.md", ".claude/commands/arch-escalations.md", ".claude/commands/arch-merges.md"}
 	var got []string
 	for _, f := range Files(o) {
 		got = append(got, f.Path)
@@ -264,5 +264,29 @@ func TestInitWithTheConnection(t *testing.T) {
 		if _, err := Init(Options{Dir: t.TempDir(), Projects: []string{"p"}, Crew: c}); err == nil {
 			t.Errorf("%+v was accepted", c)
 		}
+	}
+}
+
+// A directory from a release without /arch-merges gains it, and the guidance
+// that names it, on a rerun.
+func TestInitRerunAddsArchMerges(t *testing.T) {
+	dir := t.TempDir()
+	o := Options{Dir: dir, Projects: []string{"crew-app"}}
+	if _, err := Init(o); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, ".claude", "commands", "arch-merges.md")); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Init(o)
+	if err != nil || actions(rep)[".claude/commands/arch-merges.md"] != "create" {
+		t.Fatalf("rerun: %v, %v", actions(rep), err)
+	}
+	if got := read(t, dir, ".claude/commands/arch-merges.md"); !strings.Contains(got, "aicrew merges") ||
+		!strings.Contains(got, "Never merge") {
+		t.Fatalf("arch-merges.md: %s", got)
+	}
+	if !strings.Contains(read(t, dir, "docs/ARCHITECT.md"), "`/arch-merges`") {
+		t.Fatal("the guidance does not name /arch-merges")
 	}
 }

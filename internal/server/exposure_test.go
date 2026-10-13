@@ -26,11 +26,12 @@ const (
 // The routes agents and aimem reach call only the store operations that
 // authenticate by proof, session token or peer credential: never one that
 // trusts a caller it is given. The operator API (admin.go, the escalation
-// routes of escalations.go and the control routes of control.go) alone calls
-// the operator's store operations, only in functions handed the operator's
-// caller, and gets that caller only inside the wrapper (adminRoute): it builds
-// the operator's caller there after comparing the operator credential, and
-// has the store authenticate an architect credential there and nowhere else.
+// routes of escalations.go, the control routes of control.go and the merges
+// read of merges.go) alone calls the operator's store operations, only in
+// functions handed the operator's caller, and gets that caller only inside
+// the wrapper (adminRoute): it builds the operator's caller there after
+// comparing the operator credential, and has the store authenticate an
+// architect credential there and nowhere else.
 //
 // The guard resolves every identifier of the package through go/types, so an
 // aliased or dot import of the store, a local variable or field holding the
@@ -94,6 +95,9 @@ var (
 		"ListArchitectCredentials": true, "IssueArchitectCredential": true, "RevokeArchitectCredential": true,
 		// The team's state, pauses and nudges (C1).
 		"GetTeamState": true, "SetPause": true, "Nudge": true,
+		// The pull requests waiting for the human merge, which the
+		// operator's caller or an architect's reads (C3).
+		"PendingMerges": true,
 	}
 	// wrapperOps are the *store.Store operations only the wrapper calls.
 	wrapperOps = map[string]bool{"AuthenticateArchitect": true}
@@ -113,7 +117,7 @@ var (
 )
 
 // operatorFiles hold the operator API.
-var operatorFiles = map[string]bool{"admin.go": true, "escalations.go": true, "control.go": true}
+var operatorFiles = map[string]bool{"admin.go": true, "escalations.go": true, "control.go": true, "merges.go": true}
 
 func TestExposureGuard(t *testing.T) {
 	g := loadServer(t)

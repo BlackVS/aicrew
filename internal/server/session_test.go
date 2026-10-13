@@ -607,7 +607,7 @@ func TestRouteInventory(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{"GET /healthz", "GET /v1/admin/architect-credentials", "GET /v1/admin/escalation", "GET /v1/admin/escalations",
-		"GET /v1/admin/hub-credentials", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations",
+		"GET /v1/admin/hub-credentials", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations", "GET /v1/admin/merges",
 		"GET /v1/admin/team", "GET /v1/admin/team/state", "GET /v1/admin/teams", "GET /v1/crew/attempts", "GET /v1/crew/capabilities", "GET /v1/crew/escalations", "GET /v1/crew/inbox", "GET /v1/crew/inbox/pending",
 		"GET /v1/crew/projects", "GET /v1/crew/requirements", "GET /v1/crew/session",
 		"POST /v1/admin/architect-credentials", "POST /v1/admin/architect-credentials/revoke", "POST /v1/admin/escalations/answer",

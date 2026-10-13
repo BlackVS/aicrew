@@ -786,6 +786,34 @@ member:
 - A team route naming a member, a member route naming none, or a resume with
   a reason is `400 invalid_request`.
 
+### Pull requests waiting for the merge: `aicrew merges`
+
+```sh
+bin/aicrew merges [--team TEAM]
+```
+
+The merge is a human click on the forge, and nothing else told the operator
+that a pull request waits for it (`docs/DESIGN-CONTROL-PLANE.md`, section
+4.2; increment C3). `aicrew merges` (`GET /v1/admin/merges[?team=ID]`) lists
+the attempts whose latest result the team's coordinator reviewed and
+accepted, and whose delivery is not confirmed yet, oldest first:
+- **Each entry** names the team, the attempt, the task, the worker (agent
+  ID and label), the accepted result's sequence and reference (the pull
+  request), when it was submitted, and the branch.
+- **`pull`** is the pull request as the worker's launcher last observed it
+  ("Forge events"): its number, URL, state, head commit, labels, CI
+  conclusion and comment count, and when it was seen. It is absent when the
+  worker never reported one.
+- **What is not listed:** a result only submitted, one sent back for
+  rework, and one whose delivery is confirmed or finalized.
+
+aicrewd reads only its own records: no forge call, no merge, no change to
+the pull request. The operator credential reads it, and so does an
+architect credential (`/arch-merges`), which still reaches no operator
+write. A team is named by its ID, since an architect credential cannot
+resolve a name through the team routes; without `--team` the list covers
+every team.
+
 ## Invitations
 
 An invitation lets one agent join a team, or link or rebind an agent record
@@ -861,6 +889,9 @@ command then exits 1 and names the merge to do.
     `aicrew escalations list --open`, and answers on the operator's word
     (below). Without a connection, it reads them from the tasks' comments
     headed `[escalation.request ID]`.
+  - `/arch-merges` says in words which pull requests wait for the
+    operator's merge, with `aicrew merges` ("Pull requests waiting for the
+    merge", below). It never merges and never changes a pull request.
 - `.claude/settings.json` denies the session the directory's `creds/`,
   through the Read and Edit tools and in Bash or PowerShell command text,
   with the limit `docs/WORKSPACE.md` states. `creds/` is created
@@ -894,8 +925,9 @@ bin/aicrew architect credential list
 bin/aicrew architect credential revoke --id ID
 ```
 
-An architect credential reads and answers escalations and nothing else, so
-the full operator token never enters an AI session. It lives 90 days.
+An architect credential reads and answers escalations and reads the
+merges list (`aicrew merges`), and nothing else, so the full operator token
+never enters an AI session. It lives 90 days.
 
 **First start.** The first `claude` in the directory asks to trust it and
 to approve its `aimem` MCP server, and each aimem tool asks once for

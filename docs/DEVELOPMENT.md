@@ -832,7 +832,10 @@ every team (at most 100, by name) or for the one named:
 - **Stalled.** A member is stalled when it is working or waiting, has an
   open attempt, and that attempt has not changed for over an hour (twice
   the working window). A paused or offline member is never stalled, since
-  its state already says why it does nothing.
+  its state already says why it does nothing. Nor is one whose attempt
+  waits on someone else through a channel of its own: an accepted result
+  waits for the human merge (`aicrew merges`), a blocked one for an
+  escalation's answer, and a finalized one is done.
 - **Who reads it.** The operator credential reads it, and so does an
   architect credential (`/arch-status`). The architect credential still
   reaches no pause, resume or nudge, and not `GET /v1/admin/team/state`.

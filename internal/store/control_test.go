@@ -283,24 +283,32 @@ func TestPauseLeavesWorkAndTeamState(t *testing.T) {
 
 // A member looks stalled when it works or waits on an open attempt that has
 // not changed for longer than the stall window; never when paused, offline
-// or without an open attempt.
+// or without an open attempt, nor when the attempt waits for the human
+// merge or an escalation's answer, or is finalized.
 func TestLooksStalled(t *testing.T) {
 	now := time.Now()
 	old, fresh := now.Add(-StallWindow-time.Minute), now.Add(-time.Minute)
 	for _, c := range []struct {
 		name    string
 		state   string
+		phase   AttemptPhase
 		changed time.Time
 		want    bool
 	}{
-		{"working on an attempt unchanged past the window", StateWorking, old, true},
-		{"waiting on an attempt unchanged past the window", StateWaiting, old, true},
-		{"working on an attempt that changed recently", StateWorking, fresh, false},
-		{"working without an open attempt", StateWorking, time.Time{}, false},
-		{"paused on an old attempt", StatePaused, old, false},
-		{"offline on an old attempt", StateOffline, old, false},
+		{"working on an attempt unchanged past the window", StateWorking, PhaseWorking, old, true},
+		{"waiting on an attempt unchanged past the window", StateWaiting, PhaseWorking, old, true},
+		{"waiting on rework unchanged past the window", StateWaiting, PhaseRework, old, true},
+		{"waiting on a submitted result unchanged past the window", StateWaiting, PhaseSubmitted, old, true},
+		{"waiting on an offer unchanged past the window", StateWaiting, "", old, true},
+		{"working on an attempt that changed recently", StateWorking, PhaseWorking, fresh, false},
+		{"working without an open attempt", StateWorking, "", time.Time{}, false},
+		{"paused on an old attempt", StatePaused, PhaseWorking, old, false},
+		{"offline on an old attempt", StateOffline, PhaseWorking, old, false},
+		{"waiting for the human merge", StateWaiting, PhaseAccepted, old, false},
+		{"waiting for an escalation's answer", StateWaiting, PhaseBlocked, old, false},
+		{"finalized", StateWaiting, PhaseFinalized, old, false},
 	} {
-		if got := LooksStalled(c.state, c.changed, now); got != c.want {
+		if got := LooksStalled(c.state, c.phase, c.changed, now); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}

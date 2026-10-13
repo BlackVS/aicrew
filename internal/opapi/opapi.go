@@ -414,7 +414,8 @@ type MemberState struct {
 	Unacknowledged int            `json:"unacknowledged"`
 	// Stalled marks a member that looks stalled: working or waiting, with
 	// an open attempt that has not changed for longer than the stall
-	// window (store.StallWindow).
+	// window (store.StallWindow) and does not wait for the human merge or
+	// an escalation's answer (store.LooksStalled).
 	Stalled bool `json:"stalled,omitempty"`
 }
 

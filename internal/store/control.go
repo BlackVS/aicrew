@@ -408,12 +408,19 @@ func DeriveState(paused, session bool, lastSeen, lastWaited, now time.Time) stri
 // working window, so one long turn alone never marks it.
 const StallWindow = 2 * WorkingWindow
 
-// LooksStalled reports whether a member in state, whose open attempt last
-// changed at attemptUpdated (zero without an open attempt), looks stalled
-// at now: working or waiting, with an open attempt unchanged for longer
-// than StallWindow. A paused or offline member is not stalled: its state
-// says why it does nothing.
-func LooksStalled(state string, attemptUpdated, now time.Time) bool {
+// LooksStalled reports whether a member in state, whose open attempt is in
+// phase and last changed at attemptUpdated (zero without an open attempt),
+// looks stalled at now: working or waiting, with an open attempt unchanged
+// for longer than StallWindow. A paused or offline member is not stalled:
+// its state says why it does nothing. Nor is one whose attempt waits on
+// someone else with a channel of its own: an accepted result waits for the
+// human merge (the merges list), a blocked one for an escalation's answer,
+// and a finalized one is done.
+func LooksStalled(state string, phase AttemptPhase, attemptUpdated, now time.Time) bool {
+	switch phase {
+	case PhaseAccepted, PhaseBlocked, PhaseFinalized:
+		return false
+	}
 	return (state == StateWorking || state == StateWaiting) && !attemptUpdated.IsZero() &&
 		now.Sub(attemptUpdated) > StallWindow
 }

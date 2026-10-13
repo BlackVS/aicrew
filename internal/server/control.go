@@ -130,14 +130,17 @@ func (s *Server) teamStateOf(st store.TeamState, now time.Time) opapi.TeamState 
 			v.Session = &opapi.MemberSession{ID: sess.ID, Generation: sess.Generation, StartedAt: sess.CreatedAt,
 				LastSeenAt: seen.seen, LastWaitedAt: seen.waited}
 		}
-		var changed time.Time
+		var (
+			changed time.Time
+			phase   store.AttemptPhase
+		)
 		if a := m.OpenAttempt; a != nil {
 			v.OpenAttempt = &opapi.MemberAttempt{ID: a.ID, State: string(a.State), Phase: string(a.Phase),
 				HubID: a.Task.HubID, ProjectID: a.Task.ProjectID, TaskID: a.Task.TaskID, UpdatedAt: a.UpdatedAt}
-			changed = a.UpdatedAt
+			changed, phase = a.UpdatedAt, a.Phase
 		}
 		v.State = store.DeriveState(st.Paused != nil || m.Paused != nil, m.Session != nil, seen.seen, seen.waited, now)
-		v.Stalled = store.LooksStalled(v.State, changed, now)
+		v.Stalled = store.LooksStalled(v.State, phase, changed, now)
 		out.Members = append(out.Members, v)
 	}
 	return out

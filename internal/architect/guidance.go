@@ -97,8 +97,9 @@ only through you. ` + "`/arch-status`" + ` reads each team's state with
 ` + "`aicrew status`" + ` and says, for each member, its role, its state and since
 when, its open attempt and phase, its unread messages and any pause with its
 reason. A member marked ` + "`stalled`" + ` is working or waiting with an open
-attempt that has not changed for over an hour: point it out, with what it
-works on, so the operator can look. Pausing, resuming and nudging are the
+attempt that has not changed for over an hour, and is not waiting for a
+merge or an escalation's answer: point it out, with what it works on, so
+the operator can look. Pausing, resuming and nudging are the
 operator's, with the operator credential: you never do them.
 
 These commands use this directory's architect credential, which reads and
@@ -168,6 +169,7 @@ var commands = []command{
 			"`session.last_waited_at` or `session.started_at`, against `read_at`), its open attempt (task, `state`, " +
 			"`phase`, and `updated_at`) or that it has none, its `unacknowledged` messages, and its own pause with " +
 			"the reason. Then name each member marked `stalled`: working or waiting with an open attempt unchanged " +
-			"for over an hour; say what it works on and since when nothing changed, so the operator can look. Never " +
+			"for over an hour, and not waiting for a merge or an escalation's answer; say what it works on and since " +
+			"when nothing changed, so the operator can look. Never " +
 			"pause, resume or nudge a member: those are the operator's. If the command cannot connect, say so."},
 }

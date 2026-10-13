@@ -145,6 +145,44 @@ What this means:
   - Bash exact rules and host allow lists;
   - the deny rules above every allow.
 
+### MCP tools and file reads in a turn (pilot finding #15)
+
+The first turns on v0.5.6 showed a coordinator's turn denied aimem's
+`get_task`: in `dontAsk` mode an MCP tool needs an allow rule, and the
+per-turn list had none. Measured on 2026-10-13 with Claude Code 2.1.296 on
+Windows, headless, `--permission-mode dontAsk --permission-prompts none`,
+Haiku. The rules were passed with `--settings`, as the turn loop passes
+them. A fake stdio MCP server named `aimem` answered `get_task`,
+`triage_task` and `add_task_comment` and recorded each call, and a fake
+`aimem` command stood on `PATH`. No hub was involved.
+
+| Call | Settings | Result |
+| --- | --- | --- |
+| `mcp__aimem__get_task` | the v0.5.6 list (no MCP rule) | **Denied**, the finding reproduced |
+| `mcp__aimem__get_task` | the member's `.claude/turn-settings.json` as `join` now writes it | Allowed; the server saw the call |
+| `mcp__aimem__triage_task` | the member's file | **Denied**; the server saw nothing |
+| `get_task`, `triage_task`, `add_task_comment` | the coordinator's `.claude/turn-settings-coordinator.json` | All three allowed |
+| `aimem process show` (Bash) | the coordinator's file | Allowed |
+| `aimem task create --title x` (Bash) | the coordinator's file | **Denied** |
+| `aimem process show` | the member's file | **Denied** |
+| Glob `worktrees/**/*.txt`, Grep `MARKER` in `worktrees` | the member's file, and also with no file rule | Allowed |
+| Read `creds/secret.txt` | the coordinator's file | **Denied** by `Read(./creds/**)` |
+| Grep `SECRET` in `creds` | the coordinator's file | **Denied**, by the same Read rule |
+| `cat creds/secret.txt` (Bash) | the coordinator's file | **Denied** by `Bash(*creds/*)` |
+
+What this means:
+- **An MCP tool needs its own rule** in `dontAsk` mode, by its full name
+  (`mcp__aimem__get_task`). The client's read-only class does not cover
+  MCP tools.
+- **Read, Grep and Glob** run in the working directory without a rule, as
+  above. The lists name them anyway (`Read(./**)`, `Grep(./**)`,
+  `Glob(./**)`), so the intent is written down.
+- **The deny rules hold over the wider list:** a `Read` deny also stops
+  Grep, and the Bash patterns stop `cat`.
+- On Windows Haiku sometimes chose the PowerShell tool for `aimem process
+  show`. It was denied, since no narrow PowerShell rule admits anything.
+  `/crew-turn` teaches the Bash tool.
+
 ### An API key through `apiKeyHelper` (Claude Code)
 
 **What was not measured, and why.** A tool call cannot run without a valid

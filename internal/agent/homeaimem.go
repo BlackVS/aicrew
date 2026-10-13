@@ -102,20 +102,48 @@ func claudeSettings(home string) string {
 // from both files.
 const TurnSettingsFile = ".claude/turn-settings.json"
 
-// turnSettings is TurnSettingsFile's content. A file passed with --settings
-// anchors a rule's leading "/" at its own directory, .claude/, not at the
-// home as the home's .claude/settings.json does (measured with Claude Code
-// 2.1.296), so its path rules are anchored with "./" at the turn's working
-// directory, the home.
-func turnSettings(home string) string {
+// CoordinatorTurnSettingsFile is the per-turn settings of a coordinator's
+// turn: TurnSettingsFile's rules and the coordinator's own (pilot finding
+// #15, 2026-10-13).
+const CoordinatorTurnSettingsFile = ".claude/turn-settings-coordinator.json"
+
+// TurnSettingsFor is the per-turn settings file of a member in role.
+func TurnSettingsFor(role string) string {
+	if role == "coordinator" {
+		return CoordinatorTurnSettingsFile
+	}
+	return TurnSettingsFile
+}
+
+// turnSettings is the content of the per-turn settings, the coordinator's
+// when coordinator is set. A file passed with --settings anchors a rule's
+// leading "/" at its own directory, .claude/, not at the home as the home's
+// .claude/settings.json does (measured with Claude Code 2.1.296), so its
+// path rules are anchored with "./" at the turn's working directory, the
+// home.
+func turnSettings(home string, coordinator bool) string {
 	deny := denyRules()
 	for i, r := range deny {
 		deny[i] = homeAnchored(r)
 	}
-	b, _ := json.MarshalIndent(map[string]any{"permissions": map[string]any{"allow": turnAllow(home),
+	b, _ := json.MarshalIndent(map[string]any{"permissions": map[string]any{"allow": turnAllow(home, coordinator),
 		"deny": deny}}, "", "  ")
 	return string(b) + "\n"
 }
+
+// aimemReadTools are the aimem MCP tools every member's turn may call: the
+// reads of the board and its documents. In dontAsk mode an MCP tool without
+// an allow rule is denied, which kept the pilot's coordinator from reading
+// the READY task it was to offer (finding #15).
+var aimemReadTools = []string{"get_task", "list_tasks", "get_task_comment", "list_task_comments", "get_task_history",
+	"get_epic", "list_epics", "list_docs", "read_doc", "get_design_doc", "process_context", "project_repository",
+	"writing_rule"}
+
+// coordinatorTurnAllow is what only a coordinator's turn may do besides:
+// mirror an escalation with add_task_comment, triage with triage_task (ROLES.md,
+// the coordinator's rules), and the aimem reads /crew-offer names.
+var coordinatorTurnAllow = []string{"mcp__aimem__add_task_comment", "mcp__aimem__triage_task",
+	"Bash(aimem process show*)", "Bash(aimem project show*)"}
 
 // homeAnchored rewrites a Read or Edit rule anchored with "/" at the
 // settings' project into one anchored with "./" at the working directory.
@@ -129,13 +157,23 @@ func homeAnchored(rule string) string {
 }
 
 // baseTurnAllow is what every member's turn may do without asking, beyond
-// the commands the client itself judges read-only: edit its worktrees and
-// its handoff (anchored at the home with "./"), run git, and run
-// aicrew-agent by name or by the path of the one writing the settings.
-func baseTurnAllow() []string {
-	rules := []string{"Edit(./worktrees/**)", "Edit(./docs/HANDOFF.md)", "Bash(git *)", "Bash(aicrew-agent *)"}
+// the commands the client itself judges read-only: read, search and list
+// files in the home and its worktrees, edit its worktrees and its handoff
+// (all anchored at the home with "./"; the deny rules keep creds/ and the
+// hub file out), run git, run aicrew-agent by name or by the path of the
+// one writing the settings, and call aimem's read tools. A coordinator's
+// turn also has coordinatorTurnAllow.
+func baseTurnAllow(coordinator bool) []string {
+	rules := []string{"Read(./**)", "Grep(./**)", "Glob(./**)", "Edit(./worktrees/**)", "Edit(./docs/HANDOFF.md)",
+		"Bash(git *)", "Bash(aicrew-agent *)"}
 	if self := filepath.ToSlash(selfExecutable()); self != "aicrew-agent" {
 		rules = append(rules, "Bash("+self+" *)")
+	}
+	for _, t := range aimemReadTools {
+		rules = append(rules, "mcp__aimem__"+t)
+	}
+	if coordinator {
+		rules = append(rules, coordinatorTurnAllow...)
 	}
 	return rules
 }
@@ -143,8 +181,8 @@ func baseTurnAllow() []string {
 // turnAllow is the base allow list and the home's own additions, agent.json's
 // turns.allow, which name the project's build and test commands. An addition
 // that is not a narrow rule (TurnRuleProblem) is left out, and check names it.
-func turnAllow(home string) []string {
-	rules := baseTurnAllow()
+func turnAllow(home string, coordinator bool) []string {
+	rules := baseTurnAllow(coordinator)
 	for _, r := range ReadTurnAllow(home) {
 		if r = homeAnchored(r); TurnRuleProblem(r) == "" && !slices.Contains(rules, r) {
 			rules = append(rules, r)

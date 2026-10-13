@@ -26,6 +26,9 @@ type TurnSpec struct {
 	Home   string
 	Env    []string
 	Prompt string
+	// Settings is the per-turn settings file, relative to the home;
+	// empty means TurnSettingsFile.
+	Settings string
 	// Conversation is the conversation's ID; Resume continues it.
 	Conversation string
 	Resume       bool
@@ -56,9 +59,13 @@ type TurnResult struct {
 // ClaudeTurnArgs are the arguments a turn runs Claude Code with. No
 // dangerous flag, permission bypass or fallback model is ever passed.
 func ClaudeTurnArgs(spec TurnSpec) []string {
+	settings := spec.Settings
+	if settings == "" {
+		settings = TurnSettingsFile
+	}
 	args := []string{"-p", spec.Prompt, "--output-format", "stream-json", "--verbose",
 		"--permission-mode", "dontAsk", "--permission-prompts", "none",
-		"--settings", TurnSettingsFile}
+		"--settings", settings}
 	if spec.Resume {
 		args = append(args, "--resume", spec.Conversation)
 	} else {

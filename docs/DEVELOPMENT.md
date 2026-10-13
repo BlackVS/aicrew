@@ -1548,10 +1548,26 @@ managed files from it:
 - **`.claude/turn-settings.json`** (managed, in both modes) is the settings
   a headless turn runs under. The turn loop passes it with `--settings`,
   because a home's own allow rules do not apply to a headless turn
-  (`docs/TURN-PROBE.md`). It holds the deny rules and an allow list:
-  - the base list: `Edit(./worktrees/**)`, `Edit(./docs/HANDOFF.md)`,
+  (`docs/TURN-PROBE.md`). A coordinator's turn gets
+  **`.claude/turn-settings-coordinator.json`** instead, chosen by the
+  session's role. In a home not rejoined since the upgrade that file is
+  missing, and the coordinator's turn runs with the common file, which
+  admits less, while the loop logs that `join` should be rerun. Both files
+  hold the deny rules and an allow list:
+  - the base list: `Read(./**)`, `Grep(./**)` and `Glob(./**)` in the home
+    and its worktrees, `Edit(./worktrees/**)`, `Edit(./docs/HANDOFF.md)`,
     `Bash(git *)` and `aicrew-agent` (by name and by the path of the
     `aicrew-agent` that wrote the file);
+  - aimem's read tools, since in `dontAsk` mode an MCP tool without a rule
+    is denied (pilot finding #15): `get_task`, `list_tasks`,
+    `get_task_comment`, `list_task_comments`, `get_task_history`,
+    `get_epic`, `list_epics`, `list_docs`, `read_doc`, `get_design_doc`,
+    `process_context`, `project_repository` and `writing_rule`, each as
+    `mcp__aimem__<tool>`;
+  - in the coordinator's file only, its own aimem work: `add_task_comment`
+    (an escalation's mirror), `triage_task`, and the reads `/crew-offer`
+    names, `Bash(aimem process show*)` and `Bash(aimem project show*)`.
+    A worker's turn is denied triage;
   - the home's additions, `agent.json`'s `turns.allow`, for the project's
     build and test commands, for example
     `{"turns": {"allow": ["Bash(go test *)", "Bash(go build *)"]}}`. An
@@ -1610,7 +1626,8 @@ Messages that arrive during a turn wait for the next one.
 **The turn.**
 - **The command:** `claude -p "/crew-turn TRIGGER" --output-format
   stream-json --verbose --permission-mode dontAsk --permission-prompts none
-  --settings .claude/turn-settings.json`, with `--session-id` or `--resume`,
+  --settings .claude/turn-settings.json` (the coordinator's file for a
+  coordinator), with `--session-id` or `--resume`,
   `--model` and `--max-budget-usd`. Standard input is closed, and the turn
   runs in the home with the environment `run` gives its client. No
   dangerous flag, permission bypass or fallback model is ever passed.

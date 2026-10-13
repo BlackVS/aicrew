@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -470,5 +471,29 @@ func TestStepsDoneCountsStepsThatRan(t *testing.T) {
 	}
 	if n := srv.StepsDone(); n != 1 {
 		t.Fatalf("a committed claim counted %d steps", n)
+	}
+}
+
+// A coordinator's turn runs under the coordinator's per-turn settings, and
+// any other member's under the common ones (pilot finding #15). A home not
+// rejoined since the upgrade, without the coordinator's file, falls back to
+// the common one rather than pass a missing file.
+func TestTurnLoopSettingsByRole(t *testing.T) {
+	for role, want := range map[string]string{"coordinator": CoordinatorTurnSettingsFile, "worker": TurnSettingsFile,
+		"independent": TurnSettingsFile, "coordinator without its file": TurnSettingsFile} {
+		e := newLoopEnv(t)
+		e.host.role, _, _ = strings.Cut(role, " ")
+		if role == "coordinator" {
+			os.MkdirAll(filepath.Join(e.home, ".claude"), 0o700)
+			os.WriteFile(filepath.Join(e.home, filepath.FromSlash(CoordinatorTurnSettingsFile)), []byte("{}"), 0o600)
+		}
+		e.host.pending = []PendingMessage{msg("m1", "lifecycle")}
+		e.tick(t)
+		if len(e.specs) != 1 || e.specs[0].Settings != want {
+			t.Errorf("%s: %d turns, settings %+v", role, len(e.specs), e.specs)
+		}
+		if args := ClaudeTurnArgs(e.specs[0]); !slices.Contains(args, want) {
+			t.Errorf("%s: the turn's arguments %q", role, args)
+		}
 	}
 }

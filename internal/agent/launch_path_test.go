@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -70,5 +71,23 @@ func TestCheckProbeEnvPutsSelfOnPath(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("%d PATH variables in %q", n, env)
+	}
+}
+
+// withStopHookCap raises Claude Code's Stop-hook block cap to
+// StopHookBlockCap, keeps a larger one, and leaves one variable.
+func TestWithStopHookCap(t *testing.T) {
+	want := StopHookBlockCapEnv + "=" + strconv.Itoa(StopHookBlockCap)
+	if got := withStopHookCap([]string{"A=1"}); !slices.Equal(got, []string{"A=1", want}) {
+		t.Errorf("no cap: %q", got)
+	}
+	for _, v := range []string{"9", "", "many", "-1"} {
+		if got := withStopHookCap([]string{StopHookBlockCapEnv + "=" + v}); !slices.Equal(got, []string{want}) {
+			t.Errorf("cap %q: %q", v, got)
+		}
+	}
+	larger := []string{StopHookBlockCapEnv + "=" + strconv.Itoa(StopHookBlockCap*10)}
+	if got := withStopHookCap(larger); !slices.Equal(got, larger) {
+		t.Errorf("a larger cap changed: %q", got)
 	}
 }

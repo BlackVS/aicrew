@@ -1509,6 +1509,12 @@ handing off with no human message is still open.
   session, the hook lets the session stop, and the member is idle until
   something else starts a turn. A new client session starts a new idle
   period.
+- **Claude Code's block cap.** Claude Code ends a turn whose stop a Stop
+  hook has blocked 9 times in a row, which ended the keep-alive in the
+  pilot. `run` therefore sets `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP=100000` in
+  its client's environment, unless that holds a larger number already. The
+  keep-alive stays bounded by `idle_hours`. This is interim: a home under
+  the turn loop (`serve`) has no Stop hook.
 - **Never a wedge.** With no launcher (a client started outside
   `aicrew-agent run`), a closed session, or anything else failing, the hook
   prints nothing and exits 0, and Claude Code lets the session stop. The

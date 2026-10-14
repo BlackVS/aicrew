@@ -171,6 +171,15 @@ no fault armed.
   - The next offer to the worker is refused `capability_missing`, naming
     the forge's host and `write`, and nothing begins.
   - Restored and checked again, the offer commits.
+- **T1. A worker's toolchain (pilot finding #18).** `aicrew team toolchain`
+  refuses a name it does not know, and selects `dev-go` for the team's
+  project.
+  - The worker's launcher restarts; its session start records the
+    project's toolchain in the home's `state/team.json`.
+  - Cleared with `--clear`, the next start records none.
+  - The e2e runs no headless client, so the worker's per-turn settings
+    file is checked by the agent tests and the real probe in
+    `docs/TURN-PROBE.md`.
 - **B1. Board wake (A1).** aicrewd reads the hub's board feed with the
   `board.read` credential `aicrew hub add` bound from the provision
   directory.

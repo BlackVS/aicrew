@@ -37,7 +37,8 @@ type requirementView struct {
 }
 
 // projectView is a project granted to the team, and the repository the hub
-// binds to it, or null when it binds none.
+// binds to it, or null when it binds none, and the toolchain the operator
+// selected for it, absent when none (pilot finding #18).
 type projectView struct {
 	HubID      string `json:"hub_id"`
 	ProjectID  string `json:"project_id"`
@@ -46,6 +47,7 @@ type projectView struct {
 		URL    string `json:"url"`
 		Access string `json:"access"`
 	} `json:"repository"`
+	Toolchain string `json:"toolchain,omitempty"`
 }
 
 // teamProjects is GET /v1/crew/projects: every project granted to the
@@ -70,7 +72,7 @@ func (s *Server) teamProjects(w http.ResponseWriter, r *http.Request) {
 		Projects []projectView `json:"projects"`
 	}{Projects: []projectView{}}
 	for _, g := range grants {
-		v := projectView{HubID: g.HubID, ProjectID: g.ProjectID}
+		v := projectView{HubID: g.HubID, ProjectID: g.ProjectID, Toolchain: g.Toolchain}
 		if g.Repository != nil {
 			v.Repository = &struct {
 				Kind   string `json:"kind"`

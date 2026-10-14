@@ -86,6 +86,21 @@ func TestTeamLifecycle(t *testing.T) {
 	}
 	// Renaming a team to its own name is not a clash with itself.
 	decodeTeam(t, teamCLI(t, 0, "rename", "-team", created.ID, "-expect-revision", "2", "-name", "crew-2"))
+
+	// The toolchain of a worker's turn, per project (pilot finding #18): set,
+	// noted when the hub does not grant the project, and cleared.
+	r := teamCLI(t, 0, "toolchain", "-team", created.ID, "-project", "docs", "-toolchain", "dev-go")
+	if tc := decodeTeam(t, r); tc.Toolchains["docs"] != "dev-go" || r.stderr != "" {
+		t.Fatalf("toolchain = %+v, stderr %q", tc, r.stderr)
+	}
+	r = teamCLI(t, 0, "toolchain", "-team-name", "crew-2", "-project", "later", "-toolchain", "dev-go")
+	if tc := decodeTeam(t, r); tc.Toolchains["later"] != "dev-go" || !strings.Contains(r.stderr, "does not grant project later") {
+		t.Fatalf("toolchain of an ungranted project = %+v, stderr %q", tc, r.stderr)
+	}
+	if tc := decodeTeam(t, teamCLI(t, 0, "toolchain", "-team", created.ID, "-project", "docs", "-clear")); tc.Toolchains["docs"] != "" ||
+		tc.Toolchains["later"] != "dev-go" {
+		t.Fatalf("cleared = %+v", tc)
+	}
 }
 
 // The refusals: a duplicate name, a stale revision, an unknown team, an
@@ -128,6 +143,11 @@ func TestTeamRefusals(t *testing.T) {
 		{"create", "-name", "beta", "-hub", ""},
 		{"register"},
 		{"register", "-team", crew.ID, "-name", "beta"},
+		{"toolchain", "-team", crew.ID, "-project", "docs"},
+		{"toolchain", "-team", crew.ID, "-toolchain", "dev-go"},
+		{"toolchain", "-team", crew.ID, "-project", "docs", "-toolchain", "dev-go", "-clear"},
+		{"toolchain", "-team", crew.ID, "-project", "docs", "-toolchain", ""},
+		{"toolchain", "-project", "docs", "-toolchain", "dev-go"},
 		{"register", "-team", crew.ID, "-hub", ""},
 	}
 	// The project list of earlier releases is gone, and its use says so.
@@ -143,6 +163,10 @@ func TestTeamRefusals(t *testing.T) {
 		if r := teamCLI(t, 2, args...); !strings.Contains(r.stderr, "usage:") {
 			t.Errorf("%v: stderr %q, want the usage", args, r.stderr)
 		}
+	}
+	if r := teamCLI(t, 2, "toolchain", "-team", crew.ID, "-project", "docs", "-toolchain", "dev-cobol"); !strings.Contains(r.stderr,
+		`toolchain "dev-cobol" is not one of dev-go`) {
+		t.Errorf("an unknown toolchain: stderr %q", r.stderr)
 	}
 
 	var listed []opapi.TeamSummary

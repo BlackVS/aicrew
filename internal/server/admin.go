@@ -71,6 +71,7 @@ func (s *Server) registerAdmin() {
 	s.handle(http.MethodPost, opapi.TeamRenamePath, s.operator("team.rename", s.renameTeam))
 	s.handle(http.MethodPost, opapi.TeamRegisterPath, s.operator("team.register", s.registerTeamRoute))
 	s.handle(http.MethodPost, opapi.TeamGrantsPath, s.operator("team.grants", s.readTeamGrants))
+	s.handle(http.MethodPost, opapi.TeamToolchainPath, s.operator("team.toolchain", s.setTeamToolchain))
 	s.handle(http.MethodGet, opapi.InvitationsPath, s.operator("invitation.list", s.listInvitations))
 	s.handle(http.MethodPost, opapi.InvitationsPath, s.operator("invitation.issue", s.issueInvitation))
 	s.handle(http.MethodPost, opapi.InvitationRevokePath, s.operator("invitation.revoke", s.revokeInvitation))
@@ -246,7 +247,7 @@ func teamOf(t store.Team) opapi.Team {
 	}
 	v := opapi.Team{ID: t.ID, Name: t.Name, Grants: grants, GrantsState: t.GrantsState, GrantsReadAt: t.GrantsReadAt,
 		Revision: t.Revision, CoordinatorGeneration: t.CoordinatorGeneration, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
-		Hub: t.Hub}
+		Hub: t.Hub, Toolchains: t.Toolchains}
 	if r := t.Registration; r != nil {
 		v.Registration = &opapi.TeamRegistration{State: r.State, Detail: r.Detail, Name: r.Name, At: r.At}
 	}
@@ -581,6 +582,25 @@ func (s *Server) renameTeam(w http.ResponseWriter, r *http.Request, op store.Cal
 	t = s.registerTeam(r.Context(), op, t)
 	writeJSON(w, http.StatusOK, teamOf(t))
 	return "renamed", t.ID
+}
+
+// setTeamToolchain selects or clears the toolchain of one of a team's
+// projects (pilot finding #18). Members read it on the projects route at
+// their next session start.
+func (s *Server) setTeamToolchain(w http.ResponseWriter, r *http.Request, op store.Caller) (string, string) {
+	var req opapi.TeamToolchainRequest
+	if !adminBody(w, r, &req) {
+		return opapi.CodeInvalid, ""
+	}
+	t, err := s.store.SetTeamToolchain(r.Context(), op, commandKey(), req.TeamID, req.ProjectID, req.Toolchain)
+	if err != nil {
+		return adminFail(w, err), ""
+	}
+	writeJSON(w, http.StatusOK, teamOf(t))
+	if req.Toolchain == "" {
+		return "cleared", t.ID
+	}
+	return "set", t.ID
 }
 
 func (s *Server) listInvitations(w http.ResponseWriter, r *http.Request, op store.Caller) (string, string) {

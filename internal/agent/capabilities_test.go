@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -188,5 +189,16 @@ func TestLauncherRecordsTheTeamsProjects(t *testing.T) {
 	}
 	if st, ok, err := LoadState(s.cfg.Home); err != nil || !ok || st.Role != string(store.RoleCoordinator) {
 		t.Fatalf("the session record's role: %+v %v %v", st, ok, err)
+	}
+	// The toolchain the operator selects for a project is recorded with it
+	// at the next read (pilot finding #18).
+	if _, err := s.store.SetTeamToolchain(ctx, s.operator, "toolchain-1", s.teamID, "project-t", "dev-go"); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.RecordTeam(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if names, unknown, err := teamToolchains(s.cfg.Home); err != nil || !slices.Equal(names, []string{"dev-go"}) || unknown != nil {
+		t.Fatalf("the recorded toolchains: %q %q %v", names, unknown, err)
 	}
 }

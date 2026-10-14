@@ -71,6 +71,9 @@ type Team struct {
 	// Registration is the outcome of the team's last registration on its
 	// hub, or nil when none was attempted.
 	Registration *TeamRegistration `json:"registration,omitempty"`
+	// Toolchains are the toolchains the operator selected for the team's
+	// projects, by project ID; a project without one is absent.
+	Toolchains map[string]string `json:"toolchains,omitempty"`
 	// CoordinatorGeneration advances whenever a coordinator session starts,
 	// resumes or ends. It is separate from Revision, which versions the
 	// team record itself.
@@ -95,6 +98,7 @@ const (
 	opCreateTeam      = "team.create"
 	opRecordRegister  = "team.record_registration"
 	opRenameTeam      = "team.rename"
+	opSetToolchain    = "team.set_toolchain"
 	opSetTeamHub      = "team.set_hub"
 	opAddMember       = "member.add"
 	opSetMemberRole   = "member.set_role"
@@ -614,6 +618,9 @@ func getTeam(ctx context.Context, q querier, id string) (Team, error) {
 		t.GrantsReadAt = &at
 	}
 	if t.Grants, err = teamGrants(ctx, q, id); err != nil {
+		return Team{}, err
+	}
+	if t.Toolchains, err = teamToolchains(ctx, q, id); err != nil {
 		return Team{}, err
 	}
 	return t, nil

@@ -174,14 +174,19 @@ func serveSteps(e *Engine) *StepServer {
 	} else if ok {
 		e.Log.Info("open attempts recorded", "file", OpenAttemptsFile, "attempts", len(o.Attempts))
 	}
+	// The team's projects are recorded before the first turn, which takes
+	// a worker's toolchains from them (pilot finding #18). A failure is
+	// logged and leaves the last record.
+	ctx, cancel := context.WithTimeout(context.Background(), teamRecordBudget)
+	if err := s.RecordTeam(ctx); err != nil {
+		e.Log.Warn("the team's projects were not recorded", "error", err.Error())
+	}
+	cancel()
 	// The session's start reports the home's capabilities (3.6); a failure
 	// is logged and never holds the session back.
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), capabilityBudget)
 		defer cancel()
-		if err := s.RecordTeam(ctx); err != nil {
-			e.Log.Warn("the team's projects were not recorded", "error", err.Error())
-		}
 		if _, err := s.ReportCapabilities(ctx); err != nil {
 			e.Log.Warn("the capabilities were not reported", "error", err.Error())
 		}
@@ -191,6 +196,10 @@ func serveSteps(e *Engine) *StepServer {
 
 // capabilityBudget bounds the capability report at a session's start.
 const capabilityBudget = 2 * time.Minute
+
+// teamRecordBudget bounds the read of the team's projects at a session's
+// start, which the session waits for.
+const teamRecordBudget = 30 * time.Second
 
 // RunClient starts the agent's team session, runs the client as a child in
 // the agent home with the session bound to it, keeps the session alive

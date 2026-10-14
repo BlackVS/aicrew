@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/store"
+	"github.com/BlackVS/aicrew/internal/toolchain"
 )
 
 // fakeHost is the launcher's session as the loop sees it.
@@ -494,6 +496,97 @@ func TestTurnLoopSettingsByRole(t *testing.T) {
 		}
 		if args := ClaudeTurnArgs(e.specs[0]); !slices.Contains(args, want) {
 			t.Errorf("%s: the turn's arguments %q", role, args)
+		}
+	}
+}
+
+// A worker whose team selects a toolchain for a project runs its turn under
+// the common rules and the toolchain's, which the loop writes from the team
+// record (pilot finding #18). A coordinator, and an independent reviewer,
+// keep their own files; a worker whose team selects none, or only names
+// this build does not know, keeps the common one.
+func TestTurnLoopWorkerToolchain(t *testing.T) {
+	record := func(t *testing.T, home string, chains ...string) {
+		t.Helper()
+		rec := TeamRecord{}
+		for i, c := range chains {
+			rec.Projects = append(rec.Projects, TeamProject{HubID: "hub-a", ProjectID: fmt.Sprintf("p%d", i), Toolchain: c})
+		}
+		if err := SaveTeam(home, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []struct {
+		name, role string
+		chains     []string
+		want       string
+	}{
+		{"dev-go", "worker", []string{"dev-go", "", "dev-go"}, WorkerToolchainSettingsFile},
+		{"none selected", "worker", []string{""}, TurnSettingsFile},
+		{"no record", "worker", nil, TurnSettingsFile},
+		{"unknown", "worker", []string{"dev-cobol"}, TurnSettingsFile},
+		{"coordinator", "coordinator", []string{"dev-go"}, CoordinatorTurnSettingsFile},
+		{"independent", "independent", []string{"dev-go"}, TurnSettingsFile},
+	}
+	for _, c := range cases {
+		e := newLoopEnv(t)
+		e.host.role = c.role
+		os.MkdirAll(filepath.Join(e.home, ".claude"), 0o700)
+		os.WriteFile(filepath.Join(e.home, filepath.FromSlash(CoordinatorTurnSettingsFile)), []byte("{}"), 0o600)
+		if c.chains != nil {
+			record(t, e.home, c.chains...)
+		}
+		e.host.pending = []PendingMessage{msg("m1", "lifecycle")}
+		e.tick(t)
+		if len(e.specs) != 1 || e.specs[0].Settings != c.want {
+			t.Errorf("%s: %d turns, settings %+v", c.name, len(e.specs), e.specs)
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(e.home, filepath.FromSlash(WorkerToolchainSettingsFile)))
+		if c.want != WorkerToolchainSettingsFile {
+			if err == nil {
+				t.Errorf("%s: the worker's toolchain file was written", c.name)
+			}
+			continue
+		}
+		var doc struct {
+			Permissions struct{ Allow, Deny []string }
+		}
+		if err != nil || json.Unmarshal(raw, &doc) != nil {
+			t.Fatalf("%s: %v %s", c.name, err, raw)
+		}
+		common := turnAllow(e.home, false)
+		if !slices.Equal(doc.Permissions.Allow[:len(common)], common) ||
+			!slices.Equal(doc.Permissions.Allow[len(common):], toolchain.Rules("dev-go")) {
+			t.Errorf("%s: allow %q", c.name, doc.Permissions.Allow)
+		}
+		var common2 struct {
+			Permissions struct{ Deny []string }
+		}
+		_ = json.Unmarshal([]byte(turnSettings(e.home, false)), &common2)
+		if !slices.Equal(doc.Permissions.Deny, common2.Permissions.Deny) || len(doc.Permissions.Deny) == 0 {
+			t.Errorf("%s: deny %q", c.name, doc.Permissions.Deny)
+		}
+	}
+	// A selection cleared since the last turn removes the worker's file.
+	e := newLoopEnv(t)
+	e.host.role = "worker"
+	record(t, e.home, "dev-go")
+	e.host.pending = []PendingMessage{msg("m1", "lifecycle")}
+	e.tick(t)
+	record(t, e.home, "")
+	e.clock = e.clock.Add(time.Hour)
+	e.host.pending = []PendingMessage{msg("m2", "lifecycle")}
+	e.tick(t)
+	if _, err := os.Stat(filepath.Join(e.home, filepath.FromSlash(WorkerToolchainSettingsFile))); len(e.specs) != 2 ||
+		e.specs[1].Settings != TurnSettingsFile || err == nil {
+		t.Errorf("after a clear: %+v, the file %v", e.specs, err)
+	}
+	// The coordinator's and the common files never carry a toolchain.
+	home := t.TempDir()
+	for _, coordinator := range []bool{false, true} {
+		if s := turnSettings(home, coordinator); strings.Contains(s, "go test") {
+			t.Errorf("coordinator %v: %s", coordinator, s)
 		}
 	}
 }

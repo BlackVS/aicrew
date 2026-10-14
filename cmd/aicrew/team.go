@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strings"
 
 	"github.com/BlackVS/aicrew/internal/opapi"
+	"github.com/BlackVS/aicrew/internal/toolchain"
 )
 
 // aicrew team: the operator's teams, their hubs and the projects the hubs
@@ -27,6 +29,7 @@ const teamUsage = `usage:
   aicrew team state    (--team TEAM | --team-name NAME)
   aicrew team pause    (--team TEAM | --team-name NAME) [--reason TEXT]
   aicrew team resume   (--team TEAM | --team-name NAME)
+  aicrew team toolchain (--team TEAM | --team-name NAME) --project PROJECT (--toolchain NAME | --clear)
 ` + connUsage
 
 // projectsRemoved explains the project list of earlier releases.
@@ -70,7 +73,15 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	expect := fs.Int64("expect-revision", 0, "the team revision the change applies to, as show or list printed it")
 	hub := fs.String("hub", "", "the alias of the team's aimem block (aicrewd.json aimem_hubs[].name)")
 	reason := fs.String("reason", "", "why the team is paused, kept with the pause")
-	fs.Var(removedFlag{}, "project", "removed: a team's projects are its hub's grants")
+	chain := fs.String("toolchain", "", "the toolchain a worker's turn runs for the project: "+
+		strings.Join(toolchain.Names(), ", "))
+	unset := fs.Bool("clear", false, "clear the project's toolchain")
+	var project string
+	if verb == "toolchain" {
+		fs.StringVar(&project, "project", "", "the granted project the toolchain is for")
+	} else {
+		fs.Var(removedFlag{}, "project", "removed: a team's projects are its hub's grants")
+	}
 	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
 		fmt.Fprint(stderr, teamUsage)
 		return 2
@@ -78,7 +89,7 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	usage := func() int { fmt.Fprint(stderr, teamUsage); return 2 }
-	if verb == "projects" || set["project"] {
+	if verb == "projects" || (set["project"] && verb != "toolchain") {
 		fmt.Fprint(stderr, projectsRemoved)
 		return usage()
 	}
@@ -114,6 +125,15 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "pause":
 		if !allowedFlags(set, "team", "team-name", "reason") || !teamGiven {
 			return usage()
+		}
+	case "toolchain":
+		if !allowedFlags(set, "team", "team-name", "project", "toolchain", "clear") || !teamGiven || project == "" ||
+			set["toolchain"] == *unset || (set["toolchain"] && *chain == "") {
+			return usage()
+		}
+		if !*unset && !toolchain.Valid(*chain) {
+			fmt.Fprintf(stderr, "aicrew: toolchain %q is not one of %s\n", *chain, strings.Join(toolchain.Names(), ", "))
+			return 2
 		}
 	default:
 		return usage()
@@ -180,8 +200,29 @@ func runTeam(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		_ = out.Encode(res)
 		pauseNote(stderr, "team", verb, res)
+	case "toolchain":
+		var t opapi.Team
+		if err := cl.Post(ctx, opapi.TeamToolchainPath, opapi.TeamToolchainRequest{TeamID: team, ProjectID: project,
+			Toolchain: *chain}, &t); err != nil {
+			return failed(stderr, err)
+		}
+		_ = out.Encode(t)
+		if !grantsProject(t, project) {
+			fmt.Fprintf(stderr, "aicrew: the team's hub does not grant project %s as last read; the toolchain "+
+				"applies once it does\n", project)
+		}
 	}
 	return 0
+}
+
+// grantsProject reports whether the team's last read grants lists project.
+func grantsProject(t opapi.Team, project string) bool {
+	for _, g := range t.Grants {
+		if g.ProjectID == project {
+			return true
+		}
+	}
+	return false
 }
 
 // pauseNote says on stderr when a pause or resume changed nothing.

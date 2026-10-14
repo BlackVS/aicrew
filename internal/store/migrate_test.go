@@ -118,7 +118,7 @@ func downgradeToV10(t *testing.T, path string) {
 		// Tables and columns added after v10.
 		`DROP TABLE session_tokens`, `DROP TABLE session_handles`, `DROP TABLE introspection_credentials`,
 		`DROP TABLE pauses`, `ALTER TABLE messages DROP COLUMN operator`,
-		`DROP TABLE board_tasks`, `DROP TABLE board_cursors`, `DROP TABLE board_projects`, `ALTER TABLE messages DROP COLUMN board`,
+		`DROP TABLE team_toolchains`, `DROP TABLE board_tasks`, `DROP TABLE board_cursors`, `DROP TABLE board_projects`, `ALTER TABLE messages DROP COLUMN board`,
 		`ALTER TABLE attempt_steps DROP COLUMN task_revision`,
 		`DROP TABLE escalations`, `DROP TABLE architect_credentials`, `ALTER TABLE messages DROP COLUMN escalation`,
 		`ALTER TABLE messages DROP COLUMN offer`, `ALTER TABLE messages DROP COLUMN attempt_id`,
@@ -500,9 +500,18 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 		PRIMARY KEY (team_id, hub_id, project_id)
 	)`
 
+// dropTeamToolchains takes a store back to v31.
+func dropTeamToolchains(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	if _, err := raw.Exec(`DROP TABLE team_toolchains`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // dropBoardTasks takes a store back to v30.
 func dropBoardTasks(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropTeamToolchains(t, raw)
 	if _, err := raw.Exec(`DROP TABLE board_tasks`); err != nil {
 		t.Fatal(err)
 	}
@@ -723,6 +732,35 @@ func TestMigrationV31ReadsTheBoardAgain(t *testing.T) {
 	}
 	if err := s2.db.QueryRow(`SELECT state FROM board_tasks WHERE task_id = 'task-r'`).Scan(&state); err != nil || after != before || state != "READY" {
 		t.Fatalf("after the read: %d messages (was %d), the task's state %q, %v", after, before, state, err)
+	}
+}
+
+// Schema v32 adds the teams' toolchains to a populated v31 store: every
+// team is kept with none selected, and one can be selected after.
+func TestMigrationV32AddsTeamToolchains(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	tm := mustTeamByName(t, s, "crew")
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropTeamToolchains(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 31`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v31 store: %v", err)
+	}
+	defer s2.Close()
+	got, err := s2.GetTeam(ctx, tm.ID)
+	if err != nil || got.Toolchains != nil || got.Revision != tm.Revision {
+		t.Fatalf("the team after v32: %+v, %v", got, err)
+	}
+	if got, err = s2.SetTeamToolchain(ctx, operator(t), "k", tm.ID, "project-a", "dev-go"); err != nil ||
+		got.Toolchains["project-a"] != "dev-go" {
+		t.Fatalf("a selection after v32: %+v, %v", got, err)
 	}
 }
 

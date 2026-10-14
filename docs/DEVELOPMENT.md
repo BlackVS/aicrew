@@ -668,6 +668,8 @@ bin/aicrew team register --team-name crew [--hub main]
 bin/aicrew team list
 bin/aicrew team show     --team-name crew
 bin/aicrew team rename   --team-name crew --expect-revision N --name crew-2
+bin/aicrew team toolchain --team-name crew --project PROJECT --toolchain dev-go
+bin/aicrew team toolchain --team-name crew --project PROJECT --clear
 ```
 
 - `setup` puts a team on its hub with its projects, in one command, and can
@@ -718,6 +720,17 @@ bin/aicrew team rename   --team-name crew --expect-revision N --name crew-2
   refuses a team that changed since (`revision_conflict`).
 - `team projects` and `--project` of earlier releases are removed; the
   service refuses a request that still carries `projects`.
+- `toolchain` selects the development toolchain a worker's headless turn
+  runs for one of the team's projects (pilot finding #18), or clears it
+  with `--clear`. The name is one of aicrew's named lists (today only
+  `dev-go`; "Wake modes" below lists its rules); aicrew and aicrewd both
+  refuse any other. aicrewd keeps one selection per team and project
+  (`POST /v1/admin/team/toolchain`, store schema 32) and prints the team
+  with its `toolchains`. A project the hub does not grant as last read is
+  accepted, with a note on stderr, and applies once it is granted. Members
+  read the selection with their projects (`GET /v1/crew/projects` carries
+  `toolchain`) at their next session start, so a member's launcher is
+  restarted after a change. The coordinator's turn ignores it.
 - Members join through invitations (below); `aicrew team` does not change
   membership.
 
@@ -1584,6 +1597,25 @@ managed files from it:
     names something. A whole tool (`Bash`, `Bash(*)`, `Edit(/**)`) or a
     PowerShell rule is left out, since PowerShell's allow rules admit
     nothing narrower than the whole tool.
+  - **A worker's toolchain.** When the operator selected a toolchain for
+    any of the team's projects (`aicrew team toolchain`), a worker's turn
+    runs under **`state/turn-settings-worker.json`** instead: the common
+    file's rules and the selected lists', in that order, with the same deny
+    rules. The turn loop writes it before each of the worker's turns from
+    `state/team.json`, which the launcher records at the session's start
+    (WORKSPACE, "Initial guidance"). It is not a managed file. A worker
+    whose team selects none, or only names this `aicrew-agent` does not
+    know (logged, asking for an upgrade), runs with the common file, as
+    before. The named lists are aicrew's own (`internal/toolchain`), never
+    edited in a home, so another project can carry another list later.
+    `dev-go` admits, run in the worktree (`cd worktrees/NAME && ...`):
+    `go test`, `go vet`, `go build`, `go mod tidy`, `go mod download`,
+    `gofmt`, and the repository's scripts, `bash scripts/*.sh` (or
+    `./scripts/`), each alone or with arguments. `go -C DIR` and `go run`
+    are not admitted. The coordinator's file never carries a toolchain.
+    These commands run the repository's code; the deny rules still stop
+    the texts they name (`docs/TURN-PROBE.md`), and isolation stays the
+    OS account (WORKSPACE, "Its limit").
 
   Its path rules are anchored at the home with `./`, the turn's working
   directory: a file passed with `--settings` anchors a leading `/` at its

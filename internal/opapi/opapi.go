@@ -25,6 +25,7 @@ const (
 	TeamRenamePath       = "/v1/admin/team/rename"            // POST
 	TeamRegisterPath     = "/v1/admin/team/register"          // POST
 	TeamGrantsPath       = "/v1/admin/team/grants"            // POST: read the team's grants live
+	TeamToolchainPath    = "/v1/admin/team/toolchain"         // POST: select a project's toolchain
 	InvitationsPath      = "/v1/admin/invitations"            // GET list (?team=), POST issue
 	InvitationRevokePath = "/v1/admin/invitations/revoke"     // POST
 
@@ -131,6 +132,9 @@ type Team struct {
 	// Registration is the outcome of the team's last registration on its
 	// hub (team.register), or absent when none was attempted.
 	Registration *TeamRegistration `json:"registration,omitempty"`
+	// Toolchains are the toolchains selected for the team's projects, by
+	// project ID (pilot finding #18).
+	Toolchains map[string]string `json:"toolchains,omitempty"`
 }
 
 // TeamRegistration is the outcome of a team's registration on its hub:
@@ -179,6 +183,14 @@ type TeamRenameRequest struct {
 	TeamID           string `json:"team_id"`
 	ExpectedRevision int64  `json:"expected_revision"`
 	Name             string `json:"name"`
+}
+
+// TeamToolchainRequest selects the toolchain a worker's turn runs for one
+// of the team's projects: a name from internal/toolchain, or "" to clear it.
+type TeamToolchainRequest struct {
+	TeamID    string `json:"team_id"`
+	ProjectID string `json:"project_id"`
+	Toolchain string `json:"toolchain"`
 }
 
 // TeamDetail is a team and its current members.

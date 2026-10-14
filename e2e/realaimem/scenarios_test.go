@@ -54,6 +54,7 @@ func TestRealAimem(t *testing.T) {
 	t.Run("S5_dependencies", func(t *testing.T) { h.s5Dependencies(t) })
 	t.Run("G1_grants", func(t *testing.T) { h.g1Grants(t) })
 	t.Run("G2_capabilities", func(t *testing.T) { h.g2Capabilities(t) })
+	t.Run("T1_toolchain", func(t *testing.T) { h.t1Toolchain(t) })
 	t.Run("E1_escalation", func(t *testing.T) { h.e1Escalation(t) })
 	t.Run("B1_board_wake", func(t *testing.T) { h.b1BoardWake(t) })
 	t.Run("C1_control", func(t *testing.T) { h.c1Control(t) })

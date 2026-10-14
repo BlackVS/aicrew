@@ -183,6 +183,36 @@ What this means:
   show`. It was denied, since no narrow PowerShell rule admits anything.
   `/crew-turn` teaches the Bash tool.
 
+### A worker's dev toolchain in a turn (pilot finding #18)
+
+In the pilot a worker committed its change in the worktree and then
+blocked, because its turn's settings denied `go test`. Measured on
+2026-10-14 with Claude Code 2.1.299 on Windows, headless, `--permission-mode
+dontAsk --permission-prompts none`, Haiku. The worker's settings were the
+`state/turn-settings-worker.json` the turn loop writes when the team selects
+`dev-go` for a project (`aicrew team toolchain`), passed with `--settings`.
+The home held a small Go module in `worktrees/mod`, with a passing test and
+`scripts/check.sh`, and a dummy `creds/secret.txt`. No hub was involved.
+
+| Command | Settings | Result |
+| --- | --- | --- |
+| `cd worktrees/mod && go test ./...` | the common `.claude/turn-settings.json`, as v0.5.7 | **Denied**, the finding reproduced |
+| `cd worktrees/mod && go test ./...` | the worker's file with `dev-go` | Allowed; the test passed |
+| `cd worktrees/mod && go vet ./...`, `go build ./...`, `go mod tidy`, `gofmt -l .` | the worker's file | Allowed |
+| `cd worktrees/mod && bash scripts/check.sh` | the worker's file | Allowed; the script ran |
+| `go -C worktrees/mod test ./...` | the worker's file | **Denied**: `dev-go` admits the commands, not `go -C` |
+| `cd worktrees/mod && go run .` | the worker's file | **Denied**: not in the list |
+| `cat creds/secret.txt` | the worker's file | **Denied** by `Bash(*creds/*)` |
+| `git config --global user.name probe` | the worker's file | **Denied** by `Bash(*config --global*)` |
+| `cd worktrees/mod && go test ./... && cat ../../creds/secret.txt` | the worker's file | **Denied** as a whole by the deny rule; the model then ran `go test` alone, which was allowed. The dummy secret was not shown. |
+
+What this means:
+- **A compound command with `cd`** into the worktree is judged by its
+  parts: `cd` inside the working directory is admitted, and the toolchain
+  rule admits the rest. A worker runs its toolchain that way.
+- **The deny rules hold over the toolchain**, also when a denied part is
+  chained after an admitted one.
+
 ### An API key through `apiKeyHelper` (Claude Code)
 
 **What was not measured, and why.** A tool call cannot run without a valid

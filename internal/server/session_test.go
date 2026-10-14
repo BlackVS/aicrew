@@ -616,7 +616,7 @@ func TestRouteInventory(t *testing.T) {
 		"POST /v1/admin/introspection-credentials/rotate", "POST /v1/admin/invitations", "POST /v1/admin/invitations/revoke",
 		"POST /v1/admin/member/nudge", "POST /v1/admin/member/pause", "POST /v1/admin/member/resume",
 		"POST /v1/admin/team/grants", "POST /v1/admin/team/pause", "POST /v1/admin/team/register", "POST /v1/admin/team/rename",
-		"POST /v1/admin/team/resume", "POST /v1/admin/teams",
+		"POST /v1/admin/team/resume", "POST /v1/admin/team/toolchain", "POST /v1/admin/teams",
 		"POST /v1/crew/attempts", "POST /v1/crew/attempts/claim",
 		"POST /v1/crew/attempts/{id}/accept", "POST /v1/crew/attempts/{id}/confirm-delivery",
 		"POST /v1/crew/attempts/{id}/confirm-stop", "POST /v1/crew/attempts/{id}/decline", "POST /v1/crew/attempts/{id}/finalize",

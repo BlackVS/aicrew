@@ -87,7 +87,7 @@ var (
 	operatorOps = map[string]bool{
 		"ListIntrospectionCredentials": true, "IssueIntrospectionCredential": true, "RevokeIntrospectionCredential": true,
 		"ListTeams": true, "CreateTeam": true, "GetTeam": true, "ListMembers": true, "SetTeamHub": true,
-		"RenameTeam": true, "ListInvitations": true, "IssueInvitation": true, "GetInvitation": true,
+		"RenameTeam": true, "SetTeamToolchain": true, "ListInvitations": true, "IssueInvitation": true, "GetInvitation": true,
 		"RevokeInvitation": true, "RecordTeamRegistration": true,
 		// The escalations, which the operator's caller or an architect's
 		// reads and answers, and the architect credentials (5598).

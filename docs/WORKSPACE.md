@@ -52,8 +52,10 @@ is also independent of the model and client, both of which may change.
   aimem/             the member's aimem installation; owner-only, secret
   creds/             credential material only
   docs/              agent guidance and handoff
-  state/             nonsecret recovery data; owner-only, holds the step socket and
-                     the turn loop's state (turns.json)
+  state/             nonsecret recovery data; owner-only, holds the step socket,
+                     the team's projects (team.json), the turn loop's state (turns.json)
+                     and a worker's per-turn settings with its toolchain
+                     (turn-settings-worker.json)
   logs/              redacted logs; turns.jsonl records each turn of the turn loop,
                      turns/<turn id>.jsonl keeps its raw stream (owner-only, never sent)
   work/              temporary artifacts
@@ -165,8 +167,12 @@ survey, the options and the decision (D-STORE) are recorded in
   searches and listings in the home, edits in `worktrees/` and of
   `docs/HANDOFF.md`, git, `aicrew-agent`, aimem's read tools (and, for the
   coordinator, its comment, triage and `aimem process|project show`), and
-  the narrow rules the home adds in `agent.json`'s `turns.allow`. The deny
-  rules stay above it (DEVELOPMENT, "Wake modes").
+  the narrow rules the home adds in `agent.json`'s `turns.allow`. A
+  worker whose team has a toolchain selected for a project (`aicrew team
+  toolchain`, for example `dev-go`) runs instead under
+  `state/turn-settings-worker.json`, which the turn loop writes from
+  `state/team.json`: the same rules and the toolchain's. The deny rules
+  stay above it (DEVELOPMENT, "Wake modes").
 
   **Its limit:** the rules match command text. They stop an accidental
   violation through the tools they name, as the texts' own rule asks. They
@@ -328,7 +334,9 @@ The team's projects are recorded in `state/team.json` by the launcher at
 each session start, from aicrewd's `GET /v1/crew/projects` (every project
 the team's hub grants, including one with no repository bound). The record
 holds the read's time, the home's hub alias and each project's hub ID,
-project ID and repository (or `null`), and no secret. A grant the hub adds or removes shows at the next session start,
+project ID, repository (or `null`) and the toolchain the operator selected
+for it on aicrewd, when one is, and no secret. A worker's turn takes its
+toolchain rules from it (DEVELOPMENT, "Wake modes"). A grant the hub adds or removes shows at the next session start,
 with no `join` rerun. aicrewd stays the authority; the record is only as
 fresh as its read time.
 

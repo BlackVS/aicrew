@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BlackVS/aicrew/internal/opapi"
 )
 
 // A member reads its team's requirements and reports its capabilities, which
@@ -119,4 +121,36 @@ func TestTeamProjects(t *testing.T) {
 		t.Fatalf("the requirements name a project without a repository: %s", req.raw)
 	}
 	refused(t, e.get(t, "", ProjectsPath), http.StatusUnauthorized, "invalid_token")
+	if strings.Contains(got.raw, "toolchain") {
+		t.Fatalf("a project without a toolchain names one: %s", got.raw)
+	}
+
+	// The operator selects a toolchain for one project (pilot finding #18);
+	// the members read it with the project. An unknown name is refused.
+	var tm opapi.Team
+	if got := e.adminCall(t, http.MethodPost, opapi.TeamToolchainPath, e.opToken, nil, opapi.TeamToolchainRequest{
+		TeamID: e.team.ID, ProjectID: "project-example", Toolchain: "dev-go"}, &tm); got.status != http.StatusOK ||
+		tm.Toolchains["project-example"] != "dev-go" {
+		t.Fatalf("select: %d %s", got.status, got.raw)
+	}
+	adminRefused(t, e.adminCall(t, http.MethodPost, opapi.TeamToolchainPath, e.opToken, nil, opapi.TeamToolchainRequest{
+		TeamID: e.team.ID, ProjectID: "project-example", Toolchain: "dev-cobol"}, nil), http.StatusBadRequest, opapi.CodeInvalid)
+	got = e.get(t, e.lead.token, ProjectsPath)
+	out.Projects = nil
+	if got.status != http.StatusOK || json.Unmarshal([]byte(got.raw), &out) != nil {
+		t.Fatalf("projects: %d %s", got.status, got.raw)
+	}
+	for _, p := range out.Projects {
+		if want := map[string]string{"project-example": "dev-go"}[p.ProjectID]; p.Toolchain != want {
+			t.Fatalf("project %s carries toolchain %q, want %q: %s", p.ProjectID, p.Toolchain, want, got.raw)
+		}
+	}
+	var cleared opapi.Team
+	if got := e.adminCall(t, http.MethodPost, opapi.TeamToolchainPath, e.opToken, nil, opapi.TeamToolchainRequest{
+		TeamID: e.team.ID, ProjectID: "project-example"}, &cleared); got.status != http.StatusOK || cleared.Toolchains != nil {
+		t.Fatalf("clear: %d %s", got.status, got.raw)
+	}
+	if got := e.get(t, e.worker.token, ProjectsPath); strings.Contains(got.raw, "toolchain") {
+		t.Fatalf("a cleared toolchain is still carried: %s", got.raw)
+	}
 }

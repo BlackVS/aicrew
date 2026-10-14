@@ -168,14 +168,18 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	l.turn(ctx, &st, status, attempt, trigger, continuation, limits)
 }
 
-// hold gives the member no turn before until, and says why once.
 // settingsFile is the per-turn settings of a member in role. A coordinator's
 // file that is missing, in a home not rejoined since an upgrade, falls back
 // to the common one, which admits less, and says so: a missing --settings
-// file would fail every turn.
+// file would fail every turn. A worker whose team selects a toolchain gets
+// WorkerToolchainSettingsFile, written now from the team record; a
+// coordinator never does.
 func (l *TurnLoop) settingsFile(role string) string {
 	f := TurnSettingsFor(role)
 	if f == TurnSettingsFile {
+		if role == "worker" {
+			return l.workerSettings()
+		}
 		return f
 	}
 	if _, err := os.Stat(filepath.Join(l.Home, filepath.FromSlash(f))); err != nil {
@@ -186,6 +190,34 @@ func (l *TurnLoop) settingsFile(role string) string {
 	return f
 }
 
+// workerSettings writes a worker's settings with its team's toolchains and
+// names the file, or names the common one when the team selects none or the
+// file cannot be written.
+func (l *TurnLoop) workerSettings() string {
+	names, unknown, err := teamToolchains(l.Home)
+	if err != nil {
+		l.Log.Warn("the team record was not read: the turn runs with the common settings", "error", err.Error())
+		return TurnSettingsFile
+	}
+	if len(unknown) > 0 {
+		l.Log.Warn("the team selects a toolchain this aicrew-agent does not know; upgrade it", "toolchains",
+			strings.Join(unknown, ","))
+	}
+	path := filepath.Join(l.Home, filepath.FromSlash(WorkerToolchainSettingsFile))
+	if len(names) == 0 {
+		// A selection cleared since the last turn leaves no file behind.
+		_ = os.Remove(path)
+		return TurnSettingsFile
+	}
+	if err := writeAtomic(path, []byte(workerToolchainSettings(l.Home, names))); err != nil {
+		l.Log.Warn("the worker's toolchain settings were not written: the turn runs with the common ones",
+			"error", err.Error())
+		return TurnSettingsFile
+	}
+	return WorkerToolchainSettingsFile
+}
+
+// hold gives the member no turn before until, and says why once.
 func (l *TurnLoop) hold(st *turnState, until time.Time, why string) {
 	if st.Hold != why {
 		l.Log.Warn("no turn: "+why, "until", until.Format(time.RFC3339))

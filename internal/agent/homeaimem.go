@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/BlackVS/aicrew/internal/toolchain"
 )
 
 // The member's aimem installation lives in the agent home (decision
@@ -122,13 +124,60 @@ func TurnSettingsFor(role string) string {
 // path rules are anchored with "./" at the turn's working directory, the
 // home.
 func turnSettings(home string, coordinator bool) string {
+	return turnSettingsWith(turnAllow(home, coordinator))
+}
+
+// turnSettingsWith is per-turn settings with the allow list allow and the
+// deny rules anchored at the home.
+func turnSettingsWith(allow []string) string {
 	deny := denyRules()
 	for i, r := range deny {
 		deny[i] = homeAnchored(r)
 	}
-	b, _ := json.MarshalIndent(map[string]any{"permissions": map[string]any{"allow": turnAllow(home, coordinator),
-		"deny": deny}}, "", "  ")
+	b, _ := json.MarshalIndent(map[string]any{"permissions": map[string]any{"allow": allow, "deny": deny}}, "", "  ")
 	return string(b) + "\n"
+}
+
+// WorkerToolchainSettingsFile is a worker's per-turn settings when the
+// operator selected a toolchain for one of its team's projects (pilot
+// finding #18): TurnSettingsFile's rules and the selected lists'. The turn
+// loop writes it before each of the worker's turns, from the team record
+// the session's start wrote (state/team.json). It is not a managed file; a
+// worker whose team selects no toolchain runs with TurnSettingsFile.
+const WorkerToolchainSettingsFile = "state/turn-settings-worker.json"
+
+// teamToolchains are the toolchains the home's team record selects for its
+// projects, each once in the record's order, and the names this build does
+// not know, which a newer aicrewd may send.
+func teamToolchains(home string) (names, unknown []string, err error) {
+	rec, ok, err := LoadTeam(home)
+	if err != nil || !ok {
+		return nil, nil, err
+	}
+	for _, p := range rec.Projects {
+		switch {
+		case p.Toolchain == "" || slices.Contains(names, p.Toolchain) || slices.Contains(unknown, p.Toolchain):
+		case toolchain.Valid(p.Toolchain):
+			names = append(names, p.Toolchain)
+		default:
+			unknown = append(unknown, p.Toolchain)
+		}
+	}
+	return names, unknown, nil
+}
+
+// workerToolchainSettings is WorkerToolchainSettingsFile's content: the
+// common allow list, then the named toolchains' rules.
+func workerToolchainSettings(home string, names []string) string {
+	allow := turnAllow(home, false)
+	for _, n := range names {
+		for _, r := range toolchain.Rules(n) {
+			if !slices.Contains(allow, r) {
+				allow = append(allow, r)
+			}
+		}
+	}
+	return turnSettingsWith(allow)
 }
 
 // aimemReadTools are the aimem MCP tools every member's turn may call: the

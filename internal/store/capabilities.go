@@ -177,24 +177,32 @@ func (s *Store) TeamCapabilitiesWithToken(ctx context.Context, token string) ([]
 // member's home: each granted project with the repository the hub binds to
 // it, from the team's grants snapshot.
 func (s *Store) RequirementsWithToken(ctx context.Context, token string) ([]TeamGrant, error) {
-	grants, err := s.TeamProjectsWithToken(ctx, token)
+	projects, err := s.TeamProjectsWithToken(ctx, token)
 	if err != nil {
 		return nil, err
 	}
 	out := []TeamGrant{}
-	for _, g := range grants {
-		if g.Repository != nil {
-			out = append(out, g)
+	for _, p := range projects {
+		if p.Repository != nil {
+			out = append(out, p.TeamGrant)
 		}
 	}
 	return out, nil
 }
 
+// TeamProject is a project granted to a team and the toolchain the
+// operator selected for it, or "".
+type TeamProject struct {
+	TeamGrant
+	Toolchain string
+}
+
 // TeamProjectsWithToken is every project granted to the token's team, from
 // the team's grants snapshot, whether or not the hub binds a repository to
-// it (3a4b): what a member learns of its team's projects.
-func (s *Store) TeamProjectsWithToken(ctx context.Context, token string) ([]TeamGrant, error) {
-	var out []TeamGrant
+// it (3a4b), with its selected toolchain: what a member learns of its
+// team's projects.
+func (s *Store) TeamProjectsWithToken(ctx context.Context, token string) ([]TeamProject, error) {
+	var out []TeamProject
 	err := s.snapshot(ctx, func(q querier) error {
 		b, err := tokenBinding(ctx, q, token, s.now())
 		if err != nil {
@@ -204,7 +212,14 @@ func (s *Store) TeamProjectsWithToken(ctx context.Context, token string) ([]Team
 		if err != nil {
 			return err
 		}
-		out = append([]TeamGrant{}, grants...)
+		chains, err := teamToolchains(ctx, q, b.TeamID)
+		if err != nil {
+			return err
+		}
+		out = []TeamProject{}
+		for _, g := range grants {
+			out = append(out, TeamProject{TeamGrant: g, Toolchain: chains[g.ProjectID]})
+		}
 		return nil
 	})
 	return out, err

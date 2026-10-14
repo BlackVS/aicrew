@@ -29,7 +29,8 @@ type TeamRecord struct {
 }
 
 // TeamProject is one project granted to the team, with the repository the
-// hub binds to it, or none.
+// hub binds to it, or none, and the toolchain the operator selected for it
+// on aicrewd, or none (pilot finding #18).
 type TeamProject struct {
 	HubID      string `json:"hub_id"`
 	ProjectID  string `json:"project_id"`
@@ -38,6 +39,7 @@ type TeamProject struct {
 		URL    string `json:"url"`
 		Access string `json:"access"`
 	} `json:"repository"`
+	Toolchain string `json:"toolchain,omitempty"`
 }
 
 const projectsPath = "/v1/crew/projects"

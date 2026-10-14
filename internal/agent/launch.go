@@ -183,9 +183,12 @@ func serveSteps(e *Engine) *StepServer {
 	}
 	cancel()
 	// The session's start reports the home's capabilities (3.6); a failure
-	// is logged and never holds the session back.
+	// is logged and never holds the session back. The report belongs to
+	// the step server: its Close ends the report and waits for it.
+	s.wg.Add(1)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), capabilityBudget)
+		defer s.wg.Done()
+		ctx, cancel := context.WithTimeout(s.ctx, capabilityBudget)
 		defer cancel()
 		if _, err := s.ReportCapabilities(ctx); err != nil {
 			e.Log.Warn("the capabilities were not reported", "error", err.Error())

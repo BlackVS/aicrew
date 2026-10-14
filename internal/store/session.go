@@ -120,6 +120,9 @@ func startSessionTx(ctx context.Context, tx *sql.Tx, c Caller, teamID string, no
 		if err := noticeFencedOffers(ctx, tx, teamID, coordGen, now); err != nil {
 			return Session{}, err
 		}
+		if err := noticeReadyTasks(ctx, tx, teamID, now); err != nil {
+			return Session{}, err
+		}
 	}
 	id, err := newID(now)
 	if err != nil {
@@ -184,6 +187,9 @@ func resumeSessionTx(ctx context.Context, tx *sql.Tx, c Caller, sessionID string
 			return Session{}, err
 		}
 		if err := noticeFencedOffers(ctx, tx, sess.TeamID, coordGen, now); err != nil {
+			return Session{}, err
+		}
+		if err := noticeReadyTasks(ctx, tx, sess.TeamID, now); err != nil {
 			return Session{}, err
 		}
 	}

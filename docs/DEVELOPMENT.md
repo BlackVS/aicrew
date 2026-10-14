@@ -617,6 +617,15 @@ announcements it leads to and the cursor to read on from
   start, as history.
 - **A hub that asks to wait:** it is not read again before the time it
   named.
+- **A coordinator's session start:** every page also records each task's
+  latest state, history included. When a coordinator session starts or
+  resumes, aicrewd writes one lifecycle message for each granted project
+  with READY tasks that have no open attempt of the team, listing them (pilot
+  finding #17). A coordinator that acknowledged an announcement in a turn
+  that could not act, and then restarted, is woken by it. A restored hub's
+  states are dropped with its cursor and read again from its feed. Schema
+  31 drops the stored cursors once, so that an upgraded aicrewd reads every
+  feed again from its start, as history, to fill the states.
 
 ### Forge events
 

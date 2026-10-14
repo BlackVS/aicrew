@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // populatedStore fills a store, through the store's own commands, with every
@@ -117,7 +118,7 @@ func downgradeToV10(t *testing.T, path string) {
 		// Tables and columns added after v10.
 		`DROP TABLE session_tokens`, `DROP TABLE session_handles`, `DROP TABLE introspection_credentials`,
 		`DROP TABLE pauses`, `ALTER TABLE messages DROP COLUMN operator`,
-		`DROP TABLE board_cursors`, `DROP TABLE board_projects`, `ALTER TABLE messages DROP COLUMN board`,
+		`DROP TABLE board_tasks`, `DROP TABLE board_cursors`, `DROP TABLE board_projects`, `ALTER TABLE messages DROP COLUMN board`,
 		`ALTER TABLE attempt_steps DROP COLUMN task_revision`,
 		`DROP TABLE escalations`, `DROP TABLE architect_credentials`, `ALTER TABLE messages DROP COLUMN escalation`,
 		`ALTER TABLE messages DROP COLUMN offer`, `ALTER TABLE messages DROP COLUMN attempt_id`,
@@ -499,9 +500,18 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 		PRIMARY KEY (team_id, hub_id, project_id)
 	)`
 
+// dropBoardTasks takes a store back to v30.
+func dropBoardTasks(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	if _, err := raw.Exec(`DROP TABLE board_tasks`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // dropForgeEvents takes a store back to v29.
 func dropForgeEvents(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropBoardTasks(t, raw)
 	for _, stmt := range []string{`DROP TABLE attempt_pulls`, `ALTER TABLE messages DROP COLUMN forge`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -651,6 +661,68 @@ func TestMigrationV26AddsThePendingRefusal(t *testing.T) {
 	}
 	if after != before || before == 0 || reported != 0 {
 		t.Fatalf("after v26: %d attempts (was %d), %d with a reported refusal", after, before, reported)
+	}
+}
+
+// Schema v31 adds the tasks' board states to a populated v30 store, and
+// has the board feed read again from its start: the stored cursor is
+// dropped and every granted project's first sight moves to the migration,
+// so the history read again fills the states and announces nothing.
+func TestMigrationV31ReadsTheBoardAgain(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	tm := mustTeamByName(t, s, "crew")
+	if _, err := s.RecordTeamGrants(ctx, ReconcilerCaller(), tm.ID, TeamGrantsRead{HubID: "hub-a", State: GrantsEnabled,
+		At: s.now(), Grants: []TeamGrant{{HubID: "hub-a", ProjectID: "project-a"}}}); err != nil {
+		t.Fatal(err)
+	}
+	old := s.now().Add(-time.Hour)
+	if _, err := s.RecordBoardPage(ctx, ReconcilerCaller(), "hub-a", BoardPage{Changes: []BoardChange{}, Cursor: "c1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE board_projects SET since = ?`, formatTime(old)); err != nil {
+		t.Fatal(err)
+	}
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropBoardTasks(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 30`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v30 store: %v", err)
+	}
+	defer s2.Close()
+	rc := ReconcilerCaller()
+	if cur, err := s2.BoardCursor(ctx, rc, "hub-a"); err != nil || cur != "" {
+		t.Fatalf("the cursor after v31: %q, %v", cur, err)
+	}
+	var since string
+	if err := s2.db.QueryRow(`SELECT since FROM board_projects WHERE hub_id = 'hub-a' AND project_id = 'project-a'`).Scan(&since); err != nil {
+		t.Fatal(err)
+	}
+	first, err := parseTime(since)
+	if err != nil || !first.After(old) {
+		t.Fatalf("the project's first sight after v31: %q, %v", since, err)
+	}
+	ready := BoardChange{ProjectID: "project-a", TaskID: "task-r", Revision: 3, From: "BACKLOG", To: "READY", At: old.Add(time.Minute)}
+	if n, err := s2.RecordBoardPage(ctx, rc, "hub-a", BoardPage{Changes: []BoardChange{ready}, Cursor: "c2"}); err != nil || n != 0 {
+		t.Fatalf("the history read again: %d announced, %v", n, err)
+	}
+	var after int
+	var state string
+	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.db.QueryRow(`SELECT state FROM board_tasks WHERE task_id = 'task-r'`).Scan(&state); err != nil || after != before || state != "READY" {
+		t.Fatalf("after the read: %d messages (was %d), the task's state %q, %v", after, before, state, err)
 	}
 }
 

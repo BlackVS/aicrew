@@ -1336,8 +1336,35 @@ active coordinators at that moment.
   announced.
 - A step whose settlement lands after the tick that read its change can be
   announced once, which is harmless.
-- A team with no active coordinator when the change is read is not told;
-  a coordinator that joins later reads the board at its session start.
+- A team with no active coordinator when the change is read is not told.
+  A coordinator session that starts or resumes later is told the READY
+  tasks, as below.
+
+**READY tasks at a coordinator's start** (pilot finding #17). An
+announcement is written once. A coordinator that acknowledged it in a turn
+that could not act, and then restarted, would have nothing in its inbox to
+start a turn. So:
+- **The states:** every recorded page also keeps each task's latest state
+  on the board, history included, in the same transaction as the cursor. A
+  later page that names an older revision of a task does not move it back.
+  A `cursor_ahead` reset drops the hub's states with the cursor.
+- **The message:** when a coordinator session starts or resumes, in the
+  same transaction, aicrewd writes one lifecycle message for each project
+  the team is granted that has READY tasks with no open attempt of the team
+  (any attempt not closed is open). It goes to the team's coordinators,
+  names the project, and lists the tasks by ID, at most 50 and then a count
+  of the rest: "At this coordinator session's start, 2 tasks are READY on
+  the board in project P with no open attempt of the team: T1, T2." No
+  message is written when there are none. A worker's session writes none.
+- **When:** at each start or resume of a coordinator session. A member
+  resumes when its launcher starts, and again shortly before its session
+  token's 8-hour ceiling. A READY task the coordinator leaves unoffered is
+  therefore listed again at most once per ceiling.
+- **The upgrade:** schema 31 drops the stored cursors and makes every
+  granted project's changes until then history. The feed is read again from
+  its start, which fills the states and announces nothing again. A
+  coordinator that starts before that read is done is told only the tasks
+  read so far.
 
 ## Forge events
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -184,5 +185,125 @@ func TestBoardCallers(t *testing.T) {
 	bad := BoardPage{Cursor: "c", Changes: []BoardChange{{ProjectID: "project-a", TaskID: "t", To: "READY", At: time.Now()}}}
 	if _, err := s.RecordBoardPage(ctx, rc, "hub-a", bad); !errors.Is(err, ErrInvalid) {
 		t.Errorf("a change without a revision: %v", err)
+	}
+}
+
+// readyNotices are the coordinator's pending messages that list READY tasks
+// at a session start.
+func readyNotices(t *testing.T, s *Store, teamID string, m crewMember) []InboxItem {
+	t.Helper()
+	items, err := pendingMessages(context.Background(), s.db, teamID, m.agent.ID, maxInboxPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []InboxItem
+	for _, it := range items {
+		if it.Kind == KindLifecycle && strings.HasPrefix(it.Text, "At this coordinator session's start") {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// A coordinator session that starts or resumes is told the READY tasks of
+// its granted projects that have no open attempt of the team (pilot finding
+// #17), from the states the board feed recorded, history included. A task
+// with an open attempt, a task no longer READY, a project not granted and a
+// worker's session add nothing; a closed attempt's task is listed again.
+func TestReadyTasksAtTheCoordinatorsStart(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	now := clock(s)
+	e := newExecTeam(t, s)
+	rc := ReconcilerCaller()
+	resume := func(key string) {
+		t.Helper()
+		sess, err := s.ResumeSession(ctx, e.lead.caller, key, e.lead.sess.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.lead.sess = sess
+	}
+
+	resume("resume-0")
+	if got := readyNotices(t, s, e.tm.ID, e.lead); len(got) != 0 {
+		t.Fatalf("an empty board: %+v", got)
+	}
+	history := BoardPage{Changes: []BoardChange{readyChange("task-1", 2, now.Add(-time.Hour)),
+		readyChange("task-2", 2, now.Add(-time.Hour)), readyChange("task-3", 2, now.Add(-time.Hour)),
+		{ProjectID: "project-a", TaskID: "task-3", Revision: 3, From: "READY", To: "IN_PROGRESS", At: now.Add(-time.Minute)},
+		readyChange("task-4", 5, now.Add(-time.Minute))}, Cursor: "c1"}
+	if n, err := s.RecordBoardPage(ctx, rc, "hub-a", history); err != nil || n != 0 {
+		t.Fatalf("history: %d announced, %v", n, err)
+	}
+	// A later page that repeats an older revision does not move a task back.
+	stale := BoardPage{From: "c1", Changes: []BoardChange{readyChange("task-3", 2, now.Add(-time.Hour))}, Cursor: "c2"}
+	if _, err := s.RecordBoardPage(ctx, rc, "hub-a", stale); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(time.Minute)
+	if _, err := s.RecordBoardPage(ctx, rc, "hub-a", BoardPage{From: "c2", Changes: []BoardChange{
+		{ProjectID: "project-other", TaskID: "task-9", Revision: 1, To: "READY", At: *now}}, Cursor: "c3"}); err != nil {
+		t.Fatal(err)
+	}
+	a := e.offer(t, "o2", "task-2")
+
+	resume("resume-1")
+	got := readyNotices(t, s, e.tm.ID, e.lead)
+	want := "At this coordinator session's start, 2 tasks are READY on the board in project project-a with no open attempt" +
+		" of the team: task-1, task-4."
+	if len(got) != 1 || got[0].Text != want || got[0].Project == nil || got[0].Project.ProjectID != "project-a" ||
+		got[0].Project.HubID != "hub-a" || got[0].Task != nil {
+		t.Fatalf("at the resume: %+v", got)
+	}
+	if w := readyNotices(t, s, e.tm.ID, e.builder); len(w) != 0 {
+		t.Fatalf("the worker was told: %+v", w)
+	}
+	if _, err := s.ResumeSession(ctx, e.builder.caller, "resume-builder", e.builder.sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := readyNotices(t, s, e.tm.ID, e.lead); len(n) != 1 {
+		t.Fatalf("a worker's resume told the coordinator: %+v", n)
+	}
+
+	// Released, the offer's task is listed again at a new session's start.
+	if _, err := e.release(t, "r2", a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StopSession(ctx, operator(t), "stop-lead", e.lead.sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	if e.lead.sess, err = s.StartSession(ctx, e.lead.caller, "start-lead-2", e.tm.ID); err != nil {
+		t.Fatal(err)
+	}
+	got = readyNotices(t, s, e.tm.ID, e.lead)
+	if len(got) != 2 || !strings.HasSuffix(got[1].Text, ": task-1, task-2, task-4.") {
+		t.Fatalf("at the new session's start: %+v", got)
+	}
+
+	// A hub restore drops the recorded states with the cursor.
+	if err := s.ResetBoardCursor(ctx, rc, "hub-a"); err != nil {
+		t.Fatal(err)
+	}
+	resume("resume-2")
+	if n := readyNotices(t, s, e.tm.ID, e.lead); len(n) != 2 {
+		t.Fatalf("after a reset, before the feed is read again: %d notices", len(n))
+	}
+}
+
+// One message names at most maxReadyListed tasks and counts the rest.
+func TestReadyTasksTextBound(t *testing.T) {
+	tasks := make([]string, maxReadyListed+3)
+	for i := range tasks {
+		tasks[i] = fmt.Sprintf("t%d", i)
+	}
+	text := readyTasksText("p", tasks)
+	if !strings.HasSuffix(text, ", t49 and 3 more.") || strings.Contains(text, "t50") ||
+		!strings.Contains(text, "53 tasks are READY") {
+		t.Fatalf("text %q", text)
+	}
+	if one := readyTasksText("p", []string{"t"}); one != "At this coordinator session's start, 1 task is READY on the board in project p with no open attempt of the team: t." {
+		t.Fatalf("one task: %q", one)
 	}
 }

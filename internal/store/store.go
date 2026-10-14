@@ -57,7 +57,7 @@ import (
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 30
+const schemaVersion = 31
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -219,7 +219,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
 		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21,
-		schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29, schemaV30}
+		schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29, schemaV30, schemaV31}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -467,6 +467,25 @@ var schemaV30 = []string{
 		observed_at TEXT NOT NULL
 	)`,
 	`ALTER TABLE messages ADD COLUMN forge TEXT NOT NULL DEFAULT ''`,
+}
+
+// schemaV31 keeps each task's latest state on the board feed (pilot finding
+// #17), which a coordinator's session start lists the READY tasks from. The
+// feed is read again from its start to fill it: the stored cursors are
+// dropped, and every granted project's changes until now become history, so
+// nothing announced before is announced again (as ResetBoardCursor).
+var schemaV31 = []string{
+	`CREATE TABLE board_tasks (
+		hub_id     TEXT NOT NULL,
+		project_id TEXT NOT NULL,
+		task_id    TEXT NOT NULL,
+		revision   INTEGER NOT NULL,
+		state      TEXT NOT NULL,
+		at         TEXT NOT NULL,
+		PRIMARY KEY (hub_id, project_id, task_id)
+	)`,
+	`DELETE FROM board_cursors`,
+	`UPDATE board_projects SET since = strftime('%Y-%m-%dT%H:%M:%f000000Z', 'now')`,
 }
 
 // schemaV27 adds escalations (docs/DESIGN-CONTROL-PLANE.md, section 7.5):

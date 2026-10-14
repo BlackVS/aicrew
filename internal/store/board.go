@@ -113,7 +113,13 @@ func (s *Store) RecordBoardPage(ctx context.Context, c Caller, hubID string, pag
 	announced := 0
 	for _, ch := range page.Changes {
 		first, granted := since[ch.ProjectID]
-		if !granted || ch.At.Before(first) {
+		if !granted {
+			continue
+		}
+		if err := recordBoardTask(ctx, tx, hubID, ch); err != nil {
+			return 0, err
+		}
+		if ch.At.Before(first) {
 			continue
 		}
 		n, err := announceBoardChange(ctx, tx, hubID, ch, now)
@@ -137,8 +143,8 @@ func (s *Store) RecordBoardPage(ctx context.Context, c Caller, hubID string, pag
 // ResetBoardCursor drops the hub's stored cursor, after the hub answered
 // that it is past its feed (its state was restored), and makes every
 // granted project's changes until now history: the feed is read again from
-// its start, and nothing announced before is announced again. aicrewd's
-// reconciler only.
+// its start, and nothing announced before is announced again. The tasks'
+// recorded states are dropped with it. aicrewd's reconciler only.
 func (s *Store) ResetBoardCursor(ctx context.Context, c Caller, hubID string) error {
 	if c.kind != callerReconciler {
 		return fmt.Errorf("%w: only aicrewd resets the board", ErrForbidden)
@@ -154,6 +160,11 @@ func (s *Store) ResetBoardCursor(ctx context.Context, c Caller, hubID string) er
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE board_projects SET since = ? WHERE hub_id = ?`, now, hubID); err != nil {
 		return fmt.Errorf("reset the board's projects: %w", err)
+	}
+	// A restored hub's revisions may run behind the ones recorded: its
+	// tasks' states are read again from its feed.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM board_tasks WHERE hub_id = ?`, hubID); err != nil {
+		return fmt.Errorf("drop the board's task states: %w", err)
 	}
 	return tx.Commit()
 }

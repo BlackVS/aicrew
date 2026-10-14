@@ -21,7 +21,8 @@ import (
 // means. The coordinator then offers the task and the worker accepts, and
 // aicrew's own steps are not announced. A restarted aicrewd announces
 // nothing again; a task cancelled on the board while the worker holds it
-// is announced once.
+// is announced once. A coordinator that restarts is told the READY tasks
+// without an open attempt (pilot finding #17).
 func (h *harness) b1BoardWake(t *testing.T) {
 	sc := h.report.scenario(t, "B1")
 	coord, worker := h.members["coord"], h.members["worker"]
@@ -76,7 +77,50 @@ func (h *harness) b1BoardWake(t *testing.T) {
 	closed := h.waitAttempt(sc, id, 60*time.Second, func(a attemptRow) bool { return a.State == "closed" })
 	sc.check("aicrewd closes the cancelled task's attempt as recovered, freeing the worker", closed, h.attempt(sc, id))
 	h.pageWith(worker, "nothing-is-named-this")
+
+	// Pilot finding #17: READY announcements acknowledged in a turn that
+	// could not act, and then the coordinator restarts. Its resumed session
+	// is told the READY tasks without an open attempt, in one message; a task
+	// it has offered is not among them, and the worker is told nothing.
+	free := h.setTaskState(sc, h.createTaskIn(sc, "B1 READY at the restart", "BACKLOG").ID, "READY")
+	offered := h.setTaskState(sc, h.createTaskIn(sc, "B1 offered at the restart", "BACKLOG").ID, "READY")
+	sc.require("both READY tasks are announced", h.waitBoard(sc, free.ID, "READY", 2*boardTick+10*time.Second) &&
+		h.waitBoard(sc, offered.ID, "READY", 2*boardTick+10*time.Second))
+	oid := h.committed(sc, coord, "offer", "", "", h.offerBody(offered, worker, time.Now().Add(time.Hour))).AttemptID
+	h.pageWith(coord, "nothing-is-named-this")
+	h.crashLauncher(coord)
+	h.restartLauncher(coord)
+	page = h.pageWith(coord, "READY on the board in project")
+	listed := readyListText(page)
+	sc.check("the coordinator's resumed session lists the READY task without an open attempt, and not the offered one",
+		strings.Contains(listed, free.ID) && !strings.Contains(listed, offered.ID), page)
+	sc.check("the offer made before the restart is reported stale beside it",
+		strings.Contains(page, "(attempt "+oid+") is stale"), page)
+	h.ackAll(sc, coord, page)
+	h.committed(sc, coord, "withdraw", oid, offered.ID, map[string]any{})
+	h.setTaskState(sc, free.ID, "CANCELLED")
+	h.pageWith(worker, "nothing-is-named-this")
+	h.pageWith(coord, "nothing-is-named-this")
 	sc.finish()
+}
+
+// readyListText is the text of the message on a JSON inbox page that lists
+// the READY tasks at a coordinator's session start, "" if there is none.
+func readyListText(page string) string {
+	var ans StepAnswerLite
+	_ = json.Unmarshal([]byte(page), &ans)
+	var p struct {
+		Messages []struct {
+			Text string `json:"text"`
+		} `json:"messages"`
+	}
+	_ = json.Unmarshal(ans.Result, &p)
+	for _, m := range p.Messages {
+		if strings.HasPrefix(m.Text, "At this coordinator session's start") {
+			return m.Text
+		}
+	}
+	return ""
 }
 
 // boardTick is aicrewd's board read interval: the reconcile tick.

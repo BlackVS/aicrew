@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -174,5 +175,55 @@ func TestBoardRefusals(t *testing.T) {
 	srv.readBoards(ctx)
 	if n := hub.readCount() - before; n != 1 {
 		t.Fatalf("read %d times after rate_limited", n)
+	}
+}
+
+// A coordinator whose session resumes after its READY announcements were
+// acknowledged is told again, in one message, which READY tasks of the
+// granted project have no open attempt (pilot finding #17); the states come
+// from the board feed's history. A worker's resume tells it nothing.
+func TestBoardReadyTasksAtTheCoordinatorsResume(t *testing.T) {
+	ctx := context.Background()
+	e, srv, hub := boardSetup(t)
+	past := time.Now().Add(-time.Hour)
+	moved := hubteams.BoardChange{Project: "project-example", TaskID: "task-3", Revision: 3, From: "READY", To: "IN_PROGRESS", At: past}
+	hub.add(toReady("task-1", 2, past), toReady("task-2", 2, past), toReady("task-3", 2, past), moved)
+	srv.readBoards(ctx)
+	if got := leadBoard(t, e); len(got) != 0 {
+		t.Fatalf("the board's history announced: %+v", got)
+	}
+	if _, err := e.offer(t, "o-2", "task-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	ready := func(token string) []store.InboxItem {
+		t.Helper()
+		items, err := e.store.ReadInboxWithToken(ctx, token, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []store.InboxItem
+		for _, it := range items {
+			if it.Kind == store.KindLifecycle && strings.Contains(it.Text, "READY on the board in project") {
+				out = append(out, it)
+			}
+		}
+		return out
+	}
+	if got := ready(e.lead.token); len(got) != 0 {
+		t.Fatalf("before the resume: %+v", got)
+	}
+	e.lead.token = e.resume(t, e.lead)
+	got := ready(e.lead.token)
+	if len(got) != 1 || got[0].Project == nil || got[0].Project.ProjectID != "project-example" ||
+		!strings.HasSuffix(got[0].Text, "1 task is READY on the board in project project-example with no open attempt of the team: task-1.") {
+		t.Fatalf("at the coordinator's resume: %+v", got)
+	}
+	e.worker.token = e.resume(t, e.worker)
+	if w := ready(e.worker.token); len(w) != 0 {
+		t.Fatalf("the worker was told: %+v", w)
+	}
+	if got := ready(e.lead.token); len(got) != 1 {
+		t.Fatalf("a worker's resume told the coordinator again: %d", len(got))
 	}
 }

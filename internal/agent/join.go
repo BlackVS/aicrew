@@ -667,8 +667,12 @@ func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error)
 // member"). join prints it, the check's trust notice and session start name
 // it, and the managed START.md says the same; TestStartCommandIsDocumented
 // keeps them in step. A home
-// recorded for several clients is named with its first.
+// recorded for several clients is named with its first. A home in turns
+// mode has no Stop hook and run refuses it, so its command is serve.
 func StartCommand(home string, clients []string) string {
+	if ReadWakeSettings(home).Mode == WakeTurns {
+		return serveCommand(quoteArg(home))
+	}
 	client := "<client>"
 	if len(clients) > 0 {
 		client = clients[0]
@@ -685,6 +689,10 @@ func ServiceCommand(home string) string {
 
 func startCommand(client, home string) string {
 	return "aicrew-agent run --client " + client + " --home " + home
+}
+
+func serveCommand(home string) string {
+	return "aicrew-agent serve --home " + home
 }
 
 // HomeClients reads the clients a home is for, as join recorded them; none

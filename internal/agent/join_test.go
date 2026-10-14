@@ -397,6 +397,21 @@ func TestStartCommandIsDocumented(t *testing.T) {
 	if !strings.Contains(startMD, startCommand("<client>", "<this directory>")) {
 		t.Errorf("START.md does not name %q", startCommand("<client>", "<this directory>"))
 	}
+	// A home in turns mode is started with serve, which run names when it
+	// refuses one (01a135fe-18e5).
+	home := t.TempDir()
+	writeAgentDoc(t, home, map[string]any{"wake": map[string]any{"mode": WakeTurns}})
+	if got, want := StartCommand(home, []string{"claude"}), "aicrew-agent serve --home "+quoteArg(home); got != want {
+		t.Fatalf("StartCommand in turns mode = %q, want %q", got, want)
+	}
+	if !strings.Contains(dev, "\n"+serveCommand("HOME")+"\n") {
+		t.Errorf("DEVELOPMENT's \"Starting a member\" does not show %q", serveCommand("HOME"))
+	}
+	for _, s := range []string{serveCommand("<this directory>"), "`--wake turns`", "`--wake stop-hook`"} {
+		if !strings.Contains(startMD, s) {
+			t.Errorf("START.md does not name %q", s)
+		}
+	}
 }
 
 func TestJoinEndToEnd(t *testing.T) {

@@ -12,6 +12,127 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.5.8] - 2026-10-14
+
+Two fixes from the pilot on 0.5.7. A coordinator that restarts is told the
+READY tasks its team has not taken up, so an announcement acknowledged in a
+turn that could not act is no longer lost (finding #17). A worker's
+headless turn can run the project's development toolchain, `go test` and
+the repository's scripts among them, once the operator selects it for the
+team's project (finding #18).
+
+aicrewd and its store change: the hub needs 0.5.8 first. No managed member
+file changed. A worker takes the toolchain from aicrew-agent 0.5.8 at its
+next session start.
+
+### Breaking changes
+
+- **The aicrew store moves to schema 32** (#151, #152). Schema 31 adds each
+  task's latest board state and drops the stored board cursors once; schema
+  32 adds the toolchain selected for each team and project. The migrations
+  run when aicrewd starts. A 0.5.7 aicrewd refuses a store at schema 32, so
+  a rollback must restore the store copy the installer keeps, as its
+  automatic rollback does.
+- aimem 0.10.0 stays required.
+
+### Upgrade steps
+
+All of them use product commands and one-liners. The hub goes first.
+
+1. **aicrewd.** On the hub host, as root, run the hub one-liner:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.8/install-aicrewd.sh | bash
+   ```
+
+   As before, it backs up the configuration and the store, swaps the
+   binaries, waits for health at 0.5.8, and rolls back if the new release
+   does not come up. On its first start the upgraded aicrewd reads every
+   granted project's board feed again from its start, as history, at most
+   4 pages of 500 changes a tick. It announces nothing again.
+2. **The operator's machine.** As that user, rerun the member one-liner
+   (below), which brings `aicrew team toolchain`.
+3. **Select the toolchain.** For the pilot, from the operator's machine:
+
+   ```sh
+   aicrew team toolchain --team-name pilot --project aicrew --toolchain dev-go
+   ```
+
+   It prints the team with its `toolchains`. Until a selection is made, a
+   worker's turn runs with the same allow list as in 0.5.7.
+4. **Each member.** As that user, rerun the member one-liner:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.8/boot.sh | bash
+     ```
+
+   - Windows:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.8/boot.ps1 | iex"
+     ```
+
+   Then rerun `aicrew-agent join --home HOME` in each home. This release
+   changes no managed file, so the rerun leaves them as they are.
+5. **Restart each member** with `aicrew-agent serve --home HOME` (a home in
+   turns mode) or `aicrew-agent run --client <client> --home HOME`. The
+   launcher reads the team's projects, with the toolchain, at the session's
+   start, so a later change of the selection also needs a restart.
+
+### A coordinator's start lists the READY tasks (#151, finding #17)
+
+- **aicrewd keeps each task's latest board state** from every feed page it
+  records, history included (`board_tasks`, schema 31). A `cursor_ahead`
+  reset drops the hub's states with its cursor.
+- **When a coordinator session starts or resumes,** aicrewd writes one
+  lifecycle message for each granted project with READY tasks that have no
+  open attempt of the team, listing them by ID (at most 50, then a count).
+  A member resumes when its launcher starts and again before its session
+  token's 8-hour ceiling, so a READY task left unoffered is listed again at
+  most once per ceiling. A worker's session gets no such message.
+- **The upgrade** rereads each feed once, as history, so no announcement
+  repeats. A coordinator that starts before that read is done is told only
+  the tasks read so far.
+
+### A worker's turn runs the project's toolchain (#152, finding #18)
+
+- **Named lists in aicrew.** The first, `dev-go`, admits `go test`,
+  `go vet`, `go build`, `go mod tidy`, `go mod download`, `gofmt`, and the
+  repository's scripts (`bash scripts/*.sh` or `./scripts/`), each alone
+  or with arguments. `go -C DIR` and `go run` are not admitted.
+- **The operator selects one list per team and project** on aicrewd:
+  `aicrew team toolchain (--team ID | --team-name NAME) --project P
+  (--toolchain NAME | --clear)` (`POST /v1/admin/team/toolchain`, schema
+  32). aicrew and aicrewd both refuse an unknown name.
+- **Members read it** with their projects: `GET /v1/crew/projects` carries
+  `toolchain`. The launcher records the team's projects before the
+  session's first turn, with a 30-second bound.
+- **A worker's turn** then runs under `state/turn-settings-worker.json`,
+  which the turn loop writes before each turn: the common allow list, then
+  the toolchain's rules, with the same deny rules. With no selection the
+  turn uses `.claude/turn-settings.json` as before. The coordinator's and
+  the independent's turns are unchanged.
+- **The boundary.** These commands run the repository's own code. The deny
+  rules still block the command texts they name (the credentials, git's
+  global settings), but they match text and isolate nothing: the member's
+  OS account stays the boundary.
+- **Measured** with real Claude Code 2.1.299, headless, on a Go module in a
+  worktree. With the 0.5.7 common file `go test` is denied; with the dev-go
+  file `go test`, `go vet`, `go build`, `go mod tidy`, `gofmt` and a
+  repository script run, `go -C` and `go run` stay denied, and reading the
+  credentials stays denied, chained after `go test` too.
+  `docs/TURN-PROBE.md` records the table.
+
+### Supported and pinned versions
+
+- **Unchanged:** aimem 0.10.0 (the minimum and the tested release),
+  ai-skills 1.26.1, Claude Code 2.1.283 to 2.1.286 tested, and OpenCode
+  1.18.32 or 2.0.18 to 2.0.19 tested. The worker's toolchain settings were
+  measured with Claude Code 2.1.299.
+- **The one-liners** (`install-aicrewd.sh`, `boot.sh` and `boot.ps1`) pin
+  v0.5.8.
+
 ## [0.5.7] - 2026-10-13
 
 A fix for the first turns-mode turns on v0.5.6 (pilot finding #15). A

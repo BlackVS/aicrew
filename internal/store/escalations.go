@@ -239,9 +239,23 @@ func (s *Store) RaiseEscalationWithToken(ctx context.Context, key, token string,
 // coordinator, which may have changed since the request, and to the blocked
 // member while it is still an active member. A second answer is
 // ErrEscalationAnswered; a retry of the same answer with the same key
-// returns it.
+// returns it. The escalation is named by its ID or a unique prefix of it
+// (resolveEscalationID), resolved to the full ID before the command, so the
+// record and a retry name the full ID.
 func (s *Store) AnswerEscalation(ctx context.Context, c Caller, key, id string, in EscalationAnswer) (Escalation, error) {
 	in.AnsweredBy, in.AnsweredAt = "", time.Time{}
+	if err := requireEscalationReader(c); err != nil {
+		return Escalation{}, err
+	}
+	if id != "" && len(id) <= maxRefLen {
+		if err := s.snapshot(ctx, func(q querier) error {
+			full, err := resolveEscalationID(ctx, q, id)
+			id = full
+			return err
+		}); err != nil {
+			return Escalation{}, err
+		}
+	}
 	var out Escalation
 	err := s.run(ctx, c, command{
 		op: opAnswerEscalation, scope: id, key: key, input: struct {
@@ -339,16 +353,19 @@ func (s *Store) ListEscalations(ctx context.Context, c Caller, teamID string, op
 	return out, err
 }
 
-// GetEscalation reads one escalation. The operator or an architect
-// credential.
+// GetEscalation reads one escalation, named by its ID or a unique prefix
+// of it (resolveEscalationID). The operator or an architect credential.
 func (s *Store) GetEscalation(ctx context.Context, c Caller, id string) (Escalation, error) {
 	if err := requireEscalationReader(c); err != nil {
 		return Escalation{}, err
 	}
 	var e Escalation
 	err := s.snapshot(ctx, func(q querier) error {
-		var err error
-		e, err = getEscalation(ctx, q, id)
+		full, err := resolveEscalationID(ctx, q, id)
+		if err != nil {
+			return err
+		}
+		e, err = getEscalation(ctx, q, full)
 		return err
 	})
 	return e, err
@@ -377,6 +394,59 @@ func scanEscalation(r rowScanner) (Escalation, error) {
 		e.Answer = &a
 	}
 	return e, nil
+}
+
+// minEscalationPrefix is the shortest ID prefix that names an escalation:
+// the operator pastes the 13-character short form tasks and attempts use.
+const minEscalationPrefix = 8
+
+// maxPrefixCandidates bounds the candidates an ambiguous prefix lists.
+const maxPrefixCandidates = 10
+
+// resolveEscalationID returns the full ID that ref names: the ID itself, or
+// a prefix of at least minEscalationPrefix characters that exactly one
+// escalation's ID starts with. An ambiguous prefix is ErrInvalid listing
+// the candidates; no match is ErrNotFound.
+func resolveEscalationID(ctx context.Context, q querier, ref string) (string, error) {
+	var id string
+	err := q.QueryRowContext(ctx, `SELECT id FROM escalations WHERE id = ?`, ref).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("find escalation %s: %w", ref, err)
+	}
+	if len(ref) < minEscalationPrefix {
+		return "", fmt.Errorf("%w: escalation %s", ErrNotFound, ref)
+	}
+	rows, err := q.QueryContext(ctx, `SELECT id FROM escalations WHERE substr(id, 1, ?) = ? ORDER BY id LIMIT ?`,
+		len(ref), ref, maxPrefixCandidates+1)
+	if err != nil {
+		return "", fmt.Errorf("find escalation %s: %w", ref, err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	switch {
+	case len(ids) == 0:
+		return "", fmt.Errorf("%w: escalation %s", ErrNotFound, ref)
+	case len(ids) == 1:
+		return ids[0], nil
+	case len(ids) > maxPrefixCandidates:
+		return "", fmt.Errorf("%w: %s is the start of more than %d escalation IDs, among them %s; give more of the ID",
+			ErrInvalid, ref, maxPrefixCandidates, strings.Join(ids[:maxPrefixCandidates], ", "))
+	default:
+		return "", fmt.Errorf("%w: %s is the start of %d escalation IDs: %s; give more of the ID",
+			ErrInvalid, ref, len(ids), strings.Join(ids, ", "))
+	}
 }
 
 func getEscalation(ctx context.Context, q querier, id string) (Escalation, error) {

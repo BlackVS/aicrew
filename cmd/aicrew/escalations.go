@@ -21,6 +21,8 @@ const escalationsUsage = `usage:
   aicrew escalations list   [--team TEAM] [--open]
   aicrew escalations show   --id ESCALATION
   aicrew escalations answer --id ESCALATION --decision TEXT --rationale TEXT
+ESCALATION is the ID that list prints, or a prefix of it that starts no
+other escalation's ID, of at least 8 characters.
 ` + connUsage
 
 // runEscalations is aicrew escalations: 0 on success, 1 on a failure, 2 on
@@ -36,7 +38,7 @@ func runEscalations(ctx context.Context, args []string, stdout, stderr io.Writer
 	cn := addConn(fs)
 	team := fs.String("team", "", "the team's ID")
 	open := fs.Bool("open", false, "only the escalations not yet answered")
-	id := fs.String("id", "", "the escalation's ID")
+	id := fs.String("id", "", "the escalation's ID, or a unique prefix of it")
 	decision := fs.String("decision", "", "the decision, as the operator gave it")
 	rationale := fs.String("rationale", "", "why, and any constraint the decision adds")
 	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {

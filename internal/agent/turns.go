@@ -112,6 +112,10 @@ type conversation struct {
 	// context window its last turn used.
 	Day     string  `json:"day,omitempty"`
 	Context float64 `json:"context,omitempty"`
+	// ClientTotalUSD is the client's running total of the conversation
+	// after its last turn, from which an unpriced turn's own cost is the
+	// difference. It is nil in a state written before it was kept.
+	ClientTotalUSD *float64 `json:"client_total_usd,omitempty"`
 }
 
 // attemptTurns is what the loop keeps of one attempt's turns.
@@ -216,42 +220,60 @@ const (
 	TurnInterrupted  = "interrupted"
 )
 
-// TurnUsage is a turn's token use.
+// TurnUsage is a turn's own token use. CacheWrite is split by the cache's
+// lifetime when the client reports it, since the two are priced apart.
 type TurnUsage struct {
-	Input      int64 `json:"input_tokens"`
-	Output     int64 `json:"output_tokens"`
-	CacheRead  int64 `json:"cache_read_tokens"`
-	CacheWrite int64 `json:"cache_write_tokens"`
+	Input        int64 `json:"input_tokens"`
+	Output       int64 `json:"output_tokens"`
+	CacheRead    int64 `json:"cache_read_tokens"`
+	CacheWrite   int64 `json:"cache_write_tokens"`
+	CacheWrite5m int64 `json:"cache_write_5m_tokens,omitempty"`
+	CacheWrite1h int64 `json:"cache_write_1h_tokens,omitempty"`
 }
 
 // TurnRecord is one turn, as logs/turns.jsonl records it. It holds no
 // secret and no transcript.
 type TurnRecord struct {
-	ID           string    `json:"id"`
-	AgentID      string    `json:"agent_id"`
-	TeamID       string    `json:"team_id"`
-	AttemptID    string    `json:"attempt_id,omitempty"`
-	Task         *TaskRef  `json:"task,omitempty"`
-	Trigger      string    `json:"trigger"`
-	Client       string    `json:"client"`
+	ID        string   `json:"id"`
+	AgentID   string   `json:"agent_id"`
+	TeamID    string   `json:"team_id"`
+	AttemptID string   `json:"attempt_id,omitempty"`
+	Task      *TaskRef `json:"task,omitempty"`
+	Trigger   string   `json:"trigger"`
+	// Role and Client are the member's worker type.
+	Role   string `json:"role,omitempty"`
+	Client string `json:"client"`
+	// Model is the model the turn used, or the configured one when the
+	// client did not say; several are joined with commas.
 	Model        string    `json:"model,omitempty"`
 	Conversation string    `json:"conversation"`
 	Resumed      bool      `json:"resumed"`
 	StartedAt    time.Time `json:"started_at"`
 	EndedAt      time.Time `json:"ended_at,omitzero"`
-	Outcome      string    `json:"outcome,omitempty"`
-	Error        string    `json:"error,omitempty"`
+	// DurationMS is the turn's wall time.
+	DurationMS int64  `json:"duration_ms,omitempty"`
+	Outcome    string `json:"outcome,omitempty"`
+	Error      string `json:"error,omitempty"`
 	// LimitKind is "budget" for the profile's own budget, "provider" for
 	// the provider's limit; ResetAt is when the provider lifts it.
 	LimitKind string    `json:"limit_kind,omitempty"`
 	ResetAt   time.Time `json:"reset_at,omitzero"`
 	Usage     TurnUsage `json:"usage"`
-	CostUSD   float64   `json:"cost_usd"`
+	// CostUSD is the turn's own cost, derived as CostSource says
+	// (pricing.go); PriceList is the price list's version when it priced
+	// it. Records written before these fields existed carry the client's
+	// running total of the conversation in cost_usd instead.
+	CostUSD    float64 `json:"cost_usd"`
+	CostSource string  `json:"cost_source,omitempty"`
+	PriceList  string  `json:"price_list,omitempty"`
 	// CostBasis is "list" for a subscription's notional list price.
-	CostBasis string   `json:"cost_basis,omitempty"`
-	Denials   []string `json:"permission_denials"`
-	Steps     int      `json:"steps"`
-	Summary   string   `json:"summary,omitempty"`
+	CostBasis string `json:"cost_basis,omitempty"`
+	// ClientTotalUSD is the client's own running total of the
+	// conversation, kept as reported and never summed.
+	ClientTotalUSD float64  `json:"client_total_usd,omitempty"`
+	Denials        []string `json:"permission_denials"`
+	Steps          int      `json:"steps"`
+	Summary        string   `json:"summary,omitempty"`
 }
 
 // TurnLogFile is the turn records, relative to the home.

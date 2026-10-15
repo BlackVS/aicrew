@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -61,13 +62,14 @@ func TestReadTurnStream(t *testing.T) {
 		return ReadTurnStream(strings.NewReader(s), func() { aborts++ }), aborts
 	}
 	res, _ := read(stream(streamInit, "not json", streamCall, streamAllowed, streamSuccess))
-	if res.Outcome != TurnFinished || res.CostUSD != 0.25 || res.Usage.Output != 40 || res.Usage.CacheRead != 700 ||
+	if res.Outcome != TurnFinished || res.ClientTotalUSD != 0.25 || res.CostUSD != 0 || res.CostSource != CostClientTotal ||
+		!slices.Equal(res.Models, []string{"m"}) || res.Usage.Output != 40 || res.Usage.CacheRead != 700 ||
 		!slices.Equal(res.Denials, []string{"Bash", "Write"}) || res.Context != 0.1 || res.CostBasis != "list" ||
 		res.Summary != "Read the inbox and acknowledged one message." {
 		t.Fatalf("a finished turn: %+v", res)
 	}
 	res, _ = read(stream(`{"type":"result","subtype":"error_max_budget_usd","is_error":true,"terminal_reason":"budget_exhausted","total_cost_usd":2.1}`))
-	if res.Outcome != TurnLimitReached || res.LimitKind != "budget" || res.CostUSD != 2.1 {
+	if res.Outcome != TurnLimitReached || res.LimitKind != "budget" || res.ClientTotalUSD != 2.1 || res.CostSource != CostClientTotal {
 		t.Errorf("a spent budget: %+v", res)
 	}
 	res, _ = read(stream(`{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"Invalid API key"}`))
@@ -162,4 +164,40 @@ func mustEval(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return a
+}
+
+// A turn's own cost comes from its usage at the price list's prices when it
+// used one priced model, whatever the running totals say. The figures are
+// the last worker turn of the #154 cycle: its usage is its own, while
+// total_cost_usd and modelUsage are the conversation's running totals, and
+// the price list reproduces the totals' difference, $7.6582612 - $7.5250528.
+func TestReadTurnStreamPricesTheTurn(t *testing.T) {
+	result := `{"type":"result","subtype":"success","is_error":false,"result":"Nothing changed.","total_cost_usd":7.6582612,` +
+		`"usage":{"input_tokens":6,"output_tokens":554,"cache_read_input_tokens":511322,"cache_creation_input_tokens":2480,` +
+		`"cache_creation":{"ephemeral_1h_input_tokens":2480,"ephemeral_5m_input_tokens":0}},` +
+		`"modelUsage":{"claude-opus-5-5":{"inputTokens":234,"outputTokens":41388,"cacheReadInputTokens":13447146,` +
+		`"cacheCreationInputTokens":517517,"costUSD":7.6582612,"contextWindow":1000000,"costBasis":"list"}}}`
+	res := ReadTurnStream(strings.NewReader(stream(result)), func() {})
+	if res.CostSource != CostPriceList || math.Abs(res.CostUSD-(7.6582612-7.5250528)) > 1e-6 ||
+		res.ClientTotalUSD != 7.6582612 || res.Usage.CacheWrite1h != 2480 || res.Usage.CacheWrite5m != 0 ||
+		!slices.Equal(res.Models, []string{"claude-opus-5-5"}) {
+		t.Fatalf("the turn's own cost: %+v", res)
+	}
+
+	// Without the cache-write split, or with a model the list does not
+	// price, or with two models, the list does not price the turn.
+	for name, r := range map[string]string{
+		"no split": `{"type":"result","subtype":"success","total_cost_usd":1,"usage":{"input_tokens":1,"cache_creation_input_tokens":5},` +
+			`"modelUsage":{"claude-opus-5-5":{}}}`,
+		"unpriced model": `{"type":"result","subtype":"success","total_cost_usd":1,"usage":{"input_tokens":1},"modelUsage":{"other":{}}}`,
+		"two models": `{"type":"result","subtype":"success","total_cost_usd":1,"usage":{"input_tokens":1},` +
+			`"modelUsage":{"claude-opus-5-5":{},"other":{}}}`,
+		"a 5-minute write": `{"type":"result","subtype":"success","total_cost_usd":1,"usage":{"input_tokens":1,"cache_creation_input_tokens":5,` +
+			`"cache_creation":{"ephemeral_5m_input_tokens":5}},"modelUsage":{"claude-opus-5-5":{}}}`,
+	} {
+		res := ReadTurnStream(strings.NewReader(stream(r)), func() {})
+		if res.CostSource != CostClientTotal || res.CostUSD != 0 || res.ClientTotalUSD != 1 {
+			t.Errorf("%s: %+v", name, res)
+		}
+	}
 }

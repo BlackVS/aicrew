@@ -1791,6 +1791,16 @@ Messages that arrive during a turn wait for the next one.
 - A spent daily budget gives no turn until the next UTC day. A spent
   attempt budget gives no turn while that attempt is open, and is checked
   again each hour, for an operator who raised it.
+- **A hold from the old counting.** Before 0.5.9, the loop added each
+  resumed turn's running total, so an attempt's and a day's spend in
+  `state/turns.json` could be several times the real cost. Upgrading does
+  not rewrite those sums. The real cost is in the turn records: the
+  difference between consecutive `cost_usd` values of one conversation.
+  To clear such a hold, use the knobs, not an edit of the state:
+  - an attempt hold: raise `attempt_budget_usd` above the recorded sum.
+    The hold is checked again within the hour, and the next attempt
+    starts at zero.
+  - a daily hold: it clears at the next UTC day.
 - `max_continuations` bounds one attempt's continuation turns. A message
   still gets its turn.
 - A provider limit holds the member until the reset time the client
@@ -1810,6 +1820,32 @@ Messages that arrive during a turn wait for the next one.
   The text and the error are redacted of the home's forge tokens and of
   aicrew's, aimem's, forge and provider token shapes. Records hold no
   secret and no transcript.
+- **What a record adds for cost** (`docs/DESIGN-TURNS.md`, increment 0):
+  - **The worker type:** `role` and `client`.
+  - **The model** the turn used.
+  - **Tokens by kind:** input, output, cache read and cache write, with
+    the cache write split into `cache_write_5m_tokens` and
+    `cache_write_1h_tokens`.
+  - **The wall time:** `duration_ms`.
+- **A turn's cost is its own, derived from its tokens.** Claude Code's
+  `total_cost_usd` is the running total of the whole conversation, so a
+  resumed turn's figure includes every earlier turn.
+  - **Price list:** when the turn used one model that the price list in
+    `internal/agent/pricing.go` prices, `cost_usd` is the turn's tokens at
+    those prices. The record then has `cost_source: price_list` and the
+    list's version in `price_list`.
+  - **Running-total difference:** otherwise, `cost_usd` is the difference
+    of the running total since the conversation's previous turn, and the
+    record has `cost_source: client_total`.
+  - **Unpriced:** when neither is known, the cost is 0 with
+    `cost_source: unpriced`. That happens to a turn that resumes a
+    conversation started before this version.
+  - **The client's figure** is kept, never summed, as `client_total_usd`.
+  - **The sums:** the attempt's and the day's spend add up the turns' own
+    costs.
+  - **Older records:** records written before this version carry the
+    running total in `cost_usd`, without a `cost_source`. They are not
+    rewritten.
 - **The raw stream** of each turn is kept in `logs/turns/<turn id>.jsonl`,
   owner-only. It is the home's own log of the turn and never leaves the
   host (D7).

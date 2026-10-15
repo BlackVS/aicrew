@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -245,7 +246,8 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		*conv = conversation{ID: newUUID(), Day: dayOf(now)}
 	}
 	rec := TurnRecord{ID: newUUID(), AgentID: status.Session.AgentID, TeamID: status.Session.TeamID, Trigger: trigger,
-		Client: "claude", Model: limits.Model, Conversation: conv.ID, Resumed: resume, StartedAt: now, Denials: []string{}}
+		Role: status.Session.Role, Client: "claude", Model: limits.Model, Conversation: conv.ID, Resumed: resume,
+		StartedAt: now, Denials: []string{}}
 	if attempt != nil {
 		task := attempt.Task
 		rec.AttemptID, rec.Task = attempt.ID, &task
@@ -266,8 +268,16 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		Timeout: limits.TurnTimeout, Transcript: transcript})
 	closeTranscript()
 	rec.EndedAt = l.Now()
+	rec.DurationMS = rec.EndedAt.Sub(rec.StartedAt).Milliseconds()
 	rec.Outcome, rec.Error, rec.LimitKind, rec.ResetAt = res.Outcome, res.Error, res.LimitKind, res.ResetAt
-	rec.Usage, rec.CostUSD, rec.CostBasis, rec.Summary = res.Usage, res.CostUSD, res.CostBasis, res.Summary
+	rec.Usage, rec.CostBasis, rec.Summary, rec.ClientTotalUSD = res.Usage, res.CostBasis, res.Summary, res.ClientTotalUSD
+	if len(res.Models) > 0 {
+		rec.Model = strings.Join(res.Models, ",")
+	}
+	rec.CostUSD, rec.CostSource = l.turnCost(*conv, resume, res)
+	if rec.CostSource == CostPriceList {
+		rec.PriceList = PriceListVersion
+	}
 	if res.Denials != nil {
 		rec.Denials = res.Denials
 	}
@@ -300,10 +310,14 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	if res.Context > 0 {
 		conv.Context = res.Context
 	}
+	if res.ClientTotalUSD > 0 {
+		total := res.ClientTotalUSD
+		conv.ClientTotalUSD = &total
+	}
 	if res.Outcome == TurnFailed && resume {
 		*conv = conversation{} // a conversation the client cannot resume starts fresh
 	}
-	st.spend(dayOf(now), attemptID, res.CostUSD)
+	st.spend(dayOf(now), attemptID, rec.CostUSD)
 	l.afterOutcome(st, res)
 	if a != nil {
 		if !continuation {
@@ -555,4 +569,33 @@ func ServeHome(ctx context.Context, e *Engine, client string, signals <-chan os.
 		}
 		return err
 	}
+}
+
+// turnCost is a turn's own cost and its source (pricing.go). A turn the
+// price list priced keeps that cost, and a client's running total, when the
+// conversation's previous total is known, checks it. A turn it did not
+// price costs the difference of the running total since the conversation's
+// previous turn: the whole total for a fresh conversation, and unknown for
+// a resumed one whose previous total was not kept. Another client's
+// adapter reports its turn's own cost.
+func (l *TurnLoop) turnCost(conv conversation, resume bool, res TurnResult) (float64, string) {
+	if res.CostSource != CostPriceList && res.CostSource != CostClientTotal {
+		return res.CostUSD, res.CostSource
+	}
+	prev, known := 0.0, !resume
+	if resume && conv.ClientTotalUSD != nil {
+		prev, known = *conv.ClientTotalUSD, true
+	}
+	delta, deltaOK := math.Round((res.ClientTotalUSD-prev)*1e6)/1e6, known && res.ClientTotalUSD >= prev
+	if res.CostSource == CostPriceList {
+		if deltaOK && math.Abs(delta-res.CostUSD) > 0.01 {
+			l.Log.Warn("the price list and the client's running total disagree on a turn's cost",
+				"price_list_usd", res.CostUSD, "client_total_delta_usd", delta, "price_list", PriceListVersion)
+		}
+		return res.CostUSD, CostPriceList
+	}
+	if !deltaOK {
+		return 0, CostUnpriced
+	}
+	return delta, CostClientTotal
 }

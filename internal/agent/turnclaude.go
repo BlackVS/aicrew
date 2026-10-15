@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
@@ -46,11 +47,23 @@ type TurnResult struct {
 	Error     string
 	LimitKind string
 	ResetAt   time.Time
-	Usage     TurnUsage
-	CostUSD   float64
-	CostBasis string
-	Denials   []string
-	Summary   string
+	// Usage is the turn's own token use.
+	Usage TurnUsage
+	// CostUSD is the turn's own cost, from CostSource. A Claude Code turn
+	// the price list cannot price has CostSource CostClientTotal and no
+	// CostUSD: the loop takes the difference of ClientTotalUSD since the
+	// conversation's previous turn (pricing.go). Another client's adapter
+	// reports its turn's own cost with an empty CostSource.
+	CostUSD    float64
+	CostSource string
+	CostBasis  string
+	// ClientTotalUSD is the client's own running total of the
+	// conversation, as it reported it.
+	ClientTotalUSD float64
+	// Models are the models the turn used, sorted.
+	Models  []string
+	Denials []string
+	Summary string
 	// Context is the share of the client's context window the turn's last
 	// model call used.
 	Context float64
@@ -176,10 +189,14 @@ type streamEvent struct {
 	TerminalReason string   `json:"terminal_reason"`
 	Errors         []string `json:"errors"`
 	Usage          *struct {
-		Input      int64 `json:"input_tokens"`
-		Output     int64 `json:"output_tokens"`
-		CacheRead  int64 `json:"cache_read_input_tokens"`
-		CacheWrite int64 `json:"cache_creation_input_tokens"`
+		Input         int64 `json:"input_tokens"`
+		Output        int64 `json:"output_tokens"`
+		CacheRead     int64 `json:"cache_read_input_tokens"`
+		CacheWrite    int64 `json:"cache_creation_input_tokens"`
+		CacheCreation *struct {
+			Write5m int64 `json:"ephemeral_5m_input_tokens"`
+			Write1h int64 `json:"ephemeral_1h_input_tokens"`
+		} `json:"cache_creation"`
 	} `json:"usage"`
 	ModelUsage map[string]struct {
 		ContextWindow int64  `json:"contextWindow"`
@@ -230,14 +247,25 @@ func ReadTurnStream(r io.Reader, abort func()) TurnResult {
 			lastCall = u.Input + u.CacheRead + u.CacheWrite
 		case ev.Type == "result":
 			readResult(&res, ev, limited)
-			for _, m := range ev.ModelUsage {
+			for model, m := range ev.ModelUsage {
 				window = max(window, m.ContextWindow)
 				if res.CostBasis == "" {
 					res.CostBasis = m.CostBasis
 				}
+				res.Models = append(res.Models, model)
 			}
+			slices.Sort(res.Models)
 			if window > 0 && lastCall > 0 {
 				res.Context = float64(lastCall) / float64(window)
+			}
+			// modelUsage and total_cost_usd are the conversation's running
+			// totals; the usage is the turn's own, so the turn is priced
+			// from it when it used one model the price list knows.
+			res.CostSource = CostClientTotal
+			if len(res.Models) == 1 {
+				if usd, ok := listCost(res.Models[0], res.Usage); ok {
+					res.CostUSD, res.CostSource = usd, CostPriceList
+				}
 			}
 			return res
 		}
@@ -249,10 +277,13 @@ func ReadTurnStream(r io.Reader, abort func()) TurnResult {
 // spent turn budget or a provider limit is limit_reached; a refused key is
 // needs_login; any other error is failed.
 func readResult(res *TurnResult, ev streamEvent, limited bool) {
-	res.CostUSD = ev.TotalCostUSD
+	res.ClientTotalUSD = ev.TotalCostUSD
 	if ev.Usage != nil {
 		res.Usage = TurnUsage{Input: ev.Usage.Input, Output: ev.Usage.Output, CacheRead: ev.Usage.CacheRead,
 			CacheWrite: ev.Usage.CacheWrite}
+		if c := ev.Usage.CacheCreation; c != nil {
+			res.Usage.CacheWrite5m, res.Usage.CacheWrite1h = c.Write5m, c.Write1h
+		}
 	}
 	res.Denials = []string{}
 	for _, d := range ev.PermissionDenials {

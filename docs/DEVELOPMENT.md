@@ -77,6 +77,16 @@ CGO_ENABLED=1 go test -race -count=1 ./internal/agent/ ./internal/server/ ./inte
 
 It needs cgo (a C compiler). On a Windows host without one, run it in WSL.
 
+**A race binary sleeps for a second before it exits.** That is the race
+detector's `atexit_sleep_ms`, 1000 by default. The agent tests re-run
+their own binary as the fake `aimem`, `claude` and `opencode` and as
+probes, several hundred processes in all, so the agent package's
+`TestMain` sets `GORACE=atexit_sleep_ms=0` for the processes it starts.
+The test process keeps the default. A `GORACE` that already sets the
+option is kept. The agent package's race run measured:
+- before: 864 s in CI and 786 s in WSL;
+- after: 152 s in WSL.
+
 The end-to-end runs against a real aimem are not part of these checks:
 `scripts/e2e-real-aimem.sh` (`docs/E2E-REAL-AIMEM.md`).
 

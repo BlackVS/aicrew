@@ -27,6 +27,10 @@ section here names the amendment:
     [proposals/OPERATOR-SEAT.md](proposals/OPERATOR-SEAT.md);
 - aimem's AIForge contracts at their pinned commit (START-HERE).
 
+Proposed amendment: [DESIGN-TURNS.md](DESIGN-TURNS.md) (turn economics,
+task `01a13f80-1a20`) amends sections 1.5, 1.7, 1.8, 3.4 and 3.5 and the A6
+increment, once it is accepted.
+
 ## The shape in brief
 
 ```text

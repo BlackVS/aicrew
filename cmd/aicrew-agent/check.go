@@ -7,8 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/BlackVS/aicrew/internal/agent"
+	"github.com/BlackVS/aicrew/internal/service"
 	"github.com/BlackVS/aicrew/internal/version"
 )
 
@@ -55,17 +59,81 @@ func check(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "check failed:", err)
 		return exitFailed
 	}
+	svc := checkService(ctx, *home)
 	if *asJSON {
-		raw, _ := json.MarshalIndent(rep, "", "  ")
+		raw, _ := json.MarshalIndent(checkOutput{CheckReport: rep, Service: svc}, "", "  ")
 		fmt.Fprintln(stdout, string(raw))
 	} else {
 		fmt.Fprintf(stdout, "status: %s\n", rep.Status)
 		printCheck(stdout, rep)
+		printServiceCheck(stdout, svc)
 	}
 	if rep.Status == agent.JoinBlocked {
 		return exitFailed
 	}
 	return exitOK
+}
+
+// serviceCheck is the home's service as check reports it.
+type serviceCheck struct {
+	State  string          `json:"state"` // not_used, unavailable, or the service's state
+	Detail string          `json:"detail,omitempty"`
+	Status *service.Status `json:"status,omitempty"`
+	ToDo   string          `json:"to_do,omitempty"`
+}
+
+// checkOutput is check's JSON report: the check's, and the service's.
+type checkOutput struct {
+	agent.CheckReport
+	Service serviceCheck `json:"service"`
+}
+
+// checkService reports the home's service; tests replace it.
+var checkService = func(ctx context.Context, home string) serviceCheck {
+	abs, err := filepath.Abs(home)
+	if err != nil {
+		return serviceCheck{State: "unavailable", Detail: err.Error()}
+	}
+	if agent.ReadWakeSettings(abs).Mode != agent.WakeTurns {
+		return serviceCheck{State: "not_used", Detail: "a stop-hook home: the member runs " +
+			agent.StartCommand(abs, agent.HomeClients(abs)) + " in a terminal"}
+	}
+	m, err := newServiceManager(os.Getenv)
+	if err != nil {
+		return serviceCheck{State: "unavailable", Detail: err.Error(),
+			ToDo: "start the member in a terminal with: aicrew-agent serve --home " + abs}
+	}
+	return serviceCheckOf(m.Status(ctx, abs, agent.HomeLabel(abs)))
+}
+
+func serviceCheckOf(st service.Status, err error) serviceCheck {
+	if err != nil {
+		return serviceCheck{State: "unavailable", Detail: err.Error()}
+	}
+	c := serviceCheck{State: st.State(), Status: &st}
+	switch {
+	case st.HandServe:
+		c.ToDo = "stop the serve started by hand, then: aicrew-agent service start --home " + st.Home
+	case !st.Installed:
+		c.ToDo = agent.ServiceCommand(st.Home)
+	case !st.Active:
+		c.ToDo = "aicrew-agent service start --home " + st.Home
+	}
+	return c
+}
+
+func printServiceCheck(w io.Writer, c serviceCheck) {
+	switch {
+	case c.Status != nil:
+		fmt.Fprintf(w, "service: %s: %s (%s)\n", c.Status.Name, c.State, c.Status.Kind)
+	case c.Detail != "":
+		fmt.Fprintf(w, "service: %s (%s)\n", strings.ReplaceAll(c.State, "_", " "), c.Detail)
+	default:
+		fmt.Fprintf(w, "service: %s\n", c.State)
+	}
+	if c.ToDo != "" {
+		fmt.Fprintf(w, "to do: %s\n", c.ToDo)
+	}
 }
 
 func printCheck(w io.Writer, rep agent.CheckReport) {

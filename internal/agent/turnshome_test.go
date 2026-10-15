@@ -138,7 +138,7 @@ func TestJoinWakeMode(t *testing.T) {
 	os.WriteFile(path("agent.json"), raw, 0o600)
 
 	rep, _ := e.join(t, JoinOptions{Home: e.home, Wake: WakeTurns}, &recCrew{}, activeAimem())
-	if rep.Status == JoinBlocked {
+	if rep.Status == JoinBlocked || rep.Next != ServiceCommand(e.home) {
 		t.Fatalf("join --wake turns: %+v", rep)
 	}
 	b, _ := os.ReadFile(path(".claude/settings.json"))
@@ -167,7 +167,8 @@ func TestJoinWakeMode(t *testing.T) {
 	os.WriteFile(path(".claude/settings.json"), []byte(claudeSettings(e.home)), 0o600)
 
 	rep, _ = e.join(t, JoinOptions{Home: e.home, Wake: WakeStopHook}, &recCrew{}, activeAimem())
-	if b, _ := os.ReadFile(path(".claude/settings.json")); rep.Status == JoinBlocked || !strings.Contains(string(b), "wait-inbox") {
+	if b, _ := os.ReadFile(path(".claude/settings.json")); rep.Status == JoinBlocked || !strings.Contains(string(b), "wait-inbox") ||
+		rep.Next != StartCommand(e.home, []string{"claude"}) {
 		t.Fatalf("join --wake stop-hook: %+v\n%s", rep, b)
 	}
 	if rep, err := Join(t.Context(), JoinOptions{Home: e.home, Wake: "hook"}, e.deps(&recCrew{}, activeAimem(), new(int))); err == nil ||

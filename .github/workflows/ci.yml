@@ -60,6 +60,15 @@ jobs:
           go-version: '1.25'
           cache: true
       - run: go test -count=1 ./...
+      # A member's service against the runner's real service manager
+      # (launchd, the task scheduler, systemd's user manager): install,
+      # run, stop, start, uninstall. The test skips where the runner has no
+      # login session or user manager, and says so.
+      - name: real user service
+        timeout-minutes: 10
+        env:
+          AICREW_REAL_SERVICE: '1'
+        run: go test -count=1 -v -run TestRealService ./internal/service/
       # The race detector checks, on one OS, the packages whose goroutines
       # share state: the launcher's step channel reads the engine's session
       # state (agent), and the server's handlers, reconciler and logging run

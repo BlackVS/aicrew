@@ -252,3 +252,14 @@ Repository instructions live in each repository, not here.
 const handoffMD = "# Handoff\n\n" +
 	"This file belongs to the agent. `aicrew-agent join` created it once and never\n" +
 	"changes it.\n"
+
+// HomeLabel is the home's label as join recorded it, or else its
+// directory's name: what names the home's service.
+func HomeLabel(home string) string {
+	if d, ok, err := readAgentDoc(home); err == nil && ok {
+		if l := str(d.top, "label"); l != "" {
+			return l
+		}
+	}
+	return filepath.Base(filepath.Clean(home))
+}

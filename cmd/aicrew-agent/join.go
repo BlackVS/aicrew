@@ -12,13 +12,14 @@ import (
 	"strings"
 
 	"github.com/BlackVS/aicrew/internal/agent"
+	"github.com/BlackVS/aicrew/internal/service"
 )
 
 const joinUsage = `usage: aicrew-agent join --label LABEL [--home DIR] --url https://HOST[:PORT]
          --tls-trust-mode ca_dns|spki_sha256 --tls-trust-value VALUE --aimem-hub NAME
          --client claude|opencode[,…] [--aimem-command PATH] [--json]
          [--aimem-url https://HUB --aimem-token-file PATH|- [--aimem-ca-file PATH]]
-         [--cred HOST=PATH|- ...] [--wake stop-hook|turns]
+         [--cred HOST=PATH|- ...] [--wake stop-hook|turns] [--no-service]
        The invitation code is read at a hidden prompt. The --aimem flags
        provision the home's aimem installation on the first run, the token
        read from its owner-only file or, with -, at a hidden prompt. Each
@@ -29,7 +30,10 @@ const joinUsage = `usage: aicrew-agent join --label LABEL [--home DIR] --url htt
        refreshes the home's files, takes any --cred, and checks its
        dependencies and clients. --wake records how the member is woken:
        stop-hook (the default) for an interactive client under run, turns for
-       the turn loop, serve, whose home has no Stop hook.`
+       the turn loop, serve, whose home has no Stop hook. A ready home in
+       turns mode gets its service (aicrew-agent service install), which
+       starts the member now and at each login; --no-service, or
+       AICREW_NO_SERVICE=1, leaves it out.`
 
 // joinDeps builds the bootstrap's collaborators on the real terminal,
 // aicrewd and aimem.
@@ -84,9 +88,43 @@ func (c credFlags) Set(v string) error {
 	return nil
 }
 
+// installService installs and starts a home's service; join calls it for a
+// ready home in turns mode.
+type installService func(ctx context.Context, home string) (service.Status, error)
+
+// realInstallService is installService on this account's service manager,
+// or nil when AICREW_NO_SERVICE=1 leaves the services alone.
+func realInstallService(getenv func(string) string) installService {
+	if service.Disabled(getenv) {
+		return nil
+	}
+	return func(ctx context.Context, home string) (service.Status, error) {
+		spec, err := serviceSpec(home, getenv)
+		if err != nil {
+			return service.Status{}, err
+		}
+		m, err := newServiceManager(getenv)
+		if err != nil {
+			return service.Status{}, err
+		}
+		return m.Install(ctx, spec)
+	}
+}
+
+// joinOutput is join's report: the join's, and the service's when join
+// installed one.
+type joinOutput struct {
+	agent.JoinReport
+	Service      *service.Status `json:"service,omitempty"`
+	ServiceError string          `json:"service_error,omitempty"`
+}
+
 // join is `aicrew-agent join`. It exits 0 when the home is ready (or ready
 // after a restart of an open client), 1 when blocked or failed, 2 on usage.
-func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.Writer, deps agent.JoinDeps) int {
+// install, when not nil, installs the service of a ready home in turns
+// mode; a failure there is reported and does not fail the join.
+func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.Writer, deps agent.JoinDeps,
+	install installService) int {
 	fs := flag.NewFlagSet("aicrew-agent join", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var o agent.JoinOptions
@@ -105,6 +143,7 @@ func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.W
 	fs.StringVar(&o.Wake, "wake", "", "")
 	clients := fs.String("client", "", "")
 	asJSON := fs.Bool("json", false, "")
+	noService := fs.Bool("no-service", false, "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || (o.Home == "" && o.Label == "") {
 		if credRefused != nil {
 			fmt.Fprintln(stderr, credRefused)
@@ -132,11 +171,22 @@ func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.W
 		fmt.Fprintln(stderr, "join failed:", err)
 		return exitFailed
 	}
+	out := joinOutput{JoinReport: rep}
+	if install != nil && !*noService && rep.Status != agent.JoinBlocked &&
+		agent.ReadWakeSettings(rep.Home).Mode == agent.WakeTurns {
+		st, err := install(ctx, rep.Home)
+		if st.Name != "" {
+			out.Service = &st
+		}
+		if err != nil {
+			out.ServiceError = err.Error()
+		}
+	}
 	if *asJSON {
-		out, _ := json.MarshalIndent(rep, "", "  ")
-		fmt.Fprintln(stdout, string(out))
+		b, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Fprintln(stdout, string(b))
 	} else {
-		printJoinReport(stdout, rep)
+		printJoinReport(stdout, out)
 	}
 	if rep.Status == agent.JoinBlocked {
 		return exitFailed
@@ -144,7 +194,8 @@ func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.W
 	return exitOK
 }
 
-func printJoinReport(w io.Writer, rep agent.JoinReport) {
+func printJoinReport(w io.Writer, out joinOutput) {
+	rep := out.JoinReport
 	fmt.Fprintf(w, "status: %s\n", rep.Status)
 	if rep.Reason != "" {
 		fmt.Fprintf(w, "reason: %s\n", rep.Reason)
@@ -171,7 +222,21 @@ func printJoinReport(w io.Writer, rep agent.JoinReport) {
 	if rep.Check != nil {
 		printCheck(w, *rep.Check)
 	}
-	if rep.Next != "" && rep.Status != agent.JoinBlocked {
+	if st := out.Service; st != nil {
+		fmt.Fprintf(w, "service %s: %s (%s)\n", st.Name, st.State(), st.Kind)
+		for _, n := range st.Notes {
+			fmt.Fprintln(w, "  note:", n)
+		}
+	}
+	if out.ServiceError != "" {
+		fmt.Fprintf(w, "service not started: %s\n", out.ServiceError)
+	}
+	switch {
+	case rep.Status == agent.JoinBlocked:
+	case out.Service != nil && out.Service.Active:
+		fmt.Fprintf(w, "the member runs as the service %s; see it with: aicrew-agent service status --home %s\n",
+			out.Service.Name, out.Service.Home)
+	case rep.Next != "":
 		fmt.Fprintf(w, "start the member with: %s\n", rep.Next)
 	}
 }

@@ -220,11 +220,12 @@ Repository instructions live in each repository, not here.
    your client sees aimem's MCP server and the required skills. When
    something is missing or refused, stop and ask the operator instead of
    improvising.
-6. **The launcher holds the session.** Your client is started from a
-   terminal by ` + "`aicrew-agent run --client <client> --home <this directory>`" + `
-   (a home joined with ` + "`--wake stop-hook`" + `, the default), or by
-   ` + "`aicrew-agent serve --home <this directory>`" + ` (a home joined with
-   ` + "`--wake turns`" + `), which enters the team session and keeps it while the client runs. Inside
+6. **The launcher holds the session.** In a home joined with
+   ` + "`--wake stop-hook`" + ` (the default), your client is started from a terminal by
+   ` + "`aicrew-agent run --client <client> --home <this directory>`" + `. In a home
+   joined with ` + "`--wake turns`" + `, the member's service, which join installed,
+   runs the turn loop: ` + "`aicrew-agent service start --home <this directory>`" + `.
+   Either enters the team session and keeps it while the client runs. Inside
    the client, act through ` + "`aicrew-agent inbox`" + ` and ` + "`aicrew-agent step`" + `
    (` + "`check`" + ` and ` + "`session status`" + ` only read). Never run
    ` + "`aicrew-agent session start`" + `, ` + "`session leave`" + ` or ` + "`run`" + ` from inside it:

@@ -668,10 +668,11 @@ func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error)
 // it, and the managed START.md says the same; TestStartCommandIsDocumented
 // keeps them in step. A home
 // recorded for several clients is named with its first. A home in turns
-// mode has no Stop hook and run refuses it, so its command is serve.
+// mode has no Stop hook and run refuses it, so its command starts the
+// member's service, which join installed.
 func StartCommand(home string, clients []string) string {
 	if ReadWakeSettings(home).Mode == WakeTurns {
-		return serveCommand(quoteArg(home))
+		return serviceStartCommand(quoteArg(home))
 	}
 	client := "<client>"
 	if len(clients) > 0 {
@@ -691,8 +692,8 @@ func startCommand(client, home string) string {
 	return "aicrew-agent run --client " + client + " --home " + home
 }
 
-func serveCommand(home string) string {
-	return "aicrew-agent serve --home " + home
+func serviceStartCommand(home string) string {
+	return "aicrew-agent service start --home " + home
 }
 
 // HomeClients reads the clients a home is for, as join recorded them; none

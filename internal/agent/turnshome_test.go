@@ -141,9 +141,6 @@ func TestJoinWakeMode(t *testing.T) {
 	if rep.Status == JoinBlocked || rep.Next != ServiceCommand(e.home) {
 		t.Fatalf("join --wake turns: %+v", rep)
 	}
-	if rep.Next != serveCommand(quoteArg(e.home)) {
-		t.Fatalf("join --wake turns names %q", rep.Next)
-	}
 	b, _ := os.ReadFile(path(".claude/settings.json"))
 	if strings.Contains(string(b), "wait-inbox") || string(b) != claudeSettings(e.home) {
 		t.Fatalf("turns mode kept the Stop hook: %s", b)

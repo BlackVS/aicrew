@@ -48,3 +48,24 @@ func Lock(ctx context.Context, path string) (func(), error) {
 		}
 	}
 }
+
+// ErrBusy is TryLock's answer when another open holds the lock.
+var ErrBusy = errBusy
+
+// TryLock opens (creating if needed) the file at path and takes an exclusive
+// lock on it without waiting: ErrBusy when another open holds it. The
+// returned function unlocks and closes it.
+func TryLock(path string) (func(), error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := tryLock(f); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() {
+		_ = unlock(f)
+		f.Close()
+	}, nil
+}

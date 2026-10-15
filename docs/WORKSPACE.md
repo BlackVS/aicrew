@@ -55,9 +55,11 @@ is also independent of the model and client, both of which may change.
   state/             nonsecret recovery data; owner-only, holds the step socket,
                      the team's projects (team.json), the turn loop's state (turns.json)
                      and a worker's per-turn settings with its toolchain
-                     (turn-settings-worker.json)
+                     (turn-settings-worker.json); serve.lock, held by the running serve,
+                     and serve.pid, its process ID
   logs/              redacted logs; turns.jsonl records each turn of the turn loop,
-                     turns/<turn id>.jsonl keeps its raw stream (owner-only, never sent)
+                     turns/<turn id>.jsonl keeps its raw stream (owner-only, never sent);
+                     serve.log is the log of the home's service (aicrew-agent service)
   work/              temporary artifacts
   repos/             clean clones, one per repository key
   worktrees/         one isolated worktree per attempt

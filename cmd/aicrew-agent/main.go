@@ -7,6 +7,8 @@
 //	aicrew-agent session start  --home DIR   enter or resume, then keep the session until interrupted
 //	aicrew-agent session status [--home DIR] show the recorded session, the role and the team's projects, without secrets
 //	aicrew-agent session leave  --home DIR   prove afresh, resume and leave
+//	aicrew-agent service install|uninstall|start|stop|restart|status (--home DIR | --all)
+//	                                        the turn loop as this account's service
 //	aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
 //	                                        ask the running launcher for a step
 //	aicrew-agent join --label LABEL [--home DIR] --url URL --tls-trust-mode M --tls-trust-value V --aimem-hub NAME --client C
@@ -29,9 +31,11 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/BlackVS/aicrew/internal/agent"
+	"github.com/BlackVS/aicrew/internal/service"
 )
 
 // Exit codes.
@@ -44,7 +48,9 @@ const (
 
 const usage = `usage: aicrew-agent session start|status|leave --home DIR   (status: --home defaults to $AICREW_AGENT_HOME)
        aicrew-agent run --client claude|opencode --home DIR [--no-start] [-- CLIENT ARGS]
-       aicrew-agent serve --home DIR   (the turn loop: headless Claude Code turns; join --wake turns first)
+       aicrew-agent serve --home DIR [--log FILE]   (the turn loop: headless Claude Code turns; join --wake turns first)
+       aicrew-agent service install|uninstall|start|stop|restart|status (--home DIR | --all) [--json]
+                                        (serve as this account's service; run "aicrew-agent service" for its usage)
        aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
        aicrew-agent inbox [--home DIR] [--limit N] [--ack ID,ID...] [--json]
        aicrew-agent escalate [--home DIR] --body FILE|-   (the coordinator, through the launcher)
@@ -122,11 +128,22 @@ func serveHome(ctx context.Context, args []string, stderr io.Writer, sigs <-chan
 	fs := flag.NewFlagSet("aicrew-agent serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	home := fs.String("home", "", "the agent home directory")
+	logFile := fs.String("log", "", "also append the log to this file (the service's HOME/logs/serve.log)")
 	if err := fs.Parse(args); err != nil || *home == "" || fs.NArg() != 0 {
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
 	}
-	log := slog.New(slog.NewTextHandler(stderr, nil))
+	out := stderr
+	if *logFile != "" {
+		f, err := openLog(*logFile)
+		if err != nil {
+			fmt.Fprintln(stderr, "aicrew-agent serve: the log file:", err)
+			return exitFailed
+		}
+		defer f.Close()
+		out = io.MultiWriter(stderr, f)
+	}
+	log := slog.New(slog.NewTextHandler(out, nil))
 	cfg, err := agent.LoadConfig(*home)
 	if err != nil {
 		log.Error("configuration refused", "error", err.Error())
@@ -144,6 +161,21 @@ func serveHome(ctx context.Context, args []string, stderr io.Writer, sigs <-chan
 		log.Error("client refused", "error", err.Error())
 		return exitFailed
 	}
+	if agent.ReadWakeSettings(cfg.Home).Mode == agent.WakeTurns {
+		// One serve per home, whoever starts it: a second would fence the
+		// first's session. Exit 2 keeps a service from restarting into it.
+		release, err := service.HoldServe(cfg.Home)
+		var running *service.ServingError
+		if errors.As(err, &running) {
+			log.Error(running.Error())
+			return exitUsage
+		}
+		if err != nil {
+			log.Error("the serve lock", "error", err.Error())
+			return exitFailed
+		}
+		defer release()
+	}
 	err = agent.ServeHome(ctx, e, path, sigs)
 	if errors.Is(err, agent.ErrNotTurnsHome) {
 		log.Error(err.Error())
@@ -153,6 +185,9 @@ func serveHome(ctx context.Context, args []string, stderr io.Writer, sigs <-chan
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "service" {
+		os.Exit(serviceCmd(context.Background(), os.Args[2:], os.Stdout, os.Stderr, os.Getenv))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
 		sigs := make(chan os.Signal, 4)
 		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
@@ -186,7 +221,7 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "join" {
 		os.Exit(join(context.Background(), os.Args[2:], agent.IsTerminal(os.Stdin), os.Stdout, os.Stderr,
-			joinDeps(os.Stderr)))
+			joinDeps(os.Stderr), realInstallService(os.Getenv)))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "clone" {
 		os.Exit(clone(context.Background(), os.Args[2:], os.Stdout, os.Stderr, os.Getenv))
@@ -330,6 +365,15 @@ func status(ctx context.Context, cfg agent.Config, stdout io.Writer, log *slog.L
 	out, _ := json.MarshalIndent(view, "", "  ")
 	fmt.Fprintln(stdout, string(out))
 	return exitOK
+}
+
+// openLog opens a log file for appending, owner-only, creating its
+// directory.
+func openLog(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 }
 
 func finish(log *slog.Logger, err error) int {

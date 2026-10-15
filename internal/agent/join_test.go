@@ -388,6 +388,12 @@ func TestStartCommandIsDocumented(t *testing.T) {
 	if !strings.Contains(dev, "### Starting a member\n") || !strings.Contains(dev, "\n"+StartCommand("HOME", []string{"claude"})+"\n") {
 		t.Errorf("DEVELOPMENT's \"Starting a member\" does not show %q", StartCommand("HOME", []string{"claude"}))
 	}
+	if got, want := ServiceCommand("/x/my home"), `aicrew-agent service install --home "/x/my home"`; got != want {
+		t.Fatalf("ServiceCommand = %q, want %q", got, want)
+	}
+	if !strings.Contains(dev, "\n"+ServiceCommand("HOME")+"\n") {
+		t.Errorf("DEVELOPMENT's \"Starting a member\" does not show %q", ServiceCommand("HOME"))
+	}
 	if !strings.Contains(startMD, startCommand("<client>", "<this directory>")) {
 		t.Errorf("START.md does not name %q", startCommand("<client>", "<this directory>"))
 	}

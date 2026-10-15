@@ -13,12 +13,15 @@
 # neither. It installs the binaries and nothing else:
 # no agent home, no join, no client settings, no file outside the bin
 # directory. After a first install, run `aicrew-agent join` (or rerun it
-# for an existing home, so its Stop hook names this binary).
+# for an existing home, so its Stop hook names this binary). A member home
+# in turns mode runs as a service (aicrew-agent service): an upgrade stops
+# every home's service before the swap and starts it again after.
 #
 # Environment knobs:
 #   AICREW_BIN_DIR=~/.local/bin     where aicrew-agent and aicrew go
 #   AICREW_VERSION=vX.Y.Z           install another release than RELEASE
 #   AICREW_REPO=owner/name          install from a fork
+#   AICREW_NO_SERVICE=1             leave the members' services alone
 set -euo pipefail
 
 # The release this script installs. Bumped together with the CHANGELOG
@@ -89,6 +92,7 @@ fetch_and_swap() {
     chmod 755 "$tmp/$name" || return 1
   done
   mkdir -p "$BIN_DIR" || { echo "ERROR: cannot create $BIN_DIR. Nothing changed." >&2; return 1; }
+  case " $* " in *" aicrew-agent "*) svc_stop_all "$tmp/aicrew-agent" ;; esac
   for name in "$@"; do
     exe="$BIN_DIR/$name"
     old=$(installed_version "$name")
@@ -98,6 +102,7 @@ fetch_and_swap() {
     if ! { cp "$tmp/$name" "$exe.new.$$" && mv -f "$exe.new.$$" "$exe"; }; then
       rm -f "$exe.new.$$"
       echo "ERROR: cannot write $exe; the installed $name is unchanged." >&2
+      svc_start_all
       return 1
     fi
     if [ -n "$old" ]; then
@@ -106,6 +111,25 @@ fetch_and_swap() {
       echo "installed $name ${new:-$TAG} ($exe)"
     fi
   done
+  svc_start_all
+}
+# The members' services (aicrew-agent service): stop, swap, start. The new
+# aicrew-agent, still in the temporary directory, stops every registered
+# home's service before the swap; the installed one starts them again after
+# it, rewriting each definition with its own path. A home with no service,
+# or AICREW_NO_SERVICE=1, is left alone.
+SVC_STOPPED=""
+svc_stop_all() {
+  [ "${AICREW_NO_SERVICE:-}" != 1 ] || return 0
+  SVC_STOPPED=$("$1" service stop --all) ||
+    echo "warning: not every member's service stopped; the swap goes on, and each is started again after it." >&2
+  [ -z "$SVC_STOPPED" ] || printf 'stopped for the upgrade:\n%s\n' "$SVC_STOPPED"
+}
+svc_start_all() {
+  [ -n "$SVC_STOPPED" ] || return 0
+  SVC_STOPPED=""
+  "$BIN_DIR/aicrew-agent" service start --all ||
+    echo "warning: not every member's service started; see: aicrew-agent service status --all" >&2
 }
 # END install-agent
 

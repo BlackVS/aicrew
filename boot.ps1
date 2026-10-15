@@ -14,12 +14,15 @@
 # later run once nothing uses it. It installs the binaries and nothing else: no agent home, no join, no client settings, no
 # file outside the bin directory. After a first install, run
 # `aicrew-agent join` (or rerun it for an existing home, so its Stop hook
-# names this binary).
+# names this binary). A member home in turns mode runs as a service
+# (aicrew-agent service): an upgrade stops every home's service before the
+# swap and starts it again after.
 #
 # Optional environment:
 #   AICREW_BIN_DIR=...       where aicrew-agent.exe and aicrew.exe go
 #   AICREW_VERSION=vX.Y.Z    install another release than $release
 #   AICREW_REPO=owner/name   install from a fork
+#   AICREW_NO_SERVICE=1      leave the members' services alone
 $ErrorActionPreference = 'Stop'
 
 # The release this script installs. Bumped together with the CHANGELOG
@@ -57,6 +60,30 @@ function Get-Sha256([string]$Path) {
   try { return (($sha.ComputeHash($f) | ForEach-Object { $_.ToString('x2') }) -join '') }
   finally { $f.Dispose(); $sha.Dispose() }
 }
+# The members' services (aicrew-agent service): stop, swap, start. The new
+# aicrew-agent, still in the temporary directory, stops every registered
+# home's service before the swap; the installed one starts them again after
+# it, rewriting each definition with its own path. A home with no service,
+# or AICREW_NO_SERVICE=1, is left alone. Stop-MemberServices answers whether
+# any service was stopped, and so must be started again.
+function Stop-MemberServices([string]$NewExe) {
+  if ($env:AICREW_NO_SERVICE -eq '1') { return $false }
+  $out = @(& $NewExe service stop --all)
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "not every member's service stopped; the swap goes on, and each is started again after it."
+  }
+  $lines = @($out | Where-Object { $_ })
+  if ($lines.Count -eq 0) { return $false }
+  Write-Host 'stopped for the upgrade:'
+  $lines | ForEach-Object { Write-Host $_ }
+  return $true
+}
+function Start-MemberServices([string]$BinDir) {
+  & (Join-Path $BinDir 'aicrew-agent.exe') service start --all | ForEach-Object { Write-Host $_ }
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "not every member's service started; see: aicrew-agent service status --all"
+  }
+}
 function Install-Agent([string]$Tag, [string]$DlBase, [string]$BinDir) {
   $todo = @()
   foreach ($name in @('aicrew-agent', 'aicrew')) {
@@ -91,6 +118,8 @@ function Install-Agent([string]$Tag, [string]$DlBase, [string]$BinDir) {
       }
     }
     New-Item -ItemType Directory -Force $BinDir | Out-Null
+    $stopped = $false
+    if ($todo -contains 'aicrew-agent') { $stopped = Stop-MemberServices (Join-Path $tmp 'aicrew-agent-windows-amd64.exe') }
     foreach ($name in $todo) {
       $exe = Join-Path $BinDir "$name.exe"
       $dl = Join-Path $tmp "$name-windows-amd64.exe"
@@ -108,12 +137,14 @@ function Install-Agent([string]$Tag, [string]$DlBase, [string]$BinDir) {
       try { Copy-Item $dl $exe }
       catch {
         if ($aside) { Rename-Item $aside "$name.exe" }
+        if ($stopped) { Start-MemberServices $BinDir }
         throw "cannot write $exe ($($_.Exception.Message)); the previous $name is back."
       }
       $shownNew = if ($new) { $new } else { $Tag }
       if ($old) { Write-Host "upgraded $name $old -> $shownNew ($exe)" }
       else { Write-Host "installed $name $shownNew ($exe)" }
     }
+    if ($stopped) { Start-MemberServices $BinDir }
   } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
   }

@@ -612,6 +612,9 @@ func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error)
 	rep := JoinReport{Status: JoinReady, Home: o.Home, AgentID: str(j.doc.aicrew, "agent_id"),
 		TeamID: str(j.doc.aicrew, "team_id"), Redeemed: redeemed, Changes: plan,
 		Next: StartCommand(o.Home, slices.Concat(o.Clients, j.doc.clients()))}
+	if ReadWakeSettings(o.Home).Mode == WakeTurns {
+		rep.Next = ServiceCommand(o.Home)
+	}
 	if replaced {
 		rep.Status = JoinRestartRequired
 		rep.Instruction = "managed guidance changed: restart any client already open in this home"
@@ -671,6 +674,13 @@ func StartCommand(home string, clients []string) string {
 		client = clients[0]
 	}
 	return startCommand(client, quoteArg(home))
+}
+
+// ServiceCommand starts a member whose home is in turns mode: its turn
+// loop as a service of the member's account (DEVELOPMENT, "Starting a
+// member"). join runs it itself unless asked not to.
+func ServiceCommand(home string) string {
+	return "aicrew-agent service install --home " + quoteArg(home)
 }
 
 func startCommand(client, home string) string {

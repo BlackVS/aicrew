@@ -47,7 +47,7 @@ func TestJoinUsage(t *testing.T) {
 			"-tls-trust-value", "aicrew.example", "-aimem-hub", "main", "-client", "claude"},
 	} {
 		var out, errb bytes.Buffer
-		if code := join(context.Background(), args, true, &out, &errb, noJoinDeps(t)); code != exitUsage {
+		if code := join(context.Background(), args, true, &out, &errb, noJoinDeps(t), nil); code != exitUsage {
 			t.Errorf("%v: exit %d (%s)", args, code, errb.String())
 		}
 	}
@@ -62,7 +62,7 @@ func TestJoinCommand(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "h")
 	var out, errb bytes.Buffer
 	code := join(context.Background(), append([]string{"-home", home, "-json"}, joinFlags...), false, &out, &errb,
-		noJoinDeps(t))
+		noJoinDeps(t), nil)
 	var rep agent.JoinReport
 	if code != exitFailed || json.Unmarshal(out.Bytes(), &rep) != nil || rep.Reason != "no_terminal" {
 		t.Fatalf("off a terminal: exit %d, %s %s", code, out.String(), errb.String())
@@ -79,7 +79,7 @@ func TestJoinCommand(t *testing.T) {
 	// managed files, and the check stops it until a client is selected,
 	// before asking any client anything.
 	out.Reset()
-	if code := join(context.Background(), []string{"-home", home}, false, &out, &errb, noJoinDeps(t)); code != exitFailed {
+	if code := join(context.Background(), []string{"-home", home}, false, &out, &errb, noJoinDeps(t), nil); code != exitFailed {
 		t.Fatalf("refresh: exit %d, %s %s", code, out.String(), errb.String())
 	}
 	if !bytes.Contains(out.Bytes(), []byte("status: blocked")) || !bytes.Contains(out.Bytes(), []byte("-client claude")) {
@@ -90,7 +90,7 @@ func TestJoinCommand(t *testing.T) {
 	}
 	out.Reset()
 	code = join(context.Background(), []string{"-home", home, "-url", "https://other.example"}, false, &out, &errb,
-		noJoinDeps(t))
+		noJoinDeps(t), nil)
 	if code != exitFailed || !bytes.Contains(out.Bytes(), []byte("home_linked")) {
 		t.Fatalf("another binding: exit %d, %s", code, out.String())
 	}
@@ -102,7 +102,7 @@ func TestJoinCredNeverEchoed(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "h")
 	var out, errb bytes.Buffer
 	args := append([]string{"--home", home, "--cred", "github.com=ghp_notafile_secret"}, joinFlags...)
-	if code := join(context.Background(), args, true, &out, &errb, noJoinDeps(t)); code != exitUsage ||
+	if code := join(context.Background(), args, true, &out, &errb, noJoinDeps(t), nil); code != exitUsage ||
 		strings.Contains(errb.String()+out.String(), "ghp_notafile_secret") || !strings.Contains(errb.String(), "never a token") {
 		t.Fatalf("exit %d: %q", code, errb.String())
 	}

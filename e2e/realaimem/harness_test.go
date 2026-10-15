@@ -326,6 +326,8 @@ func (h *harness) isolatedEnv(dir string, extra ...string) []string {
 		"TMPDIR=" + h.mkdir(filepath.Join(dir, "tmp")),
 		"AIMEM_STATE_DIR=" + h.mkdir(filepath.Join(dir, "aimem")),
 		"AIMEM_SOCKET=" + filepath.Join(dir, "a.sock"),
+		// join registers no service of the user's account for a run's home.
+		"AICREW_NO_SERVICE=1",
 	}
 	env = append(env, extra...)
 	h.checkIsolated(env)

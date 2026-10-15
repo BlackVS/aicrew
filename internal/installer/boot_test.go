@@ -117,19 +117,29 @@ func files(t *testing.T, root string) []string {
 // directory.
 type bootRun func(t *testing.T, rel, tag string) (string, int)
 
-func bootSh(home, binDir, tmp string) bootRun {
+// serviceEnv keeps the installed aicrew-agent off the user's own service
+// registry: a test's registry is a file under its home, which a registry
+// never read is not created as.
+func serviceEnv(home string) string {
+	return "AICREW_SERVICE_REGISTRY=" + filepath.Join(home, "services.json")
+}
+
+// bootSh and bootPs1 run the boot script's install step; env is added to
+// its environment.
+func bootSh(home, binDir, tmp string, env ...string) bootRun {
 	return func(t *testing.T, rel, tag string) (string, int) {
 		t.Helper()
 		text := "set -euo pipefail\n" + extractFrom(t, "boot.sh", "install-agent") + "install_agent\n"
 		cmd := exec.Command("bash", "-c", text)
 		cmd.Dir = home
 		cmd.Env = append(os.Environ(), "HOME="+home, "TMPDIR="+tmp, "TAG="+tag, "DL_BASE="+fileURL(rel),
-			"BIN_DIR="+binDir, "OS="+runtime.GOOS, "ARCH="+runtime.GOARCH)
+			"BIN_DIR="+binDir, "OS="+runtime.GOOS, "ARCH="+runtime.GOARCH, serviceEnv(home))
+		cmd.Env = append(cmd.Env, env...)
 		return combined(t, cmd)
 	}
 }
 
-func bootPs1(home, binDir, tmp string) bootRun {
+func bootPs1(home, binDir, tmp string, env ...string) bootRun {
 	return func(t *testing.T, rel, tag string) (string, int) {
 		t.Helper()
 		script := filepath.Join(t.TempDir(), "run.ps1")
@@ -144,7 +154,8 @@ func bootPs1(home, binDir, tmp string) bootRun {
 		// HOME and USERPROFILE stay the real ones: PowerShell itself keeps
 		// startup data there. The script writes only into binDir, and runs
 		// from home as its working directory.
-		cmd.Env = append(os.Environ(), "TEMP="+tmp, "TMP="+tmp)
+		cmd.Env = append(os.Environ(), "TEMP="+tmp, "TMP="+tmp, serviceEnv(home))
+		cmd.Env = append(cmd.Env, env...)
 		return combined(t, cmd)
 	}
 }
@@ -335,5 +346,101 @@ func TestBootPs1VersionRead(t *testing.T) {
 		if code != 0 || strings.TrimSpace(out) != c.want {
 			t.Errorf("linger %sms, exit %s: read %q (exit %d), want %s", c.linger, c.exit, strings.TrimSpace(out), code, c.want)
 		}
+	}
+}
+
+// stubRelease is a release directory whose aicrew-agent and aicrew are
+// stubagent stamped with version.
+func stubRelease(t *testing.T, version string) string {
+	t.Helper()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go toolchain to build the stub")
+	}
+	built := filepath.Join(t.TempDir(), "stubagent")
+	cmd := exec.Command("go", "build", "-o", built, "-ldflags", "-X main.version="+version,
+		"./internal/installer/testdata/stubagent")
+	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build the stub: %v\n%s", err, out)
+	}
+	b, err := os.ReadFile(built)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	h := sha256.Sum256(b)
+	var sums strings.Builder
+	for _, binary := range memberBinaries {
+		if err := os.WriteFile(filepath.Join(dir, asset(binary)), b, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		sums.WriteString(hex.EncodeToString(h[:]) + "  " + asset(binary) + "\n")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(sums.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// The boot script stops the members' services with the new aicrew-agent,
+// still in its temporary directory, before the swap, and starts them again
+// with the installed one after it; with no service stopped it starts none,
+// and AICREW_NO_SERVICE=1 or a current release leaves them alone.
+func TestBootRestartsTheServices(t *testing.T) {
+	home, tmp := t.TempDir(), t.TempDir()
+	bin := filepath.Join(home, "bin")
+	stubLog := filepath.Join(t.TempDir(), "service.log")
+	var boot func(home, binDir, tmp string, env ...string) bootRun
+	switch runtime.GOOS {
+	case "windows":
+		if runtime.GOARCH != "amd64" {
+			t.Skip("boot.ps1 installs the windows/amd64 release only")
+		}
+		if _, err := exec.LookPath("powershell.exe"); err != nil {
+			t.Skip("no powershell.exe")
+		}
+		boot = bootPs1
+	default:
+		shellOnly(t)
+		boot = bootSh
+	}
+	read := func() []string {
+		b, _ := os.ReadFile(stubLog)
+		os.Remove(stubLog)
+		return strings.Split(strings.TrimSpace(string(b)), "\n")
+	}
+	run := func(rel, tag string, env ...string) string {
+		t.Helper()
+		out, code := boot(home, bin, tmp, append([]string{"STUB_LOG=" + stubLog}, env...)...)(t, rel, tag)
+		if code != 0 {
+			t.Fatalf("%s: exit %d:\n%s", tag, code, out)
+		}
+		return out
+	}
+
+	run(stubRelease(t, "v0.0.1"), "v0.0.1")
+	if got := read(); len(got) != 1 || !strings.HasPrefix(got[0], "v0.0.1 ") || strings.HasPrefix(got[0], "v0.0.1 bin ") ||
+		!strings.HasSuffix(got[0], " service stop --all") {
+		t.Fatalf("a first install with no service: %q", got)
+	}
+
+	out := run(stubRelease(t, "v0.0.2"), "v0.0.2", "STUB_SERVICES=1")
+	got := read()
+	if len(got) != 2 || strings.HasPrefix(got[0], "v0.0.2 bin ") || !strings.HasSuffix(got[0], " service stop --all") ||
+		got[1] != "v0.0.2 bin service start --all" {
+		t.Fatalf("an upgrade with a service: %q", got)
+	}
+	if !strings.Contains(out, "stopped for the upgrade:") || !strings.Contains(out, "aicrew-member-sol-0a1b2c3d: stopped") {
+		t.Fatalf("the upgrade did not say what it stopped:\n%s", out)
+	}
+
+	run(stubRelease(t, "v0.0.2"), "v0.0.2", "STUB_SERVICES=1")
+	if got := read(); len(got) != 1 || got[0] != "" {
+		t.Fatalf("a current release touched the services: %q", got)
+	}
+	run(stubRelease(t, "v0.0.3"), "v0.0.3", "STUB_SERVICES=1", "AICREW_NO_SERVICE=1")
+	if got := read(); len(got) != 1 || got[0] != "" {
+		t.Fatalf("AICREW_NO_SERVICE=1 touched the services: %q", got)
 	}
 }

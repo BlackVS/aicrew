@@ -1010,6 +1010,78 @@ is the command `join` prints and the home's `docs/START.md` names.
 `aicrew-agent session start` is not a way to start a member: it holds the
 session with no client, and says so.
 
+A home in `turns` mode (`join --wake turns`, "The turn loop" below) runs
+without a terminal, as a service of the member's account:
+
+```sh
+aicrew-agent service install --home HOME
+```
+
+`join` runs it itself for a ready home in `turns` mode, so the member is
+already running when `join` ends, and says so; `join --no-service` or
+`AICREW_NO_SERVICE=1` leaves it out, and `join` then prints this command.
+
+### The member's service: `aicrew-agent service`
+
+A member started in a terminal lives as long as the window. Its service
+outlives the window, and starts again at the next login and after a
+failure:
+
+```sh
+aicrew-agent service install|uninstall|start|stop|restart|status (--home HOME | --all) [--json]
+```
+
+- **One service per home**, named `aicrew-member-<label>-<8 hex digits of
+  the home path's hash>`. It runs `aicrew-agent serve --home HOME --log
+  HOME/logs/serve.log` under the member's own account, with no elevation:
+  - **Linux:** a systemd user unit,
+    `~/.config/systemd/user/<name>.service`, enabled for the user's login.
+    It restarts the serve after a failure, but not after a refusal (exit
+    2). The unit carries the `PATH` `install` ran with, on which the serve
+    finds `claude` and `aimem`; rerun `install` after it changes. **The user
+    manager stops at the last logout** unless lingering is on;
+    `install` notes when it is off. To keep the member running without a
+    login, as the hub's service does: `loginctl enable-linger USER`.
+  - **macOS:** a launchd agent,
+    `~/Library/LaunchAgents/io.github.blackvs.aicrew.<name>.plist`, loaded
+    in the user's login session (`gui/UID`), with the same `PATH`. Without
+    a login session (an ssh login with nobody at the console) it is
+    written, and loads at the next login.
+  - **Windows:** a logon task, `\aicrew\<name>`, registered from its
+    definition in `%APPDATA%\aicrew\tasks\<name>.xml`. It runs
+    `conhost.exe --headless` around the serve, so no window opens, with
+    the member's interactive token and no elevation, and never twice at
+    once.
+- **The verbs.** `install` writes and registers the service and starts it;
+  rerun, it rewrites the definition from the current binary and `PATH`,
+  which a running service takes at its next start (`restart` applies it
+  now). `start` does the same for an installed service. `stop` stops it until
+  the next login or `start`; `restart` is both. `uninstall` stops and
+  removes it. `status` says `running` (with the serve's process ID),
+  `stopped`, `not installed`, or `started by hand`. `--all` acts on every
+  home with a service, as listed in the user's registry
+  (`<user config directory>/aicrew/services.json`).
+- **One serve per home.** `serve` holds `state/serve.lock` for its whole
+  life and records its process ID in `state/serve.pid`. A second `serve`
+  of the same home, from a terminal or a service, is refused (exit 2), so
+  two never fence each other's session.
+- **A serve started by hand** is reported, never duplicated: `install` and
+  `start` refuse while one runs and the service does not, and say to stop
+  it (Ctrl-C in its terminal) and then run `aicrew-agent service start
+  --home HOME`. `stop` leaves it running.
+- **Stopping.** systemd and launchd send the serve SIGTERM, which stops a
+  running turn, records it, and leaves the session. Ending a Windows task
+  ends only its `conhost`, so `stop` then ends the serve's own process, by
+  the ID the serve recorded while it holds the lock, never by name. That
+  ends the process without leaving the session; the next start resumes it
+  with a new proof, and records a turn it found running as `interrupted`.
+- **`check`** reports the home's service: `service: NAME: STATE (MANAGER)`,
+  with a `to do:` line when a home in `turns` mode has none, a stopped one,
+  or a serve started by hand. A `stop-hook` home uses none.
+- **Upgrades.** The member one-liner stops every registered home's service
+  before it swaps the binaries, and starts them again after
+  ("Installing and upgrading" below).
+
 ### Installing and upgrading: `boot.sh` and `boot.ps1`
 
 On a member's machine, `aicrew-agent` and the operator CLI `aicrew` are
@@ -1060,11 +1132,21 @@ So after a first install, or after moving from a copied binary, run
 `aicrew-agent join --home HOME` again for each home, so its hook names the
 installed binary. Upgrades keep the path, and the hooks keep working.
 
+**The members' services: stop, swap, start.** When the one-liner replaces
+`aicrew-agent`, the new binary, still in the temporary directory after its
+checksum passed, runs `aicrew-agent service stop --all` before the swap, and
+the installed one runs `aicrew-agent service start --all` after it, which
+also rewrites each definition with the installed path. The script prints
+the services it stopped. A machine with no service, a release that is
+already current, or `AICREW_NO_SERVICE=1` leaves them alone. A swap that
+fails starts them again on the binary that stayed.
+
 Knobs:
 - `AICREW_BIN_DIR`: another bin directory, for example to upgrade a binary
   where it already is;
 - `AICREW_VERSION`: another release than the pinned one;
-- `AICREW_REPO`: a fork.
+- `AICREW_REPO`: a fork;
+- `AICREW_NO_SERVICE=1`: leave the members' services alone.
 
 `internal/installer` checks both pins and the documented one-liners against
 the CHANGELOG, and runs both scripts' install step against a local release:
@@ -1637,8 +1719,14 @@ addition it leaves out.
 
 ```sh
 aicrew-agent join  --home H --wake turns
-aicrew-agent serve --home H
+aicrew-agent serve --home H [--log FILE]
 ```
+
+`join` installs the home's service, which runs `serve` ("The member's
+service" above); `serve` in a terminal is for a home without one. One serve
+runs per home: a second is refused while the first holds
+`state/serve.lock`. `--log` appends the log to a file as well, as the
+service does to `logs/serve.log`.
 
 `serve` runs a home in `turns` mode without a terminal
 (`docs/DESIGN-CONTROL-PLANE.md`, 1.3 to 1.10, increment A3). It holds the

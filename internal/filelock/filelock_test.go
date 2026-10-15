@@ -48,3 +48,30 @@ func TestLockExcludes(t *testing.T) {
 	}
 	u()
 }
+
+// TryLock takes a free lock at once and answers ErrBusy for a held one,
+// whether Lock or TryLock holds it.
+func TestTryLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "serve.lock")
+	unlock, err := TryLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := TryLock(path); !errors.Is(err, ErrBusy) {
+		t.Fatalf("a held lock: %v, want ErrBusy", err)
+	}
+	unlock()
+	u, err := Lock(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := TryLock(path); !errors.Is(err, ErrBusy) {
+		t.Fatalf("a lock Lock holds: %v, want ErrBusy", err)
+	}
+	u()
+	u, err = TryLock(path)
+	if err != nil {
+		t.Fatalf("a released lock: %v", err)
+	}
+	u()
+}

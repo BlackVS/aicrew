@@ -18,7 +18,7 @@ Three fixes from the pilot of 2026-10-15 and the first increment of the
 turn-economics design. A member runs as a service of its own account, so it
 outlives the terminal window and starts again at the next login (#155).
 `aicrew escalations show` and `answer` take the short ID that the operator
-pastes (#156). join and START.md name `aicrew-agent serve` as the start
+pastes (#156). join and START.md name the member's service as the start
 command of a home in turns mode (#154). A turn records its own cost and
 its metrics, and the attempt's and the day's spend add up those costs
 (#158). Before, each resumed turn added the conversation's running total
@@ -143,12 +143,15 @@ All of them use product commands and one-liners. The hub goes first.
   recorded, and a retry replayed, under the full ID. `list` still prints
   full IDs.
 
-### join names serve for a turns-mode home (#154)
+### join names the member's service for a turns-mode home (#154)
 
-- In a home joined with `--wake turns`, join's start hint, `session
-  start`'s note and the managed START.md item 6 name
-  `aicrew-agent serve --home DIR`. Before, they named `run`, which refuses
-  such a home. A home in stop-hook mode is unchanged.
+- In a home joined with `--wake turns`, the start command that join's
+  hint and `session start`'s note give is the member's service,
+  `aicrew-agent service start --home DIR`, and the managed START.md item 6
+  names `run` for a stop-hook home and the member's service, which join
+  installed, for a turns-mode home. Before, they named `run`, which
+  refuses a turns-mode home. join's own last line names the service it
+  installed (#155). A home in stop-hook mode is unchanged.
 - Existing homes get the new START.md text at their next `join`.
 
 ### A turn records its own cost and its metrics (#158)

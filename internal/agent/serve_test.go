@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -588,5 +589,83 @@ func TestTurnLoopWorkerToolchain(t *testing.T) {
 		if s := turnSettings(home, coordinator); strings.Contains(s, "go test") {
 			t.Errorf("coordinator %v: %s", coordinator, s)
 		}
+	}
+}
+
+// A Claude Code turn's total_cost_usd is the conversation's running total
+// (docs/DESIGN-TURNS.md, 2.1): a resumed turn's record and the attempt's
+// spend take only the turn's own cost, the difference since the previous
+// turn, or the price list's cost when it priced the turn. A resumed
+// conversation whose previous total was not kept leaves the turn unpriced
+// rather than charging the whole total again.
+func TestTurnLoopTurnOwnCost(t *testing.T) {
+	e := newLoopEnv(t)
+	writeAgentDoc(t, e.home, map[string]any{"turns": map[string]any{"attempt_budget_usd": 100}})
+	e.host.attempt = &memberAttempt{ID: "att-1", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-1"}}
+	e.host.pending = []PendingMessage{msg("m1", "message")}
+	results := []TurnResult{
+		{Outcome: TurnFinished, CostSource: CostClientTotal, ClientTotalUSD: 1.2, Models: []string{"m"}},
+		{Outcome: TurnFinished, CostSource: CostClientTotal, ClientTotalUSD: 2.56, Models: []string{"m"}},
+		{Outcome: TurnFinished, CostSource: CostPriceList, CostUSD: 0.13, ClientTotalUSD: 2.69,
+			Models: []string{"claude-opus-5-5"}},
+	}
+	e.next = func(TurnSpec, *fakeHost) TurnResult {
+		e.host.pending = nil
+		e.host.steps++ // progress, so no stall
+		r := results[0]
+		results = results[1:]
+		return r
+	}
+	for range 3 {
+		e.tick(t)
+	}
+	if len(e.specs) != 3 || e.specs[0].Resume || !e.specs[1].Resume || !e.specs[2].Resume {
+		t.Fatalf("three turns of one conversation: %+v", e.specs)
+	}
+	recs := e.records(t)
+	want := []struct {
+		cost   float64
+		source string
+		model  string
+	}{{1.2, CostClientTotal, "m"}, {1.36, CostClientTotal, "m"}, {0.13, CostPriceList, "claude-opus-5-5"}}
+	for i, w := range want {
+		r := recs[i]
+		if r.CostUSD != w.cost || r.CostSource != w.source || r.Model != w.model || r.Role != "worker" {
+			t.Errorf("turn %d: cost %v from %q, model %q, role %q; want %v from %q", i+1, r.CostUSD, r.CostSource,
+				r.Model, r.Role, w.cost, w.source)
+		}
+	}
+	if recs[1].ClientTotalUSD != 2.56 || recs[2].PriceList != PriceListVersion || recs[1].PriceList != "" {
+		t.Errorf("the running total and the price list are recorded as such: %+v %+v", recs[1], recs[2])
+	}
+	st := readTurnState(e.home)
+	if a := st.Attempts["att-1"]; a == nil || math.Abs(a.CostUSD-2.69) > 1e-9 {
+		t.Fatalf("the attempt spent %+v, want the sum of the turns' own costs, 2.69", st.Attempts["att-1"])
+	}
+	if day := st.Days[dayOf(e.clock)]; math.Abs(day-2.69) > 1e-9 {
+		t.Fatalf("the day spent %v, want 2.69", day)
+	}
+
+	// A state from before the running total was kept: the resumed turn's
+	// own cost is unknown, and the whole total is not charged again.
+	a := st.Attempts["att-1"]
+	a.Conversation.ClientTotalUSD = nil
+	if err := writeTurnState(e.home, st); err != nil {
+		t.Fatal(err)
+	}
+	e.host.pending = []PendingMessage{msg("m2", "message")}
+	e.next = func(TurnSpec, *fakeHost) TurnResult {
+		e.host.pending = nil
+		e.host.steps++
+		return TurnResult{Outcome: TurnFinished, CostSource: CostClientTotal, ClientTotalUSD: 3.0, Models: []string{"m"}}
+	}
+	e.tick(t)
+	recs = e.records(t)
+	if last := recs[len(recs)-1]; last.CostUSD != 0 || last.CostSource != CostUnpriced || last.ClientTotalUSD != 3.0 {
+		t.Fatalf("an unknown previous total: %+v", last)
+	}
+	if st := readTurnState(e.home); math.Abs(st.Attempts["att-1"].CostUSD-2.69) > 1e-9 ||
+		*st.Attempts["att-1"].Conversation.ClientTotalUSD != 3.0 {
+		t.Fatalf("after an unpriced turn: %+v", st.Attempts["att-1"])
 	}
 }

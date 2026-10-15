@@ -2088,6 +2088,11 @@ bin/aicrew escalations answer --id ID --decision TEXT --rationale TEXT
   credential in the token file. A team is named by its ID, because
   resolving a name reads the team routes, which an architect credential
   does not reach.
+- **The ID:** `show` and `answer` take the full ID that `list` prints, or a
+  prefix of it, such as the 13-character short form used for tasks and
+  attempts. The prefix must be at least 8 characters and start exactly
+  one escalation's ID. An ambiguous prefix is refused, and the refusal
+  lists the IDs it starts, at most 10.
 - **Once only:** an answer is recorded once.
 - **Delivery:** the answer reaches the coordinator's inbox, and the blocked
   member's, as a lifecycle message carrying the escalation. The keep-alive

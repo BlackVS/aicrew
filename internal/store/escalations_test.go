@@ -367,3 +367,79 @@ func TestOpenEscalationsPages(t *testing.T) {
 		t.Errorf("an unknown cursor: got %v, want ErrInvalid", err)
 	}
 }
+
+// show and answer take the escalation's full ID or a unique prefix of it,
+// such as the 13-character short form the operator pastes; an ambiguous
+// prefix is refused with the candidates, and a prefix too short or
+// matching nothing is not found (pilot finding 2026-10-15).
+func TestEscalationIDPrefix(t *testing.T) {
+	ctx := context.Background()
+	e := newEscTeam(t)
+	op := operator(t)
+	ids := map[string]string{
+		"one": "01a13899-71bc-7000-a000-000000000001",
+		"two": "01a13899-71bc-7000-a000-000000000002",
+		"own": "01a13899-71bd-7000-a000-000000000003",
+	}
+	for _, key := range []string{"one", "two", "own"} {
+		in := escRequest()
+		in.Question += " (" + key + ")"
+		esc, err := e.s.RaiseEscalationWithToken(ctx, "raise-"+key, e.leadTok, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.s.db.Exec(`UPDATE escalations SET id = ? WHERE id = ?`, ids[key], esc.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, ref := range []string{ids["own"], "01a13899-71bd", "01a13899-71bd-7"} {
+		got, err := e.s.GetEscalation(ctx, op, ref)
+		if err != nil || got.ID != ids["own"] {
+			t.Fatalf("show %s: %+v %v", ref, got, err)
+		}
+	}
+	got, err := e.s.GetEscalation(ctx, op, ids["one"])
+	if err != nil || got.ID != ids["one"] {
+		t.Fatalf("show by the full ID with a sibling of the same prefix: %+v %v", got, err)
+	}
+	for _, ref := range []string{"01a13899-71bc", "01a13899"} {
+		_, err := e.s.GetEscalation(ctx, op, ref)
+		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), ids["one"]) || !strings.Contains(err.Error(), ids["two"]) {
+			t.Fatalf("an ambiguous prefix %s: %v", ref, err)
+		}
+		if ref == "01a13899-71bc" && strings.Contains(err.Error(), ids["own"]) {
+			t.Fatalf("the candidates of %s list an ID it does not start: %v", ref, err)
+		}
+	}
+	for _, ref := range []string{"01a1389", "01a13899-71be", "01a13899-71bc-7000-a000-000000000009"} {
+		if _, err := e.s.GetEscalation(ctx, op, ref); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("%s: %v, want not found", ref, err)
+		}
+	}
+
+	ans := EscalationAnswer{Decision: "add it", Rationale: "r"}
+	if _, err := e.s.AnswerEscalation(ctx, op, "a-amb", "01a13899-71bc", ans); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), ids["two"]) {
+		t.Fatalf("an answer to an ambiguous prefix: %v", err)
+	}
+	if open, _ := e.s.ListEscalations(ctx, op, "", true); len(open) != 3 {
+		t.Fatalf("a refused answer changed the open list: %+v", open)
+	}
+	got, err = e.s.AnswerEscalation(ctx, op, "a-own", "01a13899-71bd", ans)
+	if err != nil || got.ID != ids["own"] || got.Answer == nil {
+		t.Fatalf("an answer by the short ID: %+v %v", got, err)
+	}
+	if again, err := e.s.AnswerEscalation(ctx, op, "a-own", ids["own"], ans); err != nil || again.ID != ids["own"] {
+		t.Fatalf("a retry by the full ID replays the answer: %+v %v", again, err)
+	}
+	got, err = e.s.AnswerEscalation(ctx, op, "a-one", ids["one"], ans)
+	if err != nil || got.ID != ids["one"] {
+		t.Fatalf("an answer by the full ID: %+v %v", got, err)
+	}
+	if open, _ := e.s.ListEscalations(ctx, op, "", true); len(open) != 1 || open[0].ID != ids["two"] {
+		t.Fatalf("open after two answers: %+v", open)
+	}
+	if _, err := e.s.AnswerEscalation(ctx, op, "a-none", "01a13899-71be", ans); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an answer to an unknown prefix: %v", err)
+	}
+}

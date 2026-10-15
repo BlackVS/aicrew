@@ -1007,7 +1007,6 @@ aicrew-agent run --client claude --home HOME
 The launcher enters the team session, starts the client in the home and
 keeps the session while the client runs ("Running aicrew-agent" below). It
 is the command `join` prints and the home's `docs/START.md` names.
-
 `aicrew-agent session start` is not a way to start a member: it holds the
 session with no client, and says so.
 

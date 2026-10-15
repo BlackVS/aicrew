@@ -59,11 +59,15 @@ bash scripts/release_test.sh           # the release script's refusals
 ```
 
 CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,
-`go-test (windows-latest)`, `go-test (macos-latest)`, `go-build`,
-`release-build`.
+`go-test (windows-latest)`, `go-test (macos-latest)`, `go-race`,
+`go-build`, and `release-build` on each of the three platforms. A pull
+request shows 11 checks, these ten and the repository's secret scan; a
+commit on main shows the ten. A head is green when all of them pass, and
+`go-race` is required beside the three `go-test` jobs.
 
-`go-test (ubuntu-latest)` also runs the agent, server and store packages
-under the race detector:
+`go-race` runs the agent, server and store packages under the race
+detector, on Linux, in its own job so that the `go-test` results do not
+wait for it:
 
 ```sh
 CGO_ENABLED=1 go test -race -count=1 ./internal/agent/ ./internal/server/ ./internal/store/

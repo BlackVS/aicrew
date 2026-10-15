@@ -69,13 +69,24 @@ jobs:
         env:
           AICREW_REAL_SERVICE: '1'
         run: go test -count=1 -v -run TestRealService ./internal/service/
-      # The race detector checks, on one OS, the packages whose goroutines
-      # share state: the launcher's step channel reads the engine's session
-      # state (agent), and the server's handlers, reconciler and logging run
-      # store commands concurrently (server, store).
+
+  # The race detector checks, on one OS, the packages whose goroutines
+  # share state: the launcher's step channel reads the engine's session
+  # state (agent), and the server's handlers, reconciler and logging run
+  # store commands concurrently (server, store). It is its own job, so the
+  # go-test results do not wait for it.
+  go-race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25'
+          cache: true
       - name: go test -race (agent, server, store)
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 30
         run: go test -race -count=1 -timeout 20m ./internal/agent/ ./internal/server/ ./internal/store/
 
   go-build:

@@ -12,6 +12,198 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.5.9] - 2026-10-15
+
+Three fixes from the pilot of 2026-10-15 and the first increment of the
+turn-economics design. A member runs as a service of its own account, so it
+outlives the terminal window and starts again at the next login (#155).
+`aicrew escalations show` and `answer` take the short ID that the operator
+pastes (#156). join and START.md name the member's service as the start
+command of a home in turns mode (#154). A turn records its own cost and
+its metrics, and the attempt's and the day's spend add up those costs
+(#158). Before, each resumed turn added the conversation's running total
+again.
+
+No store schema change. The hub goes first, because the short IDs are
+resolved on aicrewd. The pilot team stays paused: nothing in this release
+resumes it, and a member's loop gives no turn while its team is paused.
+
+### Breaking changes
+
+- **A turn's spend changes meaning** (#158). `cost_usd` in a turn record
+  is now the turn's own cost. Before 0.5.9 it was the conversation's
+  running total, and the attempt's and the day's sums added those totals.
+  Records written before the upgrade are not rewritten, so the sums in
+  `state/turns.json` keep their inflated values until the attempt closes
+  or the UTC day ends. The upgrade steps below say how to clear a hold
+  that the old counting caused.
+- **`aicrew-agent serve` refuses a second serve of the same home** with
+  exit 2 (#155). Stop a serve started by hand before installing the
+  home's service.
+- aimem 0.10.0 stays required.
+
+### Upgrade steps
+
+All of them use product commands and one-liners. The hub goes first.
+
+1. **aicrewd.** On the hub host, as root, run the hub one-liner:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.9/install-aicrewd.sh | bash
+   ```
+
+   As before, it backs up the configuration and the store, swaps the
+   binaries, waits for health at 0.5.9, and rolls back if the new release
+   does not come up. The store stays at schema 32. The escalation routes
+   now take a short ID.
+2. **The operator's machine and each member.** As that user, rerun the
+   member one-liner:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.9/boot.sh | bash
+     ```
+
+   - Windows:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.5.9/boot.ps1 | iex"
+     ```
+
+   From this release on, the one-liner stops the account's registered
+   member services before it swaps the binaries and starts them again
+   after. On a machine upgraded from 0.5.8 no service is registered yet,
+   so this run changes only the binaries.
+3. **A service for an existing turns-mode home.** A home that joined with
+   `--wake turns` before 0.5.9 has no service. Give it one, once:
+
+   ```sh
+   aicrew-agent service install --home HOME
+   ```
+
+   Rerunning `aicrew-agent join --home HOME` does the same, and join does
+   it for every new home in turns mode. First stop a serve started by hand
+   in a terminal (Ctrl-C), since `install` refuses while one runs. On
+   Linux, a member that must keep running without a login also needs
+   `loginctl enable-linger USER`. `aicrew-agent check` reports the service
+   and says what is left to do. A home of a paused team can get its
+   service now: its loop starts and waits, and gives no turn until the
+   operator resumes the team. A home in stop-hook mode uses no service.
+4. **A hold from the old counting.** A home whose attempt or daily spend
+   was inflated by the old counting clears its hold with the knobs, never
+   by editing the state, as DEVELOPMENT ("The turn loop") describes:
+   - an attempt hold: raise `turns.attempt_budget_usd` in the home's
+     `agent.json` above the recorded sum. The loop checks the hold again
+     within the hour, and the next attempt starts at zero;
+   - a daily hold: it clears at the next UTC day.
+
+   The real cost of the old turns is in their records: the difference
+   between consecutive `cost_usd` values of one conversation.
+
+### A member runs as a user service (#155)
+
+- **`aicrew-agent service install|uninstall|start|stop|restart|status
+  (--home HOME | --all) [--json]`** runs a home's turn loop as a service of
+  the member's own account, with no elevation. Each home gets one service,
+  `aicrew-member-<label>-<hash of the home path>`, listed in a per-user
+  registry for `--all`.
+  - **Linux:** a systemd user unit. It restarts the loop after a failure
+    but not after a refusal (exit 2), and carries the `PATH` that
+    `install` ran with. `install` notes when lingering is off.
+  - **macOS:** a launchd agent with `RunAtLoad`, kept alive after a
+    failure.
+  - **Windows:** a logon task that runs the loop windowless through
+    `conhost --headless`, with the member's interactive token, never twice
+    at once.
+- **join** installs and starts the service of a ready home in turns mode.
+  `--no-service` or `AICREW_NO_SERVICE=1` leaves it out. join's last line
+  names the service.
+- **One serve per home.** `serve` holds `state/serve.lock` for its whole
+  life and records its process ID in `state/serve.pid`. A second serve of
+  the same home is refused. Ending a Windows task leaves its child
+  running, so there `stop` ends the serve's own recorded process, never
+  one found by name. `serve --log FILE` also writes the log to a
+  file; the service uses `logs/serve.log`.
+- **The member one-liner** (`boot.sh`, `boot.ps1`) stops the registered
+  services with the new binary, swaps the binaries, and starts the
+  services with the installed one, which rewrites each definition with its
+  own path. `AICREW_NO_SERVICE=1` leaves them alone.
+- **`check`** reports the home's service, with a `to do:` line when a home
+  in turns mode has none, a stopped one, or a serve started by hand.
+
+### Escalations take the short ID (#156)
+
+- `aicrew escalations show` and `answer` take the full ID or a prefix of
+  at least 8 characters, such as the 13-character short form that the
+  rest of the product prints.
+- A prefix that starts more than one escalation's ID is refused as
+  `invalid_request`, with the IDs it starts (at most 10). A shorter prefix,
+  or one that starts no ID, is `not_found`, as before.
+- aicrewd resolves the prefix before it reads or answers, so an answer is
+  recorded, and a retry replayed, under the full ID. `list` still prints
+  full IDs.
+
+### join names the member's service for a turns-mode home (#154)
+
+- In a home joined with `--wake turns`, the start command that join's
+  hint and `session start`'s note give is the member's service,
+  `aicrew-agent service start --home DIR`, and the managed START.md item 6
+  names `run` for a stop-hook home and the member's service, which join
+  installed, for a turns-mode home. Before, they named `run`, which
+  refuses a turns-mode home. join's own last line names the service it
+  installed (#155). A home in stop-hook mode is unchanged.
+- Existing homes get the new START.md text at their next `join`.
+
+### A turn records its own cost and its metrics (#158)
+
+The first increment of `docs/DESIGN-TURNS.md`. Claude Code's result
+reports `total_cost_usd` and `modelUsage` as running totals of the whole
+conversation; only `usage` is the turn's own.
+
+- **A price list** of confirmed prices only. Today that is
+  `claude-opus-5-5`: $4, $20, $0.20 and $8 per million tokens for input,
+  output, cache read and 1-hour cache write.
+- **A turn's own cost** comes from one of three sources, recorded as
+  `cost_source`:
+  - `price_list`: the turn's own calls used one priced model, so the cost
+    is its own `usage` at list prices. `price_list` names the list's
+    version;
+  - `client_total`: otherwise, the difference of the client's running
+    total since the conversation's previous turn, which the conversation's
+    state now keeps;
+  - `unpriced`: a resumed conversation started before 0.5.9, whose
+    previous total is unknown. The cost is 0, and the loop does not charge
+    the whole total again.
+- **The client's own figure** is kept as `client_total_usd` and never
+  summed. When both are known and they differ by more than one cent, the
+  loop logs it.
+- **The turn record** also carries the role and the client, the models the
+  turn's own calls used, the tokens by kind with the cache write split
+  into 5-minute and 1-hour writes, the wall time (`duration_ms`), the
+  steps and the outcome.
+- **The sums.** The attempt's and the day's spend add up the turns' own
+  costs.
+
+### Docs
+
+- **`docs/DESIGN-TURNS.md`** (#157): the turn-economics design. The model
+  writes and decides, aicrewd drives the workflow. It sets the increments
+  that follow this one: the event core, the Starlark sandbox with its
+  defaults, stateless turns, model tiers, the coordinator's policy, and
+  cost as a figure.
+- **DEVELOPMENT:** "The member's service", the one-liner's stop, swap,
+  start, the turn record's cost fields and how to clear a hold from the old
+  counting. WORKSPACE lists `state/serve.lock`, `state/serve.pid` and
+  `logs/serve.log`.
+
+### Supported and pinned versions
+
+- **Unchanged:** aimem 0.10.0 (the minimum and the tested release),
+  ai-skills 1.26.1, Claude Code 2.1.283 to 2.1.286 tested, and OpenCode
+  1.18.32 or 2.0.18 to 2.0.19 tested.
+- **The one-liners** (`install-aicrewd.sh`, `boot.sh` and `boot.ps1`) pin
+  v0.5.9.
+
 ## [0.5.8] - 2026-10-14
 
 Two fixes from the pilot on 0.5.7. A coordinator that restarts is told the

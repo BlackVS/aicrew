@@ -634,12 +634,14 @@ covered by the host (10.3).
 
 A script defines `main(event)`, and the core calls it at the declared
 point or for a subscribed event (12.3). `event` holds the kinds and IDs of
-the events the run covers. The host gives the script these values and
+the events the run covers. `main` returns `None` when the event is handled,
+or a `turn(...)` value when judgement is needed (12.3). Anything worth
+recording on the way goes through `step`. The host gives the script these values and
 functions, and nothing else.
 
 | Name | What it does |
 | --- | --- |
-| `pr()` | The pull request's state from the launcher's facts (4.1): `number`, `head`, `base`, `branch`, `behind`, `draft`, `labels`, `reviews` (local and external, each with its head and verdict), `checks` (name and conclusion), `mergeable`. |
+| `pr()` | The pull request's state from the launcher's facts (4.1): `number`, `head`, `base`, `branch`, `behind`, `draft`, `labels`, `mergeable`; `reviews`, local and external, each with its head, its verdict, its findings and its body (bounded to 16 KiB); `checks`, each with its name and conclusion, and for a failed job its log excerpt (bounded to 8 KiB, as in section 5). |
 | `attempt()` | The attempt's state: `id`, `phase`, `task` (`id`, `size`), `base_commit`, `spent_usd`, `budget_usd`. |
 | `run(cmd, args)` | Runs one command, with an argument list and no shell. It runs in the attempt's worktree, under the member's account, within the turn's allow list. It returns `exit` and `output`, the output bounded to 64 KiB. A command outside the allow list fails the script. |
 | `step(kind, text)` | Records a step of the attempt. A kind the state machine knows, such as `update_conflict`, moves it, for example to an action needed. |
@@ -696,36 +698,36 @@ def identity(base):
 
 def main(event):
     p = pr()
-    if not p.behind:
-        return "up to date"
-    if "hands-reviewing" in p.labels:
-        return "the reviewer is reading this head; the next point retries"
+    if not p.behind or "hands-reviewing" in p.labels:
+        return None  # up to date, or the reviewer is reading: a later event retries
     base = "origin/" + p.base
     before = identity(base)
     if run("git", ["fetch", "origin", p.base]).exit != 0:
         fail("fetch " + p.base)
-    if run("git", ["merge", "--no-edit", base]).exit != 0:
+    merge = run("git", ["merge", "--no-edit", base])
+    if merge.exit != 0:
         run("git", ["merge", "--abort"])
         step("update_conflict", "merging %s into %s conflicts" % (p.base, p.branch))
-        return "conflict: action needed"
+        return turn("fix", "Updating %s from %s conflicts:\n%s" % (p.branch, p.base, merge.output))
     after = identity(base)
     if after != before:
         run("git", ["reset", "--keep", p.head])
         step("update_changed_patch", "identity %s became %s" % (before, after))
-        return "patch changed: action needed"
+        return turn("fix", "Updating from %s changes the patch identity; update the branch by hand." % p.base)
     new = run("git", ["rev-parse", "HEAD"]).output.strip()
     if run("git", ["push", "origin", "HEAD:" + p.branch]).exit != 0:
         run("git", ["reset", "--keep", p.head])
         step("update_push_refused", "the branch moved during the update")
-        return "push refused"
+        return None  # the new head is an event of its own
     comment(NOTE.format(old = p.head, new = new, base = base, id = after))
     step("base_update", "%s -> %s, identity %s" % (p.head, new, after))
-    return "updated"
+    return None
 ```
 
 The script is about 40 lines, and a reviewer reads it in a minute.
-- **What it calls:** six host calls of four kinds (`pr`, `run`, `step` and
-  `comment`).
+- **What it calls:** the host calls `pr`, `run`, `step` and `comment`. It
+  returns `None` when the update is done or not needed, and `turn("fix", ...)`
+  with the conflict when the worker must decide.
 - **What `run` needs:** `bash scripts/...` and five `git` subcommands, all of
   which the allow list must admit, and the reviewer sees each one.
 - **How it is tested:** with a fake host in Go. The tests cover the behind
@@ -872,9 +874,16 @@ and returns can run in aicrewd, in the same sandbox.
   steps, and the commit of the script and subscription that handled it.
   - **Replay:** after a crash or a lost connection, the pending events are
     run again, from the journal.
-  - **Idempotent handlers:** the handlers are idempotent because they read
-    the current state. The base update of 10.4 does nothing on a branch
-    already up to date.
+  - **Idempotent handlers:** a handler reads the current state, so a
+    replay does not repeat an effect the state already shows. The base
+    update of 10.4 does not merge again into a branch that is up to date.
+  - **A crash between two effects is not covered by reading the state
+    alone.** If the push succeeded and the run stopped before its comment
+    and step, the replay sees an up-to-date branch and returns. The delta
+    note is then missing. Increment 2 specifies the recovery before it
+    ships `base-update`, with a fake-host test that crashes between the
+    push and the comment. The likely shape: the host records each effect of
+    a run, and a replay of the same run completes the missing ones.
 - **Failure.** A handler that fails three times in a row parks its events
   and sends one action-needed message to the coordinator, naming the
   handler, the subject and the last error. The events are not dropped, and

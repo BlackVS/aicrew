@@ -98,10 +98,18 @@ func TestEscalationRoutes(t *testing.T) {
 	if got := e.adminCall(t, http.MethodGet, opapi.EscalationPath, cred.Bearer, url.Values{"id": {id}}, nil, &one); got.status != http.StatusOK || one.ID != id {
 		t.Fatalf("the architect reads: %d %s", got.status, got.raw)
 	}
+	// The short form the operator pastes names it too (pilot finding
+	// 2026-10-15); a prefix of no escalation is not found.
+	short := id[:13]
+	if got := e.adminCall(t, http.MethodGet, opapi.EscalationPath, cred.Bearer, url.Values{"id": {short}}, nil, &one); got.status != http.StatusOK || one.ID != id {
+		t.Fatalf("the architect reads by the short ID: %d %s", got.status, got.raw)
+	}
+	adminRefused(t, e.adminCall(t, http.MethodGet, opapi.EscalationPath, cred.Bearer, url.Values{"id": {"ffffffff-ffff"}}, nil, nil),
+		http.StatusNotFound, opapi.CodeNotFound)
 	var answered opapi.Escalation
-	ans := opapi.AnswerRequest{ID: id, Decision: "add it", Rationale: "criterion 2 stands"}
+	ans := opapi.AnswerRequest{ID: short, Decision: "add it", Rationale: "criterion 2 stands"}
 	if got := e.adminCall(t, http.MethodPost, opapi.EscalationAnswerPath, cred.Bearer, nil, ans, &answered); got.status != http.StatusOK ||
-		answered.Answer == nil || answered.Answer.AnsweredBy != "architect:"+cred.ID {
+		answered.ID != id || answered.Answer == nil || answered.Answer.AnsweredBy != "architect:"+cred.ID {
 		t.Fatalf("the architect answers: %d %s", got.status, got.raw)
 	}
 	adminRefused(t, e.adminCall(t, http.MethodPost, opapi.EscalationAnswerPath, e.opToken, nil, ans, nil),

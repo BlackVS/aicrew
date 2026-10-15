@@ -60,7 +60,9 @@ type TurnResult struct {
 	// ClientTotalUSD is the client's own running total of the
 	// conversation, as it reported it.
 	ClientTotalUSD float64
-	// Models are the models the turn used, sorted.
+	// Models are the models the turn's own model calls used, sorted: from
+	// its assistant events, since modelUsage names every model of the
+	// conversation so far.
 	Models  []string
 	Denials []string
 	Summary string
@@ -173,8 +175,9 @@ type streamEvent struct {
 		Status   string `json:"status"`
 		ResetsAt int64  `json:"resetsAt"`
 	} `json:"rate_limit_info"`
-	// assistant: the model call's usage
+	// assistant: the model call's model and usage
 	Message *struct {
+		Model string `json:"model"`
 		Usage *struct {
 			Input      int64 `json:"input_tokens"`
 			CacheRead  int64 `json:"cache_read_input_tokens"`
@@ -221,6 +224,7 @@ func ReadTurnStream(r io.Reader, abort func()) TurnResult {
 		window   int64
 		limited  bool
 		aborted  bool
+		models   []string
 	)
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64<<10), maxStreamLine)
@@ -242,25 +246,30 @@ func ReadTurnStream(r io.Reader, abort func()) TurnResult {
 				res.ResetAt = time.Unix(ev.RateLimitInfo.ResetsAt, 0).UTC()
 			}
 			limited = ev.RateLimitInfo.Status != "" && ev.RateLimitInfo.Status != "allowed"
-		case ev.Type == "assistant" && ev.Message != nil && ev.Message.Usage != nil:
-			u := ev.Message.Usage
-			lastCall = u.Input + u.CacheRead + u.CacheWrite
+		case ev.Type == "assistant" && ev.Message != nil:
+			if u := ev.Message.Usage; u != nil {
+				lastCall = u.Input + u.CacheRead + u.CacheWrite
+			}
+			if m := ev.Message.Model; m != "" && !slices.Contains(models, m) {
+				models = append(models, m)
+			}
 		case ev.Type == "result":
 			readResult(&res, ev, limited)
-			for model, m := range ev.ModelUsage {
+			for _, m := range ev.ModelUsage {
 				window = max(window, m.ContextWindow)
 				if res.CostBasis == "" {
 					res.CostBasis = m.CostBasis
 				}
-				res.Models = append(res.Models, model)
 			}
-			slices.Sort(res.Models)
+			slices.Sort(models)
+			res.Models = models
 			if window > 0 && lastCall > 0 {
 				res.Context = float64(lastCall) / float64(window)
 			}
 			// modelUsage and total_cost_usd are the conversation's running
-			// totals; the usage is the turn's own, so the turn is priced
-			// from it when it used one model the price list knows.
+			// totals; the usage and the assistant events are the turn's own,
+			// so the turn is priced from its usage when its own calls used
+			// one model the price list knows.
 			res.CostSource = CostClientTotal
 			if len(res.Models) == 1 {
 				if usd, ok := listCost(res.Models[0], res.Usage); ok {

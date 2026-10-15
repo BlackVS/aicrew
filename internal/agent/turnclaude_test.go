@@ -43,7 +43,7 @@ func fakeTurnMain() int {
 
 const (
 	streamInit    = `{"type":"system","subtype":"init","session_id":"s","permissionMode":"dontAsk"}`
-	streamCall    = `{"type":"assistant","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":690,"cache_creation_input_tokens":300}}}`
+	streamCall    = `{"type":"assistant","message":{"model":"m","usage":{"input_tokens":10,"cache_read_input_tokens":690,"cache_creation_input_tokens":300}}}`
 	streamAllowed = `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1800000000,"rateLimitType":"five_hour"}}`
 	streamSuccess = `{"type":"result","subtype":"success","is_error":false,"result":"Read the inbox and acknowledged one message.",` +
 		`"total_cost_usd":0.25,"usage":{"input_tokens":12,"output_tokens":40,"cache_read_input_tokens":700,"cache_creation_input_tokens":300},` +
@@ -177,25 +177,39 @@ func TestReadTurnStreamPricesTheTurn(t *testing.T) {
 		`"cache_creation":{"ephemeral_1h_input_tokens":2480,"ephemeral_5m_input_tokens":0}},` +
 		`"modelUsage":{"claude-opus-5-5":{"inputTokens":234,"outputTokens":41388,"cacheReadInputTokens":13447146,` +
 		`"cacheCreationInputTokens":517517,"costUSD":7.6582612,"contextWindow":1000000,"costBasis":"list"}}}`
-	res := ReadTurnStream(strings.NewReader(stream(result)), func() {})
+	call := `{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":3}}}`
+	res := ReadTurnStream(strings.NewReader(stream(call, call, result)), func() {})
 	if res.CostSource != CostPriceList || math.Abs(res.CostUSD-(7.6582612-7.5250528)) > 1e-6 ||
 		res.ClientTotalUSD != 7.6582612 || res.Usage.CacheWrite1h != 2480 || res.Usage.CacheWrite5m != 0 ||
 		!slices.Equal(res.Models, []string{"claude-opus-5-5"}) {
 		t.Fatalf("the turn's own cost: %+v", res)
 	}
 
+	// The models are the turn's own calls', not modelUsage's, which names
+	// every model of the conversation so far: a resumed turn on one priced
+	// model is priced even after an earlier turn used another.
+	resumed := `{"type":"result","subtype":"success","total_cost_usd":9,"usage":{"input_tokens":1000},` +
+		`"modelUsage":{"claude-opus-5-5":{},"claude-earlier":{}}}`
+	res = ReadTurnStream(strings.NewReader(stream(call, resumed)), func() {})
+	if !slices.Equal(res.Models, []string{"claude-opus-5-5"}) || res.CostSource != CostPriceList || res.CostUSD != 0.004 {
+		t.Fatalf("a resumed turn on one model after another: %+v", res)
+	}
+
 	// Without the cache-write split, or with a model the list does not
-	// price, or with two models, the list does not price the turn.
-	for name, r := range map[string]string{
-		"no split": `{"type":"result","subtype":"success","total_cost_usd":1,"usage":{"input_tokens":1,"cache_creation_input_tokens":5},` +
-			`"modelUsage":{"claude-opus-5-5":{}}}`,
-		"unpriced model": `{"type":"result","subtype":"success","total_cost_usd":1,"usage":{"input_tokens":1},"modelUsage":{"other":{}}}`,
-		"two models": `{"type":"result","subtype":"success","total_cost_usd":1,"usage":{"input_tokens":1},` +
-			`"modelUsage":{"claude-opus-5-5":{},"other":{}}}`,
-		"a 5-minute write": `{"type":"result","subtype":"success","total_cost_usd":1,"usage":{"input_tokens":1,"cache_creation_input_tokens":5,` +
-			`"cache_creation":{"ephemeral_5m_input_tokens":5}},"modelUsage":{"claude-opus-5-5":{}}}`,
+	// price, or with two models in the turn's own calls, or with no call
+	// naming a model, the list does not price the turn.
+	other := `{"type":"assistant","message":{"model":"other"}}`
+	for name, lines := range map[string][]string{
+		"no split": {call, `{"type":"result","subtype":"success","total_cost_usd":1,` +
+			`"usage":{"input_tokens":1,"cache_creation_input_tokens":5},"modelUsage":{"claude-opus-5-5":{}}}`},
+		"unpriced model": {other, `{"type":"result","subtype":"success","total_cost_usd":1,"usage":{"input_tokens":1},"modelUsage":{"other":{}}}`},
+		"two models": {call, other, `{"type":"result","subtype":"success","total_cost_usd":1,"usage":{"input_tokens":1},` +
+			`"modelUsage":{"claude-opus-5-5":{},"other":{}}}`},
+		"a 5-minute write": {call, `{"type":"result","subtype":"success","total_cost_usd":1,"usage":{"input_tokens":1,` +
+			`"cache_creation_input_tokens":5,"cache_creation":{"ephemeral_5m_input_tokens":5}},"modelUsage":{"claude-opus-5-5":{}}}`},
+		"no call": {`{"type":"result","subtype":"success","total_cost_usd":1,"usage":{"input_tokens":1},"modelUsage":{"claude-opus-5-5":{}}}`},
 	} {
-		res := ReadTurnStream(strings.NewReader(stream(r)), func() {})
+		res := ReadTurnStream(strings.NewReader(stream(lines...)), func() {})
 		if res.CostSource != CostClientTotal || res.CostUSD != 0 || res.ClientTotalUSD != 1 {
 			t.Errorf("%s: %+v", name, res)
 		}

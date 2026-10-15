@@ -220,15 +220,18 @@ Repository instructions live in each repository, not here.
    your client sees aimem's MCP server and the required skills. When
    something is missing or refused, stop and ask the operator instead of
    improvising.
-6. **The launcher holds the session.** Your client is started from a
-   terminal by ` + "`aicrew-agent run --client <client> --home <this directory>`" + `,
-   which enters the team session and keeps it while the client runs. Inside
+6. **The launcher holds the session.** In a home joined with
+   ` + "`--wake stop-hook`" + ` (the default), your client is started from a terminal by
+   ` + "`aicrew-agent run --client <client> --home <this directory>`" + `. In a home
+   joined with ` + "`--wake turns`" + `, the member's service, which join installed,
+   runs the turn loop: ` + "`aicrew-agent service start --home <this directory>`" + `.
+   Either enters the team session and keeps it while the client runs. Inside
    the client, act through ` + "`aicrew-agent inbox`" + ` and ` + "`aicrew-agent step`" + `
    (` + "`check`" + ` and ` + "`session status`" + ` only read). Never run
    ` + "`aicrew-agent session start`" + `, ` + "`session leave`" + ` or ` + "`run`" + ` from inside it:
    a new proof would fence the launcher's session and cut you off from your
    inbox, so they are refused there. To restart the session, exit the client
-   and ` + "`run`" + ` again.
+   and start it again with the same command.
 7. **Your role.** ` + "`docs/ROLES.md`" + ` teaches your role's steps, the inbox rule and
    how to write for others. Read it at the start of every session.
 8. **Your team's projects.** ` + "`aicrew-agent session status`" + ` prints your role and

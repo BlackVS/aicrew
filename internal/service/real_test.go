@@ -97,7 +97,10 @@ func TestRealService(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if st.Active == want && (st.ServePID != 0) == want && !st.HandServe {
+			// The fake serve writes its log just after it takes the lock.
+			logged, _ := os.ReadFile(LogPath(home))
+			if st.Active == want && (st.ServePID != 0) == want && !st.HandServe &&
+				(!want || strings.HasPrefix(string(logged), fmt.Sprintf("serving %d\n", st.ServePID))) {
 				return st
 			}
 			if time.Now().After(deadline) {
@@ -116,9 +119,6 @@ func TestRealService(t *testing.T) {
 		t.Fatal(err)
 	}
 	st = running(true)
-	if b, err := os.ReadFile(LogPath(home)); err != nil || !strings.HasPrefix(string(b), "serving ") {
-		t.Fatalf("the serve's log: %v %q", err, b)
-	}
 	var se *ServingError
 	if _, err := HoldServe(home); !errors.As(err, &se) || se.PID != st.ServePID {
 		t.Fatalf("a second serve beside the service's (pid %d): %v", st.ServePID, err)

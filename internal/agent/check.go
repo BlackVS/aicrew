@@ -73,6 +73,10 @@ type CheckReport struct {
 	// Projects are the team's requirements as the launcher verified and
 	// reported them (3.6); absent when no launcher serves the home.
 	Projects []CapabilityRow `json:"projects,omitempty"`
+	// Automations are the effective automations of the member's open
+	// attempt as the launcher resolved them (docs/DESIGN-TURNS.md, 13.1);
+	// absent when no launcher serves the home.
+	Automations *AutomationsReport `json:"automations,omitempty"`
 	// OperatorCLI is the operator CLI `aicrew` beside this aicrew-agent,
 	// which the member one-liners install with it. A member does not need
 	// it, so it never blocks.
@@ -300,6 +304,46 @@ func (c *checker) checkForgeCreds(ctx context.Context) {
 		}
 	}
 	c.checkProjects(ctx)
+	c.checkAutomations(ctx)
+}
+
+// AutomationsReport is the effective automations in a check: the attempt
+// they are for, empty for the release defaults alone, and the set.
+type AutomationsReport struct {
+	Attempt string `json:"attempt,omitempty"`
+	*AutomationSet
+}
+
+// checkAutomations asks the home's launcher, when one serves it, for the
+// effective automations: only the launcher reads the session's attempt. An
+// entry whose script cannot run is a notice, never a blocker.
+func (c *checker) checkAutomations(ctx context.Context) {
+	ans, err := CallStep(ctx, c.o.Home, StepCall{Op: "automations"})
+	switch {
+	case errors.Is(err, ErrNoLauncher):
+		return // checkProjects already said the launcher is not running
+	case err != nil:
+		c.notice("the launcher did not resolve the automations: " + err.Error())
+		return
+	case !ans.OK:
+		msg := ans.Status
+		if ans.Error != nil {
+			msg = ans.Error.Code + ": " + ans.Error.Message
+		}
+		c.notice("the launcher did not resolve the automations: " + msg)
+		return
+	}
+	var rep AutomationsReport
+	if err := json.Unmarshal(ans.Result, &rep); err != nil || rep.AutomationSet == nil {
+		c.notice("the launcher's answer about the automations is not readable")
+		return
+	}
+	c.rep.Automations = &rep
+	for _, e := range rep.Entries {
+		if e.Problem != "" {
+			c.notice(fmt.Sprintf("automation %s (%s at %s) cannot run: %s", e.Name, e.Source, e.Commit, e.Problem))
+		}
+	}
 }
 
 // checkProjects asks the home's launcher, when one serves it, to verify the

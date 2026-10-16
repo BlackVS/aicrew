@@ -84,6 +84,10 @@ var (
 	nameShape  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 )
 
+// Kinds is the event kinds this release knows, which an automation's
+// subscription may name.
+func Kinds() []string { return slices.Clone(kinds) }
+
 // FileVersion is the subscription file's format version.
 const FileVersion = 1
 

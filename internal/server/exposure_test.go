@@ -78,6 +78,9 @@ var (
 		// The worker's observation of its running attempt's pull request, by
 		// its session token (forge events).
 		"ObservePullWithToken": true,
+		// The event queues' delivery, as aicrewd's reconciler (increment
+		// 1b); the store refuses every other caller.
+		"DeliverEvents": true,
 		// The member's open attempt as its worker, in its session status,
 		// for the turn loop's continuation (A3).
 		"MemberAttemptFor": true,

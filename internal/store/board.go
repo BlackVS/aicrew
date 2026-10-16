@@ -6,15 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/BlackVS/aicrew/internal/events"
 )
 
 // The board wake (docs/DESIGN-CONTROL-PLANE.md, A1; docs/CREW-CONTRACT.md,
 // "Board changes"). aicrewd reads each hub's board feed (aimem's board.read)
-// and writes a board.changed announcement to a team's coordinators when a
-// task of a project the team is granted becomes READY, or changes state
-// while aicrew has an attempt for it. The feed's cursor is stored in the
-// transaction that writes the announcements, so a change is announced once,
-// across restarts.
+// and journals each change of a granted project as a board.changed event
+// (events.go), queued for each team granted the project with the facts the
+// subscriptions' conditions read: the default board-wake subscription wakes
+// a team's coordinators when a task becomes READY, or changes state while
+// the team has an attempt for it, unless aicrew made the change itself. The
+// feed's cursor is stored in the transaction that journals the events, so a
+// change is journaled once, across restarts.
 //
 // A project's changes from before aicrewd first saw it granted are history:
 // they are read, and announced to no one. That covers the first read, which
@@ -76,10 +80,11 @@ func (s *Store) BoardCursor(ctx context.Context, c Caller, hubID string) (string
 }
 
 // RecordBoardPage records one page of the hub's board feed: in one
-// transaction it writes the page's announcements and stores its cursor, if
-// the stored cursor is still the one the page was read from
-// (ErrBoardCursorMoved otherwise). It returns how many announcements it
-// wrote. aicrewd's reconciler only.
+// transaction it journals the page's events, queues their deliveries and
+// stores its cursor, if the stored cursor is still the one the page was read
+// from (ErrBoardCursorMoved otherwise). It returns how many deliveries it
+// queued: each becomes a coordinator's announcement when DeliverEvents runs
+// its queue. aicrewd's reconciler only.
 func (s *Store) RecordBoardPage(ctx context.Context, c Caller, hubID string, page BoardPage) (int, error) {
 	if c.kind != callerReconciler {
 		return 0, fmt.Errorf("%w: only aicrewd records the board", ErrForbidden)
@@ -122,7 +127,7 @@ func (s *Store) RecordBoardPage(ctx context.Context, c Caller, hubID string, pag
 		if ch.At.Before(first) {
 			continue
 		}
-		n, err := announceBoardChange(ctx, tx, hubID, ch, now)
+		n, err := s.journalBoardChange(ctx, tx, hubID, ch, now)
 		if err != nil {
 			return 0, err
 		}
@@ -201,12 +206,12 @@ func boardSince(ctx context.Context, tx *sql.Tx, hubID string, now time.Time) (m
 	return out, rows.Err()
 }
 
-// announceBoardChange writes ch's announcement to the coordinators of each
-// team granted its project: when the task became READY, or when the team
-// has an attempt for the task. A change one of aicrew's own steps made,
-// which a committed step of an attempt of the task records as its task
-// revision, is not announced. It returns how many announcements it wrote.
-func announceBoardChange(ctx context.Context, tx *sql.Tx, hubID string, ch BoardChange, now time.Time) (int, error) {
+// journalBoardChange journals ch as a board.changed event, queued for each
+// team granted its project with the facts of that team: whether one of
+// aicrew's own committed steps made the change (a step records its task
+// revision), whether the task became READY, and whether the team has an
+// attempt for it. It returns how many deliveries it queued.
+func (s *Store) journalBoardChange(ctx context.Context, tx *sql.Tx, hubID string, ch BoardChange, now time.Time) (int, error) {
 	task := TaskRef{HubID: hubID, ProjectID: ch.ProjectID, TaskID: ch.TaskID}
 	var own int
 	err := tx.QueryRowContext(ctx,
@@ -216,34 +221,22 @@ func announceBoardChange(ctx context.Context, tx *sql.Tx, hubID string, ch Board
 	if err != nil {
 		return 0, fmt.Errorf("read the task's attempts: %w", err)
 	}
-	if own > 0 {
-		return 0, nil
-	}
 	teams, err := boardTeams(ctx, tx, task)
 	if err != nil {
 		return 0, err
 	}
-	project := ProjectRef{HubID: hubID, ProjectID: ch.ProjectID}
-	n := 0
+	var ms []match
 	for _, t := range teams {
-		if ch.To != boardReady && !t.attempt {
-			continue
-		}
-		recipients, err := activeCoordinators(ctx, tx, t.id)
-		if err != nil {
-			return 0, err
-		}
-		if len(recipients) == 0 {
-			continue
-		}
-		if _, err := insertMessage(ctx, tx, Message{TeamID: t.id, Kind: KindLifecycle, Project: &project, Task: &task,
-			Text: boardText(ch, t.attempt), Board: &BoardDetail{Revision: ch.Revision, From: ch.From, To: ch.To, At: ch.At,
-				RequiredCapability: ch.RequiredCapability}}, recipients, now); err != nil {
-			return 0, err
-		}
-		n++
+		ms = append(ms, s.matches(events.KindBoardChanged, t.id,
+			events.Facts{OwnChange: own > 0, Ready: ch.To == boardReady, TeamAttempt: t.attempt})...)
 	}
-	return n, nil
+	// The key holds the change's time as well as its revision: a hub
+	// restored from a backup may number a later change as an earlier one.
+	key := fmt.Sprintf("%s/%s/%s@%d@%s", hubID, ch.ProjectID, ch.TaskID, ch.Revision, formatTime(ch.At))
+	_, n, err := journal(ctx, tx, sourceBoard, key, taskSubject(task), events.KindBoardChanged,
+		boardEvent{Task: task, Change: BoardDetail{Revision: ch.Revision, From: ch.From, To: ch.To, At: ch.At,
+			RequiredCapability: ch.RequiredCapability}}, ch.At, now, ms)
+	return n, err
 }
 
 // boardTeam is a team granted a task's project, and whether it has an

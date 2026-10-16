@@ -54,7 +54,10 @@ type Server struct {
 	// boardEvery is how often the hubs' board feeds are read (BoardTick;
 	// tests shorten it), and boardPaused when each hub may be read again
 	// after it asked to wait (board.go; the board loop's alone).
-	boardEvery  time.Duration
+	boardEvery time.Duration
+	// eventsEvery is how often the event queues are delivered (EventTick;
+	// tests shorten it).
+	eventsEvery time.Duration
 	boardPaused map[string]time.Time
 	// reader is aimem's read scope for settling member-driven steps; nil
 	// when no read credential is configured, so those steps stay pending.
@@ -174,6 +177,10 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		go func() { s.runBoard(boardCtx); close(read) }()
 		defer func() { stopBoard(); <-read }()
 	}
+	eventsCtx, stopEvents := context.WithCancel(ctx)
+	delivered := make(chan struct{})
+	go func() { s.runEvents(eventsCtx); close(delivered) }()
+	defer func() { stopEvents(); <-delivered }()
 	served := make(chan error, 1)
 	go func() { served <- s.http.Serve(tls.NewListener(ln, s.tls)) }()
 	select {
@@ -379,6 +386,7 @@ func (s *Server) bindHubs() error {
 	s.hubs = map[string]hubBinding{}
 	s.grantsEvery = GrantsRefresh
 	s.boardEvery = BoardTick
+	s.eventsEvery = EventTick
 	if len(hubs) == 0 {
 		return nil
 	}

@@ -13,8 +13,8 @@ import (
 // The board wake (docs/DESIGN-CONTROL-PLANE.md, A1; docs/CREW-CONTRACT.md,
 // "Board changes"): every BoardTick, aicrewd reads each hub's board feed
 // with its board.read credential, from the cursor it stored, and records
-// each page with the board.changed announcements it leads to, in one
-// transaction (store.RecordBoardPage).
+// each page with the board.changed events it journals, in one transaction
+// (store.RecordBoardPage); the event loop delivers them (events.go).
 
 // BoardTick is how often the board feed is read: the reconcile tick.
 const BoardTick = reconcile.Tick
@@ -106,7 +106,7 @@ func (s *Server) readBoard(ctx context.Context, alias, hubID string, r boardRead
 			return
 		}
 		if n > 0 {
-			s.log.Info("board changes announced", "hub", alias, "announcements", n)
+			s.log.Info("board changes queued", "hub", alias, "deliveries", n)
 		}
 		if !page.More {
 			return

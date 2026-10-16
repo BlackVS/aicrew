@@ -450,7 +450,7 @@ func TestMigrationV14AddsCoordinationProofs(t *testing.T) {
 	}
 	raw := rawDB(t, path)
 	dropDeliveryColumns(t, raw)
-	for _, stmt := range []string{`DROP TABLE coordination_proofs`, `ALTER TABLE introspection_credentials DROP COLUMN operations`,
+	for _, stmt := range []string{`DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `DROP TABLE coordination_proofs`, `ALTER TABLE introspection_credentials DROP COLUMN operations`,
 		`ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 13`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)

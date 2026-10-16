@@ -59,6 +59,10 @@ func TestBoardAnnouncesReadyOnce(t *testing.T) {
 	if n, err := s.RecordBoardPage(ctx, rc, "hub-a", page); err != nil || n != 1 {
 		t.Fatalf("a READY task: %d announced, %v", n, err)
 	}
+	if got := boardMessages(t, s, e.tm.ID, e.lead); len(got) != 0 {
+		t.Fatalf("announced before the queue ran: %+v", got)
+	}
+	settle(t, s, now)
 	got := boardMessages(t, s, e.tm.ID, e.lead)
 	if len(got) != 1 || got[0].Kind != KindLifecycle || got[0].Task == nil || got[0].Task.TaskID != "task-9" ||
 		got[0].Task.HubID != "hub-a" || got[0].Board.To != "READY" || got[0].Board.From != "BACKLOG" || got[0].Board.Revision != 4 ||
@@ -77,6 +81,7 @@ func TestBoardAnnouncesReadyOnce(t *testing.T) {
 	if _, err := s.RecordBoardPage(ctx, rc, "hub-a", page); !errors.Is(err, ErrBoardCursorMoved) {
 		t.Fatalf("a page from a cursor already moved past: %v", err)
 	}
+	settle(t, s, now)
 	if got := boardMessages(t, s, e.tm.ID, e.lead); len(got) != 1 {
 		t.Fatalf("after the replay: %d announcements", len(got))
 	}
@@ -113,6 +118,7 @@ func TestBoardAnnouncesChangesOfAnAttemptsTask(t *testing.T) {
 	if n, err := s.RecordBoardPage(ctx, rc, "hub-a", page); err != nil || n != 1 {
 		t.Fatalf("%d announced, %v", n, err)
 	}
+	settle(t, s, now)
 	got := boardMessages(t, s, e.tm.ID, e.lead)
 	if len(got) != 1 || got[0].Board.To != "CANCELLED" || got[0].Board.Revision != rev ||
 		got[0].Text != fmt.Sprintf("Task task-1 of project project-a moved from IN_PROGRESS to CANCELLED on the board (revision %d)."+
@@ -146,6 +152,7 @@ func TestBoardNewGrantAndReset(t *testing.T) {
 	if n, err := s.RecordBoardPage(ctx, rc, "hub-a", page); err != nil || n != 1 {
 		t.Fatalf("a new grant: %d announced, %v", n, err)
 	}
+	settle(t, s, now)
 	if got := boardMessages(t, s, e.tm.ID, e.lead); len(got) != 1 || got[0].Task.TaskID != "b-new" {
 		t.Fatalf("announcements: %+v", got)
 	}

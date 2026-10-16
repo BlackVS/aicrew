@@ -71,7 +71,16 @@ func boardSetup(t *testing.T) (*coordEnv, *Server, *boardHub) {
 	e := setupCoordination(t)
 	hub := &boardHub{grantingHub: e.hub}
 	srv := &Server{store: e.store, log: e.srv.log, hubs: map[string]hubBinding{coordHubAlias: {id: coordHub, teams: hub}}}
+	// A board change's queue runs as soon as the loop looks.
+	e.store.SetEventTiming(time.Nanosecond, time.Nanosecond)
 	return e, srv, hub
+}
+
+// readAndDeliver is one board tick followed by one event delivery.
+func readAndDeliver(ctx context.Context, srv *Server) {
+	srv.readBoards(ctx)
+	time.Sleep(time.Millisecond)
+	srv.deliverEvents(ctx)
 }
 
 // leadBoard are the board.changed announcements in the coordinator's
@@ -104,12 +113,12 @@ func TestBoardWakesTheCoordinatorOnce(t *testing.T) {
 	e, srv, hub := boardSetup(t)
 	past := time.Now().Add(-time.Hour)
 	hub.add(toReady("old-1", 2, past), toReady("old-2", 3, past))
-	srv.readBoards(ctx)
+	readAndDeliver(ctx, srv)
 	if got := leadBoard(t, e); len(got) != 0 {
 		t.Fatalf("the board's history announced: %+v", got)
 	}
 	hub.add(toReady("task-new", 4, time.Now().Add(time.Second)))
-	srv.readBoards(ctx)
+	readAndDeliver(ctx, srv)
 	got := leadBoard(t, e)
 	if len(got) != 1 || got[0].Task.TaskID != "task-new" || got[0].Board.To != "READY" || got[0].Kind != store.KindLifecycle {
 		t.Fatalf("announcements: %+v", got)
@@ -117,8 +126,8 @@ func TestBoardWakesTheCoordinatorOnce(t *testing.T) {
 
 	// A restart: a new service on the same store, cursor and all.
 	again := &Server{store: e.store, log: e.srv.log, hubs: srv.hubs}
-	again.readBoards(ctx)
-	srv.readBoards(ctx)
+	readAndDeliver(ctx, again)
+	readAndDeliver(ctx, srv)
 	if got := leadBoard(t, e); len(got) != 1 {
 		t.Fatalf("after a restart: %d announcements", len(got))
 	}
@@ -148,9 +157,9 @@ func TestBoardRefusals(t *testing.T) {
 	ctx := context.Background()
 	e, srv, hub := boardSetup(t)
 	hub.add(toReady("old", 1, time.Now().Add(-time.Hour)))
-	srv.readBoards(ctx)
+	readAndDeliver(ctx, srv)
 	hub.add(toReady("task-a", 2, time.Now().Add(time.Second)))
-	srv.readBoards(ctx)
+	readAndDeliver(ctx, srv)
 	if got := leadBoard(t, e); len(got) != 1 {
 		t.Fatalf("before the restore: %d", len(got))
 	}
@@ -159,20 +168,20 @@ func TestBoardRefusals(t *testing.T) {
 	hub.mu.Lock()
 	hub.changes = hub.changes[:1]
 	hub.mu.Unlock()
-	srv.readBoards(ctx)
+	readAndDeliver(ctx, srv)
 	if cur, _ := e.store.BoardCursor(ctx, store.ReconcilerCaller(), coordHub); cur != "" {
 		t.Fatalf("the cursor after cursor_ahead: %q", cur)
 	}
 	hub.add(toReady("task-a", 2, time.Now().Add(-time.Second)))
-	srv.readBoards(ctx)
+	readAndDeliver(ctx, srv)
 	if got := leadBoard(t, e); len(got) != 1 {
 		t.Fatalf("after the restore: %d announcements", len(got))
 	}
 
 	hub.set("rate_limited", time.Hour)
 	before := hub.readCount()
-	srv.readBoards(ctx)
-	srv.readBoards(ctx)
+	readAndDeliver(ctx, srv)
+	readAndDeliver(ctx, srv)
 	if n := hub.readCount() - before; n != 1 {
 		t.Fatalf("read %d times after rate_limited", n)
 	}

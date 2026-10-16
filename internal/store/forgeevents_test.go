@@ -31,41 +31,52 @@ func forgeEvents(t *testing.T, s *Store, token string) []InboxItem {
 }
 
 // The worker's first observation of its attempt's pull request is the
-// baseline and announces nothing; each later change is announced once, to
-// the worker, and a repeated report announces nothing again. A label
-// removed or a new head with CI starting is recorded without a message.
-// The coordinators hear of a change while the result is submitted, and of a
-// merge whatever the phase.
+// baseline and announces nothing; each later change is journaled once and,
+// when its queue runs, announced to the worker, and a repeated report
+// announces nothing again. A label removed or a new head with CI starting is
+// recorded without an event. The coordinators hear of a change while the
+// result is submitted, and of a merge whatever the phase.
 func TestObservePull(t *testing.T) {
 	ctx := context.Background()
 	e := newClaimStopEnv(t)
 	a, _ := e.runningClaim(t, "task-1")
 	o := observed(a.Branch)
 	res, err := e.s.ObservePullWithToken(ctx, e.indepTk, o)
-	if err != nil || !res.Baseline || res.AttemptID != a.ID || res.MessageID != "" {
+	if err != nil || !res.Baseline || res.AttemptID != a.ID || res.EventID != "" {
 		t.Fatalf("the baseline: %+v, %v", res, err)
 	}
 	// hands picks the pull request up and reviews it; CI concludes.
 	o.Labels, o.Checks, o.Comments = []string{"hands-reviewed"}, "success", 1
 	res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o)
 	want := []string{"label hands-reviewed added", "CI concluded success at 0123456789ab", "1 new comment(s)"}
-	if err != nil || res.Baseline || res.MessageID == "" || strings.Join(res.Changes, "|") != strings.Join(want, "|") {
+	if err != nil || res.Baseline || res.EventID == "" || strings.Join(res.Changes, "|") != strings.Join(want, "|") {
 		t.Fatalf("the review: %+v, %v", res, err)
 	}
-	if again, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || again.MessageID != "" || len(again.Changes) != 0 {
+	if got := forgeEvents(t, e.s, e.indepTk); len(got) != 0 {
+		t.Fatalf("a message before the queue ran: %+v", got)
+	}
+	runs := settle(t, e.s, e.now)
+	if len(runs) != 1 || runs[0].Outcome != "handled" || runs[0].Events != 1 || runs[0].MessageID == "" {
+		t.Fatalf("the review's run: %+v", runs)
+	}
+	if again, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || again.EventID != "" || len(again.Changes) != 0 {
 		t.Fatalf("the same observation again: %+v, %v", again, err)
 	}
 	// The worker's own forge pr command reports a baseline: its own label
 	// announces nothing.
 	cmd := o
 	cmd.Labels, cmd.Baseline = []string{"hands-reviewed", "review-this"}, true
-	if res, err := e.s.ObservePullWithToken(ctx, e.indepTk, cmd); err != nil || !res.Baseline || res.MessageID != "" {
+	if res, err := e.s.ObservePullWithToken(ctx, e.indepTk, cmd); err != nil || !res.Baseline || res.EventID != "" {
 		t.Fatalf("a command's report: %+v, %v", res, err)
 	}
 	o.Labels = cmd.Labels
+	if more := settle(t, e.s, e.now); len(more) != 0 {
+		t.Fatalf("runs without an event: %+v", more)
+	}
 	evs := forgeEvents(t, e.s, e.indepTk)
-	if len(evs) != 1 || evs[0].ID != res.MessageID || evs[0].AttemptID != a.ID || evs[0].Kind != KindLifecycle ||
-		evs[0].Forge.Pull != 7 || evs[0].Forge.Checks != "success" || !strings.Contains(evs[0].Text, "forge.event: pull request #7") {
+	if len(evs) != 1 || evs[0].ID != runs[0].MessageID || evs[0].AttemptID != a.ID || evs[0].Kind != KindLifecycle ||
+		evs[0].Forge.Pull != 7 || evs[0].Forge.Checks != "success" || strings.Join(evs[0].Forge.Changes, "|") != strings.Join(want, "|") ||
+		!strings.Contains(evs[0].Text, "forge.event: pull request #7") {
 		t.Fatalf("the worker's forge events: %+v", evs)
 	}
 	if got := forgeEvents(t, e.s, e.leadTok); len(got) != 0 {
@@ -73,31 +84,34 @@ func TestObservePull(t *testing.T) {
 	}
 	// The worker pushes a fix: the labels go, CI starts on the new head.
 	o.Labels, o.Checks, o.HeadCommit = []string{}, "pending", "89abcdef0123456789abcdef0123456789abcdef"
-	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.MessageID != "" || len(res.Changes) != 0 {
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID != "" || len(res.Changes) != 0 {
 		t.Fatalf("a new head: %+v, %v", res, err)
 	}
 	// A conclusion on a new head is announced even when it equals the old
 	// head's and no pending read came between.
 	o.Checks = "success"
-	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.MessageID == "" ||
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID == "" ||
 		res.Changes[0] != "CI concluded success at 89abcdef0123" {
 		t.Fatalf("CI on the new head: %+v, %v", res, err)
 	}
+	settle(t, e.s, e.now)
 	o.HeadCommit = "fedcba9876543210fedcba9876543210fedcba98"
-	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.MessageID == "" ||
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID == "" ||
 		res.Changes[0] != "CI concluded success at fedcba987654" {
 		t.Fatalf("a success on a head pushed after a success: %+v, %v", res, err)
 	}
+	settle(t, e.s, e.now)
 	// Submitted: CI failing reaches the coordinator too.
 	if _, err := e.s.db.Exec(`UPDATE attempts SET phase = ? WHERE id = ?`, string(PhaseSubmitted), a.ID); err != nil {
 		t.Fatal(err)
 	}
 	o.Checks = "failure"
-	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.MessageID == "" {
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID == "" {
 		t.Fatalf("CI fails: %+v, %v", res, err)
 	}
-	if got := forgeEvents(t, e.s, e.leadTok); len(got) != 1 || got[0].ID != res.MessageID {
-		t.Fatalf("the coordinator's forge events after a submit: %+v", got)
+	runs = settle(t, e.s, e.now)
+	if got := forgeEvents(t, e.s, e.leadTok); len(runs) != 1 || len(got) != 1 || got[0].ID != runs[0].MessageID {
+		t.Fatalf("the coordinator's forge events after a submit: %+v (runs %+v)", got, runs)
 	}
 	// A merge reaches both, whatever the phase.
 	if _, err := e.s.db.Exec(`UPDATE attempts SET phase = ? WHERE id = ?`, string(PhaseAccepted), a.ID); err != nil {
@@ -107,6 +121,7 @@ func TestObservePull(t *testing.T) {
 	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.Changes[0] != "the pull request was merged" {
 		t.Fatalf("the merge: %+v, %v", res, err)
 	}
+	settle(t, e.s, e.now)
 	if w, l := forgeEvents(t, e.s, e.indepTk), forgeEvents(t, e.s, e.leadTok); len(w) != 5 || len(l) != 2 {
 		t.Fatalf("after the merge the worker has %d forge events and the coordinator %d", len(w), len(l))
 	}

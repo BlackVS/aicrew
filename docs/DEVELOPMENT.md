@@ -616,8 +616,9 @@ aicrewd reads the hub's board feed (aimem's `board.read`) at the same
 15-second tick. A tick reads at most 4 pages of 500 changes, so a backlog
 is read over several ticks and the reads stay far below the credential's
 60 a minute. Each page is recorded in one transaction with the
-announcements it leads to and the cursor to read on from
-(`docs/CREW-CONTRACT.md`, "Board changes"):
+`board.changed` events it journals and the cursor to read on from
+(`docs/CREW-CONTRACT.md`, "Board changes"). The event core ("The event
+core", below) then delivers them:
 - **What wakes a coordinator:** a task of a project the team is granted
   that becomes READY, or that changes state on the board while the team has
   an attempt for it. The coordinator receives a `board.changed` lifecycle
@@ -662,14 +663,69 @@ home's own forge credential:
   status, and on GitHub its check runs, every page of them. A read ends with
   the wait, so a slow forge cannot hold a short wait past its end.
 - **The message:** aicrewd compares a report with the last one and, on a
-  label added, CI concluding, a new comment, or a merge or close, writes one
-  lifecycle message carrying `forge`, to the worker, and to the
-  coordinators while the result is submitted or when the pull request was
-  merged or closed. A repeated report writes nothing.
+  label added, CI concluding, a new comment, or a merge or close, journals
+  one `forge.changed` event in the same transaction. The event core ("The
+  event core", below) delivers it as a lifecycle message carrying `forge`,
+  to the worker, and to the coordinators while the result is submitted or
+  when the pull request was merged or closed. A repeated report journals
+  nothing.
 - **The end of a watch:** a merged or closed pull request, or one that is no
   running attempt's (`no_attempt`), is no longer watched. A command on a
   merged or closed pull request reports it and prints `watch: not watched:
   it is merged` (or `closed`).
+
+### The event core
+
+The board wake and the forge events are two sources of one event model
+(`docs/DESIGN-TURNS.md`, section 12; increment 1b). What happens on an
+event is data; the bus is core.
+- **The journal** (store schema 33). A source writes each event in the
+  transaction that moves its own cursor: the board page with its cursor, a
+  pull request observation with the attempt's last observation. An event
+  names its source, subject, kind, time and a key unique within the
+  source, with a payload of at most 16 KiB. A board page read again is the
+  same events, and queues nothing twice.
+- **The subscriptions** are data: `internal/events/subscriptions.json`,
+  embedded in the release, with its JSON Schema beside it
+  (`internal/events/subscriptions.schema.json`). A subscription names its
+  event kinds, its recipients by role, each with the conditions under
+  which it is woken, and its handler:
+  - `board-wake`: `board.changed` to the team's coordinators, when the
+    change is not one of aicrew's own and the task became READY or the
+    team has an attempt for it;
+  - `forge-wake`: `forge.changed` to the worker always, and to the
+    coordinators when the change bears on a submit or the result is
+    submitted.
+
+  These reproduce the routing from before the event core. The kinds, roles,
+  conditions and handlers a file may name are this release's; a test
+  checks the file against the schema, and the schema's names against the
+  code.
+- **Delivery.** The same transaction queues one delivery per matching
+  subscription and team, keyed by subscription, team and subject (a task,
+  or an attempt's pull request). Every 5 seconds aicrewd runs each queue
+  whose events have been quiet for 30 seconds, or whose oldest has waited 2
+  minutes. A run hands the queue's pending events, in order, to the
+  handler, and records what it handled, in the transaction of the message
+  it writes. So a burst of events about one subject wakes once, and a crash
+  replays a run whole or not at all: pending events wait in the journal for
+  the next start.
+- **The handler** of this increment is `wake`: one lifecycle message per
+  run, to the recipients the run's events name, read as they are at the
+  run. A forge message carries every change of the run; a board message
+  the last change, with each transition in its text.
+- **Failures.** A handler that fails three times in a row parks the
+  queue's events and sends the team's coordinators one message naming the
+  subscription, the subject and the last error. Parked events are kept;
+  they are replayed by a release whose subscription file differs.
+- **Upgrade and downgrade.** Schema 33 adds the `events`,
+  `event_deliveries` and `event_runs` tables; nothing earlier is journaled.
+  An older aicrewd refuses a schema-33 store, as for every schema change.
+  Going back means restoring the store copy the upgrade made
+  (`<store>.backup-<UTC time>`), which loses what was written since: the
+  board is read again from the copy's older cursor, and the launchers
+  report their pull requests again, so their changes are announced again
+  rather than lost.
 
 ## Teams
 

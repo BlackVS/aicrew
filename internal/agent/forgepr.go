@@ -400,7 +400,7 @@ func (f *ForgePR) showWatched(ctx context.Context, t pullTarget, n int64) (PullR
 
 // The watch's answers.
 const (
-	WatchOn          = "watched: a change of its labels, CI or comments reaches you as a forge.event in your inbox"
+	WatchOn          = "watched: a change that needs your decision reaches your inbox as an action.needed message with its content"
 	watchNoLauncher  = "not watched: no launcher runs for this home"
 	watchUnavailable = "not watched: "
 	// watchEnded is a merged or closed pull request, which the launcher

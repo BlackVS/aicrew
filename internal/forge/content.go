@@ -94,6 +94,10 @@ type ReviewHeader struct {
 	// request's head commit.
 	Head   string `json:"head"`
 	AtHead bool   `json:"at_head"`
+	// Verdict is the review's verdict, such as READY_FOR_HUMAN_MERGE or
+	// RETURN_TO_IMPLEMENTATION, as its verdict line or the line after it
+	// names it; "" when the body names none.
+	Verdict string `json:"verdict,omitempty"`
 }
 
 // Check is one check of the head commit: a GitHub check run or commit
@@ -345,7 +349,41 @@ func reviewHeader(body, head string) *ReviewHeader {
 		h.Reviewer = ReviewerExternal
 	}
 	h.AtHead = head != "" && strings.HasPrefix(head, h.Head)
+	h.Verdict = reviewVerdict(body)
 	return h
+}
+
+var (
+	// verdictLine is a line that names the verdict, as a heading
+	// ("VERDICT") or a label ("**Verdict:** READY_FOR_HUMAN_MERGE").
+	verdictLine = regexp.MustCompile(`(?i)^[\s*#_]*verdict[\s*:_]*(.*)$`)
+	// verdictWord is a verdict: an upper-case word with underscores.
+	verdictWord = regexp.MustCompile(`^[*_\s]*([A-Z][A-Z_]{3,})\b`)
+)
+
+// reviewVerdict is the verdict a review body names: the word after its
+// verdict label, or on the first non-empty line after a verdict heading.
+func reviewVerdict(body string) string {
+	lines := strings.Split(body, "\n")
+	for i, l := range lines {
+		m := verdictLine.FindStringSubmatch(strings.TrimSpace(l))
+		if m == nil {
+			continue
+		}
+		if w := verdictWord.FindStringSubmatch(m[1]); w != nil {
+			return w[1]
+		}
+		for _, next := range lines[i+1:] {
+			if strings.TrimSpace(next) == "" {
+				continue
+			}
+			if w := verdictWord.FindStringSubmatch(next); w != nil {
+				return w[1]
+			}
+			break
+		}
+	}
+	return ""
 }
 
 // commitChecks reads GitHub's and Gitea's checks of commit sha: its commit

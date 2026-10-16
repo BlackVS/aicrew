@@ -255,18 +255,17 @@ func workBlock(ctx context.Context, q querier, attemptID string) (*AttemptBlock,
 
 // wakeAttempt wakes the coordinators on an attempt's blocked report, with
 // the reason and the attempt's last observed pull request, so the
-// coordinator can relay what the worker needs, or escalate, without
-// reading the forge.
-func wakeAttempt(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, roles []string, now time.Time) (string, error) {
+// coordinator can answer or escalate without reading the forge.
+func wakeAttempt(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []string) (*wakeOut, error) {
 	var last attemptEvent
 	var reports []string
 	for i, ev := range evs {
 		var e attemptEvent
 		if err := json.Unmarshal(ev.Payload, &e); err != nil {
-			return "", fmt.Errorf("read an attempt event: %w", err)
+			return nil, fmt.Errorf("read an attempt event: %w", err)
 		}
 		if i > 0 && e.AttemptID != last.AttemptID {
-			return "", errors.New("the queue holds events of two attempts")
+			return nil, errors.New("the queue holds events of two attempts")
 		}
 		last = e
 		if e.To == PhaseBlocked {
@@ -275,7 +274,7 @@ func wakeAttempt(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, ro
 	}
 	a, err := getAttempt(ctx, tx, last.AttemptID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var recipients []string
 	for _, r := range roles {
@@ -283,7 +282,7 @@ func wakeAttempt(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, ro
 		case events.RoleCoordinator:
 			coords, err := activeCoordinators(ctx, tx, a.TeamID)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
 			for _, c := range coords {
 				if c != a.WorkerAgentID {
@@ -295,15 +294,16 @@ func wakeAttempt(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, ro
 		}
 	}
 	if len(recipients) == 0 {
-		return "", nil
+		return nil, nil
 	}
 	worker, err := getAgent(ctx, tx, a.WorkerAgentID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	text := fmt.Sprintf("%s reported task %s blocked", worker.Label, taskName(a.Task))
-	if len(reports) > 0 {
-		text += ": " + strings.Join(reports, "; ")
+	reason := strings.Join(reports, "; ")
+	text := fmt.Sprintf("action.needed: %s reported task %s blocked", worker.Label, taskName(a.Task))
+	if reason != "" {
+		text += ": " + reason
 	}
 	if !strings.HasSuffix(text, ".") {
 		text += "."
@@ -312,16 +312,16 @@ func wakeAttempt(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, ro
 	if a.Phase != PhaseBlocked {
 		text += fmt.Sprintf(" The attempt has since moved to %s.", a.Phase)
 	} else {
-		text += " Relay what the worker needs, or escalate with these facts attached."
-	}
-	to := ""
-	if len(recipients) == 1 {
-		to = recipients[0]
+		text += " Answer what is yours, or escalate with these facts attached."
 	}
 	task := a.Task
-	m, err := insertMessage(ctx, tx, Message{TeamID: a.TeamID, Kind: KindLifecycle, To: to, Task: &task, AttemptID: a.ID,
-		Text: boundedText(text)}, recipients, now)
-	return m.ID, err
+	sub := ActionSubject{Kind: "blocked", AttemptID: a.ID, Task: &task,
+		Block: &BlockedSubject{Worker: a.WorkerAgentID, Reason: reason}, Text: boundedText(text)}
+	if o, err := lastObservation(ctx, tx, a.ID); err == nil && o != nil {
+		sub.Pull = &ForgeDetail{Pull: o.Number, URL: o.URL, State: o.State, HeadCommit: o.HeadCommit,
+			Labels: o.Labels, Checks: o.Checks, Comments: o.Comments}
+	}
+	return &wakeOut{recipients: recipients, subject: sub}, nil
 }
 
 // pullFacts is the attempt's last observed pull request, in words.

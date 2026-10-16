@@ -10,8 +10,9 @@ import (
 // Forge events (docs/CREW-CONTRACT.md, "Forge events"): the worker's
 // launcher reports what it observed of its running attempt's pull request,
 // read with the home's own forge credential; aicrewd records it and, once
-// per observed change, writes a forge.event to the attempt's worker and,
-// when the change bears on a submit, to the team's coordinators. aicrewd
+// per observed change, journals an event, which a change that needs a
+// decision turns into an action.needed message to the attempt's worker
+// and, when it bears on a submit, to the team's coordinators. aicrewd
 // itself reads no forge.
 
 // PullsPath is where a member reports a pull request it observed.

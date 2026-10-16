@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -30,12 +31,30 @@ func forgeEvents(t *testing.T, s *Store, token string) []InboxItem {
 	return out
 }
 
+// The heads the tests push.
+const (
+	head1 = "0123456789abcdef0123456789abcdef01234567"
+	head2 = "89abcdef0123456789abcdef0123456789abcdef"
+	head3 = "fedcba9876543210fedcba9876543210fedcba98"
+	head4 = "1111111111111111111111111111111111111111"
+	head5 = "2222222222222222222222222222222222222222"
+)
+
+// hands is the external review at head with the verdict, as the worker's
+// launcher reads it.
+func hands(head, verdict string) *PullReview {
+	return &PullReview{Author: "hands-bot", URL: "https://git.example.test/crew/project-a/pulls/7#issuecomment-" + head[:6],
+		Head: head, AtHead: true, Verdict: verdict, Blocker: verdict != verdictReady,
+		Body: "[hands-bot review] reviewed at head " + head + "\n\nBLOCKERS\n- [BLOCKER] The parser loops on an empty line.\n\nVERDICT\n" + verdict}
+}
+
 // The worker's first observation of its attempt's pull request is the
-// baseline and announces nothing; each later change is journaled once and,
-// when its queue runs, announced to the worker, and a repeated report
-// announces nothing again. A label removed or a new head with CI starting is
-// recorded without an event. The coordinators hear of a change while the
-// result is submitted, and of a merge whatever the phase.
+// baseline. A change that only reports progress (a label, a comment, CI
+// concluding without a review, a READY review while CI runs) is recorded,
+// journaled and wakes no one. A review with a BLOCKER at the head, CI
+// failing on the change, both gates green at the head, and a merge each
+// wake the worker with one action.needed message holding the content; the
+// coordinators hear of one while the result is submitted, and of a merge.
 func TestObservePull(t *testing.T) {
 	ctx := context.Background()
 	e := newClaimStopEnv(t)
@@ -45,85 +64,166 @@ func TestObservePull(t *testing.T) {
 	if err != nil || !res.Baseline || res.AttemptID != a.ID || res.EventID != "" {
 		t.Fatalf("the baseline: %+v, %v", res, err)
 	}
-	// hands picks the pull request up and reviews it; CI concludes.
-	o.Labels, o.Checks, o.Comments = []string{"hands-reviewed"}, "success", 1
-	res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o)
-	want := []string{"label hands-reviewed added", "CI concluded success at 0123456789ab", "1 new comment(s)"}
-	if err != nil || res.Baseline || res.EventID == "" || strings.Join(res.Changes, "|") != strings.Join(want, "|") {
-		t.Fatalf("the review: %+v, %v", res, err)
+	quiet := func(what string) {
+		t.Helper()
+		if runs := settle(t, e.s, e.now); len(runs) != 0 {
+			t.Fatalf("%s: runs %+v", what, runs)
+		}
+		if got := forgeEvents(t, e.s, e.indepTk); len(got) != 0 {
+			t.Fatalf("%s woke the worker: %+v", what, got)
+		}
 	}
-	if got := forgeEvents(t, e.s, e.indepTk); len(got) != 0 {
-		t.Fatalf("a message before the queue ran: %+v", got)
+	// Progress: hands picks it up and comments; CI passes with no review.
+	o.Labels, o.Comments, o.Checks = []string{"review-this", "hands-reviewing"}, 1, "success"
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID == "" || len(res.Needs) != 0 ||
+		len(res.Changes) != 3 {
+		t.Fatalf("progress: %+v, %v", res, err)
 	}
-	runs := settle(t, e.s, e.now)
-	if len(runs) != 1 || runs[0].Outcome != "handled" || runs[0].Events != 1 || runs[0].MessageID == "" {
-		t.Fatalf("the review's run: %+v", runs)
+	quiet("progress")
+	// A READY review on a new head while CI runs there: no decision yet.
+	o.HeadCommit, o.Checks, o.Comments = head2, "pending", 2
+	o.Content, o.Review = true, hands(head2, verdictReady)
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || len(res.Needs) != 0 {
+		t.Fatalf("a READY review while CI runs: %+v, %v", res, err)
 	}
-	if again, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || again.EventID != "" || len(again.Changes) != 0 {
-		t.Fatalf("the same observation again: %+v, %v", again, err)
-	}
-	// The worker's own forge pr command reports a baseline: its own label
-	// announces nothing.
-	cmd := o
-	cmd.Labels, cmd.Baseline = []string{"hands-reviewed", "review-this"}, true
-	if res, err := e.s.ObservePullWithToken(ctx, e.indepTk, cmd); err != nil || !res.Baseline || res.EventID != "" {
-		t.Fatalf("a command's report: %+v, %v", res, err)
-	}
-	o.Labels = cmd.Labels
-	if more := settle(t, e.s, e.now); len(more) != 0 {
-		t.Fatalf("runs without an event: %+v", more)
-	}
-	evs := forgeEvents(t, e.s, e.indepTk)
-	if len(evs) != 1 || evs[0].ID != runs[0].MessageID || evs[0].AttemptID != a.ID || evs[0].Kind != KindLifecycle ||
-		evs[0].Forge.Pull != 7 || evs[0].Forge.Checks != "success" || strings.Join(evs[0].Forge.Changes, "|") != strings.Join(want, "|") ||
-		!strings.Contains(evs[0].Text, "forge.event: pull request #7") {
-		t.Fatalf("the worker's forge events: %+v", evs)
-	}
-	if got := forgeEvents(t, e.s, e.leadTok); len(got) != 0 {
-		t.Fatalf("the coordinator heard of a review before a submit: %+v", got)
-	}
-	// The worker pushes a fix: the labels go, CI starts on the new head.
-	o.Labels, o.Checks, o.HeadCommit = []string{}, "pending", "89abcdef0123456789abcdef0123456789abcdef"
-	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID != "" || len(res.Changes) != 0 {
-		t.Fatalf("a new head: %+v, %v", res, err)
-	}
-	// A conclusion on a new head is announced even when it equals the old
-	// head's and no pending read came between.
-	o.Checks = "success"
-	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID == "" ||
-		res.Changes[0] != "CI concluded success at 89abcdef0123" {
-		t.Fatalf("CI on the new head: %+v, %v", res, err)
+	quiet("a READY review while CI runs")
+	// CI passes at that head: both gates are green.
+	o.Checks, o.Passed = "success", []PassedCheck{{Name: "go-test", URL: "https://ci.example/1"}, {Name: "go-lint"}}
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || strings.Join(res.Needs, ",") != NeedGates {
+		t.Fatalf("gates green: %+v, %v", res, err)
 	}
 	settle(t, e.s, e.now)
-	o.HeadCommit = "fedcba9876543210fedcba9876543210fedcba98"
-	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID == "" ||
-		res.Changes[0] != "CI concluded success at fedcba987654" {
-		t.Fatalf("a success on a head pushed after a success: %+v, %v", res, err)
+	got := forgeEvents(t, e.s, e.indepTk)
+	if len(got) != 1 || got[0].Kind != KindActionNeeded || got[0].Action == nil || len(got[0].Action.Subjects) != 1 {
+		t.Fatalf("the gates' message: %+v", got)
+	}
+	sub := got[0].Action.Subjects[0]
+	if sub.Kind != "pull" || strings.Join(sub.Needs, ",") != NeedGates || sub.Review == nil || sub.Review.Verdict != verdictReady ||
+		len(sub.Passed) != 2 || !strings.Contains(got[0].Text, "Both gates are green at the head") ||
+		!strings.Contains(got[0].Text, "aicrew-agent forge pr ready --pr 7") || !strings.Contains(got[0].Text, "go-test, go-lint") {
+		t.Fatalf("the gates' subject: %+v\n%s", sub, got[0].Text)
+	}
+	ackTok(t, e.s, e.indepTk, got)
+	// The same observation again, content and all: nothing new.
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID != "" {
+		t.Fatalf("the gates again: %+v, %v", res, err)
+	}
+	// A new head with a review that has a BLOCKER: the body reaches the
+	// worker.
+	o.HeadCommit, o.Checks, o.Comments, o.Passed = head3, "pending", 3, nil
+	o.Review = hands(head3, "RETURN_TO_IMPLEMENTATION")
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || strings.Join(res.Needs, ",") != NeedReview {
+		t.Fatalf("a BLOCKER: %+v, %v", res, err)
 	}
 	settle(t, e.s, e.now)
-	// Submitted: CI failing reaches the coordinator too.
+	got = forgeEvents(t, e.s, e.indepTk)
+	if len(got) != 1 || !strings.Contains(got[0].Text, "The external review at the head asks for changes (verdict RETURN_TO_IMPLEMENTATION)") ||
+		!strings.Contains(got[0].Text, "  | - [BLOCKER] The parser loops on an empty line.") ||
+		got[0].Action.Subjects[0].Review == nil || !got[0].Action.Subjects[0].Review.Blocker {
+		t.Fatalf("the BLOCKER's message: %+v", got)
+	}
+	ackTok(t, e.s, e.indepTk, got)
+	// CI fails at that head: the failed job and its excerpt reach the
+	// worker, and the review, already announced, is not repeated.
+	o.Checks = "failure"
+	o.Failed = []FailedCheck{{Name: "go-test", Conclusion: "failure", URL: "https://ci.example/2", Excerpt: "--- FAIL: TestParser\nFAIL"},
+		{Name: "go-race", Conclusion: "failure", NoLog: "the forge refuses this job's log to the token"}}
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || strings.Join(res.Needs, ",") != NeedCI {
+		t.Fatalf("CI fails: %+v, %v", res, err)
+	}
+	settle(t, e.s, e.now)
+	got = forgeEvents(t, e.s, e.indepTk)
+	if len(got) != 1 || !strings.Contains(got[0].Text, "CI failed on the change:\n  - go-test: failure https://ci.example/2\n  | --- FAIL: TestParser") ||
+		!strings.Contains(got[0].Text, "no log excerpt: the forge refuses") || len(got[0].Action.Subjects[0].Failed) != 2 ||
+		strings.Contains(got[0].Text, "asks for changes") {
+		t.Fatalf("the CI failure's message: %+v", got)
+	}
+	ackTok(t, e.s, e.indepTk, got)
+	if l := forgeEvents(t, e.s, e.leadTok); len(l) != 0 {
+		t.Fatalf("the coordinator heard of work in progress: %+v", l)
+	}
+	// Submitted: a failure on a new head reaches the coordinator too, a
+	// label does not.
 	if _, err := e.s.db.Exec(`UPDATE attempts SET phase = ? WHERE id = ?`, string(PhaseSubmitted), a.ID); err != nil {
 		t.Fatal(err)
 	}
-	o.Checks = "failure"
-	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID == "" {
-		t.Fatalf("CI fails: %+v, %v", res, err)
+	o.Labels = append(o.Labels, "hands-reviewed")
+	if _, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
 	}
-	runs = settle(t, e.s, e.now)
-	if got := forgeEvents(t, e.s, e.leadTok); len(runs) != 1 || len(got) != 1 || got[0].ID != runs[0].MessageID {
-		t.Fatalf("the coordinator's forge events after a submit: %+v (runs %+v)", got, runs)
+	quiet("a label while submitted")
+	o.HeadCommit = head4
+	if _, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, e.s, e.now)
+	if w, l := forgeEvents(t, e.s, e.indepTk), forgeEvents(t, e.s, e.leadTok); len(w) != 1 || len(l) != 1 || w[0].ID != l[0].ID {
+		t.Fatalf("a failure while submitted: worker %+v, coordinator %+v", w, l)
 	}
 	// A merge reaches both, whatever the phase.
 	if _, err := e.s.db.Exec(`UPDATE attempts SET phase = ? WHERE id = ?`, string(PhaseAccepted), a.ID); err != nil {
 		t.Fatal(err)
 	}
 	o.State = "merged"
-	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.Changes[0] != "the pull request was merged" {
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || strings.Join(res.Needs, ",") != NeedMerged {
 		t.Fatalf("the merge: %+v, %v", res, err)
 	}
 	settle(t, e.s, e.now)
-	if w, l := forgeEvents(t, e.s, e.indepTk), forgeEvents(t, e.s, e.leadTok); len(w) != 5 || len(l) != 2 {
-		t.Fatalf("after the merge the worker has %d forge events and the coordinator %d", len(w), len(l))
+	if w, l := forgeEvents(t, e.s, e.indepTk), forgeEvents(t, e.s, e.leadTok); len(w) != 2 || len(l) != 2 ||
+		!strings.Contains(w[1].Text, "The pull request was merged.") {
+		t.Fatalf("after the merge the worker has %+v and the coordinator %+v", w, l)
+	}
+}
+
+// ackTok acknowledges the items for the token's member.
+func ackTok(t *testing.T, s *Store, token string, items []InboxItem) {
+	t.Helper()
+	ids := make([]string, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.ID)
+	}
+	if _, err := s.AckWithToken(context.Background(), "ack-"+ids[0], token, ids); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A review body and excerpts as long as the launcher may send, of
+// characters JSON escapes, are cut to what an event carries.
+func TestObservedContentIsBounded(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	o := observed(a.Branch)
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	o.Checks, o.Content = "failure", true
+	o.Review = hands(head1, "RETURN_TO_IMPLEMENTATION")
+	o.Review.Body = strings.Repeat("<", maxObservedLen)
+	for i := range 6 {
+		o.Failed = append(o.Failed, FailedCheck{Name: fmt.Sprintf("job-%d", i), Excerpt: strings.Repeat("<", maxObservedLen)})
+	}
+	res, err := e.s.ObservePullWithToken(ctx, e.indepTk, o)
+	if err != nil || strings.Join(res.Needs, ",") != NeedCI+","+NeedReview {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	var payload string
+	if err := e.s.db.QueryRow(`SELECT payload FROM events WHERE id = ?`, res.EventID).Scan(&payload); err != nil || len(payload) > maxEventPayload {
+		t.Fatalf("the event's payload: %d bytes, %v", len(payload), err)
+	}
+	settle(t, e.s, e.now)
+	if got := forgeEvents(t, e.s, e.indepTk); len(got) != 1 || len(got[0].Text) > maxMessageText ||
+		!got[0].Action.Subjects[0].Review.Cut {
+		t.Fatalf("the message: %d", len(got))
+	}
+	o.Review.Body = strings.Repeat("x", maxObservedLen+1)
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a body over the bound: %v", err)
+	}
+	o.Review, o.Content = nil, false
+	o.Failed = []FailedCheck{{Name: "x"}}
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("content without the content mark: %v", err)
 	}
 }
 

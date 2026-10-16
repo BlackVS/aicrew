@@ -63,16 +63,23 @@ const (
 	// WhenBlocked holds for an attempt's change to the blocked phase: its
 	// worker's blocked report.
 	WhenBlocked = "blocked"
+	// WhenAction holds for a pull request change that needs a member's
+	// decision (docs/DESIGN-TURNS.md, 4.2 and 5): a review with a BLOCKER
+	// at the head, CI failing on the change, both gates green at the head,
+	// or a merge, close or reopen. A change that only reports progress (a
+	// label, CI starting, a READY review alone) is not one.
+	WhenAction = "action"
 )
 
-// HandlerWake writes one lifecycle message per handler run, carrying the
-// run's events, to the recipients they name.
+// HandlerWake writes one action.needed message per handler run, carrying
+// the run's content, to the recipients its events name; runs due together
+// for the same recipients become one message.
 const HandlerWake = "wake"
 
 var (
 	kinds      = []string{KindBoardChanged, KindForgeChanged, KindAttemptChanged, KindMemberChanged, KindTimerDue}
 	roles      = []string{RoleWorker, RoleCoordinator}
-	conditions = []string{WhenAlways, WhenNotOwnChange, WhenReadyOrTeamAttempt, WhenSubmitOrSubmitted, WhenBlocked}
+	conditions = []string{WhenAlways, WhenNotOwnChange, WhenReadyOrTeamAttempt, WhenSubmitOrSubmitted, WhenBlocked, WhenAction}
 	handlers   = []string{HandlerWake}
 	nameShape  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 )
@@ -218,6 +225,7 @@ type Facts struct {
 	Submit      bool // a pull request change that bears on a submit
 	Submitted   bool // the attempt's result is submitted
 	Blocked     bool // an attempt's change to the blocked phase
+	Action      bool // a pull request change that needs a decision
 }
 
 // Roles is the roles s wakes for an event with facts f, each once, in the
@@ -251,6 +259,8 @@ func holds(when string, f Facts) bool {
 		return f.Submit || f.Submitted
 	case WhenBlocked:
 		return f.Blocked
+	case WhenAction:
+		return f.Action
 	}
 	return false
 }

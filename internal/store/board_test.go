@@ -64,7 +64,7 @@ func TestBoardAnnouncesReadyOnce(t *testing.T) {
 	}
 	settle(t, s, now)
 	got := boardMessages(t, s, e.tm.ID, e.lead)
-	if len(got) != 1 || got[0].Kind != KindLifecycle || got[0].Task == nil || got[0].Task.TaskID != "task-9" ||
+	if len(got) != 1 || got[0].Kind != KindActionNeeded || got[0].Task == nil || got[0].Task.TaskID != "task-9" ||
 		got[0].Task.HubID != "hub-a" || got[0].Board.To != "READY" || got[0].Board.From != "BACKLOG" || got[0].Board.Revision != 4 ||
 		got[0].Text != "Task task-9 of project project-a moved from BACKLOG to READY on the board (revision 4)." {
 		t.Fatalf("the coordinator's announcements: %+v", got)
@@ -120,9 +120,12 @@ func TestBoardAnnouncesChangesOfAnAttemptsTask(t *testing.T) {
 	}
 	settle(t, s, now)
 	got := boardMessages(t, s, e.tm.ID, e.lead)
-	if len(got) != 1 || got[0].Board.To != "CANCELLED" || got[0].Board.Revision != rev ||
-		got[0].Text != fmt.Sprintf("Task task-1 of project project-a moved from IN_PROGRESS to CANCELLED on the board (revision %d)."+
-			" The team has an attempt for it.", rev) {
+	// The worker's blocked report wakes the coordinator too: due together,
+	// the two subjects are one action.needed message.
+	if len(got) != 1 || got[0].Board.To != "CANCELLED" || got[0].Board.Revision != rev || got[0].Action == nil ||
+		len(got[0].Action.Subjects) != 2 ||
+		!strings.Contains(got[0].Text, fmt.Sprintf("Task task-1 of project project-a moved from IN_PROGRESS to CANCELLED on the board (revision %d)."+
+			" The team has an attempt for it.", rev)) {
 		t.Fatalf("announcements: %+v", got)
 	}
 }

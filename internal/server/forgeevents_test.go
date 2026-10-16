@@ -9,9 +9,10 @@ import (
 )
 
 // The worker reports its running attempt's pull request: the first report
-// is the baseline, a change is one journaled event and, when aicrewd's loop
-// runs its queue, one forge.event to the worker and, once the result is
-// submitted, to the coordinator, read as the inbox delivers it.
+// is the baseline, and a change that needs a decision (here CI failing
+// while the result is submitted) is one journaled event and, when aicrewd's
+// loop runs its queue, one action.needed message to the worker and the
+// coordinator, read as the inbox delivers it.
 // Another member, a pull request of no attempt and a malformed report are
 // refused.
 func TestObservePullRoute(t *testing.T) {
@@ -27,7 +28,7 @@ func TestObservePullRoute(t *testing.T) {
 		t.Fatalf("the baseline: %d %s", got.status, got.raw)
 	}
 	e.submit(t, id, "submit-1")
-	obs["labels"], obs["checks"] = []string{"hands-reviewed"}, "success"
+	obs["labels"], obs["checks"] = []string{"hands-reviewed"}, "failure"
 	got = e.call(t, e.worker.token, PullsPath, "", obs)
 	if got.status != http.StatusOK || got.body["event_id"] == nil {
 		t.Fatalf("a review: %d %s", got.status, got.raw)

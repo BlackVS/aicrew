@@ -446,7 +446,7 @@ func pendingSummary(pending []PendingMessage) string {
 		}
 	}
 	var parts []string
-	for _, k := range []string{"lifecycle", "message"} {
+	for _, k := range []string{"action.needed", "lifecycle", "message"} {
 		if n := kinds[k]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", n, k))
 		}

@@ -621,8 +621,8 @@ is read over several ticks and the reads stay far below the credential's
 core", below) then delivers them:
 - **What wakes a coordinator:** a task of a project the team is granted
   that becomes READY, or that changes state on the board while the team has
-  an attempt for it. The coordinator receives a `board.changed` lifecycle
-  message, and the Stop hook wakes it as for any message.
+  an attempt for it. The coordinator receives an `action.needed` message
+  with a `board` subject, and the Stop hook wakes it as for any message.
 - **What is skipped:** a change one of aicrew's own steps made. Each
   committed step keeps the task revision it made.
 - **History:** a project's changes from before aicrewd first saw it
@@ -662,13 +662,18 @@ home's own forge credential:
   forge calls: the pull request, and on GitHub and Gitea the head commit's
   status, and on GitHub its check runs, every page of them. A read ends with
   the wait, so a slow forge cannot hold a short wait past its end.
-- **The message:** aicrewd compares a report with the last one and, on a
-  label added, CI concluding, a new comment, or a merge or close, journals
-  one `forge.changed` event in the same transaction. The event core ("The
-  event core", below) delivers it as a lifecycle message carrying `forge`,
-  to the worker, and to the coordinators while the result is submitted or
-  when the pull request was merged or closed. A repeated report journals
-  nothing.
+- **The content:** when CI concluded or the comments changed since the
+  launcher last reported the pull request, it also reads the content (the
+  newest external review at the head with its verdict, the failed checks
+  with their excerpts, the passed checks) and reports it.
+- **The message:** aicrewd compares a report with the last one and
+  journals one `forge.changed` event for a change, in the same transaction.
+  A change that needs a decision (the review at the head asks for changes,
+  CI failed, both gates green, a merge, close or reopen) is delivered by
+  the event core ("The event core", below) as an `action.needed` message
+  with that content, to the worker, and to the coordinators while the
+  result is submitted or when the pull request was merged or closed.
+  Progress alone wakes no one. A repeated report journals nothing.
 - **The end of a watch:** a merged or closed pull request, or one that is no
   running attempt's (`no_attempt`), is no longer watched. A command on a
   merged or closed pull request reports it and prints `watch: not watched:
@@ -710,10 +715,13 @@ event is data; the bus is core.
   it writes. So a burst of events about one subject wakes once, and a crash
   replays a run whole or not at all: pending events wait in the journal for
   the next start.
-- **The handler** of this increment is `wake`: one lifecycle message per
-  run, to the recipients the run's events name, read as they are at the
-  run. A forge message carries every change of the run; a board message
-  the last change, with each transition in its text.
+- **The handler** is `wake`: one `action.needed` subject per run (store
+  schema 35 adds the kind), to the recipients the run's events name, read
+  as they are at the run. A team's queues due at the same tick run in one
+  transaction, and the subjects for the same recipients are one message.
+  A pull subject carries every change of the run with the content its
+  needs call for, a board subject the last change with each transition in
+  its text, a blocked subject the reason with the attempt's pull request.
 - **aicrewd's own sources** (increment 1d), journaled in the transaction
   of the change:
   - `attempt.changed`: an attempt's phase change (a blocked report, a
@@ -739,7 +747,9 @@ event is data; the bus is core.
   they are replayed by a release whose subscription file differs.
 - **Upgrade and downgrade.** Schema 33 adds the `events`,
   `event_deliveries` and `event_runs` tables; nothing earlier is journaled.
-  Schema 34 adds `attempt_blocks` and `timers`.
+  Schema 34 adds `attempt_blocks` and `timers`. Schema 35 rebuilds
+  `messages` to admit the `action.needed` kind (SQLite cannot change a
+  CHECK in place), every row kept, and adds `attempt_pull_facts`.
   An older aicrewd refuses a schema-33 store, as for every schema change.
   Going back means restoring the store copy the upgrade made
   (`<store>.backup-<UTC time>`), which loses what was written since: the

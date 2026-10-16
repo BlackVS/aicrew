@@ -55,6 +55,26 @@ type memberAttempt struct {
 	Branch string  `json:"branch"`
 	// BaseCommit is the commit the attempt's work started from.
 	BaseCommit string `json:"base_commit"`
+	// Process is the process pin the attempt was offered under, and
+	// Repository the repository its work happens in: where its
+	// automations are read from (automationsources.go).
+	Process    *ProcessPin        `json:"process,omitempty"`
+	Repository *attemptRepository `json:"repository,omitempty"`
+}
+
+// ProcessPin is an immutable process version: its repository, the commit
+// and the manifest within it.
+type ProcessPin struct {
+	Repository string `json:"repository"`
+	Commit     string `json:"commit"`
+	Manifest   string `json:"manifest"`
+}
+
+// attemptRepository is an attempt's repository as the session status
+// reports it.
+type attemptRepository struct {
+	URL           string `json:"url"`
+	DefaultBranch string `json:"default_branch"`
 }
 
 // inWork reports whether the attempt is running and being worked on: not

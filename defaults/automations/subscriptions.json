@@ -1,0 +1,5 @@
+{
+  "$schema": "https://github.com/BlackVS/aicrew/blob/main/internal/automation/automations.schema.json",
+  "version": 1,
+  "automations": []
+}

@@ -213,6 +213,12 @@ type MemberAttempt struct {
 	// BaseCommit is the commit the attempt's work started from, which a
 	// workflow script reads in attempt() (docs/DESIGN-TURNS.md, 10.3).
 	BaseCommit string `json:"base_commit,omitempty"`
+	// Process is the process pin the attempt was offered under, and
+	// Repository the repository its work happens in: where the launcher
+	// reads the attempt's automations from (docs/DESIGN-TURNS.md, 13.1).
+	// Both are absent for an attempt that recorded none.
+	Process    *ProcessIdentity   `json:"process,omitempty"`
+	Repository *AttemptRepository `json:"repository,omitempty"`
 	// UpdatedAt is when the attempt last changed, for the team state. The
 	// member's session status, which carries this struct, leaves it out.
 	UpdatedAt time.Time `json:"-"`
@@ -355,9 +361,16 @@ func memberOpenAttempt(ctx context.Context, q querier, teamID, agentID string) (
 	if err != nil {
 		return nil, err
 	}
-	return &MemberAttempt{ID: a.ID, State: a.State, Phase: a.Phase, Task: a.Task, Branch: a.Branch, BaseCommit: a.BaseCommit,
+	m := &MemberAttempt{ID: a.ID, State: a.State, Phase: a.Phase, Task: a.Task, Branch: a.Branch, BaseCommit: a.BaseCommit,
 		UpdatedAt: a.UpdatedAt,
-		Block:     block, HubBlock: a.Blocked}, nil
+		Block:     block, HubBlock: a.Blocked}
+	if id := a.Process.Identity; id != (ProcessIdentity{}) {
+		m.Process = &id
+	}
+	if r := a.Repository; r.URL != "" {
+		m.Repository = &r
+	}
+	return m, nil
 }
 
 // MemberAttemptFor is the member's newest attempt as its worker that is not

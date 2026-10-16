@@ -40,6 +40,21 @@ func TestAllowList(t *testing.T) {
 			t.Errorf("%s: %v is not a refusal", CommandLine(c.cmd, c.args), err)
 		}
 	}
+	// An argument that spans lines is matched by both rule forms: a legacy
+	// deny still wins, and a legacy allow still admits (hands review of
+	// #166).
+	multi := []string{"commit", "-m", "subject\n\nbody"}
+	legacyDeny := NewAllowList([]string{"Bash(git *)"}, []string{"Bash(git commit:*)"})
+	if err := legacyDeny.Admit("git", multi); !errors.Is(err, ErrRefused) {
+		t.Errorf("a legacy deny over a multi-line argument: %v", err)
+	}
+	if err := NewAllowList([]string{"Bash(git commit:*)"}, nil).Admit("git", multi); err != nil {
+		t.Errorf("a legacy allow over a multi-line argument: %v", err)
+	}
+	if err := NewAllowList([]string{"Bash(git *)"}, []string{"Bash(*--no-verify*)"}).Admit("git",
+		[]string{"commit", "-m", "a\nb", "--no-verify"}); !errors.Is(err, ErrRefused) {
+		t.Errorf("a wildcard deny after a multi-line argument: %v", err)
+	}
 	if (AllowList{}).Admit("git", []string{"status"}) == nil {
 		t.Error("an empty list admitted a command")
 	}

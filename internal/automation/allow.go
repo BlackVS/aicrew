@@ -92,7 +92,9 @@ func bashRule(rule string) *regexp.Regexp {
 	}
 	p = strings.TrimSuffix(p, ")")
 	if prefix, ok := strings.CutSuffix(p, ":*"); ok {
-		return regexp.MustCompile(`^` + regexp.QuoteMeta(prefix) + `(\s.*)?$`)
+		// (?s): an argument may span lines, as a commit message does, and
+		// the rule must still match it (hands review of #166).
+		return regexp.MustCompile(`(?s)^` + regexp.QuoteMeta(prefix) + `(\s.*)?$`)
 	}
 	var b strings.Builder
 	b.WriteString(`(?s)^`)

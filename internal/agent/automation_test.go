@@ -336,3 +336,48 @@ func TestAutomationLimits(t *testing.T) {
 		t.Errorf("an invalid script: %+v", res)
 	}
 }
+
+// What a host call gives the script is redacted: a job's log, a review or
+// a command's output that quotes the home's forge credential reaches the
+// child without it (hands' BLOCKER on #167).
+func TestAutomationHostAnswersAreRedacted(t *testing.T) {
+	a := setupAutomation(t)
+	leak := "token " + automationForgeToken + " leaked"
+	a.forge.content.Checks[0].Log.Excerpt = leak
+	a.forge.content.Comments[1].Body += "\n- [FOLLOW_UP] " + leak + "\n"
+	os.WriteFile(filepath.Join(a.worktree, "c.txt"), []byte("c\n"), 0o600)
+	git(t, a.worktree, "add", "c.txt")
+	git(t, a.worktree, "commit", "-q", "-m", leak)
+
+	a.srv.runsMu.Lock()
+	a.srv.runs = map[string]*liveRun{"token-r": {ctx: context.Background(), id: "run-r", attempt: a.id, pull: 7,
+		worktree: a.worktree, allow: TurnAllowList(a.cfg.Home, nil)}}
+	a.srv.runsMu.Unlock()
+	for _, c := range []automationCall{{Call: "pr"}, {Call: "run", Cmd: "git", Args: []string{"log", "-1", "--format=%B"}}} {
+		c.Token = "token-r"
+		body, _ := json.Marshal(c)
+		ans, err := CallStep(context.Background(), a.cfg.Home, StepCall{Op: automationOp, Body: body})
+		if err != nil || !ans.OK {
+			t.Fatalf("%s: %+v %v", c.Call, ans, err)
+		}
+		raw, _ := json.Marshal(ans)
+		if strings.Contains(string(raw), automationForgeToken) || !strings.Contains(string(raw), redacted) {
+			t.Errorf("%s: the answer is not redacted: %s", c.Call, raw)
+		}
+	}
+
+	// Through the child too: the script sees the redacted text.
+	src := fmt.Sprintf(`
+def main(event):
+    p = pr()
+    texts = [p.checks[0].excerpt, p.reviews[1].body] + p.reviews[1].findings + [run("git", ["log", "-1", "--format=%%B"]).output]
+    for t in texts:
+        if %q in t:
+            fail("a credential reached the script")
+    if %q not in p.checks[0].excerpt:
+        fail("not redacted: " + p.checks[0].excerpt)
+`, automationForgeToken, redacted)
+	if res := a.run(t, src, AutomationRun{}); res.Failed != "" {
+		t.Fatalf("the run: %+v", res)
+	}
+}

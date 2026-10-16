@@ -423,7 +423,7 @@ func (s *StepServer) serveAutomation(call StepCall) StepAnswer {
 		if err != nil {
 			return s.hostErr(err)
 		}
-		return done(p)
+		return done(redactPR(hostRedactor(s.home), p))
 	case "attempt":
 		a, err := s.hostAttempt(ctx, run)
 		if err != nil {
@@ -451,6 +451,50 @@ func (s *StepServer) serveAutomation(call StepCall) StepAnswer {
 		return done(struct{}{})
 	}
 	return refuse("invalid_request", "Unknown host call "+in.Call+".", "Use pr, attempt, run, step or comment.")
+}
+
+// hostRedactor removes the home's forge tokens and the known token shapes
+// from a text, the tokens read once. Every text a host call gives the
+// child passes through it: what the forge, a review, a job's log or a
+// command says may quote a credential.
+func hostRedactor(home string) func(string) string {
+	var toks []string
+	if doc, _, err := readAgentDoc(home); err == nil {
+		for host := range doc.forgeEntries() {
+			if _, tok, err := forgeTokenFor(home, doc, host); err == nil && tok != "" {
+				toks = append(toks, tok)
+			}
+		}
+	}
+	return func(s string) string {
+		for _, t := range toks {
+			s = strings.ReplaceAll(s, t, redacted)
+		}
+		return tokenShapes.ReplaceAllString(s, "[redacted]")
+	}
+}
+
+// redactPR is p with every text redacted.
+func redactPR(r func(string) string, p automation.PR) automation.PR {
+	list := func(ss []string) []string {
+		out := make([]string, 0, len(ss))
+		for _, s := range ss {
+			out = append(out, r(s))
+		}
+		return out
+	}
+	p.Head, p.Base, p.Branch, p.Labels = r(p.Head), r(p.Base), r(p.Branch), list(p.Labels)
+	reviews := make([]automation.Review, 0, len(p.Reviews))
+	for _, rv := range p.Reviews {
+		reviews = append(reviews, automation.Review{Reviewer: r(rv.Reviewer), Head: r(rv.Head), Verdict: r(rv.Verdict),
+			Findings: list(rv.Findings), Body: r(rv.Body)})
+	}
+	checks := make([]automation.Check, 0, len(p.Checks))
+	for _, c := range p.Checks {
+		checks = append(checks, automation.Check{Name: r(c.Name), Conclusion: r(c.Conclusion), Excerpt: r(c.Excerpt)})
+	}
+	p.Reviews, p.Checks = reviews, checks
+	return p
 }
 
 // automationKind is a step's kind (automation.stepKind).
@@ -585,7 +629,7 @@ func (s *StepServer) hostRun(ctx context.Context, run *liveRun, name string, arg
 	case err != nil:
 		return automation.RunResult{}, err
 	}
-	text, _ := automation.Bound(out.b.String(), automation.MaxRunOutput)
+	text, _ := automation.Bound(hostRedactor(s.home)(out.b.String()), automation.MaxRunOutput)
 	return automation.RunResult{Exit: cmd.ProcessState.ExitCode(), Output: text}, nil
 }
 

@@ -695,10 +695,24 @@ func wakeForge(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []strin
 			}
 		}
 	}
-	// The run's needs and content are those that still hold at its last
-	// observation: a later review supersedes an earlier one, and checks
-	// read for another head are not this head's (hands review of #165).
+	// The run's needs and content are those that still hold now: at the
+	// pull request as aicrewd last recorded it, which may be newer than the
+	// run's last event, since a change that needs no decision (CI running
+	// again) is recorded without queuing anything. A later review
+	// supersedes an earlier one, and checks read for another head are not
+	// this head's (hands reviews of #165).
 	final := last.Observation
+	cur, err := lastObservation(ctx, tx, last.AttemptID)
+	if err != nil {
+		return nil, err
+	}
+	if cur != nil {
+		final = *cur
+	}
+	pf, err := readPullFacts(ctx, tx, last.AttemptID)
+	if err != nil {
+		return nil, err
+	}
 	var content pullContentFacts
 	var omitted string
 	for _, f := range parsed {
@@ -717,6 +731,9 @@ func wakeForge(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []strin
 		if f.Omitted != "" {
 			omitted = f.Omitted
 		}
+	}
+	if pf != nil && pf.Review != nil {
+		content.Review = pf.Review // the newest review recorded, cut as stored
 	}
 	needs = holdingNeeds(needs, final, content)
 	if len(needs) == 0 {

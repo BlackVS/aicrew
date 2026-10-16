@@ -384,3 +384,42 @@ func TestLargeMetadataStillWakes(t *testing.T) {
 		t.Fatalf("a review read at another head: %v", err)
 	}
 }
+
+// A run is checked against the pull request as aicrewd last recorded it,
+// not only its own events: gates green, then CI running again on the same
+// head before the queue runs (a change that needs no decision and queues
+// nothing), is no longer "mark it ready", and wakes no one (hands review of
+// #165). Gates green again then wakes.
+func TestQueuedGatesAfterProgress(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	o := observed(a.Branch)
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	o.Checks, o.Comments, o.Content = "success", 1, true
+	o.Review, o.Passed = hands(head1, verdictReady), []PassedCheck{{Name: "go-test"}}
+	if res, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || strings.Join(res.Needs, ",") != NeedGates {
+		t.Fatalf("gates: %+v, %v", res, err)
+	}
+	*e.now = e.now.Add(10 * time.Second)
+	// CI runs again on that head: recorded, queues nothing.
+	o.Checks, o.Content, o.Review, o.Passed = "pending", false, nil, nil
+	if res, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || len(res.Needs) != 0 {
+		t.Fatalf("CI again: %+v, %v", res, err)
+	}
+	runs := settle(t, e.s, e.now)
+	if got := forgeEvents(t, e.s, e.indepTk); len(got) != 0 || len(runs) != 1 || runs[0].MessageID != "" {
+		t.Fatalf("a stale gates wake: %+v (runs %+v)", got, runs)
+	}
+	// CI passes again: gates green at the head, and a wake.
+	o.Checks, o.Content, o.Review, o.Passed = "success", true, hands(head1, verdictReady), []PassedCheck{{Name: "go-test"}}
+	if res, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || strings.Join(res.Needs, ",") != NeedGates {
+		t.Fatalf("gates again: %+v, %v", res, err)
+	}
+	settle(t, e.s, e.now)
+	if got := forgeEvents(t, e.s, e.indepTk); len(got) != 1 || !strings.Contains(got[0].Text, "Both gates are green") {
+		t.Fatalf("the gates wake: %+v", got)
+	}
+}

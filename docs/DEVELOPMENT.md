@@ -659,14 +659,17 @@ home's own forge credential:
   each watched pull request (the home's `state/pulls.json`) at the start of
   the wait and every 60 seconds, and reports it. A read costs one to three
   forge calls: the pull request, and on GitHub and Gitea the head commit's
-  status, and on GitHub its check runs.
+  status, and on GitHub its check runs, every page of them. A read ends with
+  the wait, so a slow forge cannot hold a short wait past its end.
 - **The message:** aicrewd compares a report with the last one and, on a
   label added, CI concluding, a new comment, or a merge or close, writes one
   lifecycle message carrying `forge`, to the worker, and to the
   coordinators while the result is submitted or when the pull request was
   merged or closed. A repeated report writes nothing.
 - **The end of a watch:** a merged or closed pull request, or one that is no
-  running attempt's (`no_attempt`), is no longer watched.
+  running attempt's (`no_attempt`), is no longer watched. A command on a
+  merged or closed pull request reports it and prints `watch: not watched:
+  it is merged` (or `closed`).
 
 ## Teams
 
@@ -2039,6 +2042,29 @@ credential.
   a new comment's URL, and `watch:`, whether the launcher now watches the
   pull request for forge events ("Forge events", above) or why not.
   `--json` prints the same as one object.
+- **`show` prints the content** as well (`docs/DESIGN-TURNS.md`, 4.1), so a
+  member never reads the forge another way to learn why it was woken:
+  - **the checks** of the head commit: each GitHub check run (every page)
+    and commit status, Gitea commit status or GitLab job of the head
+    pipeline, with its state and the forge's own conclusion;
+  - **a failed job's log excerpt**, at most 8 KiB, from ten lines before the
+    first line that reads as a failure (`--- FAIL`, `FAIL`, `panic:`,
+    `error:`), else the runner's `##[error]`, else the log's end, with
+    timestamps and terminal escapes removed. GitHub Actions jobs and GitLab
+    jobs offer their logs; GitHub's redirect to a signed address is
+    followed without the token, which never leaves the forge's host. A
+    commit status, Gitea's included, another app's check run, a refused log
+    and failed jobs past the fifth say why there is no excerpt;
+  - **the comments**, oldest first, with their author, time and body (at
+    most 32 KiB each): conversation comments, submitted reviews with their
+    state, and inline comments with their file and line, at most ten pages
+    of each list. GitLab's system notes and Gitea's review requests are
+    left out. A body whose first line is a review header
+    (`[oh-code-review (LEVEL) review] reviewed at head SHA` or
+    `[hands-bot review] reviewed at head SHA`) is marked as the local or the
+    external review, and whether it names the head.
+
+  Every body and excerpt is printed indented under its heading.
 - **`open`.** The head is the checkout's branch unless `--head` names one,
   and the base is the repository's default branch unless `--base` names
   one. `--draft` sets GitHub's draft flag. Gitea and GitLab take no draft

@@ -174,3 +174,28 @@ func TestForgePRWatch(t *testing.T) {
 		t.Fatalf("a broken channel: %+v %v", rep, err)
 	}
 }
+
+// A merged or closed pull request is reported, and then no longer watched:
+// the command says so instead of "watched" (01a1301d-55e3).
+func TestForgePRWatchEnds(t *testing.T) {
+	ctx := context.Background()
+	for _, state := range []string{"merged", "closed"} {
+		f := fakeforge.New(t, "gitea")
+		home := t.TempDir()
+		provisionTestForge(t, home, f.Host, fakeforge.Token)
+		reported := 0
+		pr := ForgePR{Home: home, Repository: "https://" + f.Host + "/team/app.git", API: &forge.Client{HTTP: f.Client},
+			Step: func(context.Context, string, StepCall) (StepAnswer, error) {
+				reported++
+				return StepAnswer{OK: true, Status: StepDone, Result: json.RawMessage(`{}`)}, nil
+			}}
+		if _, err := pr.Open(ctx, OpenPull{Title: "Fix", Head: "feat/x", Base: "main"}); err != nil {
+			t.Fatal(err)
+		}
+		f.SetPull(1, func(p *fakeforge.Pull) { p.State = state })
+		rep, err := pr.Show(ctx, 1)
+		if err != nil || rep.Watch != "not watched: it is "+state || reported != 2 {
+			t.Errorf("%s: %+v %v, %d reports", state, rep.Watch, err, reported)
+		}
+	}
+}

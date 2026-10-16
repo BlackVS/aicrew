@@ -33,6 +33,7 @@ type wireStatus struct {
 	ReviewComments int64 `json:"review_comments"`
 	UserNotes      int64 `json:"user_notes_count"`
 	HeadPipeline   *struct {
+		ID     int64  `json:"id"`
 		Status string `json:"status"`
 	} `json:"head_pipeline"`
 }
@@ -41,15 +42,6 @@ type wireStatus struct {
 type combinedStatus struct {
 	State      string `json:"state"`
 	TotalCount int64  `json:"total_count"`
-}
-
-// checkRuns is GitHub's check runs of a commit.
-type checkRuns struct {
-	TotalCount int64 `json:"total_count"`
-	CheckRuns  []struct {
-		Status     string `json:"status"`
-		Conclusion string `json:"conclusion"`
-	} `json:"check_runs"`
 }
 
 // GetPullStatus reads pull request n of the repository at path, with its
@@ -92,11 +84,11 @@ func (c *Client) GetPullStatus(ctx context.Context, host string, k Kind, token, 
 		conclusions = append(conclusions, statusChecks(cs.State))
 	}
 	if k == GitHub {
-		var runs checkRuns
-		if err := c.get(ctx, host, k, token, commit+"/check-runs?per_page=100", &runs); err != nil {
+		runs, err := c.checkRuns(ctx, host, token, commit)
+		if err != nil {
 			return PullStatus{}, err
 		}
-		for _, r := range runs.CheckRuns {
+		for _, r := range runs {
 			conclusions = append(conclusions, runChecks(r.Status, r.Conclusion))
 		}
 	}

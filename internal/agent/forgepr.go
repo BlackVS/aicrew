@@ -32,6 +32,7 @@ type PullAPI interface {
 	CommentPull(ctx context.Context, host string, k forge.Kind, token, path string, n int64, body string) (forge.Comment, error)
 	ReadyPull(ctx context.Context, host string, k forge.Kind, token, path string, n int64) (forge.Pull, error)
 	GetPullStatus(ctx context.Context, host string, k forge.Kind, token, path string, n int64) (forge.PullStatus, error)
+	GetPullContent(ctx context.Context, host string, k forge.Kind, token, path string, n int64) (forge.Pull, forge.PullContent, error)
 }
 
 // ForgePR is the home and repository one `forge pr` command acts in.
@@ -58,6 +59,8 @@ type PullReport struct {
 	Account    string         `json:"account"`
 	Pull       forge.Pull     `json:"pull"`
 	Comment    *forge.Comment `json:"comment,omitempty"`
+	// Content is the pull request's checks and comments, which show reads.
+	Content *forge.PullContent `json:"content,omitempty"`
 	// Watch says whether the launcher watches the pull request for forge
 	// events, or why not.
 	Watch string `json:"watch,omitempty"`
@@ -275,13 +278,25 @@ func (f *ForgePR) Open(ctx context.Context, o OpenPull) (PullReport, error) {
 	return rep, nil
 }
 
-// Show reads pull request n.
+// Show reads pull request n with its content: the checks of its head
+// commit, a failed job's log excerpt, and its comments with their bodies
+// (docs/DESIGN-TURNS.md, section 4.1).
 func (f *ForgePR) Show(ctx context.Context, n int64) (PullReport, error) {
 	t, err := f.target(ctx)
 	if err != nil {
 		return PullReport{}, err
 	}
-	return f.showWatched(ctx, t, n)
+	if n <= 0 {
+		return PullReport{}, errors.New("--pr must be a pull request number")
+	}
+	p, content, err := f.API.GetPullContent(ctx, t.host, t.kind(), t.token, t.path, n)
+	if err != nil {
+		return PullReport{}, fmt.Errorf("read pull request %d of %s on %s: %w", n, t.path, t.host, err)
+	}
+	rep := t.report(p)
+	rep.Content = &content
+	rep.Watch = f.watch(ctx, t, n)
+	return rep, nil
 }
 
 func (f *ForgePR) show(ctx context.Context, t pullTarget, n int64) (PullReport, error) {
@@ -388,6 +403,9 @@ const (
 	WatchOn          = "watched: a change of its labels, CI or comments reaches you as a forge.event in your inbox"
 	watchNoLauncher  = "not watched: no launcher runs for this home"
 	watchUnavailable = "not watched: "
+	// watchEnded is a merged or closed pull request, which the launcher
+	// reports and then stops watching (01a1301d-55e3).
+	watchEnded = "not watched: it is "
 )
 
 // watch reports pull request n's status, read after the command, to aicrewd
@@ -416,6 +434,8 @@ func (f *ForgePR) watch(ctx context.Context, t pullTarget, n int64) string {
 		return watchUnavailable + ans.Error.Message
 	case !ans.OK:
 		return watchUnavailable + "the launcher refused it"
+	case st.State != forge.PullOpen:
+		return watchEnded + st.State
 	}
 	return WatchOn
 }

@@ -82,7 +82,8 @@ func (s *StepServer) waitInbox(ctx context.Context, call StepCall) StepAnswer {
 // elsewhere or refused) ends it as "session"; a read that did not answer, or
 // a retryable refusal, is tried again. poll, when not nil, runs at the start
 // and every forgePoll before the read: the watched pull requests are read
-// and reported, so a forge event's message is read in the same pass.
+// and reported, so a forge event's message is read in the same pass. A poll
+// ends with the wait, however slow the forge (01a1301d-55e3).
 func waitPending(ctx context.Context, read func(context.Context) (json.RawMessage, error), poll func(context.Context),
 	wait time.Duration) WakeResult {
 	var paused *PauseNote
@@ -93,7 +94,9 @@ func waitPending(ctx context.Context, read func(context.Context) (json.RawMessag
 	var nextPoll time.Time
 	for {
 		if poll != nil && !time.Now().Before(nextPoll) {
-			poll(ctx)
+			pctx, cancel := context.WithDeadline(ctx, deadline)
+			poll(pctx)
+			cancel()
 			nextPoll = time.Now().Add(forgePoll)
 		}
 		raw, err := read(ctx)

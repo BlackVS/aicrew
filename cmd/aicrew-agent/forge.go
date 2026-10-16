@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/BlackVS/aicrew/internal/agent"
 	"github.com/BlackVS/aicrew/internal/forge"
@@ -26,7 +27,11 @@ const forgeUsage = `usage: aicrew-agent forge pr open    [--home DIR] [--reposit
   "WIP: " on Gitea and "Draft: " on GitLab. ready marks it ready once the
   gates are green: it drops GitHub's draft flag and, in every dialect, a
   draft title prefix (WIP:, [WIP], Draft:, [Draft], (Draft)). Labels must
-  exist already: none is created. Never use another forge client or a credential by hand.
+  exist already: none is created. show also prints the head commit's checks,
+  with a log excerpt of at most 8 KiB for a failed job where the forge
+  offers its log, and the comments with their authors and bodies, oldest
+  first; a review's header line ("reviewed at head SHA") is marked when it
+  names the head. Never use another forge client or a credential by hand.
   Each command reports the pull request to the launcher, which then watches
   it: a later change of its labels, CI or comments arrives in the inbox as a
   forge.event and wakes the member. Do not wait with a background watch:
@@ -141,5 +146,75 @@ func printPull(w io.Writer, rep agent.PullReport) {
 	}
 	if rep.Watch != "" {
 		fmt.Fprintf(w, "watch: %s\n", rep.Watch)
+	}
+	if rep.Content != nil {
+		printContent(w, *rep.Content)
+	}
+}
+
+// printContent prints a pull request's checks and comments. Every body and
+// excerpt is indented under its heading, so a line in it cannot pass for
+// one of these.
+func printContent(w io.Writer, c forge.PullContent) {
+	if len(c.Checks) == 0 {
+		fmt.Fprintln(w, "checks: none reported")
+	} else {
+		fmt.Fprintf(w, "checks: %d\n", len(c.Checks))
+	}
+	for _, ch := range c.Checks {
+		word := ch.State
+		if ch.Conclusion != "" && ch.Conclusion != ch.State {
+			word += " (" + ch.Conclusion + ")"
+		}
+		fmt.Fprintf(w, "  - %s: %s", ch.Name, word)
+		if ch.URL != "" {
+			fmt.Fprintf(w, " %s", ch.URL)
+		}
+		fmt.Fprintln(w)
+		switch {
+		case ch.Log == nil:
+		case ch.Log.None != "":
+			fmt.Fprintf(w, "    no log excerpt: %s\n", ch.Log.None)
+		default:
+			how := "log excerpt"
+			if ch.Log.Cut {
+				how += " (part of the log)"
+			}
+			fmt.Fprintf(w, "    %s:\n", how)
+			indent(w, ch.Log.Excerpt, "    | ")
+		}
+	}
+	fmt.Fprintf(w, "comments: %d\n", len(c.Comments))
+	for _, cm := range c.Comments {
+		fmt.Fprintf(w, "  - %s %s by %s", cm.At.UTC().Format(time.RFC3339), cm.Kind, cm.Author)
+		if cm.State != "" {
+			fmt.Fprintf(w, ", %s", cm.State)
+		}
+		if cm.Path != "" {
+			fmt.Fprintf(w, ", on %s:%d", cm.Path, cm.Line)
+		}
+		if r := cm.Review; r != nil {
+			at := "not at the head"
+			if r.AtHead {
+				at = "at the head"
+			}
+			fmt.Fprintf(w, ", %s review of %s (%s)", r.Reviewer, r.Head, at)
+		}
+		if cm.URL != "" {
+			fmt.Fprintf(w, " %s", cm.URL)
+		}
+		fmt.Fprintln(w)
+		body := cm.Body
+		if cm.Cut {
+			body += "\n[cut at 32 KiB]"
+		}
+		indent(w, body, "    | ")
+	}
+}
+
+// indent writes each line of text after prefix.
+func indent(w io.Writer, text, prefix string) {
+	for line := range strings.SplitSeq(strings.TrimRight(text, "\n"), "\n") {
+		fmt.Fprintf(w, "%s%s\n", prefix, line)
 	}
 }

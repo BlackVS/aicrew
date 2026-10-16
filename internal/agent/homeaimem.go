@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/automation"
 	"github.com/BlackVS/aicrew/internal/toolchain"
 )
 
@@ -238,6 +239,18 @@ func turnAllow(home string, coordinator bool) []string {
 		}
 	}
 	return rules
+}
+
+// TurnAllowList is the allow list a workflow script's run() is checked
+// against (docs/DESIGN-TURNS.md, 9.1 and 10.3): the Bash rules of the
+// home's worker turn, with the named toolchains', under the turn's deny
+// rules. It is the turn's own list, never widened for a script.
+func TurnAllowList(home string, toolchains []string) automation.AllowList {
+	allow := turnAllow(home, false)
+	for _, n := range toolchains {
+		allow = append(allow, toolchain.Rules(n)...)
+	}
+	return automation.NewAllowList(allow, denyRules())
 }
 
 // ReadTurnAllow is agent.json's turns.allow, as written.

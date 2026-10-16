@@ -3,6 +3,7 @@ module github.com/BlackVS/aicrew
 go 1.25.0
 
 require (
+	go.starlark.net v0.0.0-20261005163335-bcb1a1a55bf9
 	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.58.0
 )

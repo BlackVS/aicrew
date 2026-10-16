@@ -20,6 +20,15 @@
         {"role": "coordinator", "when": ["submit-or-submitted"]}
       ],
       "handler": "wake"
+    },
+    {
+      "name": "blocked-wake",
+      "description": "A worker reported its attempt blocked: the team's coordinators are woken with the reason and the attempt's last observed pull request, to relay what the worker needs or to escalate.",
+      "kinds": ["attempt.changed"],
+      "to": [
+        {"role": "coordinator", "when": ["blocked"]}
+      ],
+      "handler": "wake"
     }
   ]
 }

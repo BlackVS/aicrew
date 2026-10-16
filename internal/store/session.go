@@ -142,7 +142,11 @@ func startSessionTx(ctx context.Context, tx *sql.Tx, c Caller, teamID string, no
 		id, teamID, c.id, string(m.Role), coordGen, agent.Linked.TokenID, at, at, at, ordinal+1); err != nil {
 		return Session{}, fmt.Errorf("insert session: %w", err)
 	}
-	return getSession(ctx, tx, id)
+	sess, err := getSession(ctx, tx, id)
+	if err != nil {
+		return Session{}, err
+	}
+	return sess, journalMemberChange(ctx, tx, sess, "started", now)
 }
 
 type sessionRef struct {
@@ -204,7 +208,11 @@ func resumeSessionTx(ctx context.Context, tx *sql.Tx, c Caller, sessionID string
 	if err := endMovedProofs(ctx, tx, sessionID, now); err != nil {
 		return Session{}, err
 	}
-	return getSession(ctx, tx, sessionID)
+	resumed, err := getSession(ctx, tx, sessionID)
+	if err != nil {
+		return Session{}, err
+	}
+	return resumed, journalMemberChange(ctx, tx, resumed, "resumed", now)
 }
 
 type sessionAt struct {
@@ -371,6 +379,11 @@ func endSession(ctx context.Context, tx *sql.Tx, sess Session, state SessionStat
 		return fmt.Errorf("session %s: %w", sess.ID, ErrContextStale)
 	}
 	if err := endMovedProofs(ctx, tx, sess.ID, now); err != nil {
+		return err
+	}
+	ended := sess
+	ended.Generation++
+	if err := journalMemberChange(ctx, tx, ended, string(state), now); err != nil {
 		return err
 	}
 	if sess.Role == RoleCoordinator {

@@ -213,6 +213,11 @@ type MemberAttempt struct {
 	// UpdatedAt is when the attempt last changed, for the team state. The
 	// member's session status, which carries this struct, leaves it out.
 	UpdatedAt time.Time `json:"-"`
+	// Block is the worker's blocked report while the attempt is blocked:
+	// its reason and when it began. HubBlock is the hub's: the team's
+	// project is no longer granted. They are apart, and either may be set.
+	Block    *AttemptBlock `json:"block,omitempty"`
+	HubBlock *AttemptBlock `json:"hub_block,omitempty"`
 }
 
 // TeamState is a team's pause and its current members' state.
@@ -343,7 +348,12 @@ func memberOpenAttempt(ctx context.Context, q querier, teamID, agentID string) (
 	if err != nil {
 		return nil, err
 	}
-	return &MemberAttempt{ID: a.ID, State: a.State, Phase: a.Phase, Task: a.Task, Branch: a.Branch, UpdatedAt: a.UpdatedAt}, nil
+	block, err := workBlock(ctx, q, a.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &MemberAttempt{ID: a.ID, State: a.State, Phase: a.Phase, Task: a.Task, Branch: a.Branch, UpdatedAt: a.UpdatedAt,
+		Block: block, HubBlock: a.Blocked}, nil
 }
 
 // MemberAttemptFor is the member's newest attempt as its worker that is not

@@ -116,6 +116,13 @@ var guideRoles = []guideRole{
 		"raise one escalation with `/crew-escalate` on the task you are about to triage, category `intent`, " +
 		"asking \"am I paused?\", and meanwhile proceed with triage and offers as usual. Do not raise it again " +
 		"while it is open.\n\n" +
+		"**A worker's blocked report.** When a worker reports its attempt blocked, aicrew wakes you with one " +
+		"message that names the reason and the attempt's last observed pull request: its state, head, labels, " +
+		"CI conclusion and comment count. Read the rest with `aicrew-agent forge pr show --pr N` if you need it: " +
+		"the comments' bodies, the checks and a failed job's log excerpt. Then settle it as the rule below says: " +
+		"answer a question that is yours in a task comment, and escalate every other one with those facts in its " +
+		"context and the worker as the blocked member, whom the answer reaches. Never leave a blocked report " +
+		"unanswered.\n\n" +
 		escalationRule,
 		Steps: []guideStep{
 			{"offer", "", offerExample, "Offer a task to a named worker. `expected_revision` is the task's current " +

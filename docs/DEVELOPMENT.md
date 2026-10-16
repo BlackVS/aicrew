@@ -714,12 +714,32 @@ event is data; the bus is core.
   run, to the recipients the run's events name, read as they are at the
   run. A forge message carries every change of the run; a board message
   the last change, with each transition in its text.
+- **aicrewd's own sources** (increment 1d), journaled in the transaction
+  of the change:
+  - `attempt.changed`: an attempt's phase change (a blocked report, a
+    resume, a submit, a review's decision, the finalize). A blocked
+    report's reason, at most 4 KiB of it, is in the event; the attempt
+    keeps the whole of it until it leaves the blocked phase.
+  - `member.changed`: a member's session started, resumed, or ended (left,
+    stopped or ended).
+  - `timer.due`: a deadline stored in aicrewd (schema 34) passed. The
+    delivery loop journals it once, on its first tick after the deadline,
+    and a restart keeps it. Increment 2's review pickup is its first user.
+
+  The default `blocked-wake` subscription wakes the team's coordinators on
+  a blocked report. Its message names the reason and the attempt's last
+  observed pull request (state, head, labels, CI conclusion, comment
+  count), so the coordinator can answer or escalate without reading the
+  forge. The report's broadcast to the team then leaves the coordinators
+  out, so they are woken once for it. No default subscription takes the
+  other attempt changes, member changes or timers yet.
 - **Failures.** A handler that fails three times in a row parks the
   queue's events and sends the team's coordinators one message naming the
   subscription, the subject and the last error. Parked events are kept;
   they are replayed by a release whose subscription file differs.
 - **Upgrade and downgrade.** Schema 33 adds the `events`,
   `event_deliveries` and `event_runs` tables; nothing earlier is journaled.
+  Schema 34 adds `attempt_blocks` and `timers`.
   An older aicrewd refuses a schema-33 store, as for every schema change.
   Going back means restoring the store copy the upgrade made
   (`<store>.backup-<UTC time>`), which loses what was written since: the
@@ -832,7 +852,11 @@ member:
   (`last_waited_at`);
 - its own pause;
 - its newest open attempt: ID, state, phase, task, and when it last
-  changed (`updated_at`);
+  changed (`updated_at`). While the worker has reported it blocked,
+  `block` gives the reason and when the block began; `hub_block` is the
+  hub's own, when the team's project is no longer granted. The two are
+  kept apart (schema 34), and a block reported before schema 34 shows no
+  `block` until the next report;
 - its unacknowledged messages;
 - its `state`, derived as follows until the runner reports it (B2):
   - `paused`: the team or the member is paused;

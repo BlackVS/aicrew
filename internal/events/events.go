@@ -30,6 +30,13 @@ const (
 	// KindForgeChanged is a change of an attempt's pull request that its
 	// worker's launcher observed.
 	KindForgeChanged = "forge.changed"
+	// KindAttemptChanged is an attempt's phase change: a blocked report, a
+	// resume, a submit, a review's decision or the finalize.
+	KindAttemptChanged = "attempt.changed"
+	// KindMemberChanged is a member's session starting, resuming or ending.
+	KindMemberChanged = "member.changed"
+	// KindTimerDue is a deadline aicrewd stored, passed.
+	KindTimerDue = "timer.due"
 )
 
 // The roles a subscription wakes.
@@ -53,6 +60,9 @@ const (
 	// submit (a merge, a close or a reopen), or any change while the
 	// attempt's result is submitted.
 	WhenSubmitOrSubmitted = "submit-or-submitted"
+	// WhenBlocked holds for an attempt's change to the blocked phase: its
+	// worker's blocked report.
+	WhenBlocked = "blocked"
 )
 
 // HandlerWake writes one lifecycle message per handler run, carrying the
@@ -60,9 +70,9 @@ const (
 const HandlerWake = "wake"
 
 var (
-	kinds      = []string{KindBoardChanged, KindForgeChanged}
+	kinds      = []string{KindBoardChanged, KindForgeChanged, KindAttemptChanged, KindMemberChanged, KindTimerDue}
 	roles      = []string{RoleWorker, RoleCoordinator}
-	conditions = []string{WhenAlways, WhenNotOwnChange, WhenReadyOrTeamAttempt, WhenSubmitOrSubmitted}
+	conditions = []string{WhenAlways, WhenNotOwnChange, WhenReadyOrTeamAttempt, WhenSubmitOrSubmitted, WhenBlocked}
 	handlers   = []string{HandlerWake}
 	nameShape  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 )
@@ -207,6 +217,7 @@ type Facts struct {
 	TeamAttempt bool // the team has an attempt for the board change's task
 	Submit      bool // a pull request change that bears on a submit
 	Submitted   bool // the attempt's result is submitted
+	Blocked     bool // an attempt's change to the blocked phase
 }
 
 // Roles is the roles s wakes for an event with facts f, each once, in the
@@ -238,6 +249,8 @@ func holds(when string, f Facts) bool {
 		return f.Ready || f.TeamAttempt
 	case WhenSubmitOrSubmitted:
 		return f.Submit || f.Submitted
+	case WhenBlocked:
+		return f.Blocked
 	}
 	return false
 }

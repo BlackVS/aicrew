@@ -143,9 +143,10 @@ func TestWorkLifecycle(t *testing.T) {
 	if offers != 1 {
 		t.Errorf("the worker read %d offers, want 1", offers)
 	}
+	// The coordinator hears of the blocked report from the blocked-wake
+	// subscription, not from the broadcast (increment 1d).
 	want := []string{
 		"builder accepted task hub-a/project-a/task-1 and started work.",
-		"builder blocked task hub-a/project-a/task-1: The test database is unavailable.",
 		"builder resumed work on task hub-a/project-a/task-1.",
 		"builder submitted a result for task hub-a/project-a/task-1: https://example.invalid/pull/1",
 		"Task hub-a/project-a/task-1 was finalized as done with result 1.",
@@ -476,6 +477,9 @@ func TestInconsistentUpdateReplyIsNotTrusted(t *testing.T) {
 // anything is sent, and an accepted maximum-size blocker settles and resumes.
 func TestBlockerFitsItsTeamMessage(t *testing.T) {
 	e, a := running(t)
+	// A blocked report's broadcast goes to the members other than the
+	// coordinators, who are woken by the blocked-wake subscription.
+	peer := joinCrew(t, e.s, e.tm.ID, "peer", RoleWorker)
 	calls := len(e.port.callLog())
 	if _, err := e.work(t, "w-long", a, IntentBlock, strings.Repeat("x", maxMessageText)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("oversized blocker: got %v, want ErrInvalid", err)
@@ -508,7 +512,7 @@ func TestBlockerFitsItsTeamMessage(t *testing.T) {
 	if err != nil || got.Phase != PhaseBlocked || got.State != AttemptRunning {
 		t.Fatalf("reconcile after the rename = %+v, %v", got, err)
 	}
-	items := read(t, e.s, e.lead, 20)
+	items := read(t, e.s, peer, 20)
 	if last := items[len(items)-1]; last.Text != prefix+longest {
 		t.Fatalf("the settled message was rebuilt: %d bytes, want the checked %d", len(last.Text), len(prefix+longest))
 	}

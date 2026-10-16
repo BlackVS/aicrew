@@ -110,8 +110,9 @@ func TestDefaultsMatchTheSchema(t *testing.T) {
 		t.Fatalf("the defaults do not match the schema:\n%s", strings.Join(errs, "\n"))
 	}
 	d := Defaults()
-	if len(d.Subscriptions) != 2 || len(d.Version) != 16 || len(d.Matching(KindBoardChanged)) != 1 ||
-		len(d.Matching(KindForgeChanged)) != 1 {
+	if len(d.Subscriptions) != 3 || len(d.Version) != 16 || len(d.Matching(KindBoardChanged)) != 1 ||
+		len(d.Matching(KindForgeChanged)) != 1 || len(d.Matching(KindAttemptChanged)) != 1 ||
+		len(d.Matching(KindMemberChanged)) != 0 || len(d.Matching(KindTimerDue)) != 0 {
 		t.Fatalf("the defaults: %+v", d)
 	}
 }
@@ -182,6 +183,7 @@ func TestRoles(t *testing.T) {
 	d := Defaults()
 	board, _ := d.Named("board-wake")
 	forge, _ := d.Named("forge-wake")
+	blocked, _ := d.Named("blocked-wake")
 	for _, c := range []struct {
 		sub  Subscription
 		f    Facts
@@ -194,6 +196,8 @@ func TestRoles(t *testing.T) {
 		{forge, Facts{}, []string{RoleWorker}},
 		{forge, Facts{Submit: true}, []string{RoleWorker, RoleCoordinator}},
 		{forge, Facts{Submitted: true}, []string{RoleWorker, RoleCoordinator}},
+		{blocked, Facts{Blocked: true}, []string{RoleCoordinator}},
+		{blocked, Facts{}, nil},
 		{Subscription{To: []Recipient{{RoleWorker, []string{WhenAlways}}, {RoleWorker, []string{WhenAlways}}}}, Facts{}, []string{RoleWorker}},
 	} {
 		if got := c.sub.Roles(c.f); !slices.Equal(got, c.want) {

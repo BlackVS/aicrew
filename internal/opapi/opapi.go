@@ -459,6 +459,16 @@ type MemberAttempt struct {
 	ProjectID string    `json:"project_id"`
 	TaskID    string    `json:"task_id"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Block is the worker's blocked report: why, and since when. HubBlock
+	// is the hub's block, when the team's project is no longer granted.
+	Block    *AttemptBlock `json:"block,omitempty"`
+	HubBlock *AttemptBlock `json:"hub_block,omitempty"`
+}
+
+// AttemptBlock is a block of an attempt: its reason and when it began.
+type AttemptBlock struct {
+	Reason string    `json:"reason"`
+	Since  time.Time `json:"since"`
 }
 
 // The pull requests waiting for the human merge (docs/DESIGN-CONTROL-PLANE.md,

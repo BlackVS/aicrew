@@ -227,7 +227,7 @@ func (s *Store) journalBoardChange(ctx context.Context, tx *sql.Tx, hubID string
 	}
 	var ms []match
 	for _, t := range teams {
-		ms = append(ms, s.matches(events.KindBoardChanged, t.id,
+		ms = append(ms, matches(events.KindBoardChanged, t.id,
 			events.Facts{OwnChange: own > 0, Ready: ch.To == boardReady, TeamAttempt: t.attempt})...)
 	}
 	// The key holds the change's time as well as its revision: a hub

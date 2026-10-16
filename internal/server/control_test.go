@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -186,12 +187,23 @@ func TestLiveness(t *testing.T) {
 }
 
 // GET /v1/admin/team-states reads every team's state, or one team's, for the
-// operator and an architect credential, with the open attempt's last change;
+// operator and an architect credential, with the open attempt's last change
+// and a worker's blocked report;
 // the operator's own team state route stays the operator's, and an unknown
 // parameter or team is refused.
 func TestTeamStatesRoute(t *testing.T) {
 	e := setupCoordination(t)
 	id := e.runningOffer(t)
+	// The worker reports its attempt blocked: the state shows the reason.
+	ctx := context.Background()
+	b, err := e.store.AuthenticateSessionToken(ctx, e.worker.token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.UpdateWork(ctx, e.worker.caller, e.aimem, "block-1", id, store.WorkUpdate{SessionID: b.SessionID,
+		Generation: b.Generation, Intent: store.IntentBlock, Detail: "Waiting on the schema decision."}); err != nil {
+		t.Fatalf("block: %v", err)
+	}
 	var cred opapi.ArchitectCredential
 	if got := e.adminCall(t, http.MethodPost, opapi.ArchitectCredentialsPath, e.opToken, nil,
 		opapi.ArchitectCredentialRequest{Label: "planning"}, &cred); got.status != http.StatusCreated {
@@ -207,7 +219,9 @@ func TestTeamStatesRoute(t *testing.T) {
 			found := false
 			for _, m := range list[0].Members {
 				if m.AgentID == e.worker.agent.ID {
-					found = m.OpenAttempt != nil && m.OpenAttempt.ID == id && !m.OpenAttempt.UpdatedAt.IsZero() && !m.Stalled
+					found = m.OpenAttempt != nil && m.OpenAttempt.ID == id && !m.OpenAttempt.UpdatedAt.IsZero() && !m.Stalled &&
+						m.OpenAttempt.Block != nil && m.OpenAttempt.Block.Reason == "Waiting on the schema decision." &&
+						!m.OpenAttempt.Block.Since.IsZero() && m.OpenAttempt.HubBlock == nil
 				}
 			}
 			if !found {

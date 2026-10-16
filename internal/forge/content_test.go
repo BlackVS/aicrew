@@ -212,6 +212,10 @@ func TestExcerpt(t *testing.T) {
 		{"no error", strings.Join(lines, "\n"), "", true},
 		{"short", "one\nerror: two\nthree\n", "one", false},
 		{"an error in a word is none", "fail-on-error: true\nall good\n", "fail-on-error", false},
+		// A key ending in error: before a long setup does not hide the
+		// later failure.
+		{"a key is no error", "fail-on-error: true\n" + strings.Join(withFail, "\n"), "190 ", true},
+		{"a tool's error", strings.Join(lines[:30], "\n") + "\nmain.go:3:2: error: undefined\n", "020 ", true},
 	} {
 		got, cut := excerpt(c.log)
 		if len(got) > MaxExcerpt || cut != c.cut || !strings.HasPrefix(got, c.start) {

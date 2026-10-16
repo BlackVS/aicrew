@@ -610,7 +610,10 @@ func pages[T any](ctx context.Context, c *Client, host string, k Kind, token, p 
 // The lines a log's excerpt starts near: a test's or a program's failure,
 // then an error a tool reports, then the runner's own error annotation.
 var (
-	failureLine = regexp.MustCompile(`^\s*(--- FAIL|FAIL\b|panic:|fatal error:)|(?i)\berror:|\bnpm ERR!`)
+	// An "error:" counts at the start of a line or after a space, a colon,
+	// a bracket or a parenthesis, as a tool prints it, never as the end of
+	// a word such as the key fail-on-error:.
+	failureLine = regexp.MustCompile(`^\s*(--- FAIL|FAIL\b|panic:|fatal error:)|(?i)(^|[\s:\[(])error:|\bnpm ERR!`)
 	runnerError = regexp.MustCompile(`^##\[error\]`)
 	// timestamp is the time GitHub prefixes each line of a job's log with.
 	timestamp = regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z `)

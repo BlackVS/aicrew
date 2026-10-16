@@ -261,3 +261,24 @@ func TestReviewHeader(t *testing.T) {
 		}
 	}
 }
+
+// A review's verdict is the word after its verdict label, or on the line
+// after a verdict heading, in the local and the external review's formats.
+func TestReviewVerdict(t *testing.T) {
+	for body, want := range map[string]string{
+		"[hands-bot review] x\n\nBLOCKERS\n- None\n\nVERDICT\nREADY_FOR_HUMAN_MERGE\nNo findings.": "READY_FOR_HUMAN_MERGE",
+		"[hands-bot review] x\n\nVERDICT\n\nRETURN_TO_IMPLEMENTATION\nTwo blockers.":               "RETURN_TO_IMPLEMENTATION",
+		"[oh-code-review (high) review] x\n\n**Verdict:** READY_FOR_HUMAN_MERGE. **Risk:** LOW.":   "READY_FOR_HUMAN_MERGE",
+		"## Verdict: return_to_implementation":                                                     "",
+		"The verdict is in the next comment.":                                                      "",
+		"no verdict here":                                                                          "",
+	} {
+		if got := reviewVerdict(body); got != want {
+			t.Errorf("%q: %q, want %q", body, got, want)
+		}
+	}
+	if h := reviewHeader("[hands-bot review] reviewed at head 0123456\n\nVERDICT\nREADY_FOR_HUMAN_MERGE", "0123456789"); h == nil ||
+		h.Verdict != "READY_FOR_HUMAN_MERGE" {
+		t.Errorf("the header's verdict: %+v", h)
+	}
+}

@@ -249,3 +249,71 @@ func TestEventsKeepThePagesOrder(t *testing.T) {
 		t.Fatalf("the announcements: %+v", got)
 	}
 }
+
+// A run's message keeps every change of its events in order, repeats
+// included: two comments added one by one are two changes, and a
+// conclusion that flips back ends the list as it ended on the forge.
+func TestEventBurstKeepsRepeatedChanges(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	o := observed(a.Branch)
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []func(){
+		func() { o.Comments = 1 },
+		func() { o.Comments = 2 },
+		func() { o.Checks = "success" },
+		func() { o.Checks = "failure" },
+		func() { o.Checks = "success" },
+	} {
+		step()
+		if res, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID == "" {
+			t.Fatalf("%+v, %v", res, err)
+		}
+		*e.now = e.now.Add(time.Second)
+	}
+	if runs := settle(t, e.s, e.now); len(runs) != 1 || runs[0].Events != 5 {
+		t.Fatalf("runs: %+v", runs)
+	}
+	evs := forgeEvents(t, e.s, e.indepTk)
+	want := "1 new comment(s)|1 new comment(s)|CI concluded success at 0123456789ab|" +
+		"CI concluded failure at 0123456789ab|CI concluded success at 0123456789ab"
+	if len(evs) != 1 || strings.Join(evs[0].Forge.Changes, "|") != want || evs[0].Forge.Checks != "success" {
+		t.Fatalf("the message: %+v", evs)
+	}
+}
+
+// A queue selected as due is checked again in its run: an event that
+// arrived in between ends the quiet, and the run waits for the next one.
+func TestEventQueueRecheckedBeforeRun(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	o := observed(a.Branch)
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	o.Comments = 1
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	*e.now = e.now.Add(EventQuiet)
+	e.s.beforeQueueRun = func() {
+		e.s.beforeQueueRun = nil
+		o.Comments = 2
+		if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+			t.Error(err)
+		}
+	}
+	if runs := deliver(t, e.s); len(runs) != 0 {
+		t.Fatalf("a run although an event had just arrived: %+v", runs)
+	}
+	if got := forgeEvents(t, e.s, e.indepTk); len(got) != 0 {
+		t.Fatalf("messages: %+v", got)
+	}
+	if runs := settle(t, e.s, e.now); len(runs) != 1 || runs[0].Events != 2 {
+		t.Fatalf("the next run: %+v", runs)
+	}
+}

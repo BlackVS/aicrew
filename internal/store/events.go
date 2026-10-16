@@ -237,6 +237,9 @@ func (s *Store) DeliverEvents(ctx context.Context, c Caller) ([]DeliverRun, erro
 	}
 	runs := []DeliverRun{}
 	for _, q := range due {
+		if s.beforeQueueRun != nil {
+			s.beforeQueueRun()
+		}
 		r, err := s.runQueue(ctx, q, now)
 		if err != nil {
 			return runs, err
@@ -264,24 +267,36 @@ func (s *Store) dueQueues(ctx context.Context, now time.Time) ([]queue, error) {
 		if err := rows.Scan(&q.subscription, &q.teamID, &q.subject, &oldest, &newest); err != nil {
 			return nil, err
 		}
-		o, err := parseTime(oldest)
+		due, err := s.due(oldest, newest, now)
 		if err != nil {
 			return nil, err
 		}
-		n, err := parseTime(newest)
-		if err != nil {
-			return nil, err
-		}
-		if now.Sub(n) >= s.eventQuiet || now.Sub(o) >= s.eventMaxWait {
+		if due {
 			out = append(out, q)
 		}
 	}
 	return out, rows.Err()
 }
 
-// runQueue runs q's handler on its pending events in one transaction. A
-// failure is recorded in a transaction of its own, and the third in a row
-// parks the events.
+// due reports whether a queue whose pending events were recorded from
+// oldest to newest is due a run at now: quiet for eventQuiet, or waiting
+// for eventMaxWait.
+func (s *Store) due(oldest, newest string, now time.Time) (bool, error) {
+	o, err := parseTime(oldest)
+	if err != nil {
+		return false, err
+	}
+	n, err := parseTime(newest)
+	if err != nil {
+		return false, err
+	}
+	return now.Sub(n) >= s.eventQuiet || now.Sub(o) >= s.eventMaxWait, nil
+}
+
+// runQueue runs q's handler on its pending events in one transaction, if
+// the queue is still due: an event that arrived after the queue was
+// selected may have ended its quiet. A failure is recorded in a
+// transaction of its own, and the third in a row parks the events.
 func (s *Store) runQueue(ctx context.Context, q queue, now time.Time) (DeliverRun, error) {
 	r := DeliverRun{Subscription: q.subscription, TeamID: q.teamID, Subject: q.subject}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -289,6 +304,19 @@ func (s *Store) runQueue(ctx context.Context, q queue, now time.Time) (DeliverRu
 		return r, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after commit
+	var oldest, newest sql.NullString
+	if err := tx.QueryRowContext(ctx,
+		`SELECT MIN(recorded_at), MAX(recorded_at) FROM event_deliveries
+		 WHERE state = ? AND subscription = ? AND team_id = ? AND subject = ?`,
+		deliveryPending, q.subscription, q.teamID, q.subject).Scan(&oldest, &newest); err != nil {
+		return r, fmt.Errorf("read the queue: %w", err)
+	}
+	if !oldest.Valid {
+		return r, nil
+	}
+	if due, err := s.due(oldest.String, newest.String, now); err != nil || !due {
+		return r, err
+	}
 	evs, err := pendingEvents(ctx, tx, q)
 	if err != nil {
 		return r, err
@@ -560,11 +588,10 @@ func wakeForge(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, role
 			return "", errors.New("the queue holds events of two attempts")
 		}
 		last = f
-		for _, c := range f.Changes {
-			if !slices.Contains(changes, c) {
-				changes = append(changes, c)
-			}
-		}
+		// Every event's changes, in order, repeats included: two events that
+		// each add a comment, or a conclusion that flips and flips back, are
+		// distinct changes even when their words are equal.
+		changes = append(changes, f.Changes...)
 	}
 	a, err := getAttempt(ctx, tx, last.AttemptID)
 	if err != nil {

@@ -99,10 +99,13 @@ type Store struct {
 	// subs is the event subscriptions and handlers the handlers they name
 	// (events.go); eventQuiet and eventMaxWait time a queue's run. Tests
 	// may replace them.
-	subs         events.Set
-	handlers     map[string]handlerFunc
-	eventQuiet   time.Duration
-	eventMaxWait time.Duration
+	subs events.Set
+	// beforeQueueRun, when set by tests, runs between the selection of a
+	// due event queue and its run, to force interleavings.
+	beforeQueueRun func()
+	handlers       map[string]handlerFunc
+	eventQuiet     time.Duration
+	eventMaxWait   time.Duration
 }
 
 // Open opens or creates the store at path and applies the schema. It

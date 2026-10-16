@@ -40,6 +40,15 @@ Current direct dependencies:
 - `golang.org/x/sys v0.47.0` (published 2026-06-30, Go project), for the
   store's file lock. It was already in the module graph through the SQLite
   driver at this version.
+- `go.starlark.net v0.0.0-20261005163335-bcb1a1a55bf9` (commit `bcb1a1a`
+  of github.com/google/starlark-go, published 2026-10-05; BSD-3-Clause, the
+  Bazel Authors), the workflow scripts' interpreter ("Workflow scripts",
+  below). The module publishes no tagged releases, so it is pinned by its
+  pseudo-version: the newest commit that was seven days old when it was
+  added. Only its interpreter packages are compiled in (`starlark`,
+  `starlarkstruct`, `syntax`, `resolve`); its own module graph adds the
+  `go-cmp` and `protobuf` checksums to `go.sum`, which no aicrew binary
+  builds.
 
 ## Checks
 
@@ -756,6 +765,33 @@ event is data; the bus is core.
   board is read again from the copy's older cursor, and the launchers
   report their pull requests again, so their changes are announced again
   rather than lost.
+
+### Workflow scripts
+
+A step that needs no judgement becomes a workflow script
+(`docs/DESIGN-TURNS.md`, section 10): Starlark, run by
+`internal/automation` (increment 2a) with the host API of 10.3 and
+nothing more.
+- **The dialect:** no `while`, no recursion, no reassigned globals, no
+  `load`; `print` reaches nothing. The universe holds no file, network,
+  clock or environment, and every global is frozen after the script
+  loads.
+- **The host API:** `pr()`, `attempt()`, `run(cmd, args)`,
+  `step(kind, text)`, `comment(body)`, and `turn(kind, content)` as a
+  value `main(event)` returns. Any other name fails the script at load.
+  The results are bounded: a review's body and a comment at 16 KiB, a
+  failed job's excerpt at 8 KiB, a command's output at 64 KiB.
+- **The limits:** 1 million execution steps and 2 minutes of wall clock,
+  `run()` calls included. The memory limit is the child process's
+  (increment 2b).
+- **The allow list:** `run(cmd, args)` runs a bare command name with an
+  argument list and no shell, only when the worker turn's own list admits
+  it (`agent.TurnAllowList`: the managed `Bash(...)` rules and the team's
+  toolchain, under the turn's deny rules). The list is never widened for
+  a script.
+
+The launcher serves the host and runs scripts from increment 2b; until
+then the package runs under tests against a fake host.
 
 ## Teams
 

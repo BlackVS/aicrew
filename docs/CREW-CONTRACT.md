@@ -1442,6 +1442,14 @@ task and the attempt.
 - A comment the worker posts with `forge pr comment` is in its baseline and
   is not announced; one it posts another way is.
 
+**Reading the content.** The message names what changed, never a comment's
+body. `aicrew-agent forge pr show --pr N` prints the rest, with the member's
+own credential: the head commit's checks, a failed job's log excerpt of at
+most 8 KiB where the forge offers the log (or why there is none), and the
+comments with their authors and bodies, a review header at the head marked
+as such (DEVELOPMENT, "Pull requests with the member's credential"). A
+member reads the forge no other way.
+
 ## Cross-project references
 
 - A team may span several projects on one hub. Multi-hub teams are out of

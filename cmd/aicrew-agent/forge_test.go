@@ -115,6 +115,29 @@ func TestForgePRCommand(t *testing.T) {
 				rep.Repository != "team/app" || rep.Pull.HeadCommit != fakeforge.HeadCommit {
 				t.Fatalf("show --json: %d\n%s", code, out)
 			}
+			if c := rep.Content; c == nil || len(c.Checks) != 0 || len(c.Comments) != 1 ||
+				c.Comments[0].Body != "Reviewed at the head.\n" || c.Comments[0].Author != fakeforge.Member {
+				t.Fatalf("show --json's content: %+v", rep.Content)
+			}
+			// show prints the checks, a failed job's excerpt and the
+			// comments, each body indented under its heading.
+			f.SetPull(1, func(p *fakeforge.Pull) {
+				p.CommentAs("hands-bot", "[hands-bot review] reviewed at head "+fakeforge.HeadCommit+"\n\nVERDICT\nREADY_FOR_HUMAN_MERGE")
+				p.Checks = []fakeforge.Check{{Name: "go-test", Status: "completed", Conclusion: "failure", Log: "ok\n--- FAIL: TestX\n"}}
+			})
+			code, out, _ = runForge(t, home, "", "pr", "show", repo, "--pr", "1")
+			excerpt := "    log excerpt:\n    | ok\n    | --- FAIL: TestX\n"
+			if kind == "gitea" {
+				excerpt = "    no log excerpt: a commit status carries no log"
+			}
+			for _, want := range []string{"checks: 1\n  - go-test: failure", excerpt, "comments: 2\n",
+				" comment by " + fakeforge.Member + " ", "    | Reviewed at the head.\n",
+				" comment by hands-bot, external review of " + fakeforge.HeadCommit + " (at the head)",
+				"    | VERDICT\n    | READY_FOR_HUMAN_MERGE\n"} {
+				if code != exitOK || !strings.Contains(out, want) {
+					t.Fatalf("show lacks %q: %d\n%s", want, code, out)
+				}
+			}
 			if code, _, errOut = runForge(t, home, "", "pr", "show", repo, "--pr", "9"); code != exitFailed ||
 				!strings.Contains(errOut, "no such") {
 				t.Errorf("an unknown pull request: %d %s", code, errOut)

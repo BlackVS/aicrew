@@ -250,3 +250,22 @@ func TestWaitPendingRetriesARetryableRefusal(t *testing.T) {
 		t.Fatalf("a rate-limited read: %+v", r)
 	}
 }
+
+// A forge poll that does not answer ends with the wait: a short wait ends on
+// time however slow the forge (01a1301d-55e3).
+func TestWaitPendingBoundsTheForgePoll(t *testing.T) {
+	empty := func(context.Context) (json.RawMessage, error) { return json.RawMessage(`{"pending":[]}`), nil }
+	var polled bool
+	slow := func(ctx context.Context) {
+		polled = true
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Minute):
+		}
+	}
+	start := time.Now()
+	r := waitPending(context.Background(), empty, slow, time.Second)
+	if took := time.Since(start); !polled || r.Ended != "timeout" || took > 3*time.Second {
+		t.Fatalf("a 1-second wait with a slow forge: %+v after %v (polled %v)", r, took, polled)
+	}
+}

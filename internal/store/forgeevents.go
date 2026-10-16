@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/BlackVS/aicrew/internal/events"
 	"github.com/BlackVS/aicrew/internal/forge"
 )
 
@@ -19,11 +20,13 @@ import (
 // worker's launcher reads the pull request of its running attempt with the
 // home's own credential and reports what it observed. aicrewd keeps the last
 // observation of each attempt's pull request and, once per observed change,
-// writes a forge.event lifecycle message: to the worker always, and to the
-// team's coordinators when the change bears on a submit (the attempt's
-// result is submitted, or the pull request was merged or closed). The first
-// observation of a pull request is the baseline, written by the member's own
-// forge pr command, and announces nothing: the member saw it.
+// journals a forge.changed event (events.go) in the same transaction. The
+// default forge-wake subscription queues it for the worker always, and for
+// the team's coordinators when the change bears on a submit (the attempt's
+// result is submitted, or the pull request was merged or closed); its run
+// writes the forge.event lifecycle message. The first observation of a pull
+// request is the baseline, written by the member's own forge pr command, and
+// announces nothing: the member saw it.
 
 // ErrNoAttempt refuses an observation of a pull request that is no running
 // attempt's of the member: its repository and head branch match none.
@@ -62,13 +65,14 @@ type ForgeDetail struct {
 }
 
 // ObserveResult is what aicrewd did with an observation: the attempt it is
-// the pull request of, whether it was the baseline, and the forge.event it
-// wrote, if any.
+// the pull request of, whether it was the baseline, what changed, and the
+// event it journaled, if any. The forge.event message follows when the
+// event's queue runs (events.go).
 type ObserveResult struct {
 	AttemptID string   `json:"attempt_id"`
 	Baseline  bool     `json:"baseline"`
 	Changes   []string `json:"changes"`
-	MessageID string   `json:"message_id,omitempty"`
+	EventID   string   `json:"event_id,omitempty"`
 }
 
 const (
@@ -118,7 +122,7 @@ func (o PullObservation) validate() error {
 // request of one of its running attempts, matched by repository and head
 // branch. The first observation of a pull request, and every one marked as
 // a baseline, is recorded and announces nothing; a later one that differs is
-// recorded with one forge.event message, and one that does not changes
+// recorded with one forge.changed event, and one that does not changes
 // nothing, so a repeated report announces nothing twice.
 func (s *Store) ObservePullWithToken(ctx context.Context, token string, o PullObservation) (ObserveResult, error) {
 	if o.Labels == nil {
@@ -171,27 +175,17 @@ func (s *Store) ObservePullWithToken(ctx context.Context, token string, o PullOb
 	changes, submit := pullChanges(*prev, o)
 	res.Changes = changes
 	if len(changes) > 0 {
-		recipients := []string{a.WorkerAgentID}
-		to := a.WorkerAgentID
-		if submit || a.Phase == PhaseSubmitted {
-			coords, err := activeCoordinators(ctx, tx, a.TeamID)
-			if err != nil {
-				return ObserveResult{}, err
-			}
-			for _, c := range coords {
-				if c != a.WorkerAgentID {
-					recipients, to = append(recipients, c), ""
-				}
-			}
-		}
-		task := a.Task
-		m, err := insertMessage(ctx, tx, Message{TeamID: a.TeamID, Kind: KindLifecycle, To: to, Task: &task, AttemptID: a.ID,
-			Text: forgeText(o, changes), Forge: &ForgeDetail{Pull: o.Number, URL: o.URL, State: o.State, HeadCommit: o.HeadCommit,
-				Labels: o.Labels, Checks: o.Checks, Comments: o.Comments, Changes: changes}}, recipients, now)
+		key, err := newID(now)
 		if err != nil {
 			return ObserveResult{}, err
 		}
-		res.MessageID = m.ID
+		ms := s.matches(events.KindForgeChanged, a.TeamID, events.Facts{Submit: submit, Submitted: a.Phase == PhaseSubmitted})
+		// Each change is its own event: the observation it compares with is
+		// gone once this one is recorded.
+		if res.EventID, _, err = journal(ctx, tx, sourceForge, a.ID+"/"+key, pullSubject(a.ID), events.KindForgeChanged,
+			forgeEvent{AttemptID: a.ID, Observation: o, Changes: changes}, now, now, ms); err != nil {
+			return ObserveResult{}, err
+		}
 	}
 	return res, tx.Commit()
 }

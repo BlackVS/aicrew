@@ -1,0 +1,25 @@
+{
+  "$schema": "./subscriptions.schema.json",
+  "version": 1,
+  "subscriptions": [
+    {
+      "name": "board-wake",
+      "description": "A task of a granted project became READY, or a task the team has an attempt for changed state, and aicrew did not make the change itself: the team's coordinators are woken.",
+      "kinds": ["board.changed"],
+      "to": [
+        {"role": "coordinator", "when": ["not-own-change", "ready-or-team-attempt"]}
+      ],
+      "handler": "wake"
+    },
+    {
+      "name": "forge-wake",
+      "description": "A change of an attempt's pull request that a member acts on: the worker is woken always, the coordinators when it bears on a submit.",
+      "kinds": ["forge.changed"],
+      "to": [
+        {"role": "worker", "when": ["always"]},
+        {"role": "coordinator", "when": ["submit-or-submitted"]}
+      ],
+      "handler": "wake"
+    }
+  ]
+}

@@ -52,12 +52,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/events"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver, registered as "sqlite"
 )
 
 // schemaVersion is the newest schema this code understands. Opening a store
 // written by newer code fails rather than guessing.
-const schemaVersion = 32
+const schemaVersion = 33
 
 var ErrSchemaTooNew = errors.New("store schema is newer than this build")
 
@@ -94,6 +95,14 @@ type Store struct {
 	// reconciled before its identity changes: an open attempt or an offer
 	// not yet running (attempts.go). Tests may replace it.
 	outstandingWork func(ctx context.Context, tx *sql.Tx, agentID string) (bool, error)
+
+	// subs is the event subscriptions and handlers the handlers they name
+	// (events.go); eventQuiet and eventMaxWait time a queue's run. Tests
+	// may replace them.
+	subs         events.Set
+	handlers     map[string]handlerFunc
+	eventQuiet   time.Duration
+	eventMaxWait time.Duration
 }
 
 // Open opens or creates the store at path and applies the schema. It
@@ -131,7 +140,11 @@ func Open(ctx context.Context, path string) (_ *Store, err error) {
 		outstandingWork: func(ctx context.Context, tx *sql.Tx, agentID string) (bool, error) {
 			return openWork(ctx, tx, agentID, "")
 		},
+		subs:         events.Defaults(),
+		eventQuiet:   EventQuiet,
+		eventMaxWait: EventMaxWait,
 	}
+	s.handlers = map[string]handlerFunc{events.HandlerWake: s.wake}
 	if err := s.migrate(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -219,7 +232,7 @@ func (s *Store) migrate(ctx context.Context) (err error) {
 	// Each step upgrades the schema by one version.
 	steps := [][]string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9,
 		schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19, schemaV20, schemaV21,
-		schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29, schemaV30, schemaV31, schemaV32}
+		schemaV22, schemaV23, schemaV24, schemaV25, schemaV26, schemaV27, schemaV28, schemaV29, schemaV30, schemaV31, schemaV32, schemaV33}
 	for v := version; v < schemaVersion; v++ {
 		for _, stmt := range steps[v] {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {

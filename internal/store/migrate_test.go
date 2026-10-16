@@ -109,6 +109,7 @@ func downgradeToV10(t *testing.T, path string) {
 	}
 	stmts = append(stmts,
 		// Tables added after v10 that reference attempts go first.
+		`DROP TABLE event_runs`, `DROP TABLE event_deliveries`, `DROP TABLE events`,
 		`DROP TABLE scan_finals`, `DROP TABLE coordination_proofs`, `DROP TABLE superseded_updates`,
 		`DROP TABLE attempt_pulls`, `ALTER TABLE messages DROP COLUMN forge`,
 		`INSERT INTO attempts_v10 (`+attemptsV10Columns+`) SELECT `+attemptsV10Columns+` FROM attempts`,
@@ -318,7 +319,7 @@ func TestMigrationV12AddsIntrospectionTables(t *testing.T) {
 	}
 	raw := rawDB(t, path)
 	dropDeliveryColumns(t, raw)
-	for _, stmt := range []string{`DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`, `DROP TABLE session_handles`,
+	for _, stmt := range []string{`DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`, `DROP TABLE session_handles`,
 		`DROP TABLE introspection_credentials`, `ALTER TABLE attempts DROP COLUMN process_verified_receipt`,
 		`UPDATE schema_version SET version = 11`} {
 		if _, err := raw.Exec(stmt); err != nil {
@@ -352,7 +353,7 @@ func TestMigrationV13AddsSessionTokens(t *testing.T) {
 	}
 	raw := rawDB(t, path)
 	dropDeliveryColumns(t, raw)
-	for _, stmt := range []string{`DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`,
+	for _, stmt := range []string{`DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`,
 		`ALTER TABLE introspection_credentials DROP COLUMN operations`,
 		`ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 12`} {
 		if _, err := raw.Exec(stmt); err != nil {
@@ -392,7 +393,7 @@ func TestMigrationV16AddsVerifiedPinReceipt(t *testing.T) {
 	}
 	raw := rawDB(t, path)
 	dropDeliveryColumns(t, raw)
-	for _, stmt := range []string{`ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 15`} {
+	for _, stmt := range []string{`DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 15`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}
@@ -500,9 +501,20 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 		PRIMARY KEY (team_id, hub_id, project_id)
 	)`
 
+// dropEvents takes a store back to v32.
+func dropEvents(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	for _, stmt := range []string{`DROP TABLE event_runs`, `DROP TABLE event_deliveries`, `DROP TABLE events`} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // dropTeamToolchains takes a store back to v31.
 func dropTeamToolchains(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropEvents(t, raw)
 	if _, err := raw.Exec(`DROP TABLE team_toolchains`); err != nil {
 		t.Fatal(err)
 	}
@@ -737,6 +749,42 @@ func TestMigrationV31ReadsTheBoardAgain(t *testing.T) {
 
 // Schema v32 adds the teams' toolchains to a populated v31 store: every
 // team is kept with none selected, and one can be selected after.
+// Schema v33 adds the event journal, its deliveries and the record of
+// handler runs to a populated v32 store: every message is kept, nothing is
+// journaled or queued, and a delivery finds nothing to run.
+func TestMigrationV33AddsTheEventJournal(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropEvents(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 32`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v32 store: %v", err)
+	}
+	defer s2.Close()
+	var after, journaled, queued, runs int
+	if err := s2.db.QueryRow(`SELECT (SELECT COUNT(*) FROM messages), (SELECT COUNT(*) FROM events),
+		(SELECT COUNT(*) FROM event_deliveries), (SELECT COUNT(*) FROM event_runs)`).Scan(&after, &journaled, &queued, &runs); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || before == 0 || journaled != 0 || queued != 0 || runs != 0 {
+		t.Fatalf("after v33: %d messages (was %d), %d events, %d deliveries, %d runs", after, before, journaled, queued, runs)
+	}
+	if got := deliver(t, s2); len(got) != 0 {
+		t.Fatalf("runs on a new journal: %+v", got)
+	}
+}
+
 func TestMigrationV32AddsTeamToolchains(t *testing.T) {
 	ctx := context.Background()
 	s, path := populatedStore(t)

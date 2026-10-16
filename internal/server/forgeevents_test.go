@@ -1,18 +1,22 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 )
 
 // The worker reports its running attempt's pull request: the first report
-// is the baseline, a change is one forge.event to the worker and, once the
-// result is submitted, to the coordinator, read as the inbox delivers it.
+// is the baseline, a change is one journaled event and, when aicrewd's loop
+// runs its queue, one forge.event to the worker and, once the result is
+// submitted, to the coordinator, read as the inbox delivers it.
 // Another member, a pull request of no attempt and a malformed report are
 // refused.
 func TestObservePullRoute(t *testing.T) {
 	e := setupCoordination(t)
+	e.store.SetEventTiming(time.Nanosecond, time.Nanosecond)
 	id := e.runningOffer(t)
 	obs := map[string]any{"host": "git.example.test", "repository": "crew/project-example", "number": 7,
 		"url": "https://git.example.test/crew/project-example/pulls/7", "state": "open", "head": "work/task-1",
@@ -25,9 +29,11 @@ func TestObservePullRoute(t *testing.T) {
 	e.submit(t, id, "submit-1")
 	obs["labels"], obs["checks"] = []string{"hands-reviewed"}, "success"
 	got = e.call(t, e.worker.token, PullsPath, "", obs)
-	if got.status != http.StatusOK || got.body["message_id"] == nil {
+	if got.status != http.StatusOK || got.body["event_id"] == nil {
 		t.Fatalf("a review: %d %s", got.status, got.raw)
 	}
+	time.Sleep(time.Millisecond)
+	(&Server{store: e.store, log: e.srv.log}).deliverEvents(context.Background())
 	for _, m := range []member{e.worker, e.lead} {
 		var inbox struct {
 			Messages []struct {
@@ -44,7 +50,7 @@ func TestObservePullRoute(t *testing.T) {
 		}
 		n := 0
 		for _, msg := range inbox.Messages {
-			if msg.Forge != nil && msg.ID == got.body["message_id"] && msg.Forge.Pull == 7 && len(msg.Forge.Changes) == 2 {
+			if msg.Forge != nil && msg.Forge.Pull == 7 && len(msg.Forge.Changes) == 2 {
 				n++
 			}
 		}

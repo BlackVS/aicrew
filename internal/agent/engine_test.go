@@ -107,6 +107,9 @@ func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
+	// Events are delivered as soon as aicrewd's loop looks, as before the
+	// event core: these tests time a member's wake, not the coalescing.
+	st.SetEventTiming(time.Nanosecond, time.Nanosecond)
 	op, _ := store.OperatorCaller("op-test")
 	a, err := st.CreateAgent(ctx, op, "agent", store.NewAgent{Label: "builder"})
 	if err != nil {
@@ -141,7 +144,7 @@ func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
 	db.Close()
 
 	root := filepath.Join(dir, "aimem")
-	opts := []server.Option{server.WithVerifier(testVerifier{})}
+	opts := []server.Option{server.WithVerifier(testVerifier{}), server.WithEventTick(50 * time.Millisecond)}
 	if o.steps {
 		opts = append(opts, server.WithReader(fileReader{root: root}), server.WithHub("main", "hub-test", grantingHub{}))
 	}

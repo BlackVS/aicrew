@@ -1297,10 +1297,14 @@ coordinator must react to as `board.changed` messages
   (`board_read_token_file`).
 - **When:** every reconcile tick, from the cursor aicrewd stored, at most 4
   pages a tick.
-- **Recording:** each page is recorded in one transaction: its
-  announcements, and the cursor to read on from. The page is recorded only
-  if the stored cursor is still the one it was read from. So a change is
-  announced once, across restarts, and two reads never both record.
+- **Recording:** each page is recorded in one transaction: its changes as
+  `board.changed` events in aicrewd's journal, with their deliveries, and
+  the cursor to read on from. The page is recorded only if the stored
+  cursor is still the one it was read from. So a change is announced once,
+  across restarts, and two reads never both record.
+- **Delivery:** a task's announcement is written once its changes have
+  been quiet for 30 seconds ("Event delivery", below), so changes of one
+  task close together are one message.
 
 **What is announced.** For each change of a task, to each team granted the
 task's project on that hub:
@@ -1392,7 +1396,10 @@ aicrewd matches it to the member's running attempt whose repository (host,
 and path without regard to case) and branch are the pull request's. A pull
 request that is none of the member's running attempts' is refused with
 `no_attempt`. The answer names the attempt, whether the observation was the
-baseline, what changed, and the message written, if any.
+baseline, what changed, and the event journaled, if any (`event_id`). The
+message follows when the event is delivered ("Event delivery", below):
+changes of one pull request close together are one message carrying all
+of them.
 
 **When the launcher reports.**
 - Every `aicrew-agent forge pr` command (open, show, label, comment)
@@ -1449,6 +1456,23 @@ most 8 KiB where the forge offers the log (or why there is none), and the
 comments with their authors and bodies, a review header at the head marked
 as such (DEVELOPMENT, "Pull requests with the member's credential"). A
 member reads the forge no other way.
+
+## Event delivery
+
+Board changes and forge events are journaled by aicrewd and delivered by
+its event core (`docs/DESIGN-TURNS.md`, 12.4; DEVELOPMENT, "The event
+core"). The routing is the subscription file embedded in the release.
+- **When:** a queue (one subscription, one team, one task or pull request)
+  is delivered once its events have been quiet for 30 seconds, or its
+  oldest has waited 2 minutes. aicrewd looks every 5 seconds.
+- **What:** one lifecycle message per delivery, to the members the events
+  name, as the team is at that moment: a burst of changes about one
+  subject wakes a member once.
+- **Across restarts:** an event waits in the journal until it is
+  delivered; a delivery and its message are one transaction.
+- **Failures:** a delivery that fails three times in a row is parked, and
+  the team's coordinators get one message naming it. Parked events are
+  kept and replayed by a release that changes the subscriptions.
 
 ## Cross-project references
 

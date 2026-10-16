@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/BlackVS/aicrew/blob/main/internal/events/subscriptions.schema.json",
+  "title": "aicrew event subscriptions",
+  "description": "Which members an event wakes, and through which handler (docs/DESIGN-TURNS.md, sections 12.2 and 13.3). Version 1 of the file; the event kinds, roles, conditions and handlers are those of this aicrew release.",
+  "type": "object",
+  "required": ["version", "subscriptions"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {"type": "string"},
+    "version": {"const": 1},
+    "subscriptions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/subscription"}
+    }
+  },
+  "$defs": {
+    "subscription": {
+      "type": "object",
+      "required": ["name", "kinds", "to", "handler"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},
+        "description": {"type": "string", "maxLength": 1000},
+        "kinds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["board.changed", "forge.changed"]}
+        },
+        "to": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/recipient"}
+        },
+        "handler": {"enum": ["wake"]}
+      }
+    },
+    "recipient": {
+      "type": "object",
+      "required": ["role", "when"],
+      "additionalProperties": false,
+      "properties": {
+        "role": {"enum": ["worker", "coordinator"]},
+        "when": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["always", "not-own-change", "ready-or-team-attempt", "submit-or-submitted"]}
+        }
+      }
+    }
+  }
+}

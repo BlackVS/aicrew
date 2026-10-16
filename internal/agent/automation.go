@@ -1,0 +1,718 @@
+package agent
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/BlackVS/aicrew/internal/automation"
+	"github.com/BlackVS/aicrew/internal/forge"
+	"github.com/BlackVS/aicrew/internal/toolchain"
+)
+
+// Workflow scripts (docs/DESIGN-TURNS.md, 10.3; increment 2b). The launcher
+// runs a script in a child process, `aicrew-agent automation run`, under an
+// OS memory limit, since the interpreter has none. The child holds no
+// credential: its environment is empty, its arguments are the command's
+// name, and its standard input carries the script, the event, the allow
+// list, the limits and a token that names this one run. Every host call
+// comes back over the home's step socket as an "automation" call with that
+// token, and the launcher serves it: pr() from the forge with the home's
+// credential, attempt() from the session status, run() in the attempt's
+// worktree under the turn's allow list, step() into the home's log, and
+// comment() on the attempt's pull request. A token is valid only while its
+// run lives.
+
+// AutomationLogFile is the home file, relative to the home, that records
+// each script run's steps and its outcome, one JSON line each, redacted.
+const AutomationLogFile = "logs/automations.jsonl"
+
+// AutomationMemory is the memory limit of a script's process: the child's
+// committed memory on Windows (a job object), its data segment beyond what
+// it held at its start on Linux (RLIMIT_DATA), and its Go runtime's memory
+// on macOS and the other platforms (a watchdog, with RLIMIT_DATA set as
+// well; see memlimit_other.go).
+const AutomationMemory = 512 << 20
+
+// automationGrace is how long past the script's own wall-clock limit the
+// launcher waits for its process before killing it.
+const automationGrace = 15 * time.Second
+
+// maxAutomationAnswer bounds an answer the child reads on the socket: a
+// pr() result holds reviews' bodies and log excerpts, each bounded.
+const maxAutomationAnswer = 2 << 20
+
+// maxAutomationIO bounds what the launcher reads of the child's output and
+// of a run() command's output before it is bounded as text.
+const (
+	maxChildOutput   = 256 << 10
+	maxChildStderr   = 8 << 10
+	maxCommandOutput = 4 * automation.MaxRunOutput
+)
+
+// The kinds of the steps the launcher records for a run itself.
+const (
+	// stepAutomationFailed is a run that failed: the script's own fail(),
+	// a limit, a refused command, a host error, or its process ending.
+	stepAutomationFailed = "automation_failed"
+)
+
+// AutomationRun is one script to run for an attempt.
+type AutomationRun struct {
+	AttemptID string
+	// Pull is the attempt's pull request on the forge of its worktree's
+	// origin; 0 when it has none yet, and pr() and comment() then fail.
+	Pull   int64
+	Name   string
+	Source []byte
+	Event  automation.Event
+	// Memory is the process's memory limit; 0 is AutomationMemory.
+	Memory int64
+	// Limits are the interpreter's; zero values are 10.3's.
+	Limits automation.Limits
+}
+
+// AutomationResult is how a run ended. A run either handled the event,
+// asked for a turn, or failed; a failure is recorded as a step and is
+// never retried here.
+type AutomationResult struct {
+	RunID string `json:"run_id"`
+	// Turn is the turn the script asked for, or nil.
+	Turn *automation.Turn `json:"turn,omitempty"`
+	// Failed is why the run failed, redacted; "" when it ended normally.
+	Failed string `json:"failed,omitempty"`
+	// Invalid says the script's text is at fault (automation.ErrInvalid).
+	Invalid bool `json:"invalid,omitempty"`
+	// Memory says the process passed its memory limit.
+	Memory bool `json:"memory,omitempty"`
+}
+
+// automationRequest is what the launcher writes to the child's standard
+// input.
+type automationRequest struct {
+	Version int              `json:"version"`
+	Socket  string           `json:"socket"`
+	Token   string           `json:"token"`
+	Name    string           `json:"name"`
+	Source  string           `json:"source"`
+	Event   automation.Event `json:"event"`
+	Allow   []string         `json:"allow"`
+	Deny    []string         `json:"deny"`
+	Memory  int64            `json:"memory"`
+	Steps   uint64           `json:"steps,omitempty"`
+	Wall    time.Duration    `json:"wall,omitempty"`
+}
+
+// automationReply is what the child writes to its standard output.
+type automationReply struct {
+	Turn    *automation.Turn `json:"turn,omitempty"`
+	Error   string           `json:"error,omitempty"`
+	Invalid bool             `json:"invalid,omitempty"`
+}
+
+// automationCall is one host call on the socket: the run's token and the
+// call with its arguments.
+type automationCall struct {
+	Token string   `json:"token"`
+	Call  string   `json:"call"`
+	Cmd   string   `json:"cmd,omitempty"`
+	Args  []string `json:"args,omitempty"`
+	Kind  string   `json:"kind,omitempty"`
+	Text  string   `json:"text,omitempty"`
+}
+
+// liveRun is a run the launcher serves host calls for.
+type liveRun struct {
+	ctx      context.Context
+	id       string
+	attempt  string
+	pull     int64
+	script   string
+	worktree string
+	allow    automation.AllowList
+}
+
+// AutomationForge is what a script's host asks of the forge;
+// forge.Client is the real one.
+type AutomationForge interface {
+	GetPullContent(ctx context.Context, host string, k forge.Kind, token, path string, n int64) (forge.Pull, forge.PullContent, error)
+	CommentPull(ctx context.Context, host string, k forge.Kind, token, path string, n int64, body string) (forge.Comment, error)
+}
+
+// newAutomationForge is the forge a script's host uses; tests replace it.
+var newAutomationForge = func() AutomationForge { return forge.NewClient() }
+
+// RunAutomation runs one script for an attempt in a child process and
+// serves its host calls until it ends. It returns an error only when the
+// run could not start; a script that fails is a result, recorded as a step.
+func (s *StepServer) RunAutomation(ctx context.Context, r AutomationRun) (AutomationResult, error) {
+	if !attemptIDShape(r.AttemptID) {
+		return AutomationResult{}, errors.New("a script runs for an attempt: name its ID")
+	}
+	worktree := filepath.Join(s.home, "worktrees", r.AttemptID)
+	if fi, err := os.Stat(worktree); err != nil || !fi.IsDir() {
+		return AutomationResult{}, fmt.Errorf("the attempt %s has no worktree in this home", r.AttemptID)
+	}
+	names, _, err := teamToolchains(s.home)
+	if err != nil {
+		return AutomationResult{}, fmt.Errorf("read the team's toolchains: %w", err)
+	}
+	allow, deny := turnAllowRules(s.home, names)
+	token, err := runToken()
+	if err != nil {
+		return AutomationResult{}, err
+	}
+	memory := r.Memory
+	if memory <= 0 {
+		memory = AutomationMemory
+	}
+	wall := r.Limits.Wall
+	if wall <= 0 {
+		wall = automation.MaxWall
+	}
+	runCtx, cancel := context.WithTimeout(ctx, wall+automationGrace)
+	defer cancel()
+	run := &liveRun{ctx: runCtx, id: newUUID(), attempt: r.AttemptID, pull: r.Pull, script: r.Name, worktree: worktree,
+		allow: automation.NewAllowList(allow, deny)}
+	s.runsMu.Lock()
+	if s.runs == nil {
+		s.runs = map[string]*liveRun{}
+	}
+	s.runs[token] = run
+	s.runsMu.Unlock()
+	defer func() {
+		s.runsMu.Lock()
+		delete(s.runs, token)
+		s.runsMu.Unlock()
+	}()
+
+	sock, err := filepath.Abs(StepSocket(s.home))
+	if err != nil {
+		return AutomationResult{}, err
+	}
+	in, _ := json.Marshal(automationRequest{Version: 1, Socket: sock, Token: token, Name: r.Name, Source: string(r.Source),
+		Event: r.Event, Allow: allow, Deny: deny, Memory: memory, Steps: r.Limits.Steps, Wall: wall})
+	cmd := exec.CommandContext(runCtx, selfExecutable(), "automation", "run")
+	// No credential reaches the child: an empty environment (Windows adds
+	// only SYSTEMROOT), the private state directory, and nothing in its
+	// arguments.
+	cmd.Env = []string{}
+	cmd.Dir = filepath.Dir(sock)
+	cmd.Stdin = bytes.NewReader(in)
+	var out, errb capped
+	out.n, errb.n = maxChildOutput, maxChildStderr
+	fatal := make(chan struct{})
+	errb.fatal = fatal
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	cmd.WaitDelay = time.Second
+	bindToLauncher(cmd)
+	if err := cmd.Start(); err != nil {
+		return AutomationResult{}, fmt.Errorf("start the script's process: %w", err)
+	}
+	if release, err := afterStart(cmd); err != nil {
+		s.log.Warn("the script's process will not be stopped if the launcher is killed", "error", err.Error())
+	} else {
+		defer release()
+	}
+	// A process that reported a fatal error is ended after a moment: on
+	// Windows, a Go runtime that ran out of memory inside its job object
+	// was seen to stay alive after its report, held by the system's crash
+	// handling, until the run's wall clock.
+	ended := make(chan struct{})
+	go func() {
+		select {
+		case <-fatal:
+		case <-ended:
+			return
+		}
+		select {
+		case <-time.After(fatalGrace):
+			_ = cmd.Process.Kill()
+		case <-ended:
+		}
+	}()
+	waitErr := cmd.Wait()
+	close(ended)
+
+	res := AutomationResult{RunID: run.id}
+	var reply automationReply
+	decoded := json.Unmarshal(out.b.Bytes(), &reply) == nil
+	switch {
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+		res.Failed = fmt.Sprintf("the run passed its wall-clock limit of %s, and its process was stopped", wall)
+	case memoryFailure(errb.b.String()) != "":
+		res.Failed, res.Memory = fmt.Sprintf("the script's process passed its memory limit of %d MiB (%s)", memory>>20,
+			memoryFailure(errb.b.String())), true
+	case decoded && reply.Error != "":
+		res.Failed, res.Invalid = reply.Error, reply.Invalid
+	case decoded && waitErr == nil:
+		res.Turn = reply.Turn
+	case runCtx.Err() != nil:
+		res.Failed = "the run was stopped: " + runCtx.Err().Error()
+	default:
+		res.Failed = "the script's process ended without an answer: " + processEnd(waitErr, errb.b.String())
+	}
+	if res.Failed != "" {
+		res.Failed = redactTurnText(s.home, res.Failed)
+	}
+	s.recordRun(run, r.Event, res)
+	return res, nil
+}
+
+// memoryFailure is the line of the child's standard error that says it
+// ran out of memory, or "": Go's own fatal error when the OS refuses an
+// allocation, the watchdog's message, or, in a race-detector build (the
+// tests'), ThreadSanitizer's own refused allocation.
+func memoryFailure(stderr string) string {
+	for line := range strings.Lines(stderr) {
+		for _, sign := range []string{"out of memory", "cannot allocate memory", memoryWatchdogMessage, "ThreadSanitizer failed to allocate"} {
+			if strings.Contains(line, sign) {
+				return strings.TrimSpace(line)
+			}
+		}
+	}
+	return ""
+}
+
+// processEnd is how the child ended: its exit status and the first line of
+// what it wrote to its standard error.
+func processEnd(err error, stderr string) string {
+	s := "it exited normally"
+	if err != nil {
+		s = err.Error()
+	}
+	if line, _, _ := strings.Cut(strings.TrimSpace(stderr), "\n"); line != "" {
+		s += ": " + line
+	}
+	return s
+}
+
+// automationRecord is one line of AutomationLogFile.
+type automationRecord struct {
+	At      time.Time `json:"at"`
+	Run     string    `json:"run"`
+	Attempt string    `json:"attempt"`
+	Script  string    `json:"script"`
+	// A step: its kind and text.
+	Kind string `json:"kind,omitempty"`
+	Text string `json:"text,omitempty"`
+	// The run's end: handled, turn or failed, with the turn's kind.
+	Outcome string   `json:"outcome,omitempty"`
+	Turn    string   `json:"turn,omitempty"`
+	Events  []string `json:"events,omitempty"`
+}
+
+// recordRun records how a run ended, and a failed run as a step too.
+func (s *StepServer) recordRun(run *liveRun, ev automation.Event, res AutomationResult) {
+	rec := automationRecord{At: time.Now().UTC(), Run: run.id, Attempt: run.attempt, Script: run.script, Events: ev.IDs}
+	switch {
+	case res.Failed != "":
+		s.recordStep(run, stepAutomationFailed, res.Failed)
+		rec.Outcome = "failed"
+	case res.Turn != nil:
+		rec.Outcome, rec.Turn = "turn", res.Turn.Kind
+	default:
+		rec.Outcome = "handled"
+	}
+	if err := appendAutomationRecord(s.home, rec); err != nil {
+		s.log.Warn("a script run was not recorded", "error", err.Error())
+	}
+}
+
+// recordStep records a step of the attempt in AutomationLogFile.
+func (s *StepServer) recordStep(run *liveRun, kind, text string) error {
+	return appendAutomationRecord(s.home, automationRecord{At: time.Now().UTC(), Run: run.id, Attempt: run.attempt,
+		Script: run.script, Kind: kind, Text: redactText(s.home, text)})
+}
+
+// redactText is s without the home's forge tokens and the known token
+// shapes.
+func redactText(home, s string) string {
+	return tokenShapes.ReplaceAllString(RedactForgeTokens(home, s), "[redacted]")
+}
+
+func appendAutomationRecord(home string, r automationRecord) error {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(home, filepath.FromSlash(AutomationLogFile))
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(append(b, '\n'))
+	return err
+}
+
+// runToken is a new run's token: 32 random bytes.
+func runToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// turnAllowRules are the Bash rules of the home's worker turn with the
+// named toolchains', and the turn's deny rules (TurnAllowList).
+func turnAllowRules(home string, toolchains []string) (allow, deny []string) {
+	allow = turnAllow(home, false)
+	for _, n := range toolchains {
+		allow = append(allow, toolchain.Rules(n)...)
+	}
+	return allow, denyRules()
+}
+
+// capped keeps the first n bytes written to it and drops the rest. When
+// fatal is set, it is closed once what was kept reports a fatal error.
+type capped struct {
+	b     bytes.Buffer
+	n     int
+	fatal chan struct{}
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := c.n - c.b.Len(); room > 0 {
+		c.b.Write(p[:min(len(p), room)])
+	}
+	if c.fatal != nil && bytes.Contains(c.b.Bytes(), []byte("fatal error:")) {
+		close(c.fatal)
+		c.fatal = nil
+	}
+	return len(p), nil
+}
+
+// fatalGrace is how long a process that reported a fatal error has to
+// exit before the launcher ends it.
+const fatalGrace = 2 * time.Second
+
+// serveAutomation answers one host call of a live run. It runs beside the
+// steps, never under their lock: a run may be started from within a step.
+func (s *StepServer) serveAutomation(call StepCall) StepAnswer {
+	var in automationCall
+	if json.Unmarshal(call.Body, &in) != nil || in.Token == "" {
+		return refuse("invalid_request", "A host call names its run's token.", "Only a script's process makes host calls.")
+	}
+	s.runsMu.Lock()
+	run := s.runs[in.Token]
+	s.runsMu.Unlock()
+	if run == nil {
+		return refuse("no_run", "No script run holds this token.", "Only a running script's process makes host calls.")
+	}
+	ctx := run.ctx
+	switch in.Call {
+	case "pr":
+		p, err := s.hostPR(ctx, run)
+		if err != nil {
+			return s.hostErr(err)
+		}
+		return done(p)
+	case "attempt":
+		a, err := s.hostAttempt(ctx, run)
+		if err != nil {
+			return s.hostErr(err)
+		}
+		return done(a)
+	case "run":
+		res, err := s.hostRun(ctx, run, in.Cmd, in.Args)
+		if err != nil {
+			return s.hostErr(err)
+		}
+		return done(res)
+	case "step":
+		if !automationKind.MatchString(in.Kind) || len(in.Text) > automation.MaxText {
+			return refuse("invalid_request", "A step's kind is lowercase letters, digits and '_', and its text at most 16 KiB.", "")
+		}
+		if err := s.recordStep(run, in.Kind, in.Text); err != nil {
+			return s.hostErr(fmt.Errorf("record the step: %w", err))
+		}
+		return done(struct{}{})
+	case "comment":
+		if err := s.hostComment(ctx, run, in.Text); err != nil {
+			return s.hostErr(err)
+		}
+		return done(struct{}{})
+	}
+	return refuse("invalid_request", "Unknown host call "+in.Call+".", "Use pr, attempt, run, step or comment.")
+}
+
+// automationKind is a step's kind (automation.stepKind).
+var automationKind = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
+// hostErr is a host call's failure, redacted: the script sees it in its
+// error, and the error may land in a record.
+func (s *StepServer) hostErr(err error) StepAnswer {
+	return StepAnswer{Status: StepFailed, Error: &StepError{Code: "host_failed", Message: redactText(s.home, err.Error())}}
+}
+
+// pullTarget of a run: the repository of its worktree's origin, and the
+// home's credential for its host.
+func (s *StepServer) runTarget(ctx context.Context, run *liveRun) (pullTarget, error) {
+	if run.pull <= 0 {
+		return pullTarget{}, errors.New("the attempt has no pull request yet")
+	}
+	return (&ForgePR{Home: s.home, Dir: run.worktree}).target(ctx)
+}
+
+// hostPR is pr(): the pull request with its content, read with the home's
+// credential, and whether its base has commits the head lacks, as the
+// worktree's last fetch saw it.
+func (s *StepServer) hostPR(ctx context.Context, run *liveRun) (automation.PR, error) {
+	t, err := s.runTarget(ctx, run)
+	if err != nil {
+		return automation.PR{}, err
+	}
+	p, c, err := newAutomationForge().GetPullContent(ctx, t.host, t.kind(), t.token, t.path, run.pull)
+	if err != nil {
+		return automation.PR{}, fmt.Errorf("read pull request %d of %s on %s: %w", run.pull, t.path, t.host, err)
+	}
+	out := automation.PR{Number: p.Number, Head: p.HeadCommit, Base: p.Base, Branch: p.Head, Draft: p.Draft,
+		Mergeable: p.Mergeable, Labels: p.Labels, Behind: behindBase(ctx, run.worktree, p.Base, p.HeadCommit)}
+	// The newest review of each reviewer, at any head: a script compares
+	// its head with the pull request's.
+	seen := map[string]bool{}
+	for i := len(c.Comments) - 1; i >= 0; i-- {
+		cm := c.Comments[i]
+		if cm.Review == nil || seen[cm.Review.Reviewer] {
+			continue
+		}
+		seen[cm.Review.Reviewer] = true
+		out.Reviews = append(out.Reviews, automation.Review{Reviewer: cm.Review.Reviewer, Head: cm.Review.Head,
+			Verdict: cm.Review.Verdict, Findings: reviewFindings(cm.Body), Body: cm.Body})
+	}
+	for _, ch := range c.Checks {
+		k := automation.Check{Name: ch.Name, Conclusion: ch.State}
+		if ch.Log != nil {
+			k.Excerpt = ch.Log.Excerpt
+		}
+		out.Checks = append(out.Checks, k)
+	}
+	return out, nil
+}
+
+// findingLine is a review's finding: a list item that opens with its
+// disposition in brackets, as oh-code-review and the external reviewer
+// write them.
+var findingLine = regexp.MustCompile(`^\s*(?:[-*]|\d+\.)\s+\[(BLOCKER|CURRENT_SCOPE_IMPROVEMENT|FOLLOW_UP|OBSERVATION|REJECTED|RISK_ACCEPTED)\]`)
+
+// The bounds of a review's findings in pr().
+const (
+	maxFindings    = 50
+	maxFindingLine = 1000
+)
+
+// reviewFindings are the finding lines of a review's body, each without
+// its list marker.
+func reviewFindings(body string) []string {
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		if !findingLine.MatchString(line) || len(out) == maxFindings {
+			continue
+		}
+		line = strings.TrimSpace(line)
+		line = strings.TrimSpace(strings.TrimLeft(line, "-*0123456789."))
+		line, _ = automation.Bound(line, maxFindingLine)
+		out = append(out, line)
+	}
+	return out
+}
+
+// behindBase reports whether the base branch, as the worktree's origin
+// last fetched it, has commits that head lacks. Unknown reads as false.
+func behindBase(ctx context.Context, worktree, base, head string) bool {
+	if base == "" || head == "" || strings.HasPrefix(base, "-") || strings.HasPrefix(head, "-") {
+		return false
+	}
+	_, err := execGit(ctx, worktree, gitEnv, "merge-base", "--is-ancestor", "refs/remotes/origin/"+base, head)
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 1
+}
+
+// hostAttempt is attempt(): the attempt's state from the session status,
+// with what its turns cost and its budget.
+func (s *StepServer) hostAttempt(ctx context.Context, run *liveRun) (automation.Attempt, error) {
+	st, err := s.Status(ctx)
+	if err != nil {
+		return automation.Attempt{}, fmt.Errorf("read the session status: %w", err)
+	}
+	if st.Attempt == nil || st.Attempt.ID != run.attempt {
+		return automation.Attempt{}, fmt.Errorf("the attempt %s is no longer the member's open attempt", run.attempt)
+	}
+	a := automation.Attempt{ID: st.Attempt.ID, Phase: st.Attempt.Phase, TaskID: st.Attempt.Task.TaskID,
+		BaseCommit: st.Attempt.BaseCommit, BudgetUSD: ReadTurnLimits(s.home).AttemptBudgetUSD}
+	if t := readTurnState(s.home).Attempts[run.attempt]; t != nil {
+		a.SpentUSD = t.CostUSD
+	}
+	return a, nil
+}
+
+// hostRun is run(): one command, no shell, in the attempt's worktree, under
+// the turn's allow list, which the launcher checks again whatever the
+// child checked. Its output, standard output and standard error together,
+// comes back as bounded text.
+func (s *StepServer) hostRun(ctx context.Context, run *liveRun, name string, args []string) (automation.RunResult, error) {
+	if err := run.allow.Admit(name, args); err != nil {
+		return automation.RunResult{}, err
+	}
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = run.worktree
+	cmd.Env = s.commandEnv()
+	var out capped
+	out.n = maxCommandOutput
+	cmd.Stdout, cmd.Stderr = &out, &out
+	cmd.WaitDelay = time.Second
+	err := cmd.Run()
+	var exit *exec.ExitError
+	switch {
+	case errors.As(err, &exit):
+	case err != nil:
+		return automation.RunResult{}, err
+	}
+	text, _ := automation.Bound(out.b.String(), automation.MaxRunOutput)
+	return automation.RunResult{Exit: cmd.ProcessState.ExitCode(), Output: text}, nil
+}
+
+// commandEnv is the environment a run() command gets: the turn's, as the
+// launcher gives its client.
+func (s *StepServer) commandEnv() []string {
+	if s.env != nil {
+		return s.env
+	}
+	return append(os.Environ(), gitEnv...)
+}
+
+// hostComment is comment(): body on the attempt's pull request, with the
+// home's credential.
+func (s *StepServer) hostComment(ctx context.Context, run *liveRun, body string) error {
+	if strings.TrimSpace(body) == "" || len(body) > automation.MaxText {
+		return fmt.Errorf("the body is empty or more than %d bytes", automation.MaxText)
+	}
+	t, err := s.runTarget(ctx, run)
+	if err != nil {
+		return err
+	}
+	if t.holds(body) {
+		return errHoldsToken
+	}
+	if _, err := newAutomationForge().CommentPull(ctx, t.host, t.kind(), t.token, t.path, run.pull, body); err != nil {
+		return fmt.Errorf("comment on pull request %d of %s on %s: %w", run.pull, t.path, t.host, err)
+	}
+	return nil
+}
+
+// The child's side: `aicrew-agent automation run`.
+
+// AutomationChild runs the script stdin carries under the memory limit it
+// names, its host calls going to the launcher over the step socket, and
+// writes how it ended to stdout. It returns the process's exit code.
+func AutomationChild(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) int {
+	raw, err := io.ReadAll(io.LimitReader(stdin, 2<<20))
+	var req automationRequest
+	if err == nil {
+		err = json.Unmarshal(raw, &req)
+	}
+	if err != nil || req.Version != 1 || req.Token == "" || req.Socket == "" || req.Memory <= 0 {
+		fmt.Fprintln(stderr, "aicrew-agent automation run: the launcher starts this process and writes its request to its standard input")
+		return 2
+	}
+	// The limit comes first: no part of the script runs without it.
+	if err := limitMemory(req.Memory); err != nil {
+		return reply(stdout, automationReply{Error: "the memory limit could not be set: " + err.Error()})
+	}
+	host := &socketHost{socket: req.Socket, token: req.Token}
+	turn, err := automation.Run(ctx, automation.Script{Name: req.Name, Source: []byte(req.Source), Host: host,
+		Allow: automation.NewAllowList(req.Allow, req.Deny), Limits: automation.Limits{Steps: req.Steps, Wall: req.Wall}}, req.Event)
+	if err != nil {
+		return reply(stdout, automationReply{Error: err.Error(), Invalid: errors.Is(err, automation.ErrInvalid)})
+	}
+	return reply(stdout, automationReply{Turn: turn})
+}
+
+func reply(w io.Writer, r automationReply) int {
+	b, _ := json.Marshal(r)
+	if _, err := w.Write(append(b, '\n')); err != nil {
+		return 1
+	}
+	return 0
+}
+
+// socketHost is the script's host in the child: each call goes to the
+// launcher over the step socket, with the run's token.
+type socketHost struct {
+	socket, token string
+}
+
+func (h *socketHost) call(ctx context.Context, c automationCall, out any) error {
+	c.Token = h.token
+	body, _ := json.Marshal(c)
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", h.socket)
+	if err != nil {
+		return errors.New("the launcher is not reachable")
+	}
+	defer conn.Close()
+	if dl, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(dl)
+	}
+	b, _ := json.Marshal(StepCall{Version: 1, Op: automationOp, Body: body})
+	if _, err := conn.Write(append(b, '\n')); err != nil {
+		return fmt.Errorf("the step channel: %w", err)
+	}
+	var ans StepAnswer
+	if err := json.NewDecoder(io.LimitReader(conn, maxAutomationAnswer)).Decode(&ans); err != nil {
+		return fmt.Errorf("the step channel's answer: %w", err)
+	}
+	if !ans.OK {
+		if ans.Error != nil {
+			return errors.New(ans.Error.Message)
+		}
+		return errors.New("the launcher refused the call")
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(ans.Result, out)
+}
+
+// automationOp is the step channel's op for a script's host calls.
+const automationOp = "automation"
+
+func (h *socketHost) PR(ctx context.Context) (automation.PR, error) {
+	var p automation.PR
+	return p, h.call(ctx, automationCall{Call: "pr"}, &p)
+}
+
+func (h *socketHost) Attempt(ctx context.Context) (automation.Attempt, error) {
+	var a automation.Attempt
+	return a, h.call(ctx, automationCall{Call: "attempt"}, &a)
+}
+
+func (h *socketHost) Run(ctx context.Context, cmd string, args []string) (automation.RunResult, error) {
+	var r automation.RunResult
+	return r, h.call(ctx, automationCall{Call: "run", Cmd: cmd, Args: args}, &r)
+}
+
+func (h *socketHost) Step(ctx context.Context, kind, text string) error {
+	return h.call(ctx, automationCall{Call: "step", Kind: kind, Text: text}, nil)
+}
+
+func (h *socketHost) Comment(ctx context.Context, body string) error {
+	return h.call(ctx, automationCall{Call: "comment", Text: body}, nil)
+}

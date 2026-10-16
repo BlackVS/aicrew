@@ -210,6 +210,9 @@ type MemberAttempt struct {
 	// Branch is the attempt's branch, which the turn loop reads progress
 	// from (a new commit).
 	Branch string `json:"branch,omitempty"`
+	// BaseCommit is the commit the attempt's work started from, which a
+	// workflow script reads in attempt() (docs/DESIGN-TURNS.md, 10.3).
+	BaseCommit string `json:"base_commit,omitempty"`
 	// UpdatedAt is when the attempt last changed, for the team state. The
 	// member's session status, which carries this struct, leaves it out.
 	UpdatedAt time.Time `json:"-"`
@@ -352,8 +355,9 @@ func memberOpenAttempt(ctx context.Context, q querier, teamID, agentID string) (
 	if err != nil {
 		return nil, err
 	}
-	return &MemberAttempt{ID: a.ID, State: a.State, Phase: a.Phase, Task: a.Task, Branch: a.Branch, UpdatedAt: a.UpdatedAt,
-		Block: block, HubBlock: a.Blocked}, nil
+	return &MemberAttempt{ID: a.ID, State: a.State, Phase: a.Phase, Task: a.Task, Branch: a.Branch, BaseCommit: a.BaseCommit,
+		UpdatedAt: a.UpdatedAt,
+		Block:     block, HubBlock: a.Blocked}, nil
 }
 
 // MemberAttemptFor is the member's newest attempt as its worker that is not

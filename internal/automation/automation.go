@@ -87,7 +87,11 @@ type Attempt struct {
 	BudgetUSD  float64
 }
 
-// RunResult is a command's exit status and its output.
+// RunResult is a command's exit status and its output: what it wrote to
+// its standard output and standard error together, as the host read it.
+// The script sees the output as text (a Starlark string), bounded by
+// Bound: invalid UTF-8 replaced, at most MaxRunOutput bytes, its start
+// kept.
 type RunResult struct {
 	Exit   int
 	Output string
@@ -242,7 +246,7 @@ func (r *runner) pr(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple
 	}
 	reviews := make([]starlark.Value, 0, len(p.Reviews))
 	for _, rv := range p.Reviews {
-		body, _ := bound(rv.Body, MaxText)
+		body, _ := Bound(rv.Body, MaxText)
 		reviews = append(reviews, frozenStruct(starlark.StringDict{
 			"reviewer": starlark.String(rv.Reviewer),
 			"head":     starlark.String(rv.Head),
@@ -253,7 +257,7 @@ func (r *runner) pr(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple
 	}
 	checks := make([]starlark.Value, 0, len(p.Checks))
 	for _, c := range p.Checks {
-		excerpt, _ := bound(c.Excerpt, MaxExcerpt)
+		excerpt, _ := Bound(c.Excerpt, MaxExcerpt)
 		checks = append(checks, frozenStruct(starlark.StringDict{
 			"name":       starlark.String(c.Name),
 			"conclusion": starlark.String(c.Conclusion),
@@ -313,7 +317,7 @@ func (r *runner) run(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 	if err != nil {
 		return nil, fmt.Errorf("run %s: %w", cmd, err)
 	}
-	out, _ := bound(res.Output, MaxRunOutput)
+	out, _ := Bound(res.Output, MaxRunOutput)
 	return frozenStruct(starlark.StringDict{
 		"exit":   starlark.MakeInt(res.Exit),
 		"output": starlark.String(out),
@@ -407,14 +411,22 @@ func frozenStruct(d starlark.StringDict) *starlarkstruct.Struct {
 	return s
 }
 
-// bound is s cut to at most n bytes on a rune boundary, and whether it was
-// cut.
-func bound(s string, n int) (string, bool) {
+// Bound is s as text of at most n bytes, and whether it was cut. A host
+// result is text: each run of bytes that is not UTF-8 becomes one U+FFFD
+// first, so an invalid byte anywhere never costs the valid text around it,
+// and the text is then cut on a rune boundary, keeping its start.
+func Bound(s string, n int) (string, bool) {
+	s = strings.ToValidUTF8(s, string(utf8.RuneError))
 	if len(s) <= n {
 		return s, false
 	}
 	s = s[:n]
-	for len(s) > 0 && !utf8.ValidString(s) {
+	// The cut may split the last rune: drop its bytes. A U+FFFD of the
+	// text decodes whole, three bytes long, and stays.
+	for len(s) > 0 {
+		if r, size := utf8.DecodeLastRuneInString(s); r != utf8.RuneError || size > 1 {
+			break
+		}
 		s = s[:len(s)-1]
 	}
 	return s, true

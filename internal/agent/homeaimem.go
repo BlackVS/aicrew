@@ -246,11 +246,7 @@ func turnAllow(home string, coordinator bool) []string {
 // home's worker turn, with the named toolchains', under the turn's deny
 // rules. It is the turn's own list, never widened for a script.
 func TurnAllowList(home string, toolchains []string) automation.AllowList {
-	allow := turnAllow(home, false)
-	for _, n := range toolchains {
-		allow = append(allow, toolchain.Rules(n)...)
-	}
-	return automation.NewAllowList(allow, denyRules())
+	return automation.NewAllowList(turnAllowRules(home, toolchains))
 }
 
 // ReadTurnAllow is agent.json's turns.allow, as written.

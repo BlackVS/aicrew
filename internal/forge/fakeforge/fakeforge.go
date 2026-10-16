@@ -52,6 +52,9 @@ type Pull struct {
 	Reviews []Review
 	// SystemNotes adds a GitLab system note before each comment.
 	SystemNotes bool
+	// Conflict makes the forge report that the pull request does not merge
+	// into its base; Unknown, that GitHub has not computed it yet.
+	Conflict, Unknown bool
 
 	// meta is each comment's author and time, by index.
 	meta []meta
@@ -361,7 +364,10 @@ func (f *Forge) writePull(w http.ResponseWriter, p *Pull) {
 		out = map[string]any{"iid": p.Number, "id": 9000 + p.Number, "web_url": f.pullURL(p), "title": p.Title,
 			"state": state, "draft": strings.HasPrefix(p.Title, "Draft: "), "source_branch": p.Head,
 			"target_branch": p.Base, "sha": HeadCommit, "labels": append([]string{}, p.Labels...),
-			"user_notes_count": len(p.Comments)}
+			"user_notes_count": len(p.Comments), "merge_status": "can_be_merged"}
+		if p.Conflict {
+			out["merge_status"] = "cannot_be_merged"
+		}
 		if p.State == "merged" {
 			out["merge_commit_sha"] = "fedcba9876543210fedcba9876543210fedcba98"
 		}
@@ -380,7 +386,10 @@ func (f *Forge) writePull(w http.ResponseWriter, p *Pull) {
 		}
 		out = map[string]any{"number": p.Number, "html_url": f.pullURL(p), "title": p.Title, "state": state,
 			"merged": p.State == "merged", "head": map[string]any{"ref": p.Head, "sha": HeadCommit},
-			"base": map[string]any{"ref": p.Base}, "labels": labels, "comments": len(p.Comments)}
+			"base": map[string]any{"ref": p.Base}, "labels": labels, "comments": len(p.Comments), "mergeable": !p.Conflict}
+		if p.Unknown && f.Kind == "github" {
+			out["mergeable"] = nil
+		}
 		if p.State == "merged" {
 			out["merge_commit_sha"] = "fedcba9876543210fedcba9876543210fedcba98"
 		}

@@ -53,6 +53,8 @@ type memberAttempt struct {
 	Phase  string  `json:"phase"`
 	Task   TaskRef `json:"task"`
 	Branch string  `json:"branch"`
+	// BaseCommit is the commit the attempt's work started from.
+	BaseCommit string `json:"base_commit"`
 }
 
 // inWork reports whether the attempt is running and being worked on: not

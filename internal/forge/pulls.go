@@ -42,6 +42,10 @@ type Pull struct {
 	Base        string   `json:"base"`
 	Labels      []string `json:"labels"`
 	MergeCommit string   `json:"merge_commit,omitempty"`
+	// Mergeable says the forge reports that the pull request merges into
+	// its base without a conflict. False also covers a forge that has not
+	// computed it yet (GitHub's null) and a pull request that is not open.
+	Mergeable bool `json:"mergeable"`
 }
 
 // Comment is a comment posted on a pull request.
@@ -442,6 +446,10 @@ type wirePull struct {
 	SHA            string `json:"sha"`
 	MergeCommitSHA string `json:"merge_commit_sha"`
 	SquashCommit   string `json:"squash_commit_sha"`
+	// Mergeable is GitHub's (null until computed) and Gitea's; GitLab says
+	// it in merge_status.
+	Mergeable   *bool  `json:"mergeable"`
+	MergeStatus string `json:"merge_status"`
 	// Labels are objects in GitHub and Gitea, names in GitLab.
 	Labels []any `json:"labels"`
 }
@@ -476,6 +484,7 @@ func (w wirePull) pull(k Kind) (Pull, error) {
 		p.Number, p.URL, p.Head, p.HeadCommit, p.Base = w.IID, w.WebURL, w.SourceBranch, w.SHA, w.TargetBranch
 		p.Draft = w.Draft || w.WIP
 		p.MergeCommit = first(w.MergeCommitSHA, w.SquashCommit)
+		p.Mergeable = w.MergeStatus == "can_be_merged"
 		switch w.State {
 		case "opened", "locked":
 			p.State = PullOpen
@@ -495,6 +504,7 @@ func (w wirePull) pull(k Kind) (Pull, error) {
 		if k == Gitea {
 			p.Draft = p.Draft || hasDraftPrefix(k, w.Title)
 		}
+		p.Mergeable = w.Mergeable != nil && *w.Mergeable
 	}
 	for _, l := range w.labels() {
 		p.Labels = append(p.Labels, l.name)

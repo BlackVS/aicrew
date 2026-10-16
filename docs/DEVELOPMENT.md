@@ -781,17 +781,52 @@ nothing more.
   value `main(event)` returns. Any other name fails the script at load.
   The results are bounded: a review's body and a comment at 16 KiB, a
   failed job's excerpt at 8 KiB, a command's output at 64 KiB.
+- **Text, not bytes:** every host result is a Starlark string. A
+  command's output is its standard output and standard error together;
+  each run of bytes that is not UTF-8 becomes one U+FFFD, and the text is
+  then cut on a rune boundary, keeping its start (`automation.Bound`).
 - **The limits:** 1 million execution steps and 2 minutes of wall clock,
-  `run()` calls included. The memory limit is the child process's
-  (increment 2b).
+  `run()` calls included, and a memory limit of 512 MiB on the script's
+  process (below).
 - **The allow list:** `run(cmd, args)` runs a bare command name with an
   argument list and no shell, only when the worker turn's own list admits
   it (`agent.TurnAllowList`: the managed `Bash(...)` rules and the team's
   toolchain, under the turn's deny rules). The list is never widened for
   a script.
 
-The launcher serves the host and runs scripts from increment 2b; until
-then the package runs under tests against a fake host.
+**The script's process** (increment 2b). The launcher runs a script with
+`StepServer.RunAutomation`, in a child process, `aicrew-agent automation
+run`, since the interpreter has no memory limit of its own:
+- **No credential reaches it.** Its environment is empty (Windows adds
+  `SYSTEMROOT`), its arguments are the command's name, and its working
+  directory is the home's private state directory. Its standard input
+  carries the script, the event, the allow list, the limits and a token
+  that names this one run.
+- **The memory limit** is set by the child before any part of the script
+  runs; it refuses to run the script when it cannot set it:
+  - **Windows:** a job object of the child's own with a process memory
+    limit (committed memory). It nests inside the launcher's kill-on-close
+    job.
+  - **Linux:** `RLIMIT_DATA`, the data segment the process holds at its
+    start plus the limit. `RLIMIT_AS` would not do: the Go runtime
+    reserves address space it never uses and fails at once under it.
+  - **macOS and the rest:** `RLIMIT_DATA` where the platform has it, and a
+    watchdog that ends the process when its Go runtime holds more than
+    the limit, since macOS does not enforce the data limit for the
+    runtime's mappings.
+- **The host** comes back over the home's step socket as `automation`
+  calls carrying the run's token, valid only while the run lives, and
+  served beside the steps, never under their lock. `pr()` reads the
+  attempt's pull request with the home's forge credential (`behind` from
+  the worktree's last fetch of the base); `attempt()` the session status,
+  with the attempt's turn cost and budget; `run()` executes in the
+  attempt's worktree with the client's environment, after the launcher
+  checks the allow list again; `step()` and the run's outcome go to
+  `logs/automations.jsonl`, redacted; `comment()` posts on the attempt's
+  pull request.
+- **A failed run** (`fail()`, a limit, a refused command, a host error,
+  the process ending) is a result and an `automation_failed` step. The
+  launcher never retries it.
 
 ## Teams
 

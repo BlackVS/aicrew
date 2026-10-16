@@ -136,6 +136,11 @@ type StepServer struct {
 	// request (forgewatch.go).
 	seenMu sync.Mutex
 	seen   map[string]pullSeen
+	// runs are the live script runs by their token (automation.go), and
+	// env the environment their run() commands get: the client's.
+	runsMu sync.Mutex
+	runs   map[string]*liveRun
+	env    []string
 }
 
 // ServeSteps makes the agent home's state directory private, verifies it,
@@ -240,6 +245,10 @@ func (s *StepServer) serve(conn net.Conn) {
 		_ = json.Unmarshal(call.Body, &in)
 		conn.SetDeadline(time.Now().Add(wakeWait(in.Seconds) + time.Minute))
 		ans = s.waitInbox(s.ctx, call)
+	case call.Op == automationOp:
+		// A script's host call runs beside the steps: its run may have been
+		// started from within one.
+		ans = s.serveAutomation(call)
 	default:
 		s.mu.Lock()
 		ctx, cancel := context.WithTimeout(s.ctx, stepTimeout)

@@ -167,6 +167,9 @@ func serveSteps(e *Engine) *StepServer {
 		return nil
 	}
 	s.RecoverPending()
+	if home, err := filepath.Abs(e.Cfg.Home); err == nil {
+		s.env = clientEnviron(e, home)
+	}
 	// A coordinator reconciles its open attempts first: the list is
 	// recorded before the client starts, so its first turn reads it.
 	if o, ok, err := e.RecordOpenAttempts(context.Background()); err != nil {

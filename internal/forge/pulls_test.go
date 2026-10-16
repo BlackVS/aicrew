@@ -52,6 +52,21 @@ func TestPulls(t *testing.T) {
 				!slices.Equal(p.Labels, []string{"review-this", "hands-reviewed"}) || p.Title != wantTitle || !p.Draft {
 				t.Fatalf("after adding labels: %+v, %v", p, err)
 			}
+			// Each dialect's word for a pull request that merges cleanly:
+			// GitHub's and Gitea's mergeable, GitLab's merge_status; GitHub's
+			// null, not computed yet, reads as not mergeable.
+			if !p.Mergeable {
+				t.Errorf("a clean pull request is not mergeable: %+v", p)
+			}
+			f.SetPull(1, func(p *fakeforge.Pull) { p.Conflict = true })
+			if p, err := c.GetPull(ctx, f.Host, k, fakeforge.Token, fakeforge.Repo, 1); err != nil || p.Mergeable {
+				t.Errorf("a conflicting pull request: %+v, %v", p, err)
+			}
+			f.SetPull(1, func(p *fakeforge.Pull) { p.Conflict, p.Unknown = false, true })
+			if p, err := c.GetPull(ctx, f.Host, k, fakeforge.Token, fakeforge.Repo, 1); err != nil || p.Mergeable != (k != GitHub) {
+				t.Errorf("mergeable not computed yet: %+v, %v", p, err)
+			}
+			f.SetPull(1, func(p *fakeforge.Pull) { p.Unknown = false })
 			err = c.AddLabels(ctx, f.Host, k, fakeforge.Token, fakeforge.Repo, 1, []string{"review-this:other"})
 			if !errors.Is(err, ErrLabelUnknown) || len(f.Created) != 0 {
 				t.Errorf("an unknown label: %v, created %v", err, f.Created)

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // fakeHost records what a script asked of the host.
@@ -228,5 +229,34 @@ def main(event):
 		if _, err := run(t, src, h, Limits{}); err == nil || len(h.comments) != 0 || len(h.steps) != 0 {
 			t.Errorf("%s: %v, the host saw %q %q", name, err, h.comments, h.steps)
 		}
+	}
+}
+
+// run() output is text: bytes that are not UTF-8 become U+FFFD, and the
+// bound keeps the start of the output, even when an invalid byte sits at
+// its very start (hands' follow-up on #166: such output was cut to "").
+func TestBoundKeepsText(t *testing.T) {
+	const rep = "\xef\xbf\xbd" // U+FFFD
+	big := "\xffok" + strings.Repeat("o", 2*MaxRunOutput)
+	got, cut := Bound(big, MaxRunOutput)
+	if !cut || !strings.HasPrefix(got, rep+"okoo") || len(got) > MaxRunOutput || !utf8.ValidString(got) {
+		t.Fatalf("an invalid byte at the start: cut %v, %d bytes, starts %q", cut, len(got), got[:min(len(got), 8)])
+	}
+	// A cut through a multi-byte rune drops its bytes; a U+FFFD of the
+	// text, whole at the end, stays.
+	if got, _ := Bound("ab\xc3\xa9", 3); got != "ab" {
+		t.Errorf("a split rune: %q", got)
+	}
+	if got, _ := Bound("a"+rep+"b", 4); got != "a"+rep {
+		t.Errorf("a whole U+FFFD at the cut: %q", got)
+	}
+	if got, cut := Bound("short\xfe", 100); cut || got != "short"+rep {
+		t.Errorf("short output with an invalid byte: %q %v", got, cut)
+	}
+	h := &fakeHost{results: map[string]RunResult{"git log": {Output: big}}}
+	src := "def main(event):\n    o = run(\"git\", [\"log\"]).output\n" +
+		"    if not o.startswith(\"" + rep + "ok\") or len(o) > 65536:\n        fail(\"output: %d bytes\" % len(o))\n"
+	if _, err := run(t, src, h, Limits{}); err != nil {
+		t.Fatalf("run() output: %v", err)
 	}
 }

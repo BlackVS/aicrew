@@ -20,6 +20,10 @@ func TestMain(m *testing.M) {
 	if code, ok := probeMain(os.Args[1:]); ok {
 		os.Exit(code)
 	}
+	// A script's process, as the launcher starts aicrew-agent.
+	if len(os.Args) == 3 && os.Args[1] == "automation" && os.Args[2] == "run" {
+		os.Exit(automationChildMain())
+	}
 	if os.Getenv(fakeTurnEnv) != "" {
 		os.Exit(fakeTurnMain())
 	}

@@ -263,3 +263,33 @@ func TestObservePullRefusals(t *testing.T) {
 		t.Errorf("the path in another case: %+v, %v", res, err)
 	}
 }
+
+// Without a new read of the content, the failed checks read for another
+// head are not shown as this head's: the message says where to read them.
+func TestStaleChecksAreNotShown(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	o := observed(a.Branch)
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	o.Checks, o.Content = "failure", true
+	o.Failed = []FailedCheck{{Name: "old-job", Excerpt: "old failure"}}
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, e.s, e.now)
+	ackTok(t, e.s, e.indepTk, forgeEvents(t, e.s, e.indepTk))
+	// A new head fails too, and the launcher could not read the content.
+	o.HeadCommit, o.Content, o.Failed = head2, false, nil
+	if res, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || strings.Join(res.Needs, ",") != NeedCI {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	settle(t, e.s, e.now)
+	got := forgeEvents(t, e.s, e.indepTk)
+	if len(got) != 1 || strings.Contains(got[0].Text, "old-job") || !strings.Contains(got[0].Text, "names the failed jobs") ||
+		len(got[0].Action.Subjects[0].Failed) != 0 {
+		t.Fatalf("the message: %+v", got)
+	}
+}

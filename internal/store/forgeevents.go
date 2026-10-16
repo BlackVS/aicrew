@@ -198,7 +198,13 @@ func (s *Store) ObservePullWithToken(ctx context.Context, token string, o PullOb
 	case o.Content:
 		cf.Review, cf.Failed, cf.Passed = o.Review, o.Failed, o.Passed
 	case pf != nil:
-		cf.Review, cf.Failed, cf.Passed = pf.Review, pf.Failed, pf.Passed
+		// The review names its head, which pullNeeds checks; the checks are
+		// the head's and the conclusion's they were read with, and stand
+		// only while both are unchanged.
+		cf.Review = pf.Review
+		if pf.Head == o.HeadCommit && pf.Checks == o.Checks {
+			cf.Failed, cf.Passed = pf.Failed, pf.Passed
+		}
 	}
 	boundContent(&cf)
 	newReview := o.Content && cf.Review != nil && (pf == nil || pf.Review == nil || pf.Review.URL != cf.Review.URL ||

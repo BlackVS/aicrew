@@ -179,7 +179,7 @@ func (s *Store) ObservePullWithToken(ctx context.Context, token string, o PullOb
 		if err != nil {
 			return ObserveResult{}, err
 		}
-		ms := s.matches(events.KindForgeChanged, a.TeamID, events.Facts{Submit: submit, Submitted: a.Phase == PhaseSubmitted})
+		ms := matches(events.KindForgeChanged, a.TeamID, events.Facts{Submit: submit, Submitted: a.Phase == PhaseSubmitted})
 		// Each change is its own event: the observation it compares with is
 		// gone once this one is recorded.
 		if res.EventID, _, err = journal(ctx, tx, sourceForge, a.ID+"/"+key, pullSubject(a.ID), events.KindForgeChanged,

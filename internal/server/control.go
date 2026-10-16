@@ -137,6 +137,12 @@ func (s *Server) teamStateOf(st store.TeamState, now time.Time) opapi.TeamState 
 		if a := m.OpenAttempt; a != nil {
 			v.OpenAttempt = &opapi.MemberAttempt{ID: a.ID, State: string(a.State), Phase: string(a.Phase),
 				HubID: a.Task.HubID, ProjectID: a.Task.ProjectID, TaskID: a.Task.TaskID, UpdatedAt: a.UpdatedAt}
+			if b := a.Block; b != nil {
+				v.OpenAttempt.Block = &opapi.AttemptBlock{Reason: b.Reason, Since: b.Since}
+			}
+			if b := a.HubBlock; b != nil {
+				v.OpenAttempt.HubBlock = &opapi.AttemptBlock{Reason: b.Reason, Since: b.Since}
+			}
 			changed, phase = a.UpdatedAt, a.Phase
 		}
 		v.State = store.DeriveState(st.Paused != nil || m.Paused != nil, m.Session != nil, seen.seen, seen.waited, now)

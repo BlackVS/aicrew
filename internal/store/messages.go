@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -253,6 +254,40 @@ func postLifecycle(ctx context.Context, tx *sql.Tx, teamID, actorAgentID, text s
 	now time.Time) (Message, error) {
 	return postLifecycleMessage(ctx, tx, Message{TeamID: teamID, Kind: KindLifecycle, SenderAgentID: actorAgentID,
 		Task: task, AttemptID: attemptID, Text: text}, now)
+}
+
+// postLifecycleExceptCoordinators writes a lifecycle message to every
+// active member but its actor and the team's coordinators, if any remain.
+func postLifecycleExceptCoordinators(ctx context.Context, tx *sql.Tx, teamID, actorAgentID, text string, task *TaskRef,
+	attemptID string, now time.Time) error {
+	if err := validateMessageText(text); err != nil {
+		return err
+	}
+	members, err := activeMembersExcept(ctx, tx, teamID, actorAgentID)
+	if err != nil {
+		return err
+	}
+	coords, err := activeCoordinators(ctx, tx, teamID)
+	if err != nil {
+		return err
+	}
+	var recipients []string
+	for _, m := range members {
+		if !slices.Contains(coords, m) {
+			recipients = append(recipients, m)
+		}
+	}
+	if len(recipients) == 0 {
+		return nil
+	}
+	m := Message{TeamID: teamID, Kind: KindLifecycle, SenderAgentID: actorAgentID, Task: task, AttemptID: attemptID, Text: text}
+	actor, err := getAgent(ctx, tx, actorAgentID)
+	if err != nil {
+		return err
+	}
+	m.SenderProfile = actor.Profile
+	_, err = insertMessage(ctx, tx, m, recipients, now)
+	return err
 }
 
 // postLifecycleMessage writes a lifecycle message m to every active member

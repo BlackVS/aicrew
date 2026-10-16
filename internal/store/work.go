@@ -226,12 +226,18 @@ func reviewCommand(c Caller, key, attemptID string, in ResultReview) command {
 					`phase = 'accepted', accepted_result = ?, accepted_by_session = ?, accepted_by_generation = ?`,
 					in.ResultSeq, sess.ID, sess.Generation)
 				if err == nil {
+					err = journalAttemptChange(ctx, tx, a, PhaseAccepted, "", now)
+				}
+				if err == nil {
 					err = announce(ctx, tx, a, sess.AgentID, "%s accepted result %d of task %s.",
 						now, labelOf(sess.AgentID), in.ResultSeq, taskName(a.Task))
 				}
 			case ReviewRework:
 				err = updateAttempt(ctx, tx, a.ID, now,
 					`phase = 'rework', `+acceptanceCleared)
+				if err == nil {
+					err = journalAttemptChange(ctx, tx, a, PhaseRework, "", now)
+				}
 				if err == nil {
 					err = announce(ctx, tx, a, sess.AgentID, "%s returned result %d of task %s for rework.",
 						now, labelOf(sess.AgentID), in.ResultSeq, taskName(a.Task))
@@ -470,6 +476,9 @@ func applyWorkOutcome(ctx context.Context, tx *sql.Tx, a Attempt, r ReservationR
 			r.Reservation.Fence, r.TaskRevision, r.Receipt.ID); err != nil {
 			return err
 		}
+		if err := journalAttemptChange(ctx, tx, a, PhaseFinalized, "", now); err != nil {
+			return err
+		}
 		return announce(ctx, tx, a, "", "Task %s was finalized as done with result %d.",
 			now, taskName(a.Task), a.AcceptedResult)
 	}
@@ -498,9 +507,18 @@ func applyWorkOutcome(ctx context.Context, tx *sql.Tx, a Attempt, r ReservationR
 		string(phase), r.Reservation.Fence, r.TaskRevision, r.Receipt.ID); err != nil {
 		return err
 	}
+	if err := journalAttemptChange(ctx, tx, a, phase, a.PendingDetail, now); err != nil {
+		return err
+	}
 	// The message was built and checked when the step was recorded, and is
-	// posted as it was then, so a later rename cannot make it too long.
+	// posted as it was then, so a later rename cannot make it too long. A
+	// blocked report reaches the coordinators through the blocked-wake
+	// subscription instead, with the facts they act on, so they are not
+	// woken twice for it.
 	task := a.Task
+	if phase == PhaseBlocked {
+		return postLifecycleExceptCoordinators(ctx, tx, a.TeamID, a.WorkerAgentID, a.PendingMessage, &task, a.ID, now)
+	}
 	_, err := postLifecycle(ctx, tx, a.TeamID, a.WorkerAgentID, a.PendingMessage, &task, a.ID, now)
 	return err
 }

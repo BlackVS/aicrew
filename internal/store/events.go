@@ -115,17 +115,6 @@ type match struct {
 	roles        []string
 }
 
-// matches is the deliveries of an event of kind to team, given its facts.
-func (s *Store) matches(kind, teamID string, f events.Facts) []match {
-	var out []match
-	for _, sub := range s.subs.Matching(kind) {
-		if roles := sub.Roles(f); len(roles) > 0 {
-			out = append(out, match{subscription: sub.Name, teamID: teamID, roles: roles})
-		}
-	}
-	return out
-}
-
 // journal writes an event and queues its deliveries, in the caller's
 // transaction, and returns the event's ID and how many deliveries it
 // queued. An event already in the journal (the same source and key) is not
@@ -231,6 +220,9 @@ func (s *Store) DeliverEvents(ctx context.Context, c Caller) ([]DeliverRun, erro
 		}
 	}
 	now := s.now()
+	if err := s.fireTimers(ctx, now); err != nil {
+		return nil, err
+	}
 	due, err := s.dueQueues(ctx, now)
 	if err != nil {
 		return nil, err
@@ -532,6 +524,8 @@ func (s *Store) wake(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent
 		return wakeBoard(ctx, tx, q, evs, roles, now)
 	case events.KindForgeChanged:
 		return wakeForge(ctx, tx, q, evs, roles, now)
+	case events.KindAttemptChanged:
+		return wakeAttempt(ctx, tx, q, evs, roles, now)
 	}
 	return "", fmt.Errorf("the wake handler takes no %s event", evs[0].Kind)
 }

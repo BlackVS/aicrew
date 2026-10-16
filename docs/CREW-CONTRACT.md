@@ -510,6 +510,11 @@ begin needs an `Idempotency-Key`; settle does not.
   - `/{id}/work`, with `{intent, detail?}`: the holder's work update.
     - `intent` is `block` (with the blocker as `detail`), `submit` (with
       the result reference) or `resume`.
+    - A committed `block` keeps its blocker on the attempt until the
+      attempt leaves the blocked phase; the operator's team state shows
+      it. It wakes the team's coordinators with one message that names the
+      blocker and the attempt's last observed pull request ("Event
+      delivery"); the block's broadcast to the team leaves them out.
     - The member's client adds a submitted result's reference to the
       task's `candidate_refs` with the note `aicrew attempt <id> by member
       <agent>`, naming the attempt and the submitting member. A resend of
@@ -1473,6 +1478,10 @@ core"). The routing is the subscription file embedded in the release.
 - **Failures:** a delivery that fails three times in a row is parked, and
   the team's coordinators get one message naming it. Parked events are
   kept and replayed by a release that changes the subscriptions.
+- **aicrewd's own changes** are journaled too: an attempt's phase change,
+  a member's session starting, resuming or ending, and a stored deadline
+  passing. Of these, only a worker's blocked report wakes anyone: the
+  team's coordinators.
 
 ## Cross-project references
 

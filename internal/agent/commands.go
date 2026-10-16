@@ -236,9 +236,10 @@ const pullRequestRule = "Open, read, label, comment on and mark ready pull reque
 	"[--draft]` in your worktree after pushing your branch, `show --pr N`, `label add|remove --pr N LABEL`, " +
 	"`comment --pr N --body-file FILE`, and `ready --pr N`, which drops the draft flag and a `WIP:` or `Draft:` " +
 	"title prefix once the gates the project's process requires are green (the merge stays a person's). Each prints the pull request's number and URL, and whether your " +
-	"launcher watches it (`watch:`): a later change of a watched pull request (a label added, its CI concluding, " +
-	"a new comment, a merge or a close) arrives in your inbox as a lifecycle message whose `forge` names the " +
-	"change, a forge.event, which wakes you. Never wait for a review or CI with a background watch, a sleep loop " +
+	"launcher watches it (`watch:`): a change of a watched pull request that needs your decision (the external " +
+	"review at the head asks for changes, CI fails, both gates turn green, a merge or a close) arrives in your inbox " +
+	"as an `action.needed` message that carries what you need: the review's body, each failed job with its log " +
+	"excerpt, or the passed checks. It wakes you; progress alone (a label, CI starting) does not. Never wait for a review or CI with a background watch, a sleep loop " +
 	"or a polling script: its end never reaches you. After `label add --pr N review-this`, end your turn. " + pullRequestNever
 
 func commandPath(name string) string { return ".claude/commands/" + name + ".md" }

@@ -47,7 +47,7 @@
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"enum": ["always", "not-own-change", "ready-or-team-attempt", "submit-or-submitted", "blocked"]}
+          "items": {"enum": ["always", "not-own-change", "ready-or-team-attempt", "submit-or-submitted", "blocked", "action"]}
         }
       }
     }

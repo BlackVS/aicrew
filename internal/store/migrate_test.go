@@ -109,7 +109,7 @@ func downgradeToV10(t *testing.T, path string) {
 	}
 	stmts = append(stmts,
 		// Tables added after v10 that reference attempts go first.
-		`DROP TABLE attempt_blocks`, `DROP TABLE timers`, `DROP TABLE event_runs`, `DROP TABLE event_deliveries`, `DROP TABLE events`,
+		`DROP TABLE attempt_pull_facts`, `DROP TABLE attempt_blocks`, `DROP TABLE timers`, `DROP TABLE event_runs`, `DROP TABLE event_deliveries`, `DROP TABLE events`,
 		`DROP TABLE scan_finals`, `DROP TABLE coordination_proofs`, `DROP TABLE superseded_updates`,
 		`DROP TABLE attempt_pulls`, `ALTER TABLE messages DROP COLUMN forge`,
 		`INSERT INTO attempts_v10 (`+attemptsV10Columns+`) SELECT `+attemptsV10Columns+` FROM attempts`,
@@ -319,7 +319,7 @@ func TestMigrationV12AddsIntrospectionTables(t *testing.T) {
 	}
 	raw := rawDB(t, path)
 	dropDeliveryColumns(t, raw)
-	for _, stmt := range []string{`DROP TABLE IF EXISTS attempt_blocks`, `DROP TABLE IF EXISTS timers`, `DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`, `DROP TABLE session_handles`,
+	for _, stmt := range []string{`DROP TABLE IF EXISTS attempt_pull_facts`, `DROP TABLE IF EXISTS attempt_blocks`, `DROP TABLE IF EXISTS timers`, `DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`, `DROP TABLE session_handles`,
 		`DROP TABLE introspection_credentials`, `ALTER TABLE attempts DROP COLUMN process_verified_receipt`,
 		`UPDATE schema_version SET version = 11`} {
 		if _, err := raw.Exec(stmt); err != nil {
@@ -353,7 +353,7 @@ func TestMigrationV13AddsSessionTokens(t *testing.T) {
 	}
 	raw := rawDB(t, path)
 	dropDeliveryColumns(t, raw)
-	for _, stmt := range []string{`DROP TABLE IF EXISTS attempt_blocks`, `DROP TABLE IF EXISTS timers`, `DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`,
+	for _, stmt := range []string{`DROP TABLE IF EXISTS attempt_pull_facts`, `DROP TABLE IF EXISTS attempt_blocks`, `DROP TABLE IF EXISTS timers`, `DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`,
 		`ALTER TABLE introspection_credentials DROP COLUMN operations`,
 		`ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 12`} {
 		if _, err := raw.Exec(stmt); err != nil {
@@ -393,7 +393,7 @@ func TestMigrationV16AddsVerifiedPinReceipt(t *testing.T) {
 	}
 	raw := rawDB(t, path)
 	dropDeliveryColumns(t, raw)
-	for _, stmt := range []string{`DROP TABLE IF EXISTS attempt_blocks`, `DROP TABLE IF EXISTS timers`, `DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 15`} {
+	for _, stmt := range []string{`DROP TABLE IF EXISTS attempt_pull_facts`, `DROP TABLE IF EXISTS attempt_blocks`, `DROP TABLE IF EXISTS timers`, `DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 15`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}
@@ -501,9 +501,21 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 		PRIMARY KEY (team_id, hub_id, project_id)
 	)`
 
+// dropActions takes a store back to v34. The messages table keeps its
+// v35 shape, a superset of v34's: v35 rebuilds it from the named columns.
+func dropActions(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	for _, stmt := range []string{`DROP TABLE attempt_pull_facts`, `ALTER TABLE messages DROP COLUMN action`} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // dropSources takes a store back to v33.
 func dropSources(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropActions(t, raw)
 	for _, stmt := range []string{`DROP TABLE attempt_blocks`, `DROP TABLE timers`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -760,6 +772,56 @@ func TestMigrationV31ReadsTheBoardAgain(t *testing.T) {
 
 // Schema v32 adds the teams' toolchains to a populated v31 store: every
 // team is kept with none selected, and one can be selected after.
+// Schema v35 rebuilds messages with the action.needed kind and its detail,
+// and adds the pull requests' content facts, on a populated v34 store:
+// every message is kept with its kind, sequence and details, and an
+// action.needed message can be written after it.
+func TestMigrationV35AddsActionNeeded(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	snapshot := func(db *sql.DB) string {
+		t.Helper()
+		var out string
+		if err := db.QueryRow(`SELECT COUNT(*) || '/' || group_concat(id || ':' || kind || ':' || seq || ':' || offer || ':' || board, ',')
+			FROM (SELECT * FROM messages ORDER BY id)`).Scan(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	before := snapshot(s.db)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropActions(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 34`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v34 store: %v", err)
+	}
+	defer s2.Close()
+	if after := snapshot(s2.db); after != before || strings.HasPrefix(before, "0/") {
+		t.Fatalf("after v35 the messages are %s, were %s", after, before)
+	}
+	var facts int
+	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM attempt_pull_facts`).Scan(&facts); err != nil || facts != 0 {
+		t.Fatalf("pull facts: %d, %v", facts, err)
+	}
+	tm := mustTeamByName(t, s2, "crew")
+	tx, err := s2.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	m, err := insertMessage(ctx, tx, Message{TeamID: tm.ID, Kind: KindActionNeeded, Text: "action.needed: a test",
+		Action: &ActionDetail{Subjects: []ActionSubject{{Kind: "pull", Text: "a test"}}}}, nil, s2.now())
+	if err != nil || m.Seq == 0 {
+		t.Fatalf("an action.needed message after v35: %+v, %v", m, err)
+	}
+}
+
 // Schema v34 adds the blocked reports and the timers to a populated v33
 // store: an attempt blocked before it has no report recorded, and the team
 // state shows none, until its next blocked report.

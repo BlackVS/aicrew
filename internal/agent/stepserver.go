@@ -132,6 +132,10 @@ type StepServer struct {
 	// ctx ends at Close: a step it interrupts stays recorded.
 	ctx    context.Context
 	cancel context.CancelFunc
+	// seen is what the forge poll last reported with its content, by pull
+	// request (forgewatch.go).
+	seenMu sync.Mutex
+	seen   map[string]pullSeen
 }
 
 // ServeSteps makes the agent home's state directory private, verifies it,

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -30,9 +32,10 @@ func deliver(t *testing.T, s *Store) []DeliverRun {
 	return runs
 }
 
-// Four changes of one pull request within two minutes, each less than
-// EventQuiet after the one before, are one handler run and one message,
-// which carries every change; nothing is delivered while they keep coming.
+// Four changes of one pull request within two minutes that each need a
+// decision (CI failing on four heads in turn), each less than EventQuiet
+// after the one before, are one handler run and one message, which carries
+// every change; nothing is delivered while they keep coming.
 func TestEventBurstWakesOnce(t *testing.T) {
 	ctx := context.Background()
 	e := newClaimStopEnv(t)
@@ -41,15 +44,10 @@ func TestEventBurstWakesOnce(t *testing.T) {
 	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
 		t.Fatal(err)
 	}
-	steps := []func(){
-		func() { o.Labels = []string{"review-this", "hands-reviewing"} },
-		func() { o.Comments = 1 },
-		func() { o.Labels = append(o.Labels, "hands-reviewed") },
-		func() { o.Checks = "success" },
-	}
 	start := *e.now
-	for i, step := range steps {
-		step()
+	heads := []string{head1, head2, head3, head4}
+	for i, h := range heads {
+		o.HeadCommit, o.Checks = h, "failure"
 		if res, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID == "" {
 			t.Fatalf("change %d: %+v, %v", i, res, err)
 		}
@@ -66,8 +64,11 @@ func TestEventBurstWakesOnce(t *testing.T) {
 		t.Fatalf("the burst's runs: %+v", runs)
 	}
 	evs := forgeEvents(t, e.s, e.indepTk)
-	want := "label hands-reviewing added|1 new comment(s)|label hands-reviewed added|CI concluded success at 0123456789ab"
-	if len(evs) != 1 || strings.Join(evs[0].Forge.Changes, "|") != want || evs[0].Forge.Checks != "success" {
+	var want []string
+	for _, h := range heads {
+		want = append(want, "CI concluded failure at "+h[:12])
+	}
+	if len(evs) != 1 || strings.Join(evs[0].Forge.Changes, "|") != strings.Join(want, "|") || evs[0].Forge.HeadCommit != head4 {
 		t.Fatalf("the burst's messages: %+v", evs)
 	}
 	if runs := settle(t, e.s, e.now); len(runs) != 0 {
@@ -86,8 +87,8 @@ func TestEventMaxWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := *e.now
-	for i := int64(1); e.now.Sub(start) < EventMaxWait; i++ {
-		o.Comments = i
+	for i := 1; e.now.Sub(start) < EventMaxWait; i++ {
+		o.HeadCommit, o.Checks = fmt.Sprintf("%040x", i), "failure"
 		if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
 			t.Fatal(err)
 		}
@@ -166,8 +167,8 @@ func TestEventHandlerParks(t *testing.T) {
 		t.Fatal(err)
 	}
 	wake := s.handlers["wake"]
-	s.handlers["wake"] = func(context.Context, *sql.Tx, queue, []queuedEvent, time.Time) (string, error) {
-		return "", errors.New("the handler broke\non two lines")
+	s.handlers["wake"] = func(context.Context, *sql.Tx, queue, []queuedEvent, time.Time) (*wakeOut, error) {
+		return nil, errors.New("the handler broke\non two lines")
 	}
 	for i, want := range []string{"failed", "failed", "parked"} {
 		runs := settle(t, s, now)
@@ -251,8 +252,8 @@ func TestEventsKeepThePagesOrder(t *testing.T) {
 }
 
 // A run's message keeps every change of its events in order, repeats
-// included: two comments added one by one are two changes, and a
-// conclusion that flips back ends the list as it ended on the forge.
+// included: CI that fails, passes and fails again on one head is two
+// failures (the pass between them needs no decision and queues nothing).
 func TestEventBurstKeepsRepeatedChanges(t *testing.T) {
 	ctx := context.Background()
 	e := newClaimStopEnv(t)
@@ -261,26 +262,19 @@ func TestEventBurstKeepsRepeatedChanges(t *testing.T) {
 	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
 		t.Fatal(err)
 	}
-	for _, step := range []func(){
-		func() { o.Comments = 1 },
-		func() { o.Comments = 2 },
-		func() { o.Checks = "success" },
-		func() { o.Checks = "failure" },
-		func() { o.Checks = "success" },
-	} {
-		step()
+	for _, checks := range []string{"failure", "success", "failure"} {
+		o.Checks = checks
 		if res, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID == "" {
 			t.Fatalf("%+v, %v", res, err)
 		}
 		*e.now = e.now.Add(time.Second)
 	}
-	if runs := settle(t, e.s, e.now); len(runs) != 1 || runs[0].Events != 5 {
+	if runs := settle(t, e.s, e.now); len(runs) != 1 || runs[0].Events != 2 {
 		t.Fatalf("runs: %+v", runs)
 	}
 	evs := forgeEvents(t, e.s, e.indepTk)
-	want := "1 new comment(s)|1 new comment(s)|CI concluded success at 0123456789ab|" +
-		"CI concluded failure at 0123456789ab|CI concluded success at 0123456789ab"
-	if len(evs) != 1 || strings.Join(evs[0].Forge.Changes, "|") != want || evs[0].Forge.Checks != "success" {
+	want := "CI concluded failure at 0123456789ab|CI concluded failure at 0123456789ab"
+	if len(evs) != 1 || strings.Join(evs[0].Forge.Changes, "|") != want || evs[0].Forge.Checks != "failure" {
 		t.Fatalf("the message: %+v", evs)
 	}
 }
@@ -295,14 +289,14 @@ func TestEventQueueRecheckedBeforeRun(t *testing.T) {
 	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
 		t.Fatal(err)
 	}
-	o.Comments = 1
+	o.Checks = "failure"
 	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
 		t.Fatal(err)
 	}
 	*e.now = e.now.Add(EventQuiet)
 	e.s.beforeQueueRun = func() {
 		e.s.beforeQueueRun = nil
-		o.Comments = 2
+		o.HeadCommit = head2
 		if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
 			t.Error(err)
 		}
@@ -315,5 +309,44 @@ func TestEventQueueRecheckedBeforeRun(t *testing.T) {
 	}
 	if runs := settle(t, e.s, e.now); len(runs) != 1 || runs[0].Events != 2 {
 		t.Fatalf("the next run: %+v", runs)
+	}
+}
+
+// Two subjects due together for the same member are one action.needed
+// message, which lists each with its content: a worker's blocked report
+// and a task becoming READY, both for the coordinator.
+func TestTwoSubjectsOneMessage(t *testing.T) {
+	ctx := context.Background()
+	e, a := running(t)
+	now := clock(e.s)
+	rc := ReconcilerCaller()
+	if _, err := e.s.RecordBoardPage(ctx, rc, "hub-a", BoardPage{Changes: []BoardChange{}, Cursor: "c1"}); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(time.Minute)
+	if _, err := e.s.RecordBoardPage(ctx, rc, "hub-a", BoardPage{From: "c1",
+		Changes: []BoardChange{readyChange("task-9", 4, *now)}, Cursor: "c2"}); err != nil {
+		t.Fatal(err)
+	}
+	e.mustWork(t, "block", a, IntentBlock, "The schema is undecided.")
+	before := len(read(t, e.s, e.lead, 50))
+	runs := settle(t, e.s, now)
+	if len(runs) != 2 || runs[0].MessageID == "" || runs[0].MessageID != runs[1].MessageID {
+		t.Fatalf("the runs: %+v", runs)
+	}
+	got := read(t, e.s, e.lead, 50)
+	if len(got) != before+1 {
+		t.Fatalf("the coordinator's messages: %+v", got[before:])
+	}
+	m := got[len(got)-1]
+	if m.Kind != KindActionNeeded || m.Action == nil || len(m.Action.Subjects) != 2 || m.Task != nil || m.Board == nil ||
+		!strings.Contains(m.Text, "Task task-9 of project project-a moved from BACKLOG to READY") ||
+		!strings.Contains(m.Text, "builder reported task hub-a/project-a/task-1 blocked: The schema is undecided.") {
+		t.Fatalf("the merged message: %+v", m)
+	}
+	kinds := []string{m.Action.Subjects[0].Kind, m.Action.Subjects[1].Kind}
+	slices.Sort(kinds)
+	if strings.Join(kinds, ",") != "blocked,board" || m.Action.Subjects[1].Text == "" {
+		t.Fatalf("the subjects: %+v", m.Action.Subjects)
 	}
 }

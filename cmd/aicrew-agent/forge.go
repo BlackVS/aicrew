@@ -33,9 +33,10 @@ const forgeUsage = `usage: aicrew-agent forge pr open    [--home DIR] [--reposit
   first; a review's header line ("reviewed at head SHA") is marked when it
   names the head. Never use another forge client or a credential by hand.
   Each command reports the pull request to the launcher, which then watches
-  it: a later change of its labels, CI or comments arrives in the inbox as a
-  forge.event and wakes the member. Do not wait with a background watch:
-  end the turn.
+  it: a change that needs a decision (a review asking for changes, CI
+  failing, both gates green, a merge or a close) arrives in the inbox as an
+  action.needed message with its content and wakes the member. Do not wait
+  with a background watch: end the turn.
   --home defaults to $` + agent.HomeEnv + `, which the launcher gives its client.`
 
 // newPullAPI is the forge client `forge pr` uses; tests replace it.

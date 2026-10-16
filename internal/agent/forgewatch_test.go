@@ -16,10 +16,28 @@ import (
 
 // fakeStatus is a forge whose one pull request's status the test changes.
 type fakeStatus struct {
-	mu    sync.Mutex
-	st    forge.PullStatus
-	reads int
-	token string
+	mu       sync.Mutex
+	st       forge.PullStatus
+	content  forge.PullContent
+	reads    int
+	contents int
+	token    string
+}
+
+func (f *fakeStatus) GetPullContent(_ context.Context, host string, k forge.Kind, token, path string, n int64) (forge.Pull, forge.PullContent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.contents++
+	if token != f.token || n != f.st.Number {
+		return forge.Pull{}, forge.PullContent{}, forge.ErrNotFound
+	}
+	return f.st.Pull, f.content, nil
+}
+
+func (f *fakeStatus) contentReads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.contents
 }
 
 func (f *fakeStatus) GetPullStatus(_ context.Context, host string, k forge.Kind, token, path string, n int64) (forge.PullStatus, error) {
@@ -85,8 +103,19 @@ func TestWaitWakesOnAForgeEvent(t *testing.T) {
 		t.Fatalf("an unchanged pull request woke the member: %s (reads %d)", ans.Result, fake.readCount())
 	}
 
+	// hands posts a READY review at the head and CI passes: both gates are
+	// green, a decision for the worker. The launcher reads the content for
+	// it, since the status changed.
 	go func() {
 		time.Sleep(300 * time.Millisecond)
+		fake.mu.Lock()
+		fake.content = forge.PullContent{
+			Comments: []forge.PullComment{{Kind: forge.CommentIssue, Author: "hands-bot", URL: "https://git.example.test/c/1",
+				Body: "[hands-bot review] reviewed at head 0123456789ab\n\nVERDICT\nREADY_FOR_HUMAN_MERGE",
+				Review: &forge.ReviewHeader{Reviewer: forge.ReviewerExternal, Head: "0123456789ab", AtHead: true,
+					Verdict: "READY_FOR_HUMAN_MERGE"}}},
+			Checks: []forge.Check{{Name: "build", State: forge.ChecksSuccess, URL: "https://ci.example/1"}}}
+		fake.mu.Unlock()
 		fake.set(func(st *forge.PullStatus) {
 			st.Labels, st.Checks, st.Comments = []string{"hands-reviewed"}, forge.ChecksSuccess, 1
 		})
@@ -94,7 +123,7 @@ func TestWaitWakesOnAForgeEvent(t *testing.T) {
 	ten, _ := json.Marshal(map[string]int{"seconds": 10})
 	start := time.Now()
 	ans = s.call(t, &answers, StepCall{Op: "wait-inbox", Body: ten})
-	if json.Unmarshal(ans.Result, &wake) != nil || len(wake.Pending) != 1 || wake.Pending[0].Kind != "lifecycle" ||
+	if json.Unmarshal(ans.Result, &wake) != nil || len(wake.Pending) != 1 || wake.Pending[0].Kind != "action.needed" ||
 		wake.Pending[0].AttemptID != id || time.Since(start) > 5*time.Second {
 		t.Fatalf("a review during the wait: %s after %s", ans.Result, time.Since(start))
 	}
@@ -103,8 +132,13 @@ func TestWaitWakesOnAForgeEvent(t *testing.T) {
 		Messages []store.InboxItem `json:"messages"`
 	}
 	if json.Unmarshal(page.Result, &inbox) != nil || len(inbox.Messages) != 1 || inbox.Messages[0].Forge == nil ||
-		strings.Join(inbox.Messages[0].Forge.Changes, "|") != "label hands-reviewed added|CI concluded success at 0123456789ab|1 new comment(s)" {
+		strings.Join(inbox.Messages[0].Forge.Changes, "|") != "label hands-reviewed added|CI concluded success at 0123456789ab|1 new comment(s)" ||
+		inbox.Messages[0].Action == nil || strings.Join(inbox.Messages[0].Action.Subjects[0].Needs, ",") != store.NeedGates ||
+		!strings.Contains(inbox.Messages[0].Text, "Both gates are green at the head") {
 		t.Fatalf("the forge event: %s", page.Result)
+	}
+	if n := fake.contentReads(); n != 1 {
+		t.Fatalf("the content was read %d times, want once for the one change", n)
 	}
 
 	// Merged: reported once more, then no longer watched.
@@ -197,5 +231,62 @@ func TestForgePRWatchEnds(t *testing.T) {
 		if err != nil || rep.Watch != "not watched: it is "+state || reported != 2 {
 			t.Errorf("%s: %+v %v, %d reports", state, rep.Watch, err, reported)
 		}
+	}
+}
+
+// The content an observation carries is the newest external review at the
+// head, with its verdict deciding whether it blocks, and the failed and
+// passed checks; a local review and a review of another head are left out.
+func TestWithContent(t *testing.T) {
+	head := "0123456789abcdef0123456789abcdef01234567"
+	review := func(reviewer, at string, atHead bool, verdict, body string) forge.PullComment {
+		return forge.PullComment{Kind: forge.CommentIssue, Author: reviewer, URL: "https://x/" + at + verdict, Body: body,
+			Review: &forge.ReviewHeader{Reviewer: reviewer, Head: at, AtHead: atHead, Verdict: verdict}}
+	}
+	c := forge.PullContent{
+		Comments: []forge.PullComment{
+			review(forge.ReviewerExternal, "fedcba9", false, "RETURN_TO_IMPLEMENTATION", "old head"),
+			review(forge.ReviewerExternal, head[:7], true, "RETURN_TO_IMPLEMENTATION", "first at the head"),
+			review(forge.ReviewerExternal, head[:7], true, "READY_FOR_HUMAN_MERGE", "second at the head"),
+			review(forge.ReviewerLocal, head[:7], true, "READY_FOR_HUMAN_MERGE", "the author's own"),
+			{Kind: forge.CommentIssue, Author: "someone", Body: "a plain comment"},
+		},
+		Checks: []forge.Check{
+			{Name: "lint", State: forge.ChecksSuccess, URL: "https://ci/1"},
+			{Name: "test", State: forge.ChecksFailure, Conclusion: "failure", Log: &forge.JobLog{Excerpt: "--- FAIL", Cut: true}},
+			{Name: "race", State: forge.ChecksFailure, Log: &forge.JobLog{None: "no log"}},
+			{Name: "build", State: forge.ChecksPending},
+		},
+	}
+	o := withContent(PullObservation{HeadCommit: head}, c)
+	if !o.Content || o.Review == nil || o.Review.Body != "second at the head" || o.Review.Blocker || o.Review.Verdict != verdictReady {
+		t.Fatalf("the review: %+v", o.Review)
+	}
+	if len(o.Failed) != 2 || o.Failed[0].Excerpt != "--- FAIL" || !o.Failed[0].Cut || o.Failed[1].NoLog != "no log" ||
+		len(o.Passed) != 1 || o.Passed[0].Name != "lint" {
+		t.Fatalf("the checks: %+v %+v", o.Failed, o.Passed)
+	}
+	// No verdict: a body with a BLOCKER blocks, one without does not.
+	for body, blocks := range map[string]bool{"- [BLOCKER] the parser loops": true, "looks fine": false} {
+		c.Comments = []forge.PullComment{review(forge.ReviewerExternal, head[:7], true, "", body)}
+		if o := withContent(PullObservation{HeadCommit: head}, c); o.Review == nil || o.Review.Blocker != blocks {
+			t.Errorf("%q: %+v", body, o.Review)
+		}
+	}
+}
+
+// Content read for another head than the status's is not sent: the branch
+// moved between the two reads (hands review of #165).
+func TestAddContentNeedsOneHead(t *testing.T) {
+	st := forge.PullStatus{Pull: forge.Pull{Number: 4, HeadCommit: "0123456789abcdef0123456789abcdef01234567"}, Checks: forge.ChecksFailure}
+	c := forge.PullContent{Checks: []forge.Check{{Name: "test", State: forge.ChecksFailure}}}
+	o := observation("git.example.test", "crew/project-t", st)
+	moved := st.Pull
+	moved.HeadCommit = "89abcdef0123456789abcdef0123456789abcdef"
+	if got, added := addContent(o, st, moved, c); added || got.Content || len(got.Failed) != 0 {
+		t.Fatalf("another head's content: %+v %v", got, added)
+	}
+	if got, added := addContent(o, st, st.Pull, c); !added || !got.Content || len(got.Failed) != 1 {
+		t.Fatalf("the same head's content: %+v %v", got, added)
 	}
 }

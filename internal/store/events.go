@@ -169,8 +169,9 @@ type queuedEvent struct {
 }
 
 // handlerFunc handles a queue's pending events in the run's transaction
-// and returns the message it wrote, if any.
-type handlerFunc func(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, now time.Time) (string, error)
+// and returns what to send, or nil for nothing; the runner writes it
+// (actions.go, writeWakes).
+type handlerFunc func(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, now time.Time) (*wakeOut, error)
 
 // DeliverRun is one handler run DeliverEvents made.
 type DeliverRun struct {
@@ -227,20 +228,117 @@ func (s *Store) DeliverEvents(ctx context.Context, c Caller) ([]DeliverRun, erro
 	if err != nil {
 		return nil, err
 	}
-	runs := []DeliverRun{}
+	// A team's due queues run together, so the subjects they wake the same
+	// members for become one message.
+	var teams []string
+	byTeam := map[string][]queue{}
 	for _, q := range due {
+		if _, ok := byTeam[q.teamID]; !ok {
+			teams = append(teams, q.teamID)
+		}
+		byTeam[q.teamID] = append(byTeam[q.teamID], q)
+	}
+	runs := []DeliverRun{}
+	for _, team := range teams {
 		if s.beforeQueueRun != nil {
 			s.beforeQueueRun()
 		}
-		r, err := s.runQueue(ctx, q, now)
+		rs, err := s.runTeam(ctx, team, byTeam[team], now)
+		runs = append(runs, rs...)
 		if err != nil {
 			return runs, err
 		}
-		if r.Events > 0 {
-			runs = append(runs, r)
-		}
 	}
 	return runs, nil
+}
+
+// runTeam runs a team's due queues in one transaction and writes their
+// messages together. When a handler fails, nothing of the batch is kept,
+// and each queue runs on its own, so the failure is recorded against its
+// queue alone.
+func (s *Store) runTeam(ctx context.Context, teamID string, qs []queue, now time.Time) ([]DeliverRun, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after commit
+	type ran struct {
+		q   queue
+		evs []queuedEvent
+		out *wakeOut
+	}
+	var done []ran
+	var outs []*wakeOut
+	for _, q := range qs {
+		evs, err := s.dueEvents(ctx, tx, q, now)
+		if err != nil {
+			return nil, err
+		}
+		if len(evs) == 0 {
+			continue
+		}
+		out, herr := s.handle(ctx, tx, q, evs, now)
+		if herr != nil {
+			tx.Rollback() //nolint:errcheck // each queue runs again on its own
+			var runs []DeliverRun
+			for _, q := range qs {
+				r, err := s.runQueue(ctx, q, now)
+				if err != nil {
+					return runs, err
+				}
+				if r.Events > 0 {
+					runs = append(runs, r)
+				}
+			}
+			return runs, nil
+		}
+		done = append(done, ran{q, evs, out})
+		outs = append(outs, out)
+	}
+	ids, err := writeWakes(ctx, tx, teamID, outs, now)
+	if err != nil {
+		return nil, err
+	}
+	var runs []DeliverRun
+	for _, d := range done {
+		msgID := ""
+		if d.out != nil {
+			msgID = ids[d.out]
+		}
+		runID, err := insertRun(ctx, tx, d.q, s.subs.Version, runHandled, len(d.evs), msgID, "", now)
+		if err != nil {
+			return nil, err
+		}
+		if err := markDeliveries(ctx, tx, d.q, d.evs, deliveryHandled, runID); err != nil {
+			return nil, err
+		}
+		runs = append(runs, DeliverRun{Subscription: d.q.subscription, TeamID: d.q.teamID, Subject: d.q.subject,
+			Events: len(d.evs), Outcome: runHandled, MessageID: msgID})
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return runs, nil
+}
+
+// dueEvents is q's pending events, in the run's transaction, if q is still
+// due: an event that arrived after the queue was selected may have ended
+// its quiet.
+func (s *Store) dueEvents(ctx context.Context, tx *sql.Tx, q queue, now time.Time) ([]queuedEvent, error) {
+	var oldest, newest sql.NullString
+	if err := tx.QueryRowContext(ctx,
+		`SELECT MIN(recorded_at), MAX(recorded_at) FROM event_deliveries
+		 WHERE state = ? AND subscription = ? AND team_id = ? AND subject = ?`,
+		deliveryPending, q.subscription, q.teamID, q.subject).Scan(&oldest, &newest); err != nil {
+		return nil, fmt.Errorf("read the queue: %w", err)
+	}
+	if !oldest.Valid {
+		return nil, nil
+	}
+	if due, err := s.due(oldest.String, newest.String, now); err != nil || !due {
+		return nil, err
+	}
+	return pendingEvents(ctx, tx, q)
 }
 
 // dueQueues is the queues with pending events that are due a run.
@@ -296,20 +394,7 @@ func (s *Store) runQueue(ctx context.Context, q queue, now time.Time) (DeliverRu
 		return r, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after commit
-	var oldest, newest sql.NullString
-	if err := tx.QueryRowContext(ctx,
-		`SELECT MIN(recorded_at), MAX(recorded_at) FROM event_deliveries
-		 WHERE state = ? AND subscription = ? AND team_id = ? AND subject = ?`,
-		deliveryPending, q.subscription, q.teamID, q.subject).Scan(&oldest, &newest); err != nil {
-		return r, fmt.Errorf("read the queue: %w", err)
-	}
-	if !oldest.Valid {
-		return r, nil
-	}
-	if due, err := s.due(oldest.String, newest.String, now); err != nil || !due {
-		return r, err
-	}
-	evs, err := pendingEvents(ctx, tx, q)
+	evs, err := s.dueEvents(ctx, tx, q, now)
 	if err != nil {
 		return r, err
 	}
@@ -317,10 +402,18 @@ func (s *Store) runQueue(ctx context.Context, q queue, now time.Time) (DeliverRu
 	if len(evs) == 0 {
 		return r, nil
 	}
-	msgID, herr := s.handle(ctx, tx, q, evs, now)
+	out, herr := s.handle(ctx, tx, q, evs, now)
 	if herr != nil {
 		tx.Rollback() //nolint:errcheck // the failure is recorded on its own
 		return s.failRun(ctx, q, evs, herr, now)
+	}
+	ids, err := writeWakes(ctx, tx, q.teamID, []*wakeOut{out}, now)
+	if err != nil {
+		return r, err
+	}
+	msgID := ""
+	if out != nil {
+		msgID = ids[out]
 	}
 	runID, err := insertRun(ctx, tx, q, s.subs.Version, runHandled, len(evs), msgID, "", now)
 	if err != nil {
@@ -337,14 +430,14 @@ func (s *Store) runQueue(ctx context.Context, q queue, now time.Time) (DeliverRu
 }
 
 // handle runs the queue's subscription's handler.
-func (s *Store) handle(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, now time.Time) (string, error) {
+func (s *Store) handle(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, now time.Time) (*wakeOut, error) {
 	sub, ok := s.subs.Named(q.subscription)
 	if !ok {
-		return "", fmt.Errorf("no subscription is called %s in this release", q.subscription)
+		return nil, fmt.Errorf("no subscription is called %s in this release", q.subscription)
 	}
 	h, ok := s.handlers[sub.Handler]
 	if !ok {
-		return "", fmt.Errorf("no handler is called %s in this release", sub.Handler)
+		return nil, fmt.Errorf("no handler is called %s in this release", sub.Handler)
 	}
 	return h(ctx, tx, q, evs, now)
 }
@@ -501,17 +594,26 @@ type forgeEvent struct {
 	AttemptID   string          `json:"attempt_id"`
 	Observation PullObservation `json:"observation"`
 	Changes     []string        `json:"changes"`
+	// Needs is what the change needs a decision on, and Review, Failed and
+	// Passed the content those needs call for (actions.go).
+	Needs  []string      `json:"needs,omitempty"`
+	Review *PullReview   `json:"review,omitempty"`
+	Failed []FailedCheck `json:"failed,omitempty"`
+	Passed []PassedCheck `json:"passed,omitempty"`
+	// Omitted says what fitForgeEvent left out for room, "" for nothing.
+	Omitted string `json:"omitted,omitempty"`
 }
 
-// wake is the handler of this increment: one lifecycle message per run, to
-// the recipients the run's events name, carrying the merged changes. It
-// reads the current facts (the team's coordinators, the attempt's worker),
-// not those of the moment each event was written.
-func (s *Store) wake(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, now time.Time) (string, error) {
+// wake is the handler of the event core: one action.needed subject per
+// run, to the recipients the run's events name, with the content the
+// decision needs (actions.go). It reads the current facts (the team's
+// coordinators, the attempt's worker), not those of the moment each event
+// was written.
+func (s *Store) wake(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, now time.Time) (*wakeOut, error) {
 	var roles []string
 	for _, ev := range evs {
 		if ev.Kind != evs[0].Kind {
-			return "", fmt.Errorf("the queue holds events of kinds %s and %s", evs[0].Kind, ev.Kind)
+			return nil, fmt.Errorf("the queue holds events of kinds %s and %s", evs[0].Kind, ev.Kind)
 		}
 		for _, r := range ev.Roles {
 			if !slices.Contains(roles, r) {
@@ -521,32 +623,32 @@ func (s *Store) wake(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent
 	}
 	switch evs[0].Kind {
 	case events.KindBoardChanged:
-		return wakeBoard(ctx, tx, q, evs, roles, now)
+		return wakeBoard(ctx, tx, q, evs, roles)
 	case events.KindForgeChanged:
-		return wakeForge(ctx, tx, q, evs, roles, now)
+		return wakeForge(ctx, tx, evs, roles)
 	case events.KindAttemptChanged:
-		return wakeAttempt(ctx, tx, q, evs, roles, now)
+		return wakeAttempt(ctx, tx, evs, roles)
 	}
-	return "", fmt.Errorf("the wake handler takes no %s event", evs[0].Kind)
+	return nil, fmt.Errorf("the wake handler takes no %s event", evs[0].Kind)
 }
 
-func wakeBoard(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, roles []string, now time.Time) (string, error) {
+func wakeBoard(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, roles []string) (*wakeOut, error) {
 	if !slices.Contains(roles, events.RoleCoordinator) {
-		return "", nil // a board change has no worker of its own
+		return nil, nil // a board change has no worker of its own
 	}
 	recipients, err := activeCoordinators(ctx, tx, q.teamID)
 	if err != nil || len(recipients) == 0 {
-		return "", err
+		return nil, err
 	}
 	var last boardEvent
 	var texts []string
 	for i, ev := range evs {
 		var b boardEvent
 		if err := json.Unmarshal(ev.Payload, &b); err != nil {
-			return "", fmt.Errorf("read a board event: %w", err)
+			return nil, fmt.Errorf("read a board event: %w", err)
 		}
 		if i > 0 && b.Task != last.Task {
-			return "", errors.New("the queue holds events of two tasks")
+			return nil, errors.New("the queue holds events of two tasks")
 		}
 		last = b
 		ch := BoardChange{ProjectID: b.Task.ProjectID, TaskID: b.Task.TaskID, Revision: b.Change.Revision,
@@ -557,7 +659,7 @@ func wakeBoard(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, role
 	if err := tx.QueryRowContext(ctx,
 		`SELECT EXISTS (SELECT 1 FROM attempts WHERE team_id = ? AND task_hub_id = ? AND task_project_id = ? AND task_id = ?)`,
 		q.teamID, last.Task.HubID, last.Task.ProjectID, last.Task.TaskID).Scan(&attempt); err != nil {
-		return "", fmt.Errorf("read the task's attempts: %w", err)
+		return nil, fmt.Errorf("read the task's attempts: %w", err)
 	}
 	text := strings.Join(texts, " ")
 	if attempt {
@@ -565,55 +667,113 @@ func wakeBoard(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, role
 	}
 	task, project := last.Task, ProjectRef{HubID: last.Task.HubID, ProjectID: last.Task.ProjectID}
 	change := last.Change
-	m, err := insertMessage(ctx, tx, Message{TeamID: q.teamID, Kind: KindLifecycle, Project: &project, Task: &task,
-		Text: text, Board: &change}, recipients, now)
-	return m.ID, err
+	return &wakeOut{recipients: recipients, project: &project, board: &change,
+		subject: ActionSubject{Kind: "board", Task: &task, Board: &change, Text: text}}, nil
 }
 
-func wakeForge(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, roles []string, now time.Time) (string, error) {
+func wakeForge(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []string) (*wakeOut, error) {
 	var last forgeEvent
-	changes := []string{}
+	changes, needs := []string{}, []string{}
+	var parsed []forgeEvent
 	for i, ev := range evs {
 		var f forgeEvent
 		if err := json.Unmarshal(ev.Payload, &f); err != nil {
-			return "", fmt.Errorf("read a forge event: %w", err)
+			return nil, fmt.Errorf("read a forge event: %w", err)
 		}
 		if i > 0 && f.AttemptID != last.AttemptID {
-			return "", errors.New("the queue holds events of two attempts")
+			return nil, errors.New("the queue holds events of two attempts")
 		}
 		last = f
+		parsed = append(parsed, f)
 		// Every event's changes, in order, repeats included: two events that
 		// each add a comment, or a conclusion that flips and flips back, are
 		// distinct changes even when their words are equal.
 		changes = append(changes, f.Changes...)
+		for _, n := range f.Needs {
+			if !slices.Contains(needs, n) {
+				needs = append(needs, n)
+			}
+		}
+	}
+	// The run's needs and content are those that still hold now: at the
+	// pull request as aicrewd last recorded it, which may be newer than the
+	// run's last event, since a change that needs no decision (CI running
+	// again) is recorded without queuing anything. A later review
+	// supersedes an earlier one, and checks read for another head are not
+	// this head's (hands reviews of #165).
+	final := last.Observation
+	cur, err := lastObservation(ctx, tx, last.AttemptID)
+	if err != nil {
+		return nil, err
+	}
+	if cur != nil {
+		final = *cur
+	}
+	pf, err := readPullFacts(ctx, tx, last.AttemptID)
+	if err != nil {
+		return nil, err
+	}
+	var content pullContentFacts
+	var omitted string
+	for _, f := range parsed {
+		if f.Review != nil {
+			content.Review = f.Review
+		}
+		if f.Observation.HeadCommit != final.HeadCommit {
+			continue
+		}
+		if f.Failed != nil {
+			content.Failed = f.Failed
+		}
+		if f.Passed != nil {
+			content.Passed = f.Passed
+		}
+		if f.Omitted != "" {
+			omitted = f.Omitted
+		}
+	}
+	if pf != nil && pf.Review != nil {
+		content.Review = pf.Review // the newest review recorded, cut as stored
+	}
+	needs = holdingNeeds(needs, final, content)
+	if len(needs) == 0 {
+		return nil, nil
 	}
 	a, err := getAttempt(ctx, tx, last.AttemptID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var recipients []string
-	to := ""
 	if slices.Contains(roles, events.RoleWorker) {
-		recipients, to = append(recipients, a.WorkerAgentID), a.WorkerAgentID
+		recipients = append(recipients, a.WorkerAgentID)
 	}
 	if slices.Contains(roles, events.RoleCoordinator) {
 		coords, err := activeCoordinators(ctx, tx, a.TeamID)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		for _, c := range coords {
 			if !slices.Contains(recipients, c) {
-				recipients, to = append(recipients, c), ""
+				recipients = append(recipients, c)
 			}
 		}
 	}
 	if len(recipients) == 0 {
-		return "", nil
+		return nil, nil
 	}
-	o := last.Observation
 	task := a.Task
-	m, err := insertMessage(ctx, tx, Message{TeamID: a.TeamID, Kind: KindLifecycle, To: to, Task: &task, AttemptID: a.ID,
-		Text: forgeText(o, changes), Forge: &ForgeDetail{Pull: o.Number, URL: o.URL, State: o.State, HeadCommit: o.HeadCommit,
-			Labels: o.Labels, Checks: o.Checks, Comments: o.Comments, Changes: changes}}, recipients, now)
-	return m.ID, err
+	detail := &ForgeDetail{Pull: final.Number, URL: final.URL, State: final.State, HeadCommit: final.HeadCommit,
+		Labels: final.Labels, Checks: final.Checks, Comments: final.Comments, Changes: changes}
+	sub := ActionSubject{Kind: "pull", AttemptID: a.ID, Task: &task, Needs: needs, Pull: detail,
+		Text: pullText(final, needs, content, omitted)}
+	if slices.Contains(needs, NeedReview) || slices.Contains(needs, NeedGates) {
+		sub.Review = content.Review
+	}
+	if slices.Contains(needs, NeedCI) {
+		sub.Failed = content.Failed
+	}
+	if slices.Contains(needs, NeedGates) {
+		sub.Passed = content.Passed
+	}
+	return &wakeOut{recipients: recipients, forge: detail, subject: sub}, nil
 }

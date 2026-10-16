@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/BlackVS/aicrew/internal/events"
 	"github.com/BlackVS/aicrew/internal/forge"
@@ -24,7 +25,8 @@ import (
 // default forge-wake subscription queues it for the worker always, and for
 // the team's coordinators when the change bears on a submit (the attempt's
 // result is submitted, or the pull request was merged or closed); its run
-// writes the forge.event lifecycle message. The first observation of a pull
+// writes the action.needed message (actions.go) for a change that needs a
+// decision. The first observation of a pull
 // request is the baseline, written by the member's own forge pr command, and
 // announces nothing: the member saw it.
 
@@ -49,9 +51,17 @@ type PullObservation struct {
 	// Baseline marks the report of the member's own forge pr command: it is
 	// recorded and announces nothing, since the member has just seen it.
 	Baseline bool `json:"baseline,omitempty"`
+	// Content marks an observation for which the launcher also read the
+	// pull request's content (increment 1c): the external review at the
+	// head, the failed checks with their excerpts, and the passed checks.
+	// Without it the content facts recorded before stand.
+	Content bool          `json:"content,omitempty"`
+	Review  *PullReview   `json:"review,omitempty"`
+	Failed  []FailedCheck `json:"failed,omitempty"`
+	Passed  []PassedCheck `json:"passed,omitempty"`
 }
 
-// ForgeDetail is what a forge.event message carries: the pull request as
+// ForgeDetail is the pull request a forge subject carries: the pull request as
 // observed, and what changed since the observation before it.
 type ForgeDetail struct {
 	Pull       int64    `json:"pull"`
@@ -66,13 +76,16 @@ type ForgeDetail struct {
 
 // ObserveResult is what aicrewd did with an observation: the attempt it is
 // the pull request of, whether it was the baseline, what changed, and the
-// event it journaled, if any. The forge.event message follows when the
+// event it journaled, if any. The action.needed message follows when the
 // event's queue runs (events.go).
 type ObserveResult struct {
 	AttemptID string   `json:"attempt_id"`
 	Baseline  bool     `json:"baseline"`
 	Changes   []string `json:"changes"`
-	EventID   string   `json:"event_id,omitempty"`
+	// Needs is what the change needs a decision on (actions.go); empty for
+	// one that only reports progress.
+	Needs   []string `json:"needs,omitempty"`
+	EventID string   `json:"event_id,omitempty"`
 }
 
 const (
@@ -115,6 +128,32 @@ func (o PullObservation) validate() error {
 			return bad("labels")
 		}
 	}
+	if !o.Content && (o.Review != nil || len(o.Failed) > 0 || len(o.Passed) > 0) {
+		return bad("content without the content mark")
+	}
+	// A review read at the head names that head: one at another head was
+	// read with another status, and is refused rather than recorded.
+	if r := o.Review; r != nil && r.AtHead && !sameCommit(r.Head, o.HeadCommit) {
+		return bad("review, read at another head")
+	}
+	if r := o.Review; r != nil && (len(r.Body) > maxObservedLen || len(r.URL) > maxPullURL || len(r.Author) > maxCheckField ||
+		len(r.Verdict) > maxCheckField || (r.Head != "" && !observedCommit.MatchString(r.Head)) || !utf8.ValidString(r.Body)) {
+		return bad("review")
+	}
+	if len(o.Failed) > 4*maxFailed || len(o.Passed) > 4*maxPassed {
+		return bad("checks")
+	}
+	for _, f := range o.Failed {
+		if len(f.Name) > maxCheckField || len(f.URL) > maxPullURL || len(f.Excerpt) > maxObservedLen ||
+			len(f.NoLog) > maxCheckField || len(f.Conclusion) > maxCheckField || !utf8.ValidString(f.Excerpt) {
+			return bad("failed check")
+		}
+	}
+	for _, p := range o.Passed {
+		if len(p.Name) > maxCheckField || len(p.URL) > maxPullURL {
+			return bad("passed check")
+		}
+	}
 	return nil
 }
 
@@ -153,11 +192,36 @@ func (s *Store) ObservePullWithToken(ctx context.Context, token string, o PullOb
 	if err != nil {
 		return ObserveResult{}, err
 	}
+	pf, err := readPullFacts(ctx, tx, a.ID)
+	if err != nil {
+		return ObserveResult{}, err
+	}
+	// The content facts: this observation's when the launcher read the
+	// content, else those recorded before.
+	cf := pullContentFacts{Head: o.HeadCommit, Checks: o.Checks}
+	switch {
+	case o.Content:
+		cf.Review, cf.Failed, cf.Passed = o.Review, o.Failed, o.Passed
+	case pf != nil:
+		// The review names its head, which pullNeeds checks; the checks are
+		// the head's and the conclusion's they were read with, and stand
+		// only while both are unchanged.
+		cf.Review = pf.Review
+		if pf.Head == o.HeadCommit && pf.Checks == o.Checks {
+			cf.Failed, cf.Passed = pf.Failed, pf.Passed
+		}
+	}
+	boundContent(&cf)
+	newReview := o.Content && cf.Review != nil && (pf == nil || pf.Review == nil || pf.Review.URL != cf.Review.URL ||
+		pf.Review.Head != cf.Review.Head || pf.Review.Verdict != cf.Review.Verdict)
 	labels, _ := json.Marshal(o.Labels)
 	if prev != nil && prev.Number == o.Number && prev.URL == o.URL && prev.State == o.State &&
 		prev.HeadCommit == o.HeadCommit && slices.Equal(prev.Labels, o.Labels) && prev.Checks == o.Checks &&
-		prev.Comments == o.Comments {
+		prev.Comments == o.Comments && !newReview {
 		return res, tx.Commit()
+	}
+	if err := writePullFacts(ctx, tx, a.ID, cf); err != nil {
+		return ObserveResult{}, err
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO attempt_pulls (attempt_id, number, url, state, head_commit, labels, checks, comments, observed_at)
@@ -173,17 +237,37 @@ func (s *Store) ObservePullWithToken(ctx context.Context, token string, o PullOb
 		return res, tx.Commit()
 	}
 	changes, submit := pullChanges(*prev, o)
-	res.Changes = changes
-	if len(changes) > 0 {
+	needs := pullNeeds(*prev, pf, o, cf)
+	res.Changes, res.Needs = changes, needs
+	if len(changes) > 0 || len(needs) > 0 {
 		key, err := newID(now)
 		if err != nil {
 			return ObserveResult{}, err
 		}
-		ms := matches(events.KindForgeChanged, a.TeamID, events.Facts{Submit: submit, Submitted: a.Phase == PhaseSubmitted})
+		ms := matches(events.KindForgeChanged, a.TeamID,
+			events.Facts{Submit: submit, Submitted: a.Phase == PhaseSubmitted, Action: len(needs) > 0})
+		// The event carries the content its needs call for, bounded; the
+		// observation's own copy of the content is left out.
+		ev := forgeEvent{AttemptID: a.ID, Observation: o, Changes: changes, Needs: needs}
+		ev.Observation.Content, ev.Observation.Review, ev.Observation.Failed, ev.Observation.Passed = false, nil, nil, nil
+		for _, n := range needs {
+			switch n {
+			case NeedReview, NeedGates:
+				ev.Review = cf.Review
+				if n == NeedGates {
+					ev.Passed = cf.Passed
+				}
+			case NeedCI:
+				ev.Failed = cf.Failed
+			}
+		}
+		if err := fitForgeEvent(&ev); err != nil {
+			return ObserveResult{}, err
+		}
 		// Each change is its own event: the observation it compares with is
 		// gone once this one is recorded.
 		if res.EventID, _, err = journal(ctx, tx, sourceForge, a.ID+"/"+key, pullSubject(a.ID), events.KindForgeChanged,
-			forgeEvent{AttemptID: a.ID, Observation: o, Changes: changes}, now, now, ms); err != nil {
+			ev, now, now, ms); err != nil {
 			return ObserveResult{}, err
 		}
 	}
@@ -286,12 +370,6 @@ func short(commit string) string {
 		return commit[:12]
 	}
 	return commit
-}
-
-// forgeText is a forge.event's text: what changed, and how to read it.
-func forgeText(o PullObservation, changes []string) string {
-	return fmt.Sprintf("forge.event: pull request #%d (%s): %s. Read it with `aicrew-agent forge pr show --pr %d` "+
-		"and act on it within your role.", o.Number, o.URL, strings.Join(changes, "; "), o.Number)
 }
 
 // encodeForge is a message's forge detail as stored, "" for none.

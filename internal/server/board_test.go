@@ -120,7 +120,7 @@ func TestBoardWakesTheCoordinatorOnce(t *testing.T) {
 	hub.add(toReady("task-new", 4, time.Now().Add(time.Second)))
 	readAndDeliver(ctx, srv)
 	got := leadBoard(t, e)
-	if len(got) != 1 || got[0].Task.TaskID != "task-new" || got[0].Board.To != "READY" || got[0].Kind != store.KindLifecycle {
+	if len(got) != 1 || got[0].Task.TaskID != "task-new" || got[0].Board.To != "READY" || got[0].Kind != store.KindActionNeeded {
 		t.Fatalf("announcements: %+v", got)
 	}
 

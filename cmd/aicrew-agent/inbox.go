@@ -94,7 +94,10 @@ func inbox(ctx context.Context, args []string, stdout, stderr io.Writer, getenv 
 		if m.AttemptID != "" {
 			fmt.Fprintf(stdout, ", attempt %s", m.AttemptID)
 		}
-		fmt.Fprintf(stdout, " (delivered %d times)\n  %s\n", m.Deliveries, m.Text)
+		// A message's text may span lines (an action.needed message's
+		// review body or log excerpt): each line is indented under its
+		// heading.
+		fmt.Fprintf(stdout, " (delivered %d times)\n  %s\n", m.Deliveries, strings.ReplaceAll(m.Text, "\n", "\n  "))
 	}
 	fmt.Fprintln(stdout, "Acknowledge what you handled: aicrew-agent inbox --ack ID,ID")
 	return stepDone

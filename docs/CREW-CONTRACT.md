@@ -1323,8 +1323,9 @@ task's project on that hub:
   no cursor, a project granted later, and the whole feed after a hub
   restore (`cursor_ahead`), when the cursor is dropped.
 
-**The message.** It is a lifecycle message of the team, to the team's
-active coordinators at that moment.
+**The message.** It is an `action.needed` message of the team, to the
+team's active coordinators at that moment, with one `board` subject
+("Event delivery").
 - **What it names:** the project and the task.
 - **What it carries:** `board {revision, from, to, at,
   required_capability}`: the revision that set the state, the state before
@@ -1417,31 +1418,48 @@ of them.
   reported merged or closed, is no longer watched. The list is the home's
   `state/pulls.json`, at most 20 entries, and holds no secret.
 
-**What is announced.** aicrewd keeps the last observation of each
-attempt's pull request (schema 30). The first observation of a pull
-request, or of a new one for the attempt, is recorded and announces
-nothing. A later one that differs is recorded, in the same transaction as
-its message, so a change is announced once however often it is reported.
-A change is announced when it is one of:
-- the pull request was merged, closed, or reopened;
-- a label was added (a label removed is not announced);
-- the CI of the head concluded `success` or `failure`, once per head
-  commit, so a conclusion on a new head is announced even when it equals
-  the old head's (a new head, or CI starting, is not announced by itself);
-- the comment count grew.
+**The content.** When a watched pull request's status changes so that a
+decision may be due (CI concluded, or its comments changed), the launcher
+also reads its content and reports it with the observation (increment 1c):
+the newest external review at the head (`[hands-bot review] reviewed at
+head SHA`) with its author, verdict and body, the failed checks with their
+log excerpts or why there is none, and the passed checks. Without a new
+read, the content reported before stands.
 
-**The message.** It is a lifecycle message of the team that names the
-task and the attempt.
-- **Recipients:** the attempt's worker always. The team's active
-  coordinators too when the change bears on a submit: the attempt's result
-  is submitted, or the pull request was merged or closed.
-- **What it carries:** `forge {pull, url, state, head_commit, labels,
-  checks, comments, changes}`: the pull request as observed, and the changes
-  in words, such as "label hands-reviewed added" or "CI concluded success
-  at 0123456789ab".
-- **Its text** is built from those fields alone, never from a comment's
-  body: "forge.event: pull request #N (URL): CHANGES. Read it with
-  `aicrew-agent forge pr show --pr N` and act on it within your role."
+**What needs a decision.** aicrewd keeps the last observation and content
+of each attempt's pull request (schemas 30 and 35). The first observation
+of a pull request, or of a new one for the attempt, is recorded and
+announces nothing. A later one that differs is recorded and journaled as
+one event, so a change is journaled once however often it is reported. It
+needs a decision when it is one of:
+- `review`: the external review at the head asks for changes (its verdict
+  is not `READY_FOR_HUMAN_MERGE`), once per review;
+- `ci`: the CI of the head failed, once per head commit;
+- `gates`: both gates are green at the head: the external review there is
+  `READY_FOR_HUMAN_MERGE` and the CI of that head passed. Until increment
+  2's `gates-green` automation, this is the worker's cue to mark the pull
+  request ready and submit;
+- `merged`, `closed` or `reopened`.
+
+A change that needs none of these (a label added or removed, CI starting
+or passing without a READY review, a READY review while CI runs, a comment
+that is no review) is recorded and journaled, and wakes no one.
+
+**The message.** A change that needs a decision becomes an `action.needed`
+message ("Event delivery").
+- **Recipients:** the attempt's worker. The team's active coordinators too
+  when the change bears on a submit: the attempt's result is submitted, or
+  the pull request was merged or closed.
+- **What it carries:** its `action.subjects` hold one `pull` subject with
+  `needs`, the pull request as observed (`pull`: number, URL, state, head,
+  labels, checks, comments, and every change in words), and the content
+  the needs call for: `review` (the body, at most 5 KiB as encoded, marked
+  `cut` when longer), `failed` (each failed job with its excerpt, the
+  excerpts sharing 5 KiB) or `passed`. A message with one pull subject also
+  carries the pull request as `forge`, as before.
+- **Its text** holds the same content in words, each body and excerpt
+  indented under its heading, so `aicrew-agent inbox` shows it and the
+  worker needs no forge read to act.
 - **Pauses:** as every message, it waits in the inbox while the member or
   its team is paused.
 
@@ -1454,8 +1472,8 @@ task and the attempt.
 - A comment the worker posts with `forge pr comment` is in its baseline and
   is not announced; one it posts another way is.
 
-**Reading the content.** The message names what changed, never a comment's
-body. `aicrew-agent forge pr show --pr N` prints the rest, with the member's
+**Reading the content.** The message carries what the decision needs.
+`aicrew-agent forge pr show --pr N` prints the rest, with the member's
 own credential: the head commit's checks, a failed job's log excerpt of at
 most 8 KiB where the forge offers the log (or why there is none), and the
 comments with their authors and bodies, a review header at the head marked
@@ -1470,9 +1488,14 @@ core"). The routing is the subscription file embedded in the release.
 - **When:** a queue (one subscription, one team, one task or pull request)
   is delivered once its events have been quiet for 30 seconds, or its
   oldest has waited 2 minutes. aicrewd looks every 5 seconds.
-- **What:** one lifecycle message per delivery, to the members the events
-  name, as the team is at that moment: a burst of changes about one
-  subject wakes a member once.
+- **What:** one `action.needed` message per delivery, to the members the
+  events name, as the team is at that moment: a burst of changes about one
+  subject wakes a member once. Subjects due at the same tick for the same
+  members are one message, whose `action.subjects` list each (`pull`,
+  `blocked`, `board`) with its content and whose text holds each in turn.
+  The message's `conflict` and `pre_push` fields are filled from increment
+  2: a conflict in the update from the base, and a check that failed after
+  a push.
 - **Across restarts:** an event waits in the journal until it is
   delivered; a delivery and its message are one transaction.
 - **Failures:** a delivery that fails three times in a row is parked, and

@@ -74,11 +74,13 @@ func TestBlockedReportWakesTheCoordinator(t *testing.T) {
 		t.Fatalf("the runs: %+v", runs)
 	}
 	got := read(t, e.s, e.lead, 50)[before:]
-	want := "builder reported task hub-a/project-a/task-1 blocked: CI fails on a test I cannot read. " +
+	want := "action.needed: builder reported task hub-a/project-a/task-1 blocked: CI fails on a test I cannot read. " +
 		"Its pull request #7 (https://git.example.test/crew/project-a/pulls/7) is open at 0123456789ab; labels: hands-reviewed; " +
 		"CI: failure; 3 comment(s)."
 	if len(got) != 1 || !strings.HasPrefix(got[0].Text, want) || got[0].AttemptID != a.ID || got[0].To != e.lead.agent.ID ||
-		!strings.HasSuffix(got[0].Text, "Relay what the worker needs, or escalate with these facts attached.") {
+		!strings.HasSuffix(got[0].Text, "Answer what is yours, or escalate with these facts attached.") ||
+		got[0].Kind != KindActionNeeded || got[0].Action == nil || got[0].Action.Subjects[0].Kind != "blocked" ||
+		got[0].Action.Subjects[0].Block.Reason != "CI fails on a test I cannot read." || got[0].Action.Subjects[0].Pull == nil {
 		t.Fatalf("the coordinator's messages: %+v", got)
 	}
 	if w := read(t, e.s, e.builder, 50); len(w) == 0 || strings.Contains(w[len(w)-1].Text, "reported task") {

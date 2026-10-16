@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -118,9 +119,35 @@ func TestLongBlockedReport(t *testing.T) {
 		t.Fatal("the attempt does not keep the whole reason")
 	}
 	var n int
-	if err := e.s.db.QueryRow(`SELECT length(json_extract(payload, '$.reason')) FROM events WHERE kind = 'attempt.changed'`).Scan(&n); err != nil ||
-		n > maxEventReason+3 {
-		t.Fatalf("the event's reason: %d bytes, %v", n, err)
+	if err := e.s.db.QueryRow(`SELECT length(payload) FROM events WHERE kind = 'attempt.changed'`).Scan(&n); err != nil ||
+		n > maxEventPayload {
+		t.Fatalf("the event's payload: %d bytes, %v", n, err)
+	}
+}
+
+// A reason of characters JSON escapes, six bytes each, is accepted and
+// settles: the event's copy is bounded as encoded (hands review of #164).
+func TestEscapedBlockedReport(t *testing.T) {
+	e, a := running(t)
+	reason := strings.Repeat("<", 4096)
+	e.mustWork(t, "block", a, IntentBlock, reason)
+	if oa := openAttemptOf(t, e); oa.Block == nil || oa.Block.Reason != reason {
+		t.Fatal("the attempt does not keep the whole reason")
+	}
+	var payload string
+	if err := e.s.db.QueryRow(`SELECT payload FROM events WHERE kind = 'attempt.changed'`).Scan(&payload); err != nil ||
+		len(payload) > maxEventPayload {
+		t.Fatalf("the event's payload: %d bytes, %v", len(payload), err)
+	}
+	for _, r := range []string{reason, strings.Repeat("é", 3000), strings.Repeat("y", 10000), "short"} {
+		got := fitReason(r)
+		b, _ := json.Marshal(got)
+		if len(b) > maxEventReason || !strings.HasPrefix(r, strings.TrimSuffix(got, "…")) || (got != r && !strings.HasSuffix(got, "…")) {
+			t.Errorf("fitReason of %d bytes: %d encoded, %q...", len(r), len(b), got[:min(10, len(got))])
+		}
+	}
+	if fitReason("short") != "short" {
+		t.Error("a short reason was cut")
 	}
 }
 
@@ -223,5 +250,12 @@ func TestTimerFiresOnce(t *testing.T) {
 	deliver(t, s2)
 	if n := fired(s2); n != 2 {
 		t.Fatalf("a timer set again: %d events, want 2", n)
+	}
+	// Set again at the deadline it already fired at: a new arm, which fires
+	// too (hands review of #164).
+	set(s2, later.Add(-time.Minute))
+	deliver(t, s2)
+	if n := fired(s2); n != 3 {
+		t.Fatalf("a timer set again at its old deadline: %d events, want 3", n)
 	}
 }

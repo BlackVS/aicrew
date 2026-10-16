@@ -29,8 +29,29 @@ func attemptSubject(id string) string     { return "attempt:" + id }
 func memberSubject(agentID string) string { return "member:" + agentID }
 
 // maxEventReason bounds the blocked reason an attempt.changed event
-// carries, so its payload stays within maxEventPayload.
+// carries, as JSON encodes it, so its payload stays within
+// maxEventPayload whatever the reason's characters.
 const maxEventReason = 4 << 10
+
+// fitReason is reason, or its longest start that JSON encodes, with a
+// trailing ellipsis, within maxEventReason bytes: an escaped character
+// takes up to six.
+func fitReason(reason string) string {
+	encoded := func(s string) int { b, _ := json.Marshal(s); return len(b) }
+	if encoded(reason) <= maxEventReason {
+		return reason
+	}
+	lo, hi := 0, len(reason)
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if encoded(strings.ToValidUTF8(reason[:mid], "")+"…") <= maxEventReason {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return strings.ToValidUTF8(reason[:lo], "") + "…"
+}
 
 // sourceAicrewd and sourceTimer are the sources of this file's events.
 const (
@@ -53,6 +74,7 @@ var schemaV34 = []string{
 		subject  TEXT NOT NULL,
 		payload  TEXT NOT NULL,
 		due_at   TEXT NOT NULL,
+		arm      INTEGER NOT NULL DEFAULT 1,
 		fired_at TEXT NOT NULL DEFAULT ''
 	)`,
 	`CREATE INDEX timers_due ON timers (fired_at, due_at)`,
@@ -105,9 +127,7 @@ func journalAttemptChange(ctx context.Context, tx *sql.Tx, a Attempt, to Attempt
 	}
 	// A reason may be as long as a message; the event carries its start, and
 	// the attempt keeps it whole.
-	if len(reason) > maxEventReason {
-		reason = strings.ToValidUTF8(reason[:maxEventReason], "") + "…"
-	}
+	reason = fitReason(reason)
 	key, err := newID(now)
 	if err != nil {
 		return err
@@ -139,8 +159,8 @@ func journalMemberChange(ctx context.Context, tx *sql.Tx, sess Session, change s
 
 // setTimer stores a deadline: when due passes, the delivery loop journals
 // a timer.due event about subject with payload, once. A timer set again
-// under its key before it fires moves to the new deadline; one that fired
-// is set again.
+// under its key is a new arm: before it fires it moves to the new deadline;
+// after, it fires again, even at the same deadline.
 func setTimer(ctx context.Context, tx *sql.Tx, key, teamID, subject string, payload any, due time.Time) error {
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -152,7 +172,7 @@ func setTimer(ctx context.Context, tx *sql.Tx, key, teamID, subject string, payl
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO timers (key, team_id, subject, payload, due_at) VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT (key) DO UPDATE SET team_id = excluded.team_id, subject = excluded.subject,
-		   payload = excluded.payload, due_at = excluded.due_at, fired_at = ''`,
+		   payload = excluded.payload, due_at = excluded.due_at, arm = timers.arm + 1, fired_at = ''`,
 		key, teamID, subject, string(raw), formatTime(due)); err != nil {
 		return fmt.Errorf("store the timer: %w", err)
 	}
@@ -177,16 +197,19 @@ func (s *Store) fireTimers(ctx context.Context, now time.Time) error {
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after commit
 	rows, err := tx.QueryContext(ctx,
-		`SELECT key, team_id, subject, payload, due_at FROM timers WHERE fired_at = '' AND due_at <= ? ORDER BY due_at, key`,
+		`SELECT key, team_id, subject, payload, due_at, arm FROM timers WHERE fired_at = '' AND due_at <= ? ORDER BY due_at, key`,
 		formatTime(now))
 	if err != nil {
 		return fmt.Errorf("read the timers: %w", err)
 	}
-	type due struct{ key, team, subject, payload, at string }
+	type due struct {
+		key, team, subject, payload, at string
+		arm                             int64
+	}
 	var fired []due
 	for rows.Next() {
 		var d due
-		if err := rows.Scan(&d.key, &d.team, &d.subject, &d.payload, &d.at); err != nil {
+		if err := rows.Scan(&d.key, &d.team, &d.subject, &d.payload, &d.at, &d.arm); err != nil {
 			rows.Close()
 			return err
 		}
@@ -200,8 +223,9 @@ func (s *Store) fireTimers(ctx context.Context, now time.Time) error {
 		if err != nil {
 			return err
 		}
-		// The key holds the deadline, so a timer set again fires again.
-		if _, _, err := journal(ctx, tx, sourceTimer, d.key+"@"+d.at, d.subject, events.KindTimerDue,
+		// The event's key holds the arm, so a timer set again fires again,
+		// at any deadline.
+		if _, _, err := journal(ctx, tx, sourceTimer, fmt.Sprintf("%s#%d", d.key, d.arm), d.subject, events.KindTimerDue,
 			json.RawMessage(d.payload), at, now, matches(events.KindTimerDue, d.team, events.Facts{})); err != nil {
 			return err
 		}

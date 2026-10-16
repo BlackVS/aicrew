@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // observed is the claim's pull request as the fake forge would report it.
@@ -152,7 +153,8 @@ func TestObservePull(t *testing.T) {
 		t.Fatal(err)
 	}
 	quiet("a label while submitted")
-	o.HeadCommit = head4
+	// A new head fails, its content not read this time.
+	o.HeadCommit, o.Content, o.Review, o.Failed = head4, false, nil, nil
 	if _, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
 		t.Fatal(err)
 	}
@@ -291,5 +293,94 @@ func TestStaleChecksAreNotShown(t *testing.T) {
 	if len(got) != 1 || strings.Contains(got[0].Text, "old-job") || !strings.Contains(got[0].Text, "names the failed jobs") ||
 		len(got[0].Action.Subjects[0].Failed) != 0 {
 		t.Fatalf("the message: %+v", got)
+	}
+}
+
+// A run whose events no longer agree keeps what holds at its last
+// observation: a gates-green event followed by a blocking review on the
+// same head wakes for the review alone, never "mark it ready" (hands review
+// of #165).
+func TestMergedRunKeepsWhatHolds(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	o := observed(a.Branch)
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	o.Checks, o.Comments, o.Content = "success", 1, true
+	o.Review, o.Passed = hands(head1, verdictReady), []PassedCheck{{Name: "go-test"}}
+	if res, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || strings.Join(res.Needs, ",") != NeedGates {
+		t.Fatalf("gates: %+v, %v", res, err)
+	}
+	*e.now = e.now.Add(10 * time.Second)
+	o.Comments = 2
+	o.Review = hands(head1, "RETURN_TO_IMPLEMENTATION")
+	o.Review.URL += "-second"
+	if res, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || strings.Join(res.Needs, ",") != NeedReview {
+		t.Fatalf("the later BLOCKER: %+v, %v", res, err)
+	}
+	settle(t, e.s, e.now)
+	got := forgeEvents(t, e.s, e.indepTk)
+	if len(got) != 1 || strings.Join(got[0].Action.Subjects[0].Needs, ",") != NeedReview ||
+		strings.Contains(got[0].Text, "Both gates are green") || strings.Contains(got[0].Text, "forge pr ready") ||
+		!got[0].Action.Subjects[0].Review.Blocker || len(got[0].Action.Subjects[0].Passed) != 0 {
+		t.Fatalf("the merged run: %+v", got)
+	}
+	ackTok(t, e.s, e.indepTk, got)
+	// CI fails on one head with its jobs read, then on a newer head whose
+	// content was not read: the run shows no job of the older head.
+	o.HeadCommit, o.Checks, o.Review, o.Passed = head2, "failure", nil, nil
+	o.Failed = []FailedCheck{{Name: "old-job", Excerpt: "old failure"}}
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	*e.now = e.now.Add(10 * time.Second)
+	o.HeadCommit, o.Content, o.Failed = head3, false, nil
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, e.s, e.now)
+	got = forgeEvents(t, e.s, e.indepTk)
+	if len(got) != 1 || strings.Contains(got[0].Text, "old-job") || got[0].Forge.HeadCommit != head3 ||
+		len(got[0].Action.Subjects[0].Failed) != 0 {
+		t.Fatalf("a failure on a newer head: %+v", got)
+	}
+}
+
+// Metadata within every field bound but too large together (thirty passed
+// checks with long names) still journals the event: the content is cut,
+// the message says what was left out, and the worker is woken (hands review
+// of #165). A review read at another head is refused.
+func TestLargeMetadataStillWakes(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	o := observed(a.Branch)
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	o.Checks, o.Comments, o.Content, o.Review = "success", 1, true, hands(head1, verdictReady)
+	for i := range maxPassed {
+		o.Passed = append(o.Passed, PassedCheck{Name: fmt.Sprintf("%03d-%s", i, strings.Repeat("n", 600)),
+			URL: "https://ci.example/" + strings.Repeat("u", 400)})
+	}
+	res, err := e.s.ObservePullWithToken(ctx, e.indepTk, o)
+	if err != nil || strings.Join(res.Needs, ",") != NeedGates {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	var payload string
+	if err := e.s.db.QueryRow(`SELECT payload FROM events WHERE id = ?`, res.EventID).Scan(&payload); err != nil || len(payload) > maxEventPayload {
+		t.Fatalf("the payload: %d bytes, %v", len(payload), err)
+	}
+	settle(t, e.s, e.now)
+	got := forgeEvents(t, e.s, e.indepTk)
+	if len(got) != 1 || !strings.Contains(got[0].Text, "Both gates are green") || !strings.Contains(got[0].Text, "Left out for room:") ||
+		!strings.Contains(got[0].Text, "passed check(s)") {
+		t.Fatalf("the message: %+v", got)
+	}
+	o.Review, o.Passed = hands(head2, verdictReady), nil
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a review read at another head: %v", err)
 	}
 }

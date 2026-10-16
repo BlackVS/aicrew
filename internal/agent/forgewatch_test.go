@@ -274,3 +274,19 @@ func TestWithContent(t *testing.T) {
 		}
 	}
 }
+
+// Content read for another head than the status's is not sent: the branch
+// moved between the two reads (hands review of #165).
+func TestAddContentNeedsOneHead(t *testing.T) {
+	st := forge.PullStatus{Pull: forge.Pull{Number: 4, HeadCommit: "0123456789abcdef0123456789abcdef01234567"}, Checks: forge.ChecksFailure}
+	c := forge.PullContent{Checks: []forge.Check{{Name: "test", State: forge.ChecksFailure}}}
+	o := observation("git.example.test", "crew/project-t", st)
+	moved := st.Pull
+	moved.HeadCommit = "89abcdef0123456789abcdef0123456789abcdef"
+	if got, added := addContent(o, st, moved, c); added || got.Content || len(got.Failed) != 0 {
+		t.Fatalf("another head's content: %+v %v", got, added)
+	}
+	if got, added := addContent(o, st, st.Pull, c); !added || !got.Content || len(got.Failed) != 1 {
+		t.Fatalf("the same head's content: %+v %v", got, added)
+	}
+}

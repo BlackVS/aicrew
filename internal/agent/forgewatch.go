@@ -161,6 +161,16 @@ func cut(s string) string {
 	return strings.ToValidUTF8(s[:maxObservedField], "")
 }
 
+// addContent adds the content read for pull p to o, the observation of
+// the status st, when both reads saw the same head; otherwise o goes as it
+// is, and false says the content was another head's.
+func addContent(o PullObservation, st forge.PullStatus, p forge.Pull, c forge.PullContent) (PullObservation, bool) {
+	if p.HeadCommit != st.HeadCommit {
+		return o, false
+	}
+	return withContent(o, c), true
+}
+
 // pullSeen is what the launcher last reported of a watched pull request, to
 // read its content only when that changed.
 type pullSeen struct {
@@ -303,9 +313,20 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 		if s.wantsContent(key, st) {
 			// The content tells aicrewd whether a decision is needed; a read
 			// that fails sends the status alone, and the next poll tries again.
-			if _, c, err := api.GetPullContent(ctx, w.Host, forge.Kind(e.Kind), tok, w.Repository, w.Number); err == nil {
-				o = withContent(o, c)
-			} else {
+			p, c, err := api.GetPullContent(ctx, w.Host, forge.Kind(e.Kind), tok, w.Repository, w.Number)
+			var added bool
+			if err == nil {
+				o, added = addContent(o, st, p, c)
+			}
+			switch {
+			case added:
+			case err == nil:
+				// The branch moved between the two reads: this content is
+				// another head's. The status goes alone, and the next poll
+				// reads both again (hands review of #165).
+				s.log.Info("forge events: the head moved between the status and the content; reading again next poll",
+					"pull", w.Number)
+			default:
 				s.log.Warn("forge events: read a pull request's content", "pull", w.Number,
 					"error", RedactForgeTokens(s.home, err.Error()))
 			}

@@ -446,8 +446,102 @@ func encodeAction(d *ActionDetail) (string, error) {
 	return string(b), nil
 }
 
+// holdingNeeds is the needs that still hold at the observation o with the
+// content cf: a review at its head that asks for changes, CI failing, both
+// gates green at its head, and the state it is in. A run that queued a
+// gates-green wake and then a blocking review keeps the review alone.
+func holdingNeeds(needs []string, o PullObservation, cf pullContentFacts) []string {
+	rv := cf.Review
+	atHead := rv != nil && sameCommit(rv.Head, o.HeadCommit)
+	var out []string
+	for _, n := range needs {
+		var holds bool
+		switch n {
+		case NeedReview:
+			holds = o.State == "open" && atHead && rv.Blocker
+		case NeedCI:
+			holds = o.State == "open" && o.Checks == "failure"
+		case NeedGates:
+			holds = o.State == "open" && atHead && !rv.Blocker && rv.Verdict == verdictReady && o.Checks == "success"
+		case NeedMerged:
+			holds = o.State == "merged"
+		case NeedClosed:
+			holds = o.State == "closed"
+		case NeedReopened:
+			holds = o.State == "open"
+		}
+		if holds {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// eventBudget is the room a forge event's payload may take, below the
+// journal's bound.
+const eventBudget = maxEventPayload - 512
+
+// fitForgeEvent cuts ev's content until its payload fits eventBudget,
+// whatever the metadata the launcher reported: passed checks first, then
+// the failed jobs' excerpts, the failed jobs, the review's body, the
+// changes in words and the labels. What it leaves out it names in
+// ev.Omitted, so the message points to `forge pr show`; the needs stay.
+func fitForgeEvent(ev *forgeEvent) error {
+	size := func() int { b, _ := json.Marshal(ev); return len(b) }
+	if size() <= eventBudget {
+		return nil
+	}
+	var omitted []string
+	note := func(n int, what string) {
+		if n > 0 {
+			omitted = append(omitted, fmt.Sprintf("%d %s", n, what))
+		}
+	}
+	dropped := 0
+	for len(ev.Passed) > 0 && size() > eventBudget {
+		keep := len(ev.Passed) / 2
+		dropped += len(ev.Passed) - keep
+		ev.Passed = ev.Passed[:keep]
+	}
+	note(dropped, "passed check(s)")
+	if size() > eventBudget {
+		n := 0
+		for i := range ev.Failed {
+			if ev.Failed[i].Excerpt != "" {
+				ev.Failed[i].Excerpt, ev.Failed[i].Cut, n = "", true, n+1
+			}
+		}
+		note(n, "log excerpt(s)")
+	}
+	dropped = 0
+	for len(ev.Failed) > 0 && size() > eventBudget {
+		keep := len(ev.Failed) / 2
+		dropped += len(ev.Failed) - keep
+		ev.Failed = ev.Failed[:keep]
+	}
+	note(dropped, "failed check(s)")
+	if ev.Review != nil && size() > eventBudget {
+		ev.Review.Body, _ = fitText(ev.Review.Body, 1<<10)
+		ev.Review.Cut = true
+		omitted = append(omitted, "most of the review's body")
+	}
+	if len(ev.Changes) > 10 && size() > eventBudget {
+		n := len(ev.Changes) - 10
+		ev.Changes = append(ev.Changes[:10:10], fmt.Sprintf("and %d more change(s)", n))
+	}
+	if len(ev.Observation.Labels) > 10 && size() > eventBudget {
+		note(len(ev.Observation.Labels)-10, "label(s)")
+		ev.Observation.Labels = ev.Observation.Labels[:10]
+	}
+	ev.Omitted = strings.Join(omitted, ", ")
+	if n := size(); n > eventBudget {
+		return fmt.Errorf("%w: the pull request's event is %d bytes even with its content cut", ErrInvalid, n)
+	}
+	return nil
+}
+
 // pullText is a pull request subject in words, with its content.
-func pullText(o PullObservation, needs []string, cf pullContentFacts) string {
+func pullText(o PullObservation, needs []string, cf pullContentFacts, omitted string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "action.needed: pull request #%d (%s) at %s:", o.Number, o.URL, short(o.HeadCommit))
 	for _, n := range needs {
@@ -488,6 +582,9 @@ func pullText(o PullObservation, needs []string, cf pullContentFacts) string {
 		case NeedReopened:
 			b.WriteString("\n- The pull request was reopened.")
 		}
+	}
+	if omitted != "" {
+		fmt.Fprintf(&b, "\n- Left out for room: %s. `aicrew-agent forge pr show --pr %d` prints them.", omitted, o.Number)
 	}
 	return b.String()
 }

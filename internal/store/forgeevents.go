@@ -131,6 +131,11 @@ func (o PullObservation) validate() error {
 	if !o.Content && (o.Review != nil || len(o.Failed) > 0 || len(o.Passed) > 0) {
 		return bad("content without the content mark")
 	}
+	// A review read at the head names that head: one at another head was
+	// read with another status, and is refused rather than recorded.
+	if r := o.Review; r != nil && r.AtHead && !sameCommit(r.Head, o.HeadCommit) {
+		return bad("review, read at another head")
+	}
 	if r := o.Review; r != nil && (len(r.Body) > maxObservedLen || len(r.URL) > maxPullURL || len(r.Author) > maxCheckField ||
 		len(r.Verdict) > maxCheckField || (r.Head != "" && !observedCommit.MatchString(r.Head)) || !utf8.ValidString(r.Body)) {
 		return bad("review")
@@ -255,6 +260,9 @@ func (s *Store) ObservePullWithToken(ctx context.Context, token string, o PullOb
 			case NeedCI:
 				ev.Failed = cf.Failed
 			}
+		}
+		if err := fitForgeEvent(&ev); err != nil {
+			return ObserveResult{}, err
 		}
 		// Each change is its own event: the observation it compares with is
 		// gone once this one is recorded.

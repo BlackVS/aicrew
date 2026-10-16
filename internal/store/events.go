@@ -600,6 +600,8 @@ type forgeEvent struct {
 	Review *PullReview   `json:"review,omitempty"`
 	Failed []FailedCheck `json:"failed,omitempty"`
 	Passed []PassedCheck `json:"passed,omitempty"`
+	// Omitted says what fitForgeEvent left out for room, "" for nothing.
+	Omitted string `json:"omitted,omitempty"`
 }
 
 // wake is the handler of the event core: one action.needed subject per
@@ -672,7 +674,7 @@ func wakeBoard(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent, role
 func wakeForge(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []string) (*wakeOut, error) {
 	var last forgeEvent
 	changes, needs := []string{}, []string{}
-	var content pullContentFacts
+	var parsed []forgeEvent
 	for i, ev := range evs {
 		var f forgeEvent
 		if err := json.Unmarshal(ev.Payload, &f); err != nil {
@@ -682,6 +684,7 @@ func wakeForge(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []strin
 			return nil, errors.New("the queue holds events of two attempts")
 		}
 		last = f
+		parsed = append(parsed, f)
 		// Every event's changes, in order, repeats included: two events that
 		// each add a comment, or a conclusion that flips and flips back, are
 		// distinct changes even when their words are equal.
@@ -691,9 +694,19 @@ func wakeForge(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []strin
 				needs = append(needs, n)
 			}
 		}
-		// The latest content of each kind stands.
+	}
+	// The run's needs and content are those that still hold at its last
+	// observation: a later review supersedes an earlier one, and checks
+	// read for another head are not this head's (hands review of #165).
+	final := last.Observation
+	var content pullContentFacts
+	var omitted string
+	for _, f := range parsed {
 		if f.Review != nil {
 			content.Review = f.Review
+		}
+		if f.Observation.HeadCommit != final.HeadCommit {
+			continue
 		}
 		if f.Failed != nil {
 			content.Failed = f.Failed
@@ -701,7 +714,11 @@ func wakeForge(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []strin
 		if f.Passed != nil {
 			content.Passed = f.Passed
 		}
+		if f.Omitted != "" {
+			omitted = f.Omitted
+		}
 	}
+	needs = holdingNeeds(needs, final, content)
 	if len(needs) == 0 {
 		return nil, nil
 	}
@@ -727,12 +744,11 @@ func wakeForge(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []strin
 	if len(recipients) == 0 {
 		return nil, nil
 	}
-	o := last.Observation
 	task := a.Task
-	detail := &ForgeDetail{Pull: o.Number, URL: o.URL, State: o.State, HeadCommit: o.HeadCommit,
-		Labels: o.Labels, Checks: o.Checks, Comments: o.Comments, Changes: changes}
+	detail := &ForgeDetail{Pull: final.Number, URL: final.URL, State: final.State, HeadCommit: final.HeadCommit,
+		Labels: final.Labels, Checks: final.Checks, Comments: final.Comments, Changes: changes}
 	sub := ActionSubject{Kind: "pull", AttemptID: a.ID, Task: &task, Needs: needs, Pull: detail,
-		Text: pullText(o, needs, content)}
+		Text: pullText(final, needs, content, omitted)}
 	if slices.Contains(needs, NeedReview) || slices.Contains(needs, NeedGates) {
 		sub.Review = content.Review
 	}

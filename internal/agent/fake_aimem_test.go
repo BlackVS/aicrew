@@ -39,7 +39,24 @@ func TestMain(m *testing.M) {
 			os.Exit(fakeMCP(root))
 		}
 	}
+	childrenExitAtOnce()
 	os.Exit(m.Run())
+}
+
+// childrenExitAtOnce makes the processes the tests start, this binary
+// re-run as a stand-in or a probe, exit without the race detector's
+// one-second sleep at exit (atexit_sleep_ms). Under -race each of the
+// package's several hundred child processes paid it: 786 s of the
+// package's race run against 150 s without it. The races a child detects
+// while it runs are reported as before; this test process keeps the
+// default, read when it started. A GORACE that already sets the option
+// is kept.
+func childrenExitAtOnce() {
+	v := os.Getenv("GORACE")
+	if strings.Contains(v, "atexit_sleep_ms") {
+		return
+	}
+	os.Setenv("GORACE", strings.TrimSpace(v+" atexit_sleep_ms=0"))
 }
 
 // fakeReceipt is the receipt the fake aimem issues for a challenge, which

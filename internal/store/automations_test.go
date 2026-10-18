@@ -117,6 +117,32 @@ func TestAutomationRunReports(t *testing.T) {
 	}
 }
 
+// A run for the launcher's own event (forge.changed) names the event in
+// place of a point: it is recorded with an empty point, and a failed one
+// wakes the coordinators with the event in the text and the run's events in
+// the subject.
+func TestAutomationEventRun(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	r := runReport(a.ID, "run-ev", RunFailed)
+	r.Point, r.Events, r.Source, r.Command, r.Script, r.Error = "", []string{"forge.changed"}, "release", nil, "review-request.star", "the script failed: boom"
+	if res, err := e.s.RecordAutomationRunWithToken(ctx, e.indepTk, r); err != nil || !res.Recorded || res.EventID == "" {
+		t.Fatalf("an event run: %+v, %v", res, err)
+	}
+	settle(t, e.s, e.now)
+	got := actionItems(t, e.s, e.leadTok, "automation")
+	if len(got) != 1 || !strings.Contains(got[0].Text, "the automation repo-check (release review-request.star) failed on forge.changed for pull request #7") ||
+		len(got[0].Action.Subjects[0].Runs) != 1 || len(got[0].Action.Subjects[0].Runs[0].Events) != 1 ||
+		got[0].Action.Subjects[0].Runs[0].Events[0] != "forge.changed" || got[0].Action.Subjects[0].Runs[0].Point != "" {
+		t.Fatalf("the coordinator's message: %+v", got)
+	}
+	var point string
+	if err := e.s.db.QueryRow(`SELECT point FROM attempt_automation_runs WHERE attempt_id = ? AND run_id = 'run-ev'`, a.ID).Scan(&point); err != nil || point != "" {
+		t.Fatalf("the row's point: %q, %v", point, err)
+	}
+}
+
 // One queue holding a failed run and a turn wakes each role with its own
 // message: the coordinators read the failed run only, the worker the turn
 // only, and the queue is delivered once (the 2d-a follow-up 2a2b).
@@ -182,6 +208,8 @@ func TestAutomationRunRefusalsAndBounds(t *testing.T) {
 		"content on a handled run":     func(r *AutomationRunReport) { r.Content = "x" },
 		"a bad run id":                 func(r *AutomationRunReport) { r.RunID = "run 1" },
 		"a bad point":                  func(r *AutomationRunReport) { r.Point = "After Push" },
+		"neither a point nor events":   func(r *AutomationRunReport) { r.Point = "" },
+		"an unknown event kind":        func(r *AutomationRunReport) { r.Point, r.Events = "", []string{"forge.moved"} },
 		"a long command":               func(r *AutomationRunReport) { r.Command = make([]string, maxRunCommand+1) },
 		"an http url":                  func(r *AutomationRunReport) { r.URL = "http://git.example.test/x" },
 		"a head that is not a commit":  func(r *AutomationRunReport) { r.Head = "main" },

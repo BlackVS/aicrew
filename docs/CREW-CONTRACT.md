@@ -1432,8 +1432,11 @@ of them.
 **Automation runs.** The launcher also runs the process's automations at
 the pull request's extension points as it observes them (DEVELOPMENT,
 "Workflow scripts": `after-push`, `after-ci`, `ci-failed`, `gates-green`,
-`before-submit`, `after-merge`), once per edge, and remembers the fired
-edges in the home's `state/points.json`, which holds no secret. A
+`before-submit`, `after-merge`), once per edge, and the scripts subscribed
+to `forge.changed` once per observation that changed the pull request
+(task 05cf), and remembers the fired edges and the last observed labels,
+checks conclusion, comment count and newest comment time in the home's
+`state/points.json`, which holds no secret and no comment body. A
 declared command runs in the attempt's worktree with the client's
 environment, and receives no credential through its environment or
 through git: the clone's credential helper is reset for its process, so
@@ -1443,7 +1446,10 @@ helper command, and a command whose arguments name `credential.helper`,
 runs has the member's OS-user access, as a worker turn's code does. It
 reports
 each run with `POST /v1/crew/automations` and the member's session token:
-the attempt, a run ID, the point, the entry's name, source and commit, its
+the attempt, a run ID, the point or `events` (the event kinds the run was
+for, `forge.changed`; a report names one or both, and the shape with a
+point alone, which launchers before task 05cf send, stays accepted), the
+entry's name, source and commit, its
 script or command, the pull request and head, whether the head was a
 base-only update, the outcome (`handled`, `turn` with the turn's kind and
 content, or `failed` with the error), a command's exit status and the

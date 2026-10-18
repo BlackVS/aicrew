@@ -371,6 +371,9 @@ type automationRecord struct {
 	Outcome string   `json:"outcome,omitempty"`
 	Turn    string   `json:"turn,omitempty"`
 	Events  []string `json:"events,omitempty"`
+	// Kinds are the event kinds the run was for: the point's name, or the
+	// launcher's own event (forge.changed).
+	Kinds []string `json:"kinds,omitempty"`
 	// A run at an extension point (dispatch.go): the point, and for a
 	// declared command its argument list and exit status.
 	Point   string   `json:"point,omitempty"`
@@ -380,7 +383,7 @@ type automationRecord struct {
 
 // recordRun records how a run ended, and a failed run as a step too.
 func (s *StepServer) recordRun(run *liveRun, ev automation.Event, res AutomationResult) {
-	rec := automationRecord{At: time.Now().UTC(), Run: run.id, Attempt: run.attempt, Script: run.script, Point: run.point, Events: ev.IDs}
+	rec := automationRecord{At: time.Now().UTC(), Run: run.id, Attempt: run.attempt, Script: run.script, Point: run.point, Events: ev.IDs, Kinds: ev.Kinds}
 	switch {
 	case res.Failed != "":
 		s.recordStep(run, stepAutomationFailed, res.Failed)

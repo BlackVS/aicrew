@@ -150,7 +150,52 @@ type Event struct {
 	Kinds    []string
 	IDs      []string
 	BaseOnly bool
+	// Change is what changed at the pull request, for a run on
+	// forge.changed (12.2); nil at a point, where the script sees None.
+	Change *ForgeChange
 }
+
+// ForgeChange is what the launcher's observation of a pull request changed
+// against the one before it: the facts a script subscribed to
+// forge.changed acts on without reading the forge again.
+type ForgeChange struct {
+	// HeadMoved says the head commit is another than at the observation
+	// before.
+	HeadMoved bool
+	// State and Checks are the new state and the new checks conclusion
+	// when they changed, "" when they did not.
+	State  string
+	Checks string
+	// LabelsAdded and LabelsRemoved are the label names that appeared and
+	// went.
+	LabelsAdded   []string
+	LabelsRemoved []string
+	// Comments are the comments new since the content was last read,
+	// oldest first, at most MaxChangeComments, each body bounded by
+	// MaxChangeComment; none when no content came with the observation.
+	Comments []ChangedComment
+	// ReviewFailures counts the observations at this head, this one
+	// included, that carried the external reviewer's failure: its
+	// could-not-run notice or the hands-review-failed label added. 0 when
+	// this observation carried none.
+	ReviewFailures int
+}
+
+// ChangedComment is one new comment: its author, kind (comment, review or
+// inline), body and notice (forge.NoticeReviewFailed for the external
+// reviewer's failure notice, "" otherwise).
+type ChangedComment struct {
+	Author string
+	Kind   string
+	Body   string
+	Notice string
+}
+
+// The bounds of a change's comments.
+const (
+	MaxChangeComments = 10
+	MaxChangeComment  = 4 << 10
+)
 
 // Turn is a request for a model turn: its kind and its content.
 type Turn struct {
@@ -238,6 +283,7 @@ func Run(ctx context.Context, s Script, ev Event) (*Turn, error) {
 		"kinds":     stringList(ev.Kinds),
 		"ids":       stringList(ev.IDs),
 		"base_only": starlark.Bool(ev.BaseOnly),
+		"change":    changeValue(ev.Change),
 	})
 	event.Freeze()
 	out, err := starlark.Call(thread, mainFn, starlark.Tuple{event}, nil)
@@ -560,6 +606,32 @@ func stringList(ss []string) *starlark.List {
 		vs = append(vs, starlark.String(s))
 	}
 	return frozenList(vs)
+}
+
+// changeValue is event.change: None at a point, else the change as a
+// struct whose comments are structs too.
+func changeValue(c *ForgeChange) starlark.Value {
+	if c == nil {
+		return starlark.None
+	}
+	var comments []starlark.Value
+	for _, cm := range c.Comments {
+		comments = append(comments, frozenStruct(starlark.StringDict{
+			"author": starlark.String(cm.Author),
+			"kind":   starlark.String(cm.Kind),
+			"body":   starlark.String(cm.Body),
+			"notice": starlark.String(cm.Notice),
+		}))
+	}
+	return frozenStruct(starlark.StringDict{
+		"head_moved":      starlark.Bool(c.HeadMoved),
+		"state":           starlark.String(c.State),
+		"checks":          starlark.String(c.Checks),
+		"labels_added":    stringList(c.LabelsAdded),
+		"labels_removed":  stringList(c.LabelsRemoved),
+		"comments":        frozenList(comments),
+		"review_failures": starlark.MakeInt(c.ReviewFailures),
+	})
 }
 
 func frozenList(vs []starlark.Value) *starlark.List {

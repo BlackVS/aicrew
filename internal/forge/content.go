@@ -83,7 +83,16 @@ type PullComment struct {
 	// Review is what the body's header line says, when it is a review
 	// posted as a comment.
 	Review *ReviewHeader `json:"review,omitempty"`
+	// Notice is what a comment that is no review announces, when the
+	// launcher's automations act on it: NoticeReviewFailed.
+	Notice string `json:"notice,omitempty"`
 }
+
+// NoticeReviewFailed is the external reviewer's notice that its review
+// could not run, "[hands-bot review] could not run: ...", which the
+// external-review row of docs/DESIGN-TURNS.md 4.2 names beside the
+// hands-review-failed label: the review is requested once more.
+const NoticeReviewFailed = "review-failed"
 
 // ReviewHeader is a review comment's header line.
 type ReviewHeader struct {
@@ -231,6 +240,9 @@ func (c *Client) pullComments(ctx context.Context, host string, k Kind, token, p
 	}
 	for i := range out {
 		out[i].Review = reviewHeader(out[i].Body, p.HeadCommit)
+		if out[i].Review == nil {
+			out[i].Notice = commentNotice(out[i].Body)
+		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	if out == nil {
@@ -338,14 +350,32 @@ func appendComments(out []PullComment, ws []wireComment, kind string) []PullComm
 // reviewer's "[hands-bot review] reviewed at head SHA".
 var reviewShape = regexp.MustCompile(`^\[(?:oh-code-review(?: \(([a-z]+)\))? review|(hands-bot) review)\] reviewed at head ([0-9a-f]{7,40})\b`)
 
-// reviewHeader reads body's first non-empty line as a review's header, or
-// nil.
-func reviewHeader(body, head string) *ReviewHeader {
+// noticeShape is the external reviewer's failure notice, "⚠️ [hands-bot
+// review] could not run: ...", with or without the mark before it.
+var noticeShape = regexp.MustCompile(`^\W{0,8}\[hands-bot review\] could not run\b`)
+
+// firstLine is body's first non-empty line, trimmed.
+func firstLine(body string) string {
 	line := strings.TrimSpace(body)
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = strings.TrimSpace(line[:i])
 	}
-	m := reviewShape.FindStringSubmatch(line)
+	return line
+}
+
+// commentNotice reads body's first non-empty line as a notice the
+// automations act on, or "".
+func commentNotice(body string) string {
+	if noticeShape.MatchString(firstLine(body)) {
+		return NoticeReviewFailed
+	}
+	return ""
+}
+
+// reviewHeader reads body's first non-empty line as a review's header, or
+// nil.
+func reviewHeader(body, head string) *ReviewHeader {
+	m := reviewShape.FindStringSubmatch(firstLine(body))
 	if m == nil {
 		return nil
 	}

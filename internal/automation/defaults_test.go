@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/BlackVS/aicrew/defaults"
+	"github.com/BlackVS/aicrew/internal/events"
 )
 
 // The release's default automations (docs/DESIGN-TURNS.md 13.1, increment
@@ -24,6 +25,9 @@ func TestDefaultEntries(t *testing.T) {
 	}
 	if !slices.Equal(names, []string{"review-request@after-push", "ci-rerun@ci-failed", "gates-green@gates-green"}) {
 		t.Fatalf("the defaults: %v", names)
+	}
+	if !slices.Equal(entries[0].Events, []string{events.KindForgeChanged}) || entries[1].Events != nil || entries[2].Events != nil {
+		t.Fatalf("the defaults' events: %+v", entries)
 	}
 	instance := regexp.MustCompile(`://|[A-Za-z0-9-]+\.(com|dev|io|net|org)\b|github|gitlab|gitea`)
 	for _, e := range entries {
@@ -74,10 +78,20 @@ func TestDefaultGatesGreen(t *testing.T) {
 // review-request clears hands-reviewed and adds review-this once at a new
 // head; a base-only update, hands-reviewing present, review-this present
 // and an external review at the head leave the labels alone; and a head
-// without any label (the in-flight read) gets one add and nothing more.
+// without any label (the in-flight read) gets one add and nothing more. On
+// forge.changed it adds review-this once after the external reviewer's
+// could-not-run notice and once after hands-review-failed, removing that
+// label; a failure while a review is in progress or a request is in
+// flight, a change without a failure, the empty label read and a second
+// failure at the head add nothing.
 func TestDefaultReviewRequest(t *testing.T) {
 	src := defaultSource(t, "review-request")
 	head := "0123456789abcdef0123456789abcdef01234567"
+	changed := func(c ForgeChange) Event {
+		return Event{Kinds: []string{events.KindForgeChanged}, Change: &c}
+	}
+	notice := changed(ForgeChange{LabelsRemoved: []string{"hands-reviewing"}, ReviewFailures: 1, Comments: []ChangedComment{
+		{Author: "hands-bot", Kind: "comment", Body: "[hands-bot review] could not run: the runner is down", Notice: "review-failed"}}})
 	cases := []struct {
 		name   string
 		labels []string
@@ -94,6 +108,16 @@ func TestDefaultReviewRequest(t *testing.T) {
 			Event{Kinds: []string{PointAfterPush}}, nil},
 		{"a review at an earlier head", []string{"hands-reviewed"}, &Review{Reviewer: "external", Head: "fedcba987654", Verdict: "READY_FOR_HUMAN_MERGE"},
 			Event{Kinds: []string{PointAfterPush}}, []string{"-hands-reviewed", "+review-this"}},
+		{"the failure notice", nil, nil, notice, []string{"+review-this"}},
+		{"the failure label", []string{"hands-review-failed"}, nil,
+			changed(ForgeChange{LabelsAdded: []string{"hands-review-failed"}, ReviewFailures: 1}), []string{"-hands-review-failed", "+review-this"}},
+		{"a failure while a review is in progress", []string{"hands-reviewing"}, nil, notice, nil},
+		{"a failure while a request is in flight", []string{"review-this"}, nil, notice, nil},
+		{"a change without a failure", []string{"hands-reviewed"}, nil,
+			changed(ForgeChange{Checks: "success", LabelsAdded: []string{"hands-reviewed"}, Comments: []ChangedComment{{Author: "hands-bot", Kind: "comment", Body: "reviewed"}}}), nil},
+		{"the empty label read", nil, nil, changed(ForgeChange{LabelsRemoved: []string{"review-this"}}), nil},
+		{"a second failure at the head", []string{"hands-review-failed"}, nil,
+			changed(ForgeChange{LabelsAdded: []string{"hands-review-failed"}, ReviewFailures: 2}), nil},
 	}
 	for _, c := range cases {
 		h := &fakeHost{pr: PR{Number: 7, Head: head, Labels: c.labels}}
@@ -105,6 +129,9 @@ func TestDefaultReviewRequest(t *testing.T) {
 		}
 		if !slices.Equal(h.labels, c.want) {
 			t.Errorf("%s: labels %v, want %v", c.name, h.labels, c.want)
+		}
+		if c.name == "a second failure at the head" && !slices.Contains(h.steps, "review_request: the external review failed again at this head; the request is not repeated") {
+			t.Errorf("%s: steps %v", c.name, h.steps)
 		}
 	}
 }

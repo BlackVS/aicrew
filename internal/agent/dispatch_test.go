@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/automation"
+	"github.com/BlackVS/aicrew/internal/events"
 	"github.com/BlackVS/aicrew/internal/forge"
 	"github.com/BlackVS/aicrew/internal/store"
 )
@@ -539,6 +540,245 @@ func lastStep(recs []automationRecord, kind string) string {
 		}
 	}
 	return out
+}
+
+// countKind is the runs' ends for the event kind.
+func countKind(recs []automationRecord, kind string) int {
+	n := 0
+	for _, r := range recs {
+		if r.Outcome != "" && slices.Contains(r.Kinds, kind) {
+			n++
+		}
+	}
+	return n
+}
+
+const changeManifest = `{
+  "name": "delivery",
+  "automations": [
+    {"name": "change-note", "source": {"process": "process/change-note.star"}, "events": ["forge.changed"]},
+    {"name": "push-note", "source": {"process": "process/push-note.star"}, "point": "after-push"},
+    {"name": "push-check", "source": {"command": ["git", "status", "--short"]}, "point": "after-push"}
+  ]
+}`
+
+// The change against the kept state (task 05cf): the first observation is
+// none; a label, a checks conclusion, a comment count and a head each are
+// one; the first content read marks the comments and names none as new,
+// later reads name the ones after the mark with their notice, bounded; the
+// external reviewer's failures are counted per head; and the state kept
+// survives the file.
+func TestForgeChangeState(t *testing.T) {
+	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	// A record a launcher before this state wrote: seen, but not observed
+	// for the change, so its first observation sets the state like a new
+	// pull request's.
+	p := &pullPoints{Attempt: "a1", Head: "h1", State: forge.PullOpen, Seen: t0}
+	obs := func(head, checks string, comments int64, labels ...string) PullObservation {
+		return PullObservation{Host: "git.example.test", Repository: "crew/project-t", Number: 4, State: forge.PullOpen,
+			HeadCommit: head, Checks: checks, Comments: comments, Labels: labels}
+	}
+	comment := func(at time.Time, notice string) forge.PullComment {
+		return forge.PullComment{Kind: forge.CommentIssue, Author: "hands-bot", At: at, Body: "a comment", Notice: notice}
+	}
+	step := func(o PullObservation, f pullFacts) *automation.ForgeChange {
+		c := p.change(o, f)
+		p.edges(o, f, map[string]bool{}, "k")
+		return c
+	}
+	if c := step(obs("h1", forge.ChecksPending, 0), pullFacts{}); c != nil {
+		t.Fatalf("the first observation: %+v", c)
+	}
+	if c := step(obs("h1", forge.ChecksPending, 0), pullFacts{}); c != nil {
+		t.Fatalf("the same observation again: %+v", c)
+	}
+	c := step(obs("h1", forge.ChecksPending, 0, "review-this"), pullFacts{})
+	if c == nil || !slices.Equal(c.LabelsAdded, []string{"review-this"}) || c.Checks != "" || c.HeadMoved || c.ReviewFailures != 0 {
+		t.Fatalf("a label added: %+v", c)
+	}
+	// The first content read: its two comments are the mark, not news;
+	// the conclusion is the change.
+	two := []forge.PullComment{comment(t0, ""), comment(t0.Add(time.Minute), "")}
+	c = step(obs("h1", forge.ChecksSuccess, 2, "review-this"), pullFacts{Content: true, Comments: two})
+	if c == nil || c.Checks != forge.ChecksSuccess || len(c.Comments) != 0 || len(c.LabelsAdded) != 0 ||
+		!p.ContentRead || !p.LastComment.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("the first content read: %+v, state %+v", c, p)
+	}
+	// A later read: the notice is new, and the first failure at h1.
+	three := append(slices.Clone(two), comment(t0.Add(2*time.Minute), forge.NoticeReviewFailed))
+	c = step(obs("h1", forge.ChecksSuccess, 3), pullFacts{Content: true, Comments: three})
+	if c == nil || len(c.Comments) != 1 || c.Comments[0].Notice != forge.NoticeReviewFailed || c.Comments[0].Author != "hands-bot" ||
+		c.ReviewFailures != 1 || !slices.Equal(c.LabelsRemoved, []string{"review-this"}) {
+		t.Fatalf("the notice: %+v", c)
+	}
+	// The failure label at the same head: the second failure.
+	c = step(obs("h1", forge.ChecksSuccess, 3, labelReviewFailed), pullFacts{})
+	if c == nil || c.ReviewFailures != 2 || !slices.Equal(c.LabelsAdded, []string{labelReviewFailed}) {
+		t.Fatalf("the failure label: %+v", c)
+	}
+	// A new head: the head moved; a failure there is the first.
+	c = step(obs("h2", forge.ChecksPending, 3, labelReviewFailed), pullFacts{})
+	if c == nil || !c.HeadMoved || c.Checks != forge.ChecksPending || c.ReviewFailures != 0 || len(c.LabelsAdded) != 0 {
+		t.Fatalf("a new head: %+v", c)
+	}
+	c = step(obs("h2", forge.ChecksPending, 4, labelReviewFailed), pullFacts{Content: true,
+		Comments: append(slices.Clone(three), comment(t0.Add(3*time.Minute), forge.NoticeReviewFailed))})
+	if c == nil || c.ReviewFailures != 1 || len(c.Comments) != 1 {
+		t.Fatalf("a failure at the new head: %+v", c)
+	}
+	// The replay of a merged pull request's after-merge is made from the
+	// kept state, not a forge read: it changes nothing and keeps the state.
+	kept := *p
+	if c := step(p.observation("git.example.test/crew/project-t#4"), pullFacts{Replay: true}); c != nil ||
+		!slices.Equal(p.Labels, kept.Labels) || p.Comments != kept.Comments || p.Checks != kept.Checks {
+		t.Fatalf("the replay: %+v, state %+v", c, p)
+	}
+	// The comments are bounded, and the state survives the file.
+	var many []forge.PullComment
+	for i := 0; i < automation.MaxChangeComments+5; i++ {
+		many = append(many, comment(t0.Add(time.Duration(10+i)*time.Minute), ""))
+	}
+	c = step(obs("h2", forge.ChecksPending, 20, labelReviewFailed), pullFacts{Content: true, Comments: many})
+	if c == nil || len(c.Comments) != automation.MaxChangeComments {
+		t.Fatalf("many comments: %+v", c)
+	}
+	raw, _ := json.Marshal(p)
+	var back pullPoints
+	if json.Unmarshal(raw, &back) != nil || !slices.Equal(back.ReviewFailures, []string{"h1", "h1", "h2"}) ||
+		!back.LastComment.Equal(many[len(many)-1].At) || back.Comments != 20 || !slices.Equal(back.Labels, []string{labelReviewFailed}) ||
+		strings.Contains(string(raw), "a comment") {
+		t.Fatalf("the kept state: %s", raw)
+	}
+}
+
+// The launcher dispatches forge.changed once per observation that changed
+// the pull request against its kept state: the first observation runs
+// nothing for it, a label added runs the entries subscribed to it with the
+// change, the same labels again and a restart run nothing, a new comment
+// arrives with its author and notice, the reviewer's failures at the head
+// are counted, and a failed run reaches the coordinator naming the event.
+// A point entry sees event.change as None and never runs for the event.
+func TestForgeChangeDispatch(t *testing.T) {
+	ctx := context.Background()
+	a := setupAutomationSources(t)
+	pin := a.commit(t, a.process, a.processBare, "main", map[string]string{
+		"process/manifest.json": changeManifest,
+		"process/change-note.star": starlark("def main(event):\n" +
+			"    c = event.change\n" +
+			"    if c.review_failures > 1:\n" +
+			"        fail(\"a second failure at the head\")\n" +
+			"    step(\"change\", \"kinds=%s moved=%s checks=%s added=%s removed=%s failures=%d comments=%s\" % (\",\".join(event.kinds), " +
+			"c.head_moved, c.checks, \",\".join(c.labels_added), \",\".join(c.labels_removed), c.review_failures, " +
+			"\";\".join([x.author + \":\" + x.kind + \":\" + x.notice for x in c.comments])))\n" +
+			"    return None\n"),
+		"process/push-note.star": starlark("def main(event):\n    step(\"push\", \"change=%s\" % (event.change == None))\n    return None\n"),
+	})
+	s := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
+	body := s.claimBody()
+	body["process"] = map[string]string{"repo": testProcessRepo, "commit": pin, "manifest": "process/manifest.json"}
+	r, err := s.run(t, attemptsPath+"/claim", body)
+	if err != nil || r.Outcome != "committed" {
+		t.Fatalf("claim: %+v %v", r, err)
+	}
+	id := r.AttemptID
+	provisionTestForge(t, s.cfg.Home, "git.example.test", "member-forge-token")
+	srv := s.serve(t)
+	wt := filepath.Join(s.cfg.Home, "worktrees", id)
+	os.MkdirAll(filepath.Dir(wt), 0o700)
+	git(t, filepath.Dir(wt), "clone", "-q", "-b", "work/task-1", a.projectBare, wt)
+	head1 := git(t, wt, "rev-parse", "HEAD")
+	fake := &fakeStatus{token: "member-forge-token", st: forge.PullStatus{Pull: forge.Pull{Number: 4,
+		URL: "https://git.example.test/crew/project-t/pulls/4", State: forge.PullOpen, Head: "work/task-1", HeadCommit: head1,
+		Base: "main", Labels: []string{}}, Checks: forge.ChecksPending}}
+	oldAPI := newPullStatusAPI
+	newPullStatusAPI = func() PullStatusAPI { return fake }
+	t.Cleanup(func() { newPullStatusAPI = oldAPI })
+	changes := func() int { return countKind(dispatchRecords(t, s.cfg.Home), events.KindForgeChanged) }
+
+	// 1. The first observation sets the state: after-push fires with
+	// event.change None, and nothing runs for forge.changed.
+	var answers []byte
+	obs, _ := json.Marshal(observation("git.example.test", "crew/project-t", fake.st))
+	if ans := s.call(t, &answers, StepCall{Op: "watch-pull", Body: obs}); !ans.OK {
+		t.Fatalf("the baseline: %+v", ans)
+	}
+	srv.waitPoints()
+	if recs := dispatchRecords(t, s.cfg.Home); lastStep(recs, "push") != "change=True" || countKind(recs, events.KindForgeChanged) != 0 ||
+		countRuns(recs, automation.PointAfterPush) != 2 {
+		t.Fatalf("the first observation: push %q, %d change runs\n%s", lastStep(recs, "push"), countKind(recs, events.KindForgeChanged), s.logs.String())
+	}
+
+	// 2. review-this is added: one run with the change; the same labels
+	// polled again, and after a restart, run nothing.
+	fake.set(func(st *forge.PullStatus) { st.Labels = []string{"review-this"} })
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	recs := dispatchRecords(t, s.cfg.Home)
+	if changes() != 1 || lastStep(recs, "change") != "kinds=forge.changed moved=False checks= added=review-this removed= failures=0 comments=" {
+		t.Fatalf("a label added: %d runs, step %q\n%s", changes(), lastStep(recs, "change"), s.logs.String())
+	}
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	srv.Close()
+	srv = s.serve(t)
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	if changes() != 1 {
+		t.Fatalf("an unchanged pull request ran forge.changed: %d runs", changes())
+	}
+
+	// 3. CI concludes and the content is read for the first time: its
+	// comment is the mark, not news; the conclusion is the change.
+	t0 := time.Now().UTC().Add(-time.Hour)
+	fake.mu.Lock()
+	fake.content = forge.PullContent{Checks: []forge.Check{{Name: "build", State: forge.ChecksSuccess}},
+		Comments: []forge.PullComment{{Kind: forge.CommentIssue, Author: "member", At: t0, Body: "a first comment"}}}
+	fake.mu.Unlock()
+	fake.set(func(st *forge.PullStatus) { st.Checks, st.Comments = forge.ChecksSuccess, 1 })
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	if recs = dispatchRecords(t, s.cfg.Home); changes() != 2 ||
+		lastStep(recs, "change") != "kinds=forge.changed moved=False checks=success added= removed= failures=0 comments=" {
+		t.Fatalf("the first content read: %d runs, step %q", changes(), lastStep(recs, "change"))
+	}
+
+	// 4. The reviewer fails: its working label goes and the notice
+	// arrives. The run sees the new comment with its notice and the first
+	// failure at the head.
+	fake.mu.Lock()
+	fake.content.Comments = append(fake.content.Comments, forge.PullComment{Kind: forge.CommentIssue, Author: "hands-bot",
+		At: t0.Add(time.Minute), Body: "[hands-bot review] could not run: the runner is down", Notice: forge.NoticeReviewFailed})
+	fake.mu.Unlock()
+	fake.set(func(st *forge.PullStatus) { st.Labels, st.Comments = []string{}, 2 })
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	if recs = dispatchRecords(t, s.cfg.Home); changes() != 3 ||
+		lastStep(recs, "change") != "kinds=forge.changed moved=False checks= added= removed=review-this failures=1 comments=hands-bot:comment:review-failed" {
+		t.Fatalf("the notice: %d runs, step %q", changes(), lastStep(recs, "change"))
+	}
+
+	// 5. The failure label at the same head is the second failure: the
+	// script fails, and the coordinator is woken with the run naming the
+	// event.
+	fake.set(func(st *forge.PullStatus) { st.Labels = []string{labelReviewFailed} })
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	if changes() != 4 {
+		t.Fatalf("the failure label: %d runs", changes())
+	}
+	wakes := automationWakes(t, s, 1)
+	if len(wakes) != 1 || len(wakes[0].Runs) != 1 || wakes[0].Runs[0].Name != "change-note" || wakes[0].Runs[0].Point != "" ||
+		!slices.Equal(wakes[0].Runs[0].Events, []string{events.KindForgeChanged}) ||
+		!strings.Contains(wakes[0].Text, "failed on forge.changed for pull request #4 (https://git.example.test/crew/project-t/pulls/4) at "+head1[:12]) ||
+		!strings.Contains(wakes[0].Text, "a second failure at the head") {
+		t.Fatalf("the coordinator's wake: %+v", wakes)
+	}
+	if n := countRuns(dispatchRecords(t, s.cfg.Home), automation.PointAfterPush); n != 2 {
+		t.Fatalf("after-push ran %d entries for one head, want 2", n)
+	}
+	if strings.Contains(string(answers), "member-forge-token") || strings.Contains(s.logs.String(), "member-forge-token") {
+		t.Fatal("the forge token reached an answer or the log")
+	}
 }
 
 // A declared command runs code from the attempt's head and receives no

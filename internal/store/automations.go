@@ -60,13 +60,17 @@ type AutomationRunReport struct {
 	// RunID is the launcher's ID of the run, unique per attempt: a report
 	// sent twice records one run.
 	RunID string `json:"run_id"`
-	// Point is the extension point the run was for, and Name the entry's
-	// name; Source and Commit say where the entry came from (process,
-	// repository, release or command) and at which commit it was read.
-	Point  string `json:"point"`
-	Name   string `json:"name"`
-	Source string `json:"source"`
-	Commit string `json:"commit,omitempty"`
+	// Point is the extension point the run was for, or Events the event
+	// kinds it ran for when the launcher ran it on its own events rather
+	// than at a point (forge.changed, docs/DESIGN-TURNS.md 12.2); a report
+	// names one or both. Name is the entry's name; Source and Commit say
+	// where the entry came from (process, repository, release or command)
+	// and at which commit it was read.
+	Point  string   `json:"point"`
+	Events []string `json:"events,omitempty"`
+	Name   string   `json:"name"`
+	Source string   `json:"source"`
+	Commit string   `json:"commit,omitempty"`
 	// Script is a script entry's path; Command a declared command's
 	// argument list.
 	Script  string   `json:"script,omitempty"`
@@ -132,8 +136,12 @@ func (r AutomationRunReport) validate() error {
 		return bad("attempt")
 	case !runIDShape.MatchString(r.RunID):
 		return bad("run_id")
-	case !runNameShape.MatchString(r.Point) || !runNameShape.MatchString(r.Name) || !runNameShape.MatchString(r.Source):
+	case r.Point == "" && len(r.Events) == 0:
+		return bad("point and events, which name neither")
+	case (r.Point != "" && !runNameShape.MatchString(r.Point)) || !runNameShape.MatchString(r.Name) || !runNameShape.MatchString(r.Source):
 		return bad("point, name or source")
+	case len(r.Events) > len(events.Kinds()) || slices.ContainsFunc(r.Events, func(k string) bool { return !slices.Contains(events.Kinds(), k) }):
+		return bad("events, which name an unknown kind")
 	case len(r.Commit) > maxRefLen || len(r.Script) > maxRefLen || len(r.Command) > maxRunCommand:
 		return bad("commit, script or command")
 	case r.Pull < 1 || !strings.HasPrefix(r.URL, "https://") || len(r.URL) > maxPullURL || strings.ContainsAny(r.URL, " \t\r\n"):
@@ -358,7 +366,11 @@ func runText(r AutomationRunReport) string {
 		}
 		what += ")"
 	}
-	where := fmt.Sprintf("at %s for pull request #%d (%s) at %s", r.Point, r.Pull, r.URL, short(r.Head))
+	at := "at " + r.Point
+	if r.Point == "" {
+		at = "on " + strings.Join(r.Events, ", ")
+	}
+	where := fmt.Sprintf("%s for pull request #%d (%s) at %s", at, r.Pull, r.URL, short(r.Head))
 	switch r.Outcome {
 	case RunFailed:
 		fmt.Fprintf(&b, "action.needed: the automation %s failed %s: %s", what, where, strings.TrimSpace(r.Error))

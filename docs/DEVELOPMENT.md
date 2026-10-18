@@ -912,7 +912,14 @@ subscribes to, or both. The entries come from three sources:
   `review-request` at `after-push` (clear `hands-reviewed`, add
   `review-this` once; nothing for a base-only update, while
   `hands-reviewing` or `review-this` is present, or when the external
-  review at the head exists), `ci-rerun` at `ci-failed` (`rerun()` once a
+  review at the head exists) and on `forge.changed` (task 05cf: a change
+  that carries the external reviewer's failure, its could-not-run comment
+  read as the notice `review-failed` or `hands-review-failed` added, gets
+  `review-this` once more with the failure label removed, unless
+  `hands-reviewing` or `review-this` is present; a second failure at the
+  same head gets a step and no request, as the 4.2 row says; the script
+  acts on the change, never on the absence of a label, so an empty label
+  read adds nothing), `ci-rerun` at `ci-failed` (`rerun()` once a
   check failed on the runner) and `gates-green` at `gates-green`
   (`ready()`, then `submit(pr().url)`, unless the attempt is submitted
   already; the script reads no label, the point's edge does); `base-update`
@@ -970,6 +977,32 @@ once per edge, not at every poll.
 A merged pull request leaves the watch list, so
 the file keeps it until its `after-merge` ran, and the next poll runs the
 point first.
+
+**The forge event** (task 05cf, `docs/DESIGN-TURNS.md` 12.2). Beside the
+points, the launcher runs the script entries whose `events` name
+`forge.changed` once per accepted observation that changed the pull
+request against the state it keeps per pull request in
+`state/points.json`: the labels, the checks conclusion, the comment count
+and the time of the newest comment its last content read saw (no comment
+body is kept). A change is the head moved, the state or the checks
+conclusion changed, labels added or removed, or the comment count risen;
+the first observation of a pull request sets the state and is no change,
+and the first content read sets the comment mark and names no comment as
+new, so history is never acted on. The event's `change` (`event.change`
+in the script; `None` at a point, so host API 1 stands) carries
+`head_moved`, `state` and `checks` (the new value when it changed),
+`labels_added`, `labels_removed`, `comments` (the new ones since the mark,
+oldest first, each with `author`, `kind`, `body` and `notice`, at most ten
+of 4 KiB) and `review_failures`, the count of observations at this head,
+this one included, that carried the external reviewer's failure: a new
+comment the forge layer read as `review-failed` (`[hands-bot review] could
+not run`) or `hands-review-failed` added. The entries run after the
+observation's points, under the same run lock, and each run is reported
+with `events` in place of a point. A declared command never runs for an
+event. Unlike a point, the change has no edge: the kept state moves on
+with the observation, so a dispatch the launcher's exit cuts, or one it
+could not prepare, is logged and not repeated; a follow-up brings these
+runs under the at-least-once rule of 12.4.
 
 **The gates wake** (increment 2d-d). Each observation the launcher
 reports names the automations of its attempt's effective set that run

@@ -549,6 +549,30 @@ def main(event):
 	if p := readPoints(a.cfg.Home).Pulls[pullKey("git.example.test", "crew/project-t", 7)]; p == nil || !slices.Equal(p.Reruns, []string{a.head, "0123456789abcdef0123456789abcdef01234567"}) {
 		t.Errorf("the points keep both heads: %+v", p)
 	}
+	// The heads are kept for as long as the pull request is, however many:
+	// with 64 more re-run heads seeded, a new head is claimed and the first
+	// head is still re-run nothing, without a forge call.
+	key := pullKey("git.example.test", "crew/project-t", 7)
+	doc := readPoints(a.cfg.Home)
+	for i := range 64 {
+		doc.Pulls[key].Reruns = append(doc.Pulls[key].Reruns, fmt.Sprintf("%040x", i+1))
+	}
+	if err := writePoints(a.cfg.Home, doc, key); err != nil {
+		t.Fatal(err)
+	}
+	a.forge.pull.HeadCommit = "fedcba9876543210fedcba9876543210fedcba98"
+	res = a.run(t, "def main(event):\n    r = rerun()\n    if not r.reran:\n        fail(r)\n", AutomationRun{})
+	if res.Failed != "" || len(a.forge.reruns) != 4 {
+		t.Errorf("the 67th head: %+v, re-runs %v", res, a.forge.reruns)
+	}
+	a.forge.pull.HeadCommit = a.head
+	res = a.run(t, "def main(event):\n    r = rerun()\n    if r.reran or \"already\" not in r.reason:\n        fail(r)\n", AutomationRun{})
+	if res.Failed != "" || len(a.forge.reruns) != 4 {
+		t.Errorf("the first head after 66 others: %+v, re-runs %v", res, a.forge.reruns)
+	}
+	if p := readPoints(a.cfg.Home).Pulls[key]; p == nil || len(p.Reruns) != 67 || p.Reruns[0] != a.head {
+		t.Errorf("the points keep every head: %d heads", len(p.Reruns))
+	}
 	// submit() at the before-submit point, and with a reference that is
 	// no URL, fails the script and sends nothing.
 	res = a.run(t, "def main(event):\n    submit(pr().url)\n", AutomationRun{Point: automation.PointBeforeSubmit})

@@ -747,15 +747,12 @@ func (s *StepServer) submitResult(ctx context.Context, run *liveRun, u string) e
 	return s.recordStep(run, stepHostSubmit, "the result "+u+" is submitted")
 }
 
-// maxReruns bounds the heads a pull request's points remember as re-run:
-// the oldest is forgotten first.
-const maxReruns = 64
-
 // hostRerun is rerun(): the failed jobs of the pull request's head re-run
 // once per head, with the home's credential. The head is claimed in the
 // points' state before the forge is asked, and the claimed heads are kept
-// for the pull request, so a second call at the head, in this run or a
-// later one, or after the branch came back to the head, re-runs nothing;
+// as long as the pull request's points are, so a second call at the head,
+// in this run or a later one, or after the branch came back to the head,
+// re-runs nothing;
 // a forge without a re-run call, or a head with no failed job it names,
 // re-runs nothing and leaves the head unclaimed.
 func (s *StepServer) hostRerun(ctx context.Context, run *liveRun) (automation.RerunResult, error) {
@@ -795,9 +792,6 @@ func (s *StepServer) hostRerun(ctx context.Context, run *liveRun) (automation.Re
 		}
 		if claim {
 			cur.Reruns = append(cur.Reruns, head)
-			if n := len(cur.Reruns) - maxReruns; n > 0 {
-				cur.Reruns = slices.Clone(cur.Reruns[n:])
-			}
 		} else {
 			cur.Reruns = slices.Delete(cur.Reruns, i, i+1)
 		}

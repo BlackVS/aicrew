@@ -86,9 +86,9 @@ type pullPoints struct {
 	// run at the head.
 	PrePush *pointPrePush `json:"pre_push,omitempty"`
 	// Reruns are the heads whose failed jobs a script's rerun() re-ran
-	// (automation.go), oldest first and at most maxReruns of them: once per
-	// head, so a second call at a head re-runs nothing, also after the
-	// branch moved away and came back to it.
+	// (automation.go), oldest first, kept as long as the pull request is:
+	// once per head, so a second call at a head re-runs nothing, also after
+	// the branch moved away and came back to it.
 	Reruns []string  `json:"reruns,omitempty"`
 	Seen   time.Time `json:"seen"`
 }

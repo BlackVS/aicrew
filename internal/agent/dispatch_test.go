@@ -29,6 +29,11 @@ func TestPointEdges(t *testing.T) {
 		return map[string]pointReview{forge.ReviewerLocal: {Head: head[:12], Verdict: verdictReady},
 			forge.ReviewerExternal: {Head: head, Verdict: verdictReady}}
 	}
+	reviewing := func(head, checks string) PullObservation {
+		o := open(head, checks)
+		o.Labels = []string{labelReviewing}
+		return o
+	}
 	h1, h2 := "0123456789abcdef0123456789abcdef01234567", "89abcdef0123456789abcdef0123456789abcdef"
 	p := &pullPoints{Attempt: "att-1", Fired: map[string][]string{}}
 	inflight := map[string]bool{}
@@ -64,7 +69,9 @@ func TestPointEdges(t *testing.T) {
 	say("the external review READY alone", open(h1, forge.ChecksSuccess),
 		pullFacts{Reviews: map[string]pointReview{forge.ReviewerExternal: {Head: h1, Verdict: verdictReady}}})
 	fired()
-	say("both reviews READY, CI green", open(h1, forge.ChecksSuccess), pullFacts{Reviews: ready(h1)})
+	say("both reviews READY, CI green, while an external review is in flight", reviewing(h1, forge.ChecksSuccess), pullFacts{Reviews: ready(h1)})
+	fired()
+	say("both reviews READY, CI green, the label gone", open(h1, forge.ChecksSuccess), pullFacts{})
 	fired(automation.PointGatesGreen)
 	say("the same, polled again", open(h1, forge.ChecksSuccess), pullFacts{})
 	fired()

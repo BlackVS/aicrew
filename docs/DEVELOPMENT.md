@@ -898,7 +898,8 @@ subscribes to, or both. The entries come from three sources:
   review at the head exists), `ci-rerun` at `ci-failed` (`rerun()` once a
   check failed on the runner) and `gates-green` at `gates-green`
   (`ready()`, then `submit(pr().url)`, unless the attempt is submitted
-  already or `hands-reviewing` is present); `base-update` follows in 2e.
+  already; the script reads no label, the point's edge does); `base-update`
+  follows in 2e.
   Their tests run against the fake host
   (`internal/automation/defaults_test.go`), and one asserts the scripts
   name no host, endpoint or instance: a default is universal release
@@ -933,8 +934,11 @@ defaults.
 from what its forge poll observes, once per edge: `after-push` for a head
 it had not seen, `after-ci` for a head and a CI conclusion, `ci-failed`
 for a head whose CI failed, `gates-green` for a head whose local and
-external reviews are both `READY_FOR_HUMAN_MERGE` while its CI passed,
-`after-merge` for the merge, and `before-submit` in the `work` step that
+external reviews are both `READY_FOR_HUMAN_MERGE` while its CI passed and
+no external review is in flight (`hands-reviewing` absent: a run then would
+consume the head's one edge without the transition, so the first
+observation without the label takes it), `after-merge` for the merge, and
+`before-submit` in the `work` step that
 carries the submit, before it is sent. The fired edges are the home's
 `state/points.json`, so a restarted launcher does not fire a point it
 already fired, and an edge once fired stays fired however the

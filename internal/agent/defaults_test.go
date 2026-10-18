@@ -22,7 +22,9 @@ import (
 // ci-rerun (the failed job is re-run once), and both reviews READY with CI
 // green run gates-green: the pull request is marked ready, the attempt is
 // submitted, and the worker gets no gates wake, because the launcher's
-// observation named gates-green among its automations.
+// observation named gates-green among its automations. An observation
+// with both gates green while an external review is in flight takes no
+// edge, so the first one without the label still marks ready and submits.
 func TestDefaultsThroughTheLauncher(t *testing.T) {
 	ctx := context.Background()
 	a := setupAutomationSources(t)
@@ -98,9 +100,13 @@ func TestDefaultsThroughTheLauncher(t *testing.T) {
 		t.Fatalf("ci-failed: %+v, re-runs %v", ci, f.reruns)
 	}
 
-	// 3. Both reviews READY at the head and CI green: gates-green marks the
-	// pull request ready and submits the attempt; the worker is not woken
-	// for the gates, since the launcher does it.
+	// 3. Both reviews READY at the head and CI green, first with an external
+	// review in flight (the label beside the READY comment, as during the
+	// reviewer's label swap or after a re-request): the gates edge is not
+	// taken, nothing is marked ready or submitted, and the head is not
+	// consumed. Then the label gone: gates-green marks the pull request
+	// ready and submits the attempt; the worker is not woken for the
+	// gates, since the launcher does it.
 	review := func(reviewer, verdict string) forge.PullComment {
 		return forge.PullComment{Kind: forge.CommentIssue, Author: reviewer, Body: "reviewed at head " + head + "\n\nVERDICT\n" + verdict,
 			Review: &forge.ReviewHeader{Reviewer: reviewer, Head: head[:12], AtHead: true, Verdict: verdict}}
@@ -113,8 +119,15 @@ func TestDefaultsThroughTheLauncher(t *testing.T) {
 		Checks: []forge.Check{{Name: "go-test", State: forge.ChecksSuccess}}}
 	fake.mu.Unlock()
 	fake.set(func(st *forge.PullStatus) {
-		st.Checks, st.Comments, st.Labels = forge.ChecksSuccess, 2, []string{"hands-reviewed"}
+		st.Checks, st.Comments, st.Labels = forge.ChecksSuccess, 2, []string{"hands-reviewing"}
 	})
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	recs = dispatchRecords(t, s.cfg.Home)
+	if gates := runsAt(recs, automation.PointGatesGreen); len(gates) != 0 || f.ready != 0 {
+		t.Fatalf("gates-green while an external review is in flight: %+v, ready %d", gates, f.ready)
+	}
+	fake.set(func(st *forge.PullStatus) { st.Labels = []string{"hands-reviewed"} })
 	srv.pollPulls(ctx)
 	srv.waitPoints()
 	recs = dispatchRecords(t, s.cfg.Home)

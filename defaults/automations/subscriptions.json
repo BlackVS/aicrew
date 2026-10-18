@@ -16,7 +16,7 @@
     },
     {
       "name": "gates-green",
-      "description": "When both reviews are READY and CI passed at the head: drop the WIP prefix and the draft, and submit the attempt.",
+      "description": "When both reviews are READY and CI passed at the head and no external review is in flight: drop the WIP prefix and the draft, and submit the attempt.",
       "source": {"release": "gates-green.star"},
       "point": "gates-green"
     }

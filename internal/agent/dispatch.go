@@ -249,7 +249,13 @@ func (p *pullPoints) edges(o PullObservation, f pullFacts, inflight map[string]b
 		if o.Checks == forge.ChecksFailure {
 			fire(automation.PointCIFailed, head+" "+o.Checks)
 		}
-		if o.Checks == forge.ChecksSuccess && p.Reviews[forge.ReviewerLocal].ready(head) && p.Reviews[forge.ReviewerExternal].ready(head) {
+		// The gates edge is not taken while an external review is in
+		// flight: a run then would consume the head's one edge without
+		// the transition, and the worker gets no gates wake while
+		// gates-green is in the set. The first observation without the
+		// label takes it.
+		if o.Checks == forge.ChecksSuccess && p.Reviews[forge.ReviewerLocal].ready(head) && p.Reviews[forge.ReviewerExternal].ready(head) &&
+			!slices.Contains(o.Labels, labelReviewing) {
 			fire(automation.PointGatesGreen, head)
 		}
 	}
@@ -260,6 +266,10 @@ func (p *pullPoints) edges(o PullObservation, f pullFacts, inflight map[string]b
 }
 
 // edgeOf is the edge a point fired for at o.
+// labelReviewing is the external reviewer's in-progress label (the
+// external-review row of docs/DESIGN-TURNS.md 4.2).
+const labelReviewing = "hands-reviewing"
+
 func edgeOf(point string, o PullObservation, head string) string {
 	switch point {
 	case automation.PointAfterCI, automation.PointCIFailed:

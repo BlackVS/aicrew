@@ -38,8 +38,8 @@ func TestDefaultEntries(t *testing.T) {
 }
 
 // gates-green lifts the draft and submits the pull request's URL; it does
-// nothing for an attempt submitted already, or while an external review is
-// in progress.
+// nothing for an attempt submitted already, and reads no label: the
+// launcher's edge keeps a review in flight from it.
 func TestDefaultGatesGreen(t *testing.T) {
 	src := defaultSource(t, "gates-green")
 	url := "https://forge.example.test/team/app/pulls/7"
@@ -58,13 +58,16 @@ func TestDefaultGatesGreen(t *testing.T) {
 	if h.ready != 0 || len(h.submitted) != 0 || len(h.steps) != 1 || !strings.Contains(h.steps[0], "submitted already") {
 		t.Errorf("an attempt submitted already: ready %d, submitted %v, steps %v", h.ready, h.submitted, h.steps)
 	}
-	h = &fakeHost{pr: PR{Number: 7, URL: url, Head: "0123456", Labels: []string{"hands-reviewing"}},
+	// The launcher takes the point only from an observation without a
+	// review in flight; the script reads no label, so one that landed
+	// between the observation and the run does not strand the head.
+	h = &fakeHost{pr: PR{Number: 7, URL: url, Head: "0123456", Draft: true, Labels: []string{"hands-reviewing"}},
 		attempt: Attempt{ID: "att-1", Phase: "working"}}
 	if _, err := runDefault(src, h, Event{Kinds: []string{PointGatesGreen}}); err != nil {
 		t.Fatal(err)
 	}
-	if h.ready != 0 || len(h.submitted) != 0 || len(h.steps) != 1 || !strings.Contains(h.steps[0], "in progress") {
-		t.Errorf("a review in progress: ready %d, submitted %v, steps %v", h.ready, h.submitted, h.steps)
+	if h.ready != 1 || !slices.Equal(h.submitted, []string{url}) {
+		t.Errorf("a label after the observation: ready %d, submitted %v", h.ready, h.submitted)
 	}
 }
 

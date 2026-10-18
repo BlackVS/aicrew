@@ -505,7 +505,8 @@ of 4.2:
 - `after push`: a new head, before the self-review;
 - `after CI`: CI concluded at the head, whatever the conclusion;
 - `ci failed`: the change failed CI, before the action-needed message;
-- `both gates green`: the reviews and CI are green at the head;
+- `both gates green`: the reviews and CI are green at the head, and no
+  external review is in flight;
 - `before submit`: the last point before the harness submits;
 - `after merge`: before the delivery is recorded.
 

@@ -386,6 +386,41 @@ func TestAutomationRefusedRun(t *testing.T) {
 	}
 }
 
+// The child's standard error says whether the memory limit ended it: the
+// runtime's own fatal error, the watchdog, ThreadSanitizer, a thread the
+// limit refused, as the runtime reports it with and without cgo, and a
+// signal from a mapping the limit refused where nothing checked. Each sign
+// is read on its own, and the line returned is the sign's; anything else
+// is not the limit.
+func TestMemoryFailureSigns(t *testing.T) {
+	for _, c := range []struct{ stderr, want string }{
+		{"fatal error: out of memory\n\ngoroutine 1 [running]:", "fatal error: out of memory"},
+		{"fatal error: runtime: cannot allocate memory", "fatal error: runtime: cannot allocate memory"},
+		{"runtime: mmap(0xc000400000, 4194304) returned 0x0, 12\nfatal error: runtime: cannot map pages in arena address space",
+			"fatal error: runtime: cannot map pages in arena address space"},
+		{memoryWatchdogMessage + ": 140000000 bytes held, the limit is 134217728\n",
+			memoryWatchdogMessage + ": 140000000 bytes held, the limit is 134217728"},
+		{"==12==ERROR: ThreadSanitizer failed to allocate 0x1000000 bytes", "==12==ERROR: ThreadSanitizer failed to allocate 0x1000000 bytes"},
+		{"runtime/cgo: pthread_create failed: Resource temporarily unavailable\nSIGABRT: abort\nPC=0x7f3a1c0969fc m=4",
+			"runtime/cgo: pthread_create failed: Resource temporarily unavailable"},
+		{"runtime: failed to create new OS thread (have 9 already; errno=11)\nfatal error: newosproc",
+			"runtime: failed to create new OS thread (have 9 already; errno=11)"},
+		{"SIGSEGV: segmentation violation\nPC=0x7f3a1c0e2a40 m=5 sigcode=1 addr=0x0", "SIGSEGV: segmentation violation"},
+		{"SIGABRT: abort\nPC=0x7f3a1c0969fc m=4 sigcode=18446744073709551610", "SIGABRT: abort"},
+		{"SIGBUS: bus error\nPC=0x4a2b10 m=3 sigcode=2", "SIGBUS: bus error"},
+	} {
+		if got := memoryFailure(c.stderr); got != c.want {
+			t.Errorf("%q: got %q, want %q", c.stderr, got, c.want)
+		}
+	}
+	for _, line := range []string{"", "panic: the script's own panic\n\ngoroutine 1 [running]:", "the launcher refused the call: no_run",
+		"fatal error: all goroutines are asleep - deadlock!"} {
+		if got := memoryFailure(line); got != "" {
+			t.Errorf("%q read as the memory limit: %q", line, got)
+		}
+	}
+}
+
 // A script that allocates past the memory limit is ended by it, on each
 // platform's mechanism, and the failure is recorded; so is a script that
 // passes its step limit, and one whose text is invalid.

@@ -322,10 +322,21 @@ func (s *StepServer) RunAutomation(ctx context.Context, r AutomationRun) (Automa
 // memoryFailure is the line of the child's standard error that says it
 // ran out of memory, or "": Go's own fatal error when the OS refuses an
 // allocation, the watchdog's message, or, in a race-detector build (the
-// tests'), ThreadSanitizer's own refused allocation.
+// tests'), ThreadSanitizer's own refused allocation. A mapping the limit
+// refused somewhere else counts too: on Linux the data limit holds every
+// private writable mapping, a thread's stack and the C library's thread
+// state with the heap, so a child near the limit whose runtime needs
+// another OS thread dies there first, with "pthread_create failed" (a cgo
+// build), "failed to create new OS thread" (without cgo), or a signal
+// where the C library's thread start touched what it did not get. The
+// script is interpreted and memory-safe and the child runs nothing else,
+// so a segmentation violation, an abort or a bus error under the limit is
+// the limit acting; the line is kept in the text for the reader.
 func memoryFailure(stderr string) string {
 	for line := range strings.Lines(stderr) {
-		for _, sign := range []string{"out of memory", "cannot allocate memory", memoryWatchdogMessage, "ThreadSanitizer failed to allocate"} {
+		for _, sign := range []string{"out of memory", "cannot allocate memory", "cannot map pages", memoryWatchdogMessage,
+			"ThreadSanitizer failed to allocate", "pthread_create failed", "failed to create new OS thread",
+			"SIGSEGV: segmentation violation", "SIGABRT: abort", "SIGBUS: bus error"} {
 			if strings.Contains(line, sign) {
 				return strings.TrimSpace(line)
 			}

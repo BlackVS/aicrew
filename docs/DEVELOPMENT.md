@@ -841,7 +841,16 @@ run`, since the interpreter has no memory limit of its own:
     job.
   - **Linux:** `RLIMIT_DATA`, the data segment the process holds at its
     start plus the limit. `RLIMIT_AS` would not do: the Go runtime
-    reserves address space it never uses and fails at once under it.
+    reserves address space it never uses and fails at once under it. The
+    data limit holds every private writable mapping, a thread's stack and
+    the C library's thread state with the heap, so a child near the limit
+    whose runtime needs another OS thread dies there first: with the
+    runtime's `pthread_create failed` line, or with a signal where the C
+    library's thread start touched what it did not get. The launcher reads
+    those as the limit acting, as it reads the runtime's `out of memory`:
+    the script is interpreted and memory-safe and the child runs nothing
+    else, so nothing but the limit ends it that way. The line is kept in
+    the failure's text.
   - **macOS and the rest:** `RLIMIT_DATA` where the platform has it, and a
     watchdog that ends the process when its Go runtime holds more than
     the limit, since macOS does not enforce the data limit for the

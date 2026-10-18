@@ -75,6 +75,11 @@ type Check struct {
 	Conclusion string // success, failure, skipped, ...
 	Log        string
 	NotActions bool
+	// FailureReason is GitLab's reason for a failed job, such as
+	// runner_system_failure; empty reads as script_failure.
+	FailureReason string
+	// Run is the GitHub workflow run the job belongs to; 0 is run 1.
+	Run int64
 }
 
 // Review is a submitted review.
@@ -134,6 +139,9 @@ type Forge struct {
 	LogAuthorized int
 	// LogsForbidden makes every job log answer 403.
 	LogsForbidden bool
+	// Reruns is every re-run requested: GitHub's "run N" (its failed jobs)
+	// and GitLab's "job N".
+	Reruns []string
 }
 
 // New starts a fake forge of the dialect kind. The repository defines the
@@ -297,8 +305,7 @@ func (f *Forge) serve(w http.ResponseWriter, r *http.Request) {
 		f.commitRoute(w, r, strings.TrimPrefix(rest, "/commits/"))
 	case strings.HasPrefix(rest, "/issues/"):
 		f.issueRoute(w, r, numRe.FindStringSubmatch(strings.TrimPrefix(rest, "/issues")), in)
-	case r.Method == http.MethodGet && (strings.HasPrefix(rest, "/actions/jobs/") || strings.HasPrefix(rest, "/jobs/") ||
-		strings.HasPrefix(rest, "/pipelines/")):
+	case strings.HasPrefix(rest, "/actions/") || strings.HasPrefix(rest, "/jobs/") || strings.HasPrefix(rest, "/pipelines/"):
 		f.ciRoute(w, r, rest)
 	default:
 		http.NotFound(w, r)
@@ -612,26 +619,38 @@ func combined(cs []Check) string {
 	return out
 }
 
+// giteaStatus is the commit status Gitea posts for a job: a cancelled or
+// timed-out run is a failure there, as Gitea's own Actions report it, so
+// the status never says why.
 func giteaStatus(c Check) string {
 	switch {
 	case c.Status != "completed":
 		return "pending"
 	case c.Conclusion == "skipped":
 		return "success"
+	case runnerWord(c.Conclusion):
+		return "failure"
 	}
 	return c.Conclusion
 }
 
+// gitlabStatus is a GitLab job's status: failed or canceled, with the
+// reason in failure_reason, never a word of GitHub's.
 func gitlabStatus(c Check) string {
 	switch {
 	case c.Status != "completed":
 		return "running"
-	case c.Conclusion == "failure":
+	case c.Conclusion == "failure", c.Conclusion == "timed_out", c.Conclusion == "startup_failure", c.Conclusion == "stale":
 		return "failed"
 	case c.Conclusion == "cancelled":
 		return "canceled"
 	}
 	return c.Conclusion
+}
+
+// runnerWord is a GitHub conclusion that names the runner's failure.
+func runnerWord(conclusion string) bool {
+	return conclusion == "cancelled" || conclusion == "timed_out" || conclusion == "startup_failure" || conclusion == "stale"
 }
 
 // ciRoute serves job logs (GitHub's redirect, GitLab's trace) and GitLab's
@@ -641,18 +660,31 @@ func (f *Forge) ciRoute(w http.ResponseWriter, r *http.Request, rest string) {
 	if f.Kind == "gitlab" && rest == fmt.Sprintf("/pipelines/%d/jobs", PipelineID) {
 		jobs := []any{}
 		for i, c := range checks {
+			reason := ""
+			if c.Status == "completed" && c.Conclusion != "success" && c.Conclusion != "skipped" {
+				reason = c.FailureReason
+				if reason == "" {
+					reason = "script_failure"
+				}
+			}
 			jobs = append(jobs, map[string]any{"id": JobID(i), "name": c.Name, "status": gitlabStatus(c),
-				"web_url": fmt.Sprintf("https://%s/team/app/-/jobs/%d", f.Host, JobID(i)), "allow_failure": false})
+				"web_url": fmt.Sprintf("https://%s/team/app/-/jobs/%d", f.Host, JobID(i)), "allow_failure": false,
+				"failure_reason": reason})
 		}
 		f.paged(w, r, jobs)
 		return
 	}
+	if f.rerunRoute(w, r, rest, checks) {
+		return
+	}
 	var id int64
 	var err error
-	switch f.Kind {
-	case "github":
+	switch {
+	case r.Method != http.MethodGet:
+		err = fmt.Errorf("no such route")
+	case f.Kind == "github":
 		_, err = fmt.Sscanf(rest, "/actions/jobs/%d/logs", &id)
-	case "gitlab":
+	case f.Kind == "gitlab":
 		_, err = fmt.Sscanf(rest, "/jobs/%d/trace", &id)
 	default:
 		err = fmt.Errorf("no job logs")
@@ -671,6 +703,47 @@ func (f *Forge) ciRoute(w http.ResponseWriter, r *http.Request, rest string) {
 		return
 	}
 	http.Redirect(w, r, fmt.Sprintf("https://%s/logs/%d?sig=signed", f.LogHost, id), http.StatusFound)
+}
+
+// rerunRoute serves the re-run calls: GitHub's job read (its workflow run)
+// and the re-run of a run's failed jobs, and GitLab's job retry. It reports
+// whether rest was one of them.
+func (f *Forge) rerunRoute(w http.ResponseWriter, r *http.Request, rest string, checks []Check) bool {
+	var id int64
+	switch {
+	case f.Kind == "github" && r.Method == http.MethodGet && scan(rest, "/actions/jobs/%d", &id):
+		i := int(id - 5000)
+		if i < 0 || i >= len(checks) {
+			http.NotFound(w, r)
+			return true
+		}
+		run := checks[i].Run
+		if run == 0 {
+			run = 1
+		}
+		json.NewEncoder(w).Encode(map[string]any{"id": id, "run_id": run, "name": checks[i].Name})
+	case f.Kind == "github" && r.Method == http.MethodPost && scan(rest, "/actions/runs/%d/rerun-failed-jobs", &id):
+		f.Reruns = append(f.Reruns, fmt.Sprintf("run %d", id))
+		w.WriteHeader(http.StatusCreated)
+	case f.Kind == "gitlab" && r.Method == http.MethodPost && scan(rest, "/jobs/%d/retry", &id):
+		i := int(id - 5000)
+		if i < 0 || i >= len(checks) {
+			http.NotFound(w, r)
+			return true
+		}
+		f.Reruns = append(f.Reruns, fmt.Sprintf("job %d", id))
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{"id": id + 1000, "name": checks[i].Name, "status": "pending"})
+	default:
+		return false
+	}
+	return true
+}
+
+// scan reports whether s is exactly format with one number, stored in id.
+func scan(s, format string, id *int64) bool {
+	_, err := fmt.Sscanf(s, format, id)
+	return err == nil && s == fmt.Sprintf(format, *id)
 }
 
 // serveLog is the host GitHub's job logs redirect to: it serves a log to a

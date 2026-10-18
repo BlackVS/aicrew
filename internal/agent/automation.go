@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -139,7 +141,20 @@ type automationCall struct {
 	Args  []string `json:"args,omitempty"`
 	Kind  string   `json:"kind,omitempty"`
 	Text  string   `json:"text,omitempty"`
+	// label's lists, and submit's result reference.
+	Add    []string `json:"add,omitempty"`
+	Remove []string `json:"remove,omitempty"`
+	URL    string   `json:"url,omitempty"`
 }
+
+// The kinds of the steps the launcher records for a script's transitions
+// (increment 2d-c), beside the script's own.
+const (
+	stepHostLabel  = "host_label"
+	stepHostReady  = "host_ready"
+	stepHostSubmit = "host_submit"
+	stepHostRerun  = "host_rerun"
+)
 
 // liveRun is a run the launcher serves host calls for.
 type liveRun struct {
@@ -161,6 +176,10 @@ type liveRun struct {
 type AutomationForge interface {
 	GetPullContent(ctx context.Context, host string, k forge.Kind, token, path string, n int64) (forge.Pull, forge.PullContent, error)
 	CommentPull(ctx context.Context, host string, k forge.Kind, token, path string, n int64, body string) (forge.Comment, error)
+	AddLabels(ctx context.Context, host string, k forge.Kind, token, path string, n int64, labels []string) error
+	RemoveLabels(ctx context.Context, host string, k forge.Kind, token, path string, n int64, labels []string) error
+	ReadyPull(ctx context.Context, host string, k forge.Kind, token, path string, n int64) (forge.Pull, error)
+	RerunFailed(ctx context.Context, host string, k forge.Kind, token, path string, checks []forge.Check) ([]string, error)
 }
 
 // newAutomationForge is the forge a script's host uses; tests replace it.
@@ -476,8 +495,29 @@ func (s *StepServer) serveAutomation(call StepCall) StepAnswer {
 			return s.hostErr(err)
 		}
 		return done(struct{}{})
+	case "label":
+		if err := s.hostLabel(ctx, run, in.Add, in.Remove); err != nil {
+			return s.hostErr(err)
+		}
+		return done(struct{}{})
+	case "ready":
+		if err := s.hostReady(ctx, run); err != nil {
+			return s.hostErr(err)
+		}
+		return done(struct{}{})
+	case "submit":
+		if err := s.hostSubmit(ctx, run, in.URL); err != nil {
+			return s.hostErr(err)
+		}
+		return done(struct{}{})
+	case "rerun":
+		res, err := s.hostRerun(ctx, run)
+		if err != nil {
+			return s.hostErr(err)
+		}
+		return done(res)
 	}
-	return refuse("invalid_request", "Unknown host call "+in.Call+".", "Use pr, attempt, run, step or comment.")
+	return refuse("invalid_request", "Unknown host call "+in.Call+".", "Use pr, attempt, run, step, comment, label, ready, submit or rerun.")
 }
 
 // hostRedactor removes the home's forge tokens and the known token shapes
@@ -510,7 +550,7 @@ func redactPR(r func(string) string, p automation.PR) automation.PR {
 		}
 		return out
 	}
-	p.Head, p.Base, p.Branch, p.Labels = r(p.Head), r(p.Base), r(p.Branch), list(p.Labels)
+	p.URL, p.Head, p.Base, p.Branch, p.Labels = r(p.URL), r(p.Head), r(p.Base), r(p.Branch), list(p.Labels)
 	reviews := make([]automation.Review, 0, len(p.Reviews))
 	for _, rv := range p.Reviews {
 		reviews = append(reviews, automation.Review{Reviewer: r(rv.Reviewer), Head: r(rv.Head), Verdict: r(rv.Verdict),
@@ -518,7 +558,7 @@ func redactPR(r func(string) string, p automation.PR) automation.PR {
 	}
 	checks := make([]automation.Check, 0, len(p.Checks))
 	for _, c := range p.Checks {
-		checks = append(checks, automation.Check{Name: r(c.Name), Conclusion: r(c.Conclusion), Excerpt: r(c.Excerpt)})
+		checks = append(checks, automation.Check{Name: r(c.Name), Conclusion: r(c.Conclusion), Excerpt: r(c.Excerpt), RunnerFailure: c.RunnerFailure})
 	}
 	p.Reviews, p.Checks = reviews, checks
 	return p
@@ -554,7 +594,7 @@ func (s *StepServer) hostPR(ctx context.Context, run *liveRun) (automation.PR, e
 	if err != nil {
 		return automation.PR{}, fmt.Errorf("read pull request %d of %s on %s: %w", run.pull, t.path, t.host, err)
 	}
-	out := automation.PR{Number: p.Number, Head: p.HeadCommit, Base: p.Base, Branch: p.Head, Draft: p.Draft,
+	out := automation.PR{Number: p.Number, URL: p.URL, Head: p.HeadCommit, Base: p.Base, Branch: p.Head, Draft: p.Draft,
 		Mergeable: p.Mergeable, Labels: p.Labels, Behind: behindBase(ctx, run.worktree, p.Base, p.HeadCommit)}
 	// The newest review of each reviewer, at any head: a script compares
 	// its head with the pull request's.
@@ -569,13 +609,179 @@ func (s *StepServer) hostPR(ctx context.Context, run *liveRun) (automation.PR, e
 			Verdict: cm.Review.Verdict, Findings: reviewFindings(cm.Body), Body: cm.Body})
 	}
 	for _, ch := range c.Checks {
-		k := automation.Check{Name: ch.Name, Conclusion: ch.State}
+		k := automation.Check{Name: ch.Name, Conclusion: ch.State, RunnerFailure: ch.RunnerFailure}
 		if ch.Log != nil {
 			k.Excerpt = ch.Log.Excerpt
 		}
 		out.Checks = append(out.Checks, k)
 	}
 	return out, nil
+}
+
+// hostLabel is label(add, remove): the labels removed, then added, on the
+// attempt's pull request with the home's credential, each checked again
+// whatever the child checked, and recorded as a step.
+func (s *StepServer) hostLabel(ctx context.Context, run *liveRun, add, remove []string) error {
+	if len(add) > automation.MaxLabels || len(remove) > automation.MaxLabels || len(add)+len(remove) == 0 {
+		return fmt.Errorf("label names 1 to %d labels to add and to remove", automation.MaxLabels)
+	}
+	for _, l := range slices.Concat(remove, add) {
+		if !automation.LabelName(l) {
+			return fmt.Errorf("%q is not a label name", l)
+		}
+	}
+	t, err := s.runTarget(ctx, run)
+	if err != nil {
+		return err
+	}
+	if t.holds(slices.Concat(remove, add)...) {
+		return errHoldsToken
+	}
+	f := newAutomationForge()
+	if len(remove) > 0 {
+		if err := f.RemoveLabels(ctx, t.host, t.kind(), t.token, t.path, run.pull, remove); err != nil {
+			return fmt.Errorf("remove %s from pull request %d of %s on %s: %w", strings.Join(remove, ", "), run.pull, t.path, t.host, err)
+		}
+	}
+	if len(add) > 0 {
+		if err := f.AddLabels(ctx, t.host, t.kind(), t.token, t.path, run.pull, add); err != nil {
+			return fmt.Errorf("add %s to pull request %d of %s on %s: %w", strings.Join(add, ", "), run.pull, t.path, t.host, err)
+		}
+	}
+	var what []string
+	if len(remove) > 0 {
+		what = append(what, "removed "+strings.Join(remove, ", "))
+	}
+	if len(add) > 0 {
+		what = append(what, "added "+strings.Join(add, ", "))
+	}
+	return s.recordStep(run, stepHostLabel, strings.Join(what, "; "))
+}
+
+// hostReady is ready(): the attempt's pull request leaves its draft state
+// and loses its draft prefix, with the home's credential.
+func (s *StepServer) hostReady(ctx context.Context, run *liveRun) error {
+	t, err := s.runTarget(ctx, run)
+	if err != nil {
+		return err
+	}
+	p, err := newAutomationForge().ReadyPull(ctx, t.host, t.kind(), t.token, t.path, run.pull)
+	if err != nil {
+		return fmt.Errorf("mark pull request %d of %s on %s ready: %w", run.pull, t.path, t.host, err)
+	}
+	return s.recordStep(run, stepHostReady, fmt.Sprintf("pull request %d is ready: %s", p.Number, p.Title))
+}
+
+// hostSubmit is submit(url): the attempt's result submitted as the holder's
+// own work step would, with url as the result reference, after the
+// before-submit point ran (dispatch.go). The run already holds the points'
+// run lock, so the point fires without taking it. A run at the
+// before-submit point itself is refused: the step that runs it submits.
+func (s *StepServer) hostSubmit(ctx context.Context, run *liveRun, u string) error {
+	if !automation.ResultURL(u) {
+		return errors.New("the result reference is not an http(s) URL on one line")
+	}
+	if run.point == automation.PointBeforeSubmit {
+		return errors.New("a run at before-submit cannot submit: the step that runs it does")
+	}
+	st, err := s.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("read the session status: %w", err)
+	}
+	if st.Attempt == nil || st.Attempt.ID != run.attempt {
+		return fmt.Errorf("the attempt %s is no longer the member's open attempt", run.attempt)
+	}
+	if t, err := s.runTarget(ctx, run); err == nil && t.holds(u) {
+		return errHoldsToken
+	}
+	s.fireBeforeSubmit(ctx, run.attempt)
+	body, _ := json.Marshal(map[string]string{"intent": "submit", "detail": u})
+	res, err := s.driver.Run(ctx, StepRequest{Path: attemptsPath + "/" + url.PathEscape(run.attempt) + "/work", Body: body,
+		TaskID: st.Attempt.Task.TaskID})
+	if err != nil {
+		return fmt.Errorf("the submit step: %w", err)
+	}
+	if !res.Settled || res.Outcome == "committed" {
+		s.steps.Add(1)
+	}
+	if !res.Settled {
+		return errors.New("the submit step is pending; `aicrew-agent step recover` finishes it")
+	}
+	if res.Outcome != "committed" {
+		return fmt.Errorf("the submit step did not commit: %s", res.Outcome)
+	}
+	return s.recordStep(run, stepHostSubmit, "the result "+u+" is submitted")
+}
+
+// hostRerun is rerun(): the failed jobs of the pull request's head re-run
+// once per head, with the home's credential. The head is claimed in the
+// points' state before the forge is asked, so a second call at the head,
+// in this run or a later one, re-runs nothing; a forge without a re-run
+// call, or a head with no failed job it names, re-runs nothing and leaves
+// the head unclaimed.
+func (s *StepServer) hostRerun(ctx context.Context, run *liveRun) (automation.RerunResult, error) {
+	t, err := s.runTarget(ctx, run)
+	if err != nil {
+		return automation.RerunResult{}, err
+	}
+	f := newAutomationForge()
+	p, c, err := f.GetPullContent(ctx, t.host, t.kind(), t.token, t.path, run.pull)
+	if err != nil {
+		return automation.RerunResult{}, fmt.Errorf("read pull request %d of %s on %s: %w", run.pull, t.path, t.host, err)
+	}
+	jobs := 0
+	for _, ch := range c.Checks {
+		if ch.State == forge.ChecksFailure && ch.JobID != 0 {
+			jobs++
+		}
+	}
+	if jobs == 0 || p.HeadCommit == "" {
+		return s.rerunResult(run, automation.RerunResult{Reason: "no failed job at the head that the forge can re-run"})
+	}
+	key := pullKey(t.host, t.path, run.pull)
+	claim := func(head string) (prev string, claimed bool, err error) {
+		s.points.mu.Lock()
+		defer s.points.mu.Unlock()
+		doc := readPoints(s.home)
+		cur := doc.Pulls[key]
+		if cur == nil {
+			cur = &pullPoints{Attempt: run.attempt, Number: run.pull, URL: p.URL}
+			doc.Pulls[key] = cur
+		}
+		if cur.Rerun == head {
+			return cur.Rerun, false, nil
+		}
+		prev, cur.Rerun = cur.Rerun, head
+		return prev, true, writePoints(s.home, doc, key)
+	}
+	prev, claimed, err := claim(p.HeadCommit)
+	if !claimed {
+		return s.rerunResult(run, automation.RerunResult{Reason: "the failed jobs were re-run at this head already"})
+	}
+	if err != nil {
+		return automation.RerunResult{}, fmt.Errorf("record the re-run: %w", err)
+	}
+	names, err := f.RerunFailed(ctx, t.host, t.kind(), t.token, t.path, c.Checks)
+	if errors.Is(err, forge.ErrNoRerun) {
+		// Nothing was re-run: the head is given back.
+		if _, _, werr := claim(prev); werr != nil {
+			s.log.Warn("automations: the re-run's state was not written", "error", werr.Error())
+		}
+		return s.rerunResult(run, automation.RerunResult{Reason: err.Error()})
+	}
+	if err != nil {
+		return automation.RerunResult{}, fmt.Errorf("re-run the failed jobs of pull request %d of %s on %s: %w", run.pull, t.path, t.host, err)
+	}
+	return s.rerunResult(run, automation.RerunResult{Reran: true, Jobs: names})
+}
+
+// rerunResult records res as a step and returns it.
+func (s *StepServer) rerunResult(run *liveRun, res automation.RerunResult) (automation.RerunResult, error) {
+	text := "re-ran nothing: " + res.Reason
+	if res.Reran {
+		text = "re-ran " + strings.Join(res.Jobs, ", ")
+	}
+	return res, s.recordStep(run, stepHostRerun, text)
 }
 
 // findingLine is a review's finding: a list item that opens with its
@@ -809,4 +1015,21 @@ func (h *socketHost) Step(ctx context.Context, kind, text string) error {
 
 func (h *socketHost) Comment(ctx context.Context, body string) error {
 	return h.call(ctx, automationCall{Call: "comment", Text: body}, nil)
+}
+
+func (h *socketHost) Label(ctx context.Context, add, remove []string) error {
+	return h.call(ctx, automationCall{Call: "label", Add: add, Remove: remove}, nil)
+}
+
+func (h *socketHost) Ready(ctx context.Context) error {
+	return h.call(ctx, automationCall{Call: "ready"}, nil)
+}
+
+func (h *socketHost) Submit(ctx context.Context, u string) error {
+	return h.call(ctx, automationCall{Call: "submit", URL: u}, nil)
+}
+
+func (h *socketHost) Rerun(ctx context.Context) (automation.RerunResult, error) {
+	var r automation.RerunResult
+	return r, h.call(ctx, automationCall{Call: "rerun"}, &r)
 }

@@ -798,10 +798,21 @@ nothing more.
   clock or environment, and every global is frozen after the script
   loads.
 - **The host API:** `pr()`, `attempt()`, `run(cmd, args)`,
-  `step(kind, text)`, `comment(body)`, and `turn(kind, content)` as a
-  value `main(event)` returns. Any other name fails the script at load.
-  The results are bounded: a review's body and a comment at 16 KiB, a
-  failed job's excerpt at 8 KiB, a command's output at 64 KiB.
+  `step(kind, text)`, `comment(body)`, the transitions of 4.2 (increment
+  2d-c) `label(add=[...], remove=[...])`, `ready()`, `submit(url)` and
+  `rerun()`, and `turn(kind, content)` as a value `main(event)` returns.
+  Any other name fails the script at load, which is how a script written
+  for a newer release fails on an older one: the host API version stays
+  1, since the additions break no script. The results are bounded: a
+  review's body and a comment at 16 KiB, a failed job's excerpt at 8 KiB,
+  a command's output at 64 KiB, a `label()` call at 8 names of 64 bytes,
+  a `submit()` reference at 1 KiB. `pr()` names the pull request's `url`,
+  and each check's `runner_failure`: the forge's own word says the runner
+  failed, not the change (`forge.RunnerFailure`: GitHub's `cancelled`,
+  `timed_out`, `startup_failure` and `stale`; GitLab's
+  `runner_system_failure`, `stuck_or_timeout_failure` and
+  `scheduler_failure`; Gitea's `cancelled`, which its commit statuses do
+  not carry, a cancelled run reading as a failure there).
 - **Text, not bytes:** every host result is a Starlark string. A
   command's output is its standard output and standard error together;
   each run of bytes that is not UTF-8 becomes one U+FFFD, and the text is
@@ -844,7 +855,26 @@ run`, since the interpreter has no memory limit of its own:
   attempt's worktree with the client's environment, after the launcher
   checks the allow list again; `step()` and the run's outcome go to
   `logs/automations.jsonl`, redacted; `comment()` posts on the attempt's
-  pull request.
+  pull request. The transitions act with the home's credential too, and
+  each is recorded as a step of the run (`host_label`, `host_ready`,
+  `host_submit`, `host_rerun`): `label()` removes, then adds, labels the
+  repository defines; `ready()` lifts the draft and its prefix
+  (`forge.ReadyPull`); `submit(url)` runs the before-submit point and
+  then sends the holder's own work step with `url` as the result
+  reference, so the attempt is submitted as the member would submit it
+  (a run at `before-submit` itself cannot: the step that runs it
+  submits); `rerun()` re-runs the failed jobs at the head once per head,
+  the head claimed in `state/points.json` before the forge is asked, so a
+  second call at the head, in the same run or a later one, re-runs
+  nothing and says so. The forge's call is `forge.RerunFailed`: GitHub
+  re-runs the failed jobs of each workflow run a failed job belongs to
+  (the credential needs write access to Actions; without it the forge
+  refuses and the script fails), GitLab retries each failed job, and
+  Gitea offers none through its
+  commit statuses (its Actions API gained a job re-run only in Gitea
+  1.26, and a commit status names no job), so there `rerun()` re-runs
+  nothing, leaves the head unclaimed and the CI failure reaches the
+  worker as today.
 - **A failed run** (`fail()`, a limit, a refused command, a host error,
   the process ending) is a result and an `automation_failed` step. The
   launcher never retries it.

@@ -41,6 +41,12 @@ const (
 	MaxText = 16 << 10
 	// MaxExcerpt bounds a failed check's log excerpt in pr().
 	MaxExcerpt = 8 << 10
+	// MaxLabels bounds the labels one label() call adds or removes, and
+	// MaxLabel each label's length.
+	MaxLabels = 8
+	MaxLabel  = 64
+	// MaxURL bounds the result reference submit() names.
+	MaxURL = 1 << 10
 	// maxSource bounds a script.
 	maxSource = 256 << 10
 )
@@ -48,6 +54,7 @@ const (
 // PR is the pull request as the host's facts hold it (4.1).
 type PR struct {
 	Number    int64
+	URL       string
 	Head      string
 	Base      string
 	Branch    string
@@ -69,11 +76,15 @@ type Review struct {
 	Body     string
 }
 
-// Check is a check at the head, with a failed job's log excerpt.
+// Check is a check at the head, with a failed job's log excerpt, and
+// whether its failure is the runner's rather than the change's (the forge's
+// own word, forge.RunnerFailure), so a script decides on a re-run without
+// a list of each forge's words.
 type Check struct {
-	Name       string
-	Conclusion string
-	Excerpt    string
+	Name          string
+	Conclusion    string
+	Excerpt       string
+	RunnerFailure bool
 }
 
 // Attempt is the attempt's state.
@@ -97,6 +108,15 @@ type RunResult struct {
 	Output string
 }
 
+// RerunResult is what rerun() did: the failed jobs it re-ran, by name, or
+// why it re-ran none (a second call at the head, a forge with no re-run
+// call, no failed job).
+type RerunResult struct {
+	Reran  bool
+	Jobs   []string
+	Reason string
+}
+
 // Host is what a script reaches the world through. The launcher serves it
 // over the step socket (increment 2b); tests use a fake.
 type Host interface {
@@ -107,6 +127,17 @@ type Host interface {
 	Run(ctx context.Context, cmd string, args []string) (RunResult, error)
 	Step(ctx context.Context, kind, text string) error
 	Comment(ctx context.Context, body string) error
+	// The pull request's transitions of 4.2 (increment 2d-c), each with
+	// the member's forge credential, which the script never holds.
+	// Label removes, then adds, labels on the pull request. Ready drops
+	// its draft state and prefix. Submit sends the attempt's result, the
+	// holder's work step with url as the result reference. Rerun re-runs
+	// the failed jobs at the head once; a second call at the head, and a
+	// forge without a re-run call, re-run nothing and say so.
+	Label(ctx context.Context, add, remove []string) error
+	Ready(ctx context.Context) error
+	Submit(ctx context.Context, url string) error
+	Rerun(ctx context.Context) (RerunResult, error)
 }
 
 // Event is what a run covers: the kinds and the IDs of its events. At an
@@ -229,8 +260,10 @@ type runner struct {
 	allow AllowList
 }
 
-// predeclared is the host API of 10.3: exactly these names beside
-// Starlark's universe, which holds no file, network, clock or environment.
+// predeclared is the host API of 10.3 with the transitions of 4.2
+// (increment 2d-c): exactly these names beside Starlark's universe, which
+// holds no file, network, clock or environment. A script that names one
+// of them on a release without it fails at load with the name.
 func (r *runner) predeclared() starlark.StringDict {
 	return starlark.StringDict{
 		"pr":      starlark.NewBuiltin("pr", r.pr),
@@ -238,6 +271,10 @@ func (r *runner) predeclared() starlark.StringDict {
 		"run":     starlark.NewBuiltin("run", r.run),
 		"step":    starlark.NewBuiltin("step", r.step),
 		"comment": starlark.NewBuiltin("comment", r.comment),
+		"label":   starlark.NewBuiltin("label", r.label),
+		"ready":   starlark.NewBuiltin("ready", r.ready),
+		"submit":  starlark.NewBuiltin("submit", r.submit),
+		"rerun":   starlark.NewBuiltin("rerun", r.rerun),
 		"turn":    starlark.NewBuiltin("turn", turnBuiltin),
 	}
 }
@@ -265,13 +302,15 @@ func (r *runner) pr(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple
 	for _, c := range p.Checks {
 		excerpt, _ := Bound(c.Excerpt, MaxExcerpt)
 		checks = append(checks, frozenStruct(starlark.StringDict{
-			"name":       starlark.String(c.Name),
-			"conclusion": starlark.String(c.Conclusion),
-			"excerpt":    starlark.String(excerpt),
+			"name":           starlark.String(c.Name),
+			"conclusion":     starlark.String(c.Conclusion),
+			"excerpt":        starlark.String(excerpt),
+			"runner_failure": starlark.Bool(c.RunnerFailure),
 		}))
 	}
 	return frozenStruct(starlark.StringDict{
 		"number":    starlark.MakeInt64(p.Number),
+		"url":       starlark.String(p.URL),
 		"head":      starlark.String(p.Head),
 		"base":      starlark.String(p.Base),
 		"branch":    starlark.String(p.Branch),
@@ -359,6 +398,122 @@ func (r *runner) comment(_ *starlark.Thread, b *starlark.Builtin, args starlark.
 		return nil, fmt.Errorf("comment: %w", err)
 	}
 	return starlark.None, nil
+}
+
+// label(add=[...], remove=[...]): labels removed, then added, on the pull
+// request. Each list holds at most MaxLabels names of at most MaxLabel
+// bytes, on one line; at least one name in all.
+func (r *runner) label(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var addList, removeList *starlark.List
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "add?", &addList, "remove?", &removeList); err != nil {
+		return nil, err
+	}
+	add, err := labelNames("add", addList)
+	if err != nil {
+		return nil, err
+	}
+	remove, err := labelNames("remove", removeList)
+	if err != nil {
+		return nil, err
+	}
+	if len(add)+len(remove) == 0 {
+		return nil, errors.New("label: name a label to add or to remove")
+	}
+	if err := r.host.Label(r.ctx, add, remove); err != nil {
+		return nil, fmt.Errorf("label: %w", err)
+	}
+	return starlark.None, nil
+}
+
+// labelNames is the names in list, checked.
+func labelNames(what string, list *starlark.List) ([]string, error) {
+	if list == nil {
+		return nil, nil
+	}
+	if list.Len() > MaxLabels {
+		return nil, fmt.Errorf("label: %s names %d labels, more than %d", what, list.Len(), MaxLabels)
+	}
+	out := make([]string, 0, list.Len())
+	for i := range list.Len() {
+		s, ok := starlark.AsString(list.Index(i))
+		if !ok {
+			return nil, fmt.Errorf("label: %s[%d] is %s, not a string", what, i, list.Index(i).Type())
+		}
+		if !LabelName(s) {
+			return nil, fmt.Errorf("label: %q is not a label name: 1 to %d bytes on one line", s, MaxLabel)
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// LabelName reports whether s can name a label: 1 to MaxLabel bytes of
+// valid UTF-8, none of them a control character.
+func LabelName(s string) bool {
+	if s == "" || len(s) > MaxLabel || !utf8.ValidString(s) || strings.TrimSpace(s) != s {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// ready(): the pull request leaves its draft state, its draft prefix
+// dropped.
+func (r *runner) ready(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs); err != nil {
+		return nil, err
+	}
+	if err := r.host.Ready(r.ctx); err != nil {
+		return nil, fmt.Errorf("ready: %w", err)
+	}
+	return starlark.None, nil
+}
+
+// submit(url): the attempt's result is submitted with url as its
+// reference, the pull request's URL as pr().url gives it.
+func (r *runner) submit(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var u string
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &u); err != nil {
+		return nil, err
+	}
+	if !ResultURL(u) {
+		return nil, fmt.Errorf("submit: %q is not a result reference: an http(s) URL of at most %d bytes", u, MaxURL)
+	}
+	if err := r.host.Submit(r.ctx, u); err != nil {
+		return nil, fmt.Errorf("submit: %w", err)
+	}
+	return starlark.None, nil
+}
+
+// ResultURL reports whether u can be a result reference: an http(s) URL on
+// one line, at most MaxURL bytes.
+func ResultURL(u string) bool {
+	if len(u) > MaxURL || !(strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "http://")) {
+		return false
+	}
+	return !strings.ContainsFunc(u, func(r rune) bool { return r <= 0x20 || r == 0x7f })
+}
+
+// rerun(): the failed jobs at the head are re-run, once per head. The
+// result says whether they were (reran), which (jobs), or why not
+// (reason).
+func (r *runner) rerun(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs); err != nil {
+		return nil, err
+	}
+	res, err := r.host.Rerun(r.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("rerun: %w", err)
+	}
+	return frozenStruct(starlark.StringDict{
+		"reran":  starlark.Bool(res.Reran),
+		"jobs":   stringList(res.Jobs),
+		"reason": starlark.String(res.Reason),
+	}), nil
 }
 
 // turnBuiltin is turn(kind, content): a value, with no side effect.

@@ -1448,8 +1448,9 @@ with `no_attempt`. The event is `automation.run`; a failed run wakes the
 team's coordinators, a turn the worker, a handled run no one ("Event
 delivery"). A script's `submit(url)` (increment 2d-c) is the holder's own
 work step, `{intent: submit, detail: url}`, sent by the launcher with the
-member's session token after the `before-submit` point ran, so aicrewd
-sees no difference from a submit the member's turn sends; `label()`,
+member's session token once the script ended without failing and after
+the `before-submit` point ran, so aicrewd sees no difference from a
+submit the member's turn sends; `label()`,
 `ready()` and `rerun()` act on the forge with the member's credential,
 and `state/points.json` remembers the head whose failed jobs were
 re-run, once per head. A declared command at `after-push` that exits nonzero is not a

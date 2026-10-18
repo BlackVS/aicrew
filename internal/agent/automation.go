@@ -166,9 +166,12 @@ type liveRun struct {
 	point    string
 	worktree string
 	allow    automation.AllowList
-	// steps are the steps recorded so far, bounded, for the run's report.
+	// steps are the steps recorded so far, bounded, for the run's report;
+	// submit is the result reference submit() asked for, sent once the
+	// script ends without failing (submitResult).
 	stepsMu sync.Mutex
 	steps   []automationStep
+	submit  string
 }
 
 // AutomationForge is what a script's host asks of the forge;
@@ -294,6 +297,17 @@ func (s *StepServer) RunAutomation(ctx context.Context, r AutomationRun) (Automa
 		res.Failed = "the run was stopped: " + runCtx.Err().Error()
 	default:
 		res.Failed = "the script's process ended without an answer: " + processEnd(waitErr, errb.b.String())
+	}
+	run.stepsMu.Lock()
+	submit := run.submit
+	run.stepsMu.Unlock()
+	if submit != "" && res.Failed == "" {
+		// The submit the script asked for, after it ended: the before-submit
+		// point and the work step take their own time, outside the script's
+		// wall clock, and a submit that fails fails the run.
+		if err := s.submitResult(ctx, run, submit); err != nil {
+			res.Failed = "the submit of " + submit + ": " + err.Error()
+		}
 	}
 	if res.Failed != "" {
 		res.Failed = redactTurnText(s.home, res.Failed)
@@ -672,11 +686,12 @@ func (s *StepServer) hostReady(ctx context.Context, run *liveRun) error {
 	return s.recordStep(run, stepHostReady, fmt.Sprintf("pull request %d is ready: %s", p.Number, p.Title))
 }
 
-// hostSubmit is submit(url): the attempt's result submitted as the holder's
-// own work step would, with url as the result reference, after the
-// before-submit point ran (dispatch.go). The run already holds the points'
-// run lock, so the point fires without taking it. A run at the
-// before-submit point itself is refused: the step that runs it submits.
+// hostSubmit is submit(url): the attempt's result is to be submitted with
+// url as the result reference. The call checks and keeps the request; the
+// submit itself is sent by submitResult once the script ended without
+// failing, since the before-submit point and the work step take their own
+// time, outside the script's wall clock. A run at the before-submit point
+// itself is refused: the step that runs it submits.
 func (s *StepServer) hostSubmit(ctx context.Context, run *liveRun, u string) error {
 	if !automation.ResultURL(u) {
 		return errors.New("the result reference is not an http(s) URL on one line")
@@ -693,6 +708,25 @@ func (s *StepServer) hostSubmit(ctx context.Context, run *liveRun, u string) err
 	}
 	if t, err := s.runTarget(ctx, run); err == nil && t.holds(u) {
 		return errHoldsToken
+	}
+	run.stepsMu.Lock()
+	run.submit = u
+	run.stepsMu.Unlock()
+	return nil
+}
+
+// submitResult sends the submit a script asked for: the before-submit point
+// first (dispatch.go; the run's caller holds the points' run lock, so the
+// point fires without taking it), then the holder's own work step with u
+// as the result reference, so aicrewd sees the submit the member would
+// send. A committed step is recorded as a step of the run.
+func (s *StepServer) submitResult(ctx context.Context, run *liveRun, u string) error {
+	st, err := s.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("read the session status: %w", err)
+	}
+	if st.Attempt == nil || st.Attempt.ID != run.attempt {
+		return fmt.Errorf("the attempt %s is no longer the member's open attempt", run.attempt)
 	}
 	s.fireBeforeSubmit(ctx, run.attempt)
 	body, _ := json.Marshal(map[string]string{"intent": "submit", "detail": u})

@@ -466,9 +466,10 @@ def main(event):
 // process with the home's credential (increment 2d-c): label() removes
 // and adds, ready() lifts the draft, rerun() re-runs the failed jobs the
 // forge names once per head and says so the second time, in this run and
-// a later one, and submit() sends the holder's work step after the
-// before-submit point, so the attempt is submitted. Each is a recorded
-// step. A run at the before-submit point cannot submit.
+// a later one, and submit() has the holder's work step sent once the
+// script ended, after the before-submit point, so the attempt is
+// submitted. Each is a recorded step. A run at the before-submit point
+// cannot submit, and a script that fails after submit() submits nothing.
 func TestAutomationTransitions(t *testing.T) {
 	a := setupAutomation(t)
 	a.forge.pull.Title = "WIP: the change"
@@ -547,5 +548,24 @@ def main(event):
 	res = a.run(t, "def main(event):\n    submit(\"pull 7\")\n", AutomationRun{})
 	if !strings.Contains(res.Failed, "not a result reference") {
 		t.Errorf("submit of a non-URL: %+v", res)
+	}
+}
+
+// A script that fails after submit() submits nothing: the submit is sent
+// once the script ended without failing, so the attempt stays working.
+func TestAutomationSubmitNeedsAHandledRun(t *testing.T) {
+	a := setupAutomation(t)
+	res := a.run(t, "def main(event):\n    submit(pr().url)\n    fail(\"changed my mind\")\n", AutomationRun{})
+	if !strings.Contains(res.Failed, "changed my mind") {
+		t.Fatalf("the run: %+v", res)
+	}
+	st, err := a.srv.Status(context.Background())
+	if err != nil || st.Attempt == nil || st.Attempt.Phase != "working" {
+		t.Fatalf("after a failed script: %+v %v", st.Attempt, err)
+	}
+	for _, r := range a.records(t, res.RunID) {
+		if r.Kind == stepHostSubmit {
+			t.Errorf("a submit was recorded: %+v", r)
+		}
 	}
 }

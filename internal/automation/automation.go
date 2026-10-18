@@ -130,10 +130,11 @@ type Host interface {
 	// The pull request's transitions of 4.2 (increment 2d-c), each with
 	// the member's forge credential, which the script never holds.
 	// Label removes, then adds, labels on the pull request. Ready drops
-	// its draft state and prefix. Submit sends the attempt's result, the
-	// holder's work step with url as the result reference. Rerun re-runs
-	// the failed jobs at the head once; a second call at the head, and a
-	// forge without a re-run call, re-run nothing and say so.
+	// its draft state and prefix. Submit asks for the attempt's result to
+	// be submitted, the holder's work step with url as the result
+	// reference, once the script ends without failing. Rerun re-runs the
+	// failed jobs at the head once; a second call at the head, and a forge
+	// without a re-run call, re-run nothing and say so.
 	Label(ctx context.Context, add, remove []string) error
 	Ready(ctx context.Context) error
 	Submit(ctx context.Context, url string) error
@@ -474,7 +475,8 @@ func (r *runner) ready(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tu
 }
 
 // submit(url): the attempt's result is submitted with url as its
-// reference, the pull request's URL as pr().url gives it.
+// reference, the pull request's URL as pr().url gives it, once main
+// returns without failing.
 func (r *runner) submit(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var u string
 	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &u); err != nil {

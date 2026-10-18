@@ -859,11 +859,14 @@ run`, since the interpreter has no memory limit of its own:
   each is recorded as a step of the run (`host_label`, `host_ready`,
   `host_submit`, `host_rerun`): `label()` removes, then adds, labels the
   repository defines; `ready()` lifts the draft and its prefix
-  (`forge.ReadyPull`); `submit(url)` runs the before-submit point and
-  then sends the holder's own work step with `url` as the result
-  reference, so the attempt is submitted as the member would submit it
-  (a run at `before-submit` itself cannot: the step that runs it
-  submits); `rerun()` re-runs the failed jobs at the head once per head,
+  (`forge.ReadyPull`); `submit(url)` asks for the submit, which the
+  launcher sends once the script ended without failing: the
+  before-submit point first, then the holder's own work step with `url`
+  as the result reference, so the attempt is submitted as the member
+  would submit it, outside the script's wall clock; a submit that fails
+  fails the run (a run at `before-submit` itself cannot submit: the step
+  that runs it does); `rerun()` re-runs the failed jobs at the head once
+  per head,
   the head claimed in `state/points.json` before the forge is asked, so a
   second call at the head, in the same run or a later one, re-runs
   nothing and says so. The forge's call is `forge.RerunFailed`: GitHub

@@ -1003,8 +1003,11 @@ the setting. The code it runs still has the member's OS-user access, as a
 worker turn's code does (`docs/DESIGN-TURNS.md` 9.1: a command runs under
 the member's own account; 5.3 for the host). Its
 output, bounded, and its exit status are recorded in
-`logs/automations.jsonl`. A refused command, one that did not start or one
-that passed its wall-clock limit is a failed run at every point, and so is
+`logs/automations.jsonl`. A command the launcher's own exit cut is no run
+of the command: nothing is recorded or reported, and the point fires again
+at the next launcher's observation (12.4). A refused command, one that did
+not start or one that passed its wall-clock limit is a failed run at every
+point, and so is
 a nonzero exit, except at `after-push`, where it is the check's verdict on
 the head (increment 2d-b, `docs/DESIGN-TURNS.md` 9.1 and 5): the run is
 handled, with its exit recorded, and the first check that failed (the

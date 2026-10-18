@@ -664,7 +664,10 @@ func (s *StepServer) recordProblem(rep automationReport) {
 // one step; a refused command, one that cannot start or one that passes
 // its wall-clock limit is a failed run, and so is a nonzero exit, except
 // at after-push, where it is the check's verdict on the head: the run is
-// handled, and the failure goes to the worker (firePoint).
+// handled, and the failure goes to the worker (firePoint). A command the
+// launcher's own exit cut is no run of the command: nothing is recorded,
+// runPoint reports nothing and firePoint keeps no edge, so the point
+// fires again at the next launcher's observation (12.4).
 func (s *StepServer) runCommand(ctx context.Context, rep *automationReport, cmdline []string) {
 	rep.RunID = newUUID()
 	run := &liveRun{id: rep.RunID, attempt: rep.AttemptID, script: rep.Name, point: rep.Point}
@@ -709,6 +712,10 @@ func (s *StepServer) runCommand(ctx context.Context, rep *automationReport, cmdl
 	cmd.Stdout, cmd.Stderr = &out, &out
 	cmd.WaitDelay = time.Second
 	err = cmd.Run()
+	if ctx.Err() != nil {
+		// The launcher is stopping and cut the command.
+		return
+	}
 	text, _ := automation.Bound(hostRedactor(s.home)(out.b.String()), automation.MaxRunOutput)
 	var exit *exec.ExitError
 	switch {

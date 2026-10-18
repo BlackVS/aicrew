@@ -41,6 +41,76 @@ type automationForge struct {
 	pull     forge.Pull
 	content  forge.PullContent
 	comments []string
+	// labels is the label calls in order (+name added, -name removed);
+	// ready counts the ReadyPull calls; reruns is each RerunFailed call's
+	// failed jobs with an ID; noRerun makes RerunFailed answer ErrNoRerun.
+	labels  []string
+	ready   int
+	reruns  [][]string
+	noRerun bool
+}
+
+func (f *automationForge) ours(host string, token, path string, n int64) bool {
+	return token == f.token && host == "git.example.test" && path == "crew/project-t" && n == f.pull.Number
+}
+
+func (f *automationForge) AddLabels(_ context.Context, host string, _ forge.Kind, token, path string, n int64, labels []string) error {
+	if !f.ours(host, token, path, n) {
+		return forge.ErrNotFound
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, l := range labels {
+		f.labels = append(f.labels, "+"+l)
+		if !slices.Contains(f.pull.Labels, l) {
+			f.pull.Labels = append(f.pull.Labels, l)
+		}
+	}
+	return nil
+}
+
+func (f *automationForge) RemoveLabels(_ context.Context, host string, _ forge.Kind, token, path string, n int64, labels []string) error {
+	if !f.ours(host, token, path, n) {
+		return forge.ErrNotFound
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, l := range labels {
+		f.labels = append(f.labels, "-"+l)
+		f.pull.Labels = slices.DeleteFunc(f.pull.Labels, func(x string) bool { return x == l })
+	}
+	return nil
+}
+
+func (f *automationForge) ReadyPull(_ context.Context, host string, _ forge.Kind, token, path string, n int64) (forge.Pull, error) {
+	if !f.ours(host, token, path, n) {
+		return forge.Pull{}, forge.ErrNotFound
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ready++
+	f.pull.Draft = false
+	f.pull.Title = strings.TrimPrefix(f.pull.Title, "WIP: ")
+	return f.pull, nil
+}
+
+func (f *automationForge) RerunFailed(_ context.Context, host string, _ forge.Kind, token, path string, checks []forge.Check) ([]string, error) {
+	if !f.ours(host, token, path, f.pull.Number) {
+		return nil, forge.ErrNotFound
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var names []string
+	for _, ch := range checks {
+		if ch.State == forge.ChecksFailure && ch.JobID != 0 {
+			names = append(names, ch.Name)
+		}
+	}
+	f.reruns = append(f.reruns, names)
+	if f.noRerun || len(names) == 0 {
+		return nil, forge.ErrNoRerun
+	}
+	return names, nil
 }
 
 func (f *automationForge) GetPullContent(_ context.Context, host string, k forge.Kind, token, path string, n int64) (forge.Pull, forge.PullContent, error) {
@@ -99,8 +169,8 @@ func setupAutomation(t *testing.T) *automationEnv {
 	git(t, wt, "reset", "-q", "--hard", head)
 
 	f := &automationForge{token: automationForgeToken,
-		pull: forge.Pull{Number: 7, State: forge.PullOpen, Draft: true, Head: "work/task-1", HeadCommit: head, Base: "main",
-			Labels: []string{"review-this"}, Mergeable: true},
+		pull: forge.Pull{Number: 7, URL: "https://git.example.test/crew/project-t/pulls/7", State: forge.PullOpen, Draft: true,
+			Head: "work/task-1", HeadCommit: head, Base: "main", Labels: []string{"review-this"}, Mergeable: true},
 		content: forge.PullContent{
 			Checks: []forge.Check{{Name: "go-test", State: forge.ChecksFailure, Log: &forge.JobLog{Excerpt: "FAIL TestX"}},
 				{Name: "lint", State: forge.ChecksSuccess}},
@@ -300,6 +370,16 @@ func TestAutomationRefusedRun(t *testing.T) {
 		ans.Error.Code != "no_run" {
 		t.Errorf("a call without a live run's token: %+v", ans)
 	}
+	for _, c := range []automationCall{{Call: "label", Add: []string{"review-this"}}, {Call: "ready"},
+		{Call: "submit", URL: "https://git.example.test/crew/project-t/pulls/7"}, {Call: "rerun"}} {
+		if ans := call("token-y", c); ans.OK || ans.Error.Code != "no_run" {
+			t.Errorf("%s without a live run's token: %+v", c.Call, ans)
+		}
+	}
+	if ans := call("token-x", automationCall{Call: "label", Add: []string{"leaks " + automationForgeToken}}); ans.OK ||
+		len(a.forge.labels) != 0 || strings.Contains(ans.Error.Message, automationForgeToken) {
+		t.Errorf("a label holding the forge token: %+v %q", ans, a.forge.labels)
+	}
 	if ans := call("token-x", automationCall{Call: "comment", Text: "leaks " + automationForgeToken}); ans.OK ||
 		len(a.forge.comments) != 0 || strings.Contains(ans.Error.Message, automationForgeToken) {
 		t.Errorf("a comment holding the forge token: %+v %q", ans, a.forge.comments)
@@ -379,5 +459,147 @@ def main(event):
 `, automationForgeToken, redacted)
 	if res := a.run(t, src, AutomationRun{}); res.Failed != "" {
 		t.Fatalf("the run: %+v", res)
+	}
+}
+
+// The transitions of 4.2 reach the forge and aicrewd from the script's
+// process with the home's credential (increment 2d-c): label() removes
+// and adds, ready() lifts the draft, rerun() re-runs the failed jobs the
+// forge names once per head and says so the second time, in this run and
+// a later one, and submit() has the holder's work step sent once the
+// script ended, after the before-submit point, so the attempt is
+// submitted. Each is a recorded step. A run at the before-submit point
+// cannot submit, and a script that fails after submit() submits nothing.
+func TestAutomationTransitions(t *testing.T) {
+	a := setupAutomation(t)
+	a.forge.pull.Title = "WIP: the change"
+	a.forge.pull.Labels = []string{"hands-reviewed"}
+	a.forge.content.Checks = []forge.Check{{Name: "go-test", State: forge.ChecksFailure, JobID: 5001, RunnerFailure: true,
+		Log: &forge.JobLog{Excerpt: "lost"}}, {Name: "lint", State: forge.ChecksSuccess}}
+	src := `
+def main(event):
+    p = pr()
+    if not p.url.endswith("/pulls/7") or not p.draft or p.labels != ["hands-reviewed"]:
+        fail("pr: %s" % p)
+    if [c.runner_failure for c in p.checks] != [True, False]:
+        fail("runner failures: %s" % p.checks)
+    r = rerun()
+    if not r.reran or r.jobs != ["go-test"]:
+        fail("the first rerun: %s" % r)
+    r = rerun()
+    if r.reran or "already" not in r.reason:
+        fail("the second rerun: %s" % r)
+    label(add=["review-this"], remove=["hands-reviewed"])
+    ready()
+    p = pr()
+    if p.draft or p.labels != ["review-this"]:
+        fail("after the transitions: %s" % p)
+    submit(p.url)
+`
+	res := a.run(t, src, AutomationRun{Point: automation.PointGatesGreen})
+	if res.Failed != "" || res.Turn != nil {
+		t.Fatalf("the run: %+v\n%s", res, a.logs.String())
+	}
+	if !slices.Equal(a.forge.labels, []string{"-hands-reviewed", "+review-this"}) || a.forge.ready != 1 ||
+		a.forge.pull.Title != "the change" || len(a.forge.reruns) != 1 || !slices.Equal(a.forge.reruns[0], []string{"go-test"}) {
+		t.Errorf("the forge saw labels %v, ready %d, title %q, re-runs %v", a.forge.labels, a.forge.ready, a.forge.pull.Title, a.forge.reruns)
+	}
+	st, err := a.srv.Status(context.Background())
+	if err != nil || st.Attempt == nil || st.Attempt.Phase != "submitted" {
+		t.Fatalf("after submit(): %+v %v", st.Attempt, err)
+	}
+	var kinds []string
+	for _, r := range a.records(t, res.RunID) {
+		if r.Kind != "" {
+			kinds = append(kinds, r.Kind+": "+r.Text)
+		}
+	}
+	want := []string{stepHostRerun + ": re-ran go-test", stepHostRerun + ": re-ran nothing: the failed jobs were re-run at this head already",
+		stepHostLabel + ": removed hands-reviewed; added review-this", stepHostReady + ": pull request 7 is ready: the change",
+		stepHostSubmit + ": the result https://git.example.test/crew/project-t/pulls/7 is submitted"}
+	if !slices.Equal(kinds, want) {
+		t.Errorf("the steps:\n%s\nwant\n%s", strings.Join(kinds, "\n"), strings.Join(want, "\n"))
+	}
+	if p := readPoints(a.cfg.Home).Pulls[pullKey("git.example.test", "crew/project-t", 7)]; p == nil || !slices.Equal(p.Reruns, []string{a.head}) {
+		t.Errorf("the points keep the re-run: %+v", p)
+	}
+	// A later run at the head re-runs nothing either; a forge without a
+	// re-run call says so and the head stays unclaimed for one that has.
+	res = a.run(t, "def main(event):\n    r = rerun()\n    if r.reran or \"already\" not in r.reason:\n        fail(r)\n", AutomationRun{})
+	if res.Failed != "" || len(a.forge.reruns) != 1 {
+		t.Errorf("a later run: %+v, re-runs %v", res, a.forge.reruns)
+	}
+	a.forge.pull.HeadCommit, a.forge.noRerun = "0123456789abcdef0123456789abcdef01234567", true
+	res = a.run(t, "def main(event):\n    r = rerun()\n    if r.reran or \"no re-run\" not in r.reason:\n        fail(r)\n", AutomationRun{})
+	if res.Failed != "" || len(a.forge.reruns) != 2 {
+		t.Errorf("a forge without a re-run: %+v, re-runs %v", res, a.forge.reruns)
+	}
+	a.forge.noRerun = false
+	res = a.run(t, "def main(event):\n    r = rerun()\n    if not r.reran:\n        fail(r)\n", AutomationRun{})
+	if res.Failed != "" || len(a.forge.reruns) != 3 {
+		t.Errorf("the same head once the forge re-runs: %+v, re-runs %v", res, a.forge.reruns)
+	}
+	// The branch back at the first head, re-run there before the second:
+	// nothing is re-run and the forge is not asked; the points keep both.
+	a.forge.pull.HeadCommit = a.head
+	res = a.run(t, "def main(event):\n    r = rerun()\n    if r.reran or \"already\" not in r.reason:\n        fail(r)\n", AutomationRun{})
+	if res.Failed != "" || len(a.forge.reruns) != 3 {
+		t.Errorf("back at the first head: %+v, re-runs %v", res, a.forge.reruns)
+	}
+	if p := readPoints(a.cfg.Home).Pulls[pullKey("git.example.test", "crew/project-t", 7)]; p == nil || !slices.Equal(p.Reruns, []string{a.head, "0123456789abcdef0123456789abcdef01234567"}) {
+		t.Errorf("the points keep both heads: %+v", p)
+	}
+	// The heads are kept for as long as the pull request is, however many:
+	// with 64 more re-run heads seeded, a new head is claimed and the first
+	// head is still re-run nothing, without a forge call.
+	key := pullKey("git.example.test", "crew/project-t", 7)
+	doc := readPoints(a.cfg.Home)
+	for i := range 64 {
+		doc.Pulls[key].Reruns = append(doc.Pulls[key].Reruns, fmt.Sprintf("%040x", i+1))
+	}
+	if err := writePoints(a.cfg.Home, doc, key); err != nil {
+		t.Fatal(err)
+	}
+	a.forge.pull.HeadCommit = "fedcba9876543210fedcba9876543210fedcba98"
+	res = a.run(t, "def main(event):\n    r = rerun()\n    if not r.reran:\n        fail(r)\n", AutomationRun{})
+	if res.Failed != "" || len(a.forge.reruns) != 4 {
+		t.Errorf("the 67th head: %+v, re-runs %v", res, a.forge.reruns)
+	}
+	a.forge.pull.HeadCommit = a.head
+	res = a.run(t, "def main(event):\n    r = rerun()\n    if r.reran or \"already\" not in r.reason:\n        fail(r)\n", AutomationRun{})
+	if res.Failed != "" || len(a.forge.reruns) != 4 {
+		t.Errorf("the first head after 66 others: %+v, re-runs %v", res, a.forge.reruns)
+	}
+	if p := readPoints(a.cfg.Home).Pulls[key]; p == nil || len(p.Reruns) != 67 || p.Reruns[0] != a.head {
+		t.Errorf("the points keep every head: %d heads", len(p.Reruns))
+	}
+	// submit() at the before-submit point, and with a reference that is
+	// no URL, fails the script and sends nothing.
+	res = a.run(t, "def main(event):\n    submit(pr().url)\n", AutomationRun{Point: automation.PointBeforeSubmit})
+	if !strings.Contains(res.Failed, "cannot submit") {
+		t.Errorf("submit at before-submit: %+v", res)
+	}
+	res = a.run(t, "def main(event):\n    submit(\"pull 7\")\n", AutomationRun{})
+	if !strings.Contains(res.Failed, "not a result reference") {
+		t.Errorf("submit of a non-URL: %+v", res)
+	}
+}
+
+// A script that fails after submit() submits nothing: the submit is sent
+// once the script ended without failing, so the attempt stays working.
+func TestAutomationSubmitNeedsAHandledRun(t *testing.T) {
+	a := setupAutomation(t)
+	res := a.run(t, "def main(event):\n    submit(pr().url)\n    fail(\"changed my mind\")\n", AutomationRun{})
+	if !strings.Contains(res.Failed, "changed my mind") {
+		t.Fatalf("the run: %+v", res)
+	}
+	st, err := a.srv.Status(context.Background())
+	if err != nil || st.Attempt == nil || st.Attempt.Phase != "working" {
+		t.Fatalf("after a failed script: %+v %v", st.Attempt, err)
+	}
+	for _, r := range a.records(t, res.RunID) {
+		if r.Kind == stepHostSubmit {
+			t.Errorf("a submit was recorded: %+v", r)
+		}
 	}
 }

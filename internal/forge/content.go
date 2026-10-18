@@ -111,8 +111,13 @@ type Check struct {
 	URL        string `json:"url,omitempty"`
 	// Log is a failed check's log excerpt, or why there is none.
 	Log *JobLog `json:"log,omitempty"`
-	// jobID is the failed job whose log is still to be read.
-	jobID int64
+	// JobID is the failed job's ID on the forge: a GitHub Actions job or
+	// a GitLab job, which a log read and a re-run (RerunFailed) name; 0
+	// for a commit status and a check that is no such job.
+	JobID int64 `json:"job_id,omitempty"`
+	// RunnerFailure says the failure is the runner's, not the change's
+	// (RunnerFailure): the forge's conclusion or failure reason names it.
+	RunnerFailure bool `json:"runner_failure,omitempty"`
 }
 
 // JobLog is a failed job's log excerpt: at most MaxExcerpt bytes, from a
@@ -407,6 +412,7 @@ func (c *Client) commitChecks(ctx context.Context, host string, k Kind, token, p
 		ch := newCheck(s.Context, statusChecks(word), word, s.TargetURL)
 		if ch.State == ChecksFailure {
 			ch.Log = &JobLog{None: "a commit status carries no log through the forge's API; its URL shows it"}
+			ch.RunnerFailure = RunnerFailure(k, word)
 		}
 		out = append(out, ch)
 	}
@@ -421,9 +427,10 @@ func (c *Client) commitChecks(ctx context.Context, host string, k Kind, token, p
 		ch := newCheck(r.Name, runChecks(r.Status, r.Conclusion), first(r.Conclusion, r.Status), r.HTMLURL)
 		if ch.State == ChecksFailure {
 			ch.Log = &JobLog{None: "the check run is not a GitHub Actions job: its URL shows it"}
+			ch.RunnerFailure = RunnerFailure(GitHub, r.Conclusion)
 			if r.App.Slug == "github-actions" {
 				ch.Log = &JobLog{}
-				ch.jobID = r.ID
+				ch.JobID = r.ID
 			}
 		}
 		out = append(out, ch)
@@ -477,6 +484,9 @@ func (c *Client) pipelineJobs(ctx context.Context, host, token, path string, id 
 		Status       string `json:"status"`
 		WebURL       string `json:"web_url"`
 		AllowFailure bool   `json:"allow_failure"`
+		// FailureReason is GitLab's word for why a job failed, such as
+		// script_failure or runner_system_failure.
+		FailureReason string `json:"failure_reason"`
 	}
 	p := fmt.Sprintf("%s/pipelines/%d/jobs", repoPath(GitLab, path), id)
 	if err := pages(ctx, c, host, GitLab, token, p, contentPage, &jobs); err != nil {
@@ -491,7 +501,8 @@ func (c *Client) pipelineJobs(ctx context.Context, host, token, path string, id 
 		case ch.State == ChecksFailure && j.AllowFailure:
 			ch.State, ch.Conclusion = ChecksSuccess, j.Status+" (allowed to fail)"
 		case ch.State == ChecksFailure:
-			ch.Log, ch.jobID = &JobLog{}, j.ID
+			ch.Log, ch.JobID = &JobLog{}, j.ID
+			ch.RunnerFailure = RunnerFailure(GitLab, j.FailureReason)
 		}
 		out = append(out, ch)
 	}
@@ -505,7 +516,7 @@ func (c *Client) excerpts(ctx context.Context, host string, k Kind, token, path 
 	fetched := 0
 	for i := range checks {
 		ch := &checks[i]
-		if ch.jobID == 0 {
+		if ch.JobID == 0 {
 			continue
 		}
 		if fetched == maxExcerpts {
@@ -513,7 +524,7 @@ func (c *Client) excerpts(ctx context.Context, host string, k Kind, token, path 
 			continue
 		}
 		fetched++
-		log, err := c.jobLog(ctx, host, k, token, path, ch.jobID)
+		log, err := c.jobLog(ctx, host, k, token, path, ch.JobID)
 		switch {
 		case errors.Is(err, ErrNotFound):
 			ch.Log = &JobLog{None: "the forge has no log for this job"}

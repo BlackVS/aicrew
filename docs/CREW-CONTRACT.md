@@ -1446,7 +1446,14 @@ run's steps, bounded. aicrewd keeps one row per attempt and run ID
 A run of an attempt that is not the member's running attempt is refused
 with `no_attempt`. The event is `automation.run`; a failed run wakes the
 team's coordinators, a turn the worker, a handled run no one ("Event
-delivery"). A declared command at `after-push` that exits nonzero is not a
+delivery"). A script's `submit(url)` (increment 2d-c) is the holder's own
+work step, `{intent: submit, detail: url}`, sent by the launcher with the
+member's session token once the script ended without failing and after
+the `before-submit` point ran, so aicrewd sees no difference from a
+submit the member's turn sends; `label()`,
+`ready()` and `rerun()` act on the forge with the member's credential,
+and `state/points.json` remembers the heads whose failed jobs were
+re-run, once per head, also when the branch comes back to one. A declared command at `after-push` that exits nonzero is not a
 failed run but the check's verdict on the head: the run is reported as
 handled with its exit, and the failure reaches the worker through the
 observation's `pre_push` (increment 2d-b), as the `pre_push` need of the

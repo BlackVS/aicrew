@@ -85,7 +85,12 @@ type pullPoints struct {
 	// across polls and restarts; nil when none failed, or the point has not
 	// run at the head.
 	PrePush *pointPrePush `json:"pre_push,omitempty"`
-	Seen    time.Time     `json:"seen"`
+	// Reruns are the heads whose failed jobs a script's rerun() re-ran
+	// (automation.go), oldest first, kept as long as the pull request is:
+	// once per head, so a second call at a head re-runs nothing, also after
+	// the branch moved away and came back to it.
+	Reruns []string  `json:"reruns,omitempty"`
+	Seen   time.Time `json:"seen"`
 }
 
 // pointPrePush is a failed check with the head it failed at.
@@ -798,6 +803,15 @@ func fitReport(rep *automationReport) []byte {
 // submit is sent. An attempt with no watched pull request has nothing to
 // run at.
 func (s *StepServer) beforeSubmit(ctx context.Context, attemptID string) {
+	s.points.run.Lock()
+	defer s.points.run.Unlock()
+	s.fireBeforeSubmit(ctx, attemptID)
+}
+
+// fireBeforeSubmit is beforeSubmit for a caller that holds the points' run
+// lock already: a script's submit() (automation.go), served while its own
+// run holds it.
+func (s *StepServer) fireBeforeSubmit(ctx context.Context, attemptID string) {
 	s.points.mu.Lock()
 	doc := readPoints(s.home)
 	var key string
@@ -822,8 +836,6 @@ func (s *StepServer) beforeSubmit(ctx context.Context, attemptID string) {
 	snapshot := *p
 	o := p.observation(key)
 	o.State = forge.PullOpen
-	s.points.run.Lock()
-	defer s.points.run.Unlock()
 	s.firePoint(ctx, key, &snapshot, automation.PointBeforeSubmit, o)
 }
 

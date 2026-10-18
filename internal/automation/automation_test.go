@@ -3,6 +3,8 @@ package automation
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,39 @@ type fakeHost struct {
 	steps    []string
 	comments []string
 	block    time.Duration // how long Run takes
+	// The transitions: the labels added (+name) and removed (-name) in
+	// order, the ready calls, the result references submitted, and the
+	// re-runs, the first with reruns as its jobs and the rest refused.
+	labels    []string
+	ready     int
+	submitted []string
+	reruns    []string
+	rerunAt   int
+}
+
+func (h *fakeHost) Label(_ context.Context, add, remove []string) error {
+	for _, l := range remove {
+		h.labels = append(h.labels, "-"+l)
+	}
+	for _, l := range add {
+		h.labels = append(h.labels, "+"+l)
+	}
+	return nil
+}
+func (h *fakeHost) Ready(context.Context) error { h.ready++; return nil }
+func (h *fakeHost) Submit(_ context.Context, url string) error {
+	h.submitted = append(h.submitted, url)
+	return nil
+}
+func (h *fakeHost) Rerun(context.Context) (RerunResult, error) {
+	h.rerunAt++
+	if h.rerunAt > 1 {
+		return RerunResult{Reason: "the failed jobs were re-run at this head already"}, nil
+	}
+	if len(h.reruns) == 0 {
+		return RerunResult{Reason: "the forge offers no re-run"}, nil
+	}
+	return RerunResult{Reran: true, Jobs: h.reruns}, nil
 }
 
 func (h *fakeHost) PR(context.Context) (PR, error)           { return h.pr, nil }
@@ -258,5 +293,57 @@ func TestBoundKeepsText(t *testing.T) {
 		"    if not o.startswith(\"" + rep + "ok\") or len(o) > 65536:\n        fail(\"output: %d bytes\" % len(o))\n"
 	if _, err := run(t, src, h, Limits{}); err != nil {
 		t.Fatalf("run() output: %v", err)
+	}
+}
+
+// The transitions of 4.2 as host calls (increment 2d-c): label() removes
+// and adds, ready() and submit() take no judgement, rerun() says what it
+// re-ran, and pr() names the pull request's URL and each failed check's
+// runner failure. A bad argument fails the script before the host is asked.
+func TestHostTransitions(t *testing.T) {
+	h := &fakeHost{
+		pr: PR{Number: 7, URL: "https://forge.example.test/team/app/pulls/7", Head: "0123456", Labels: []string{"hands-reviewed"},
+			Checks: []Check{{Name: "build", Conclusion: "failure", RunnerFailure: true}, {Name: "test", Conclusion: "failure"}}},
+		reruns: []string{"build", "test"},
+	}
+	src := `
+def main(event):
+    p = pr()
+    if [c.runner_failure for c in p.checks] != [True, False]:
+        fail("runner failures: %s" % p.checks)
+    label(add=["review-this"], remove=["hands-reviewed"])
+    label(remove=["hands-reviewing"])
+    r = rerun()
+    if not r.reran or r.jobs != ["build", "test"] or r.reason != "":
+        fail("the first rerun: %s" % r)
+    r = rerun()
+    if r.reran or r.jobs != [] or "already" not in r.reason:
+        fail("the second rerun: %s" % r)
+    ready()
+    submit(p.url)
+`
+	if _, err := run(t, src, h, Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(h.labels, []string{"-hands-reviewed", "+review-this", "-hands-reviewing"}) || h.ready != 1 ||
+		!slices.Equal(h.submitted, []string{"https://forge.example.test/team/app/pulls/7"}) || h.rerunAt != 2 {
+		t.Errorf("the host saw labels %v, ready %d, submitted %v, reruns %d", h.labels, h.ready, h.submitted, h.rerunAt)
+	}
+	for name, body := range map[string]string{
+		"no label":         `label()`,
+		"a long label":     `label(add=["` + strings.Repeat("x", MaxLabel+1) + `"])`,
+		"a two-line label": "label(add=[\"a\\nb\"])",
+		"too many labels":  `label(remove=[str(i) for i in range(MaxLabels + 1)])`,
+		"a non-URL":        `submit("pull 7")`,
+		"a URL with space": `submit("https://forge.example.test/a b")`,
+		"ready with args":  `ready(1)`,
+		"rerun with args":  `rerun(now=True)`,
+	} {
+		h := &fakeHost{}
+		body = strings.ReplaceAll(body, "MaxLabels", fmt.Sprint(MaxLabels))
+		_, err := run(t, "def main(event):\n    "+body+"\n", h, Limits{})
+		if !errors.Is(err, ErrScript) || len(h.labels)+h.ready+len(h.submitted)+h.rerunAt != 0 {
+			t.Errorf("%s: %v (host saw %v %d %v %d)", name, err, h.labels, h.ready, h.submitted, h.rerunAt)
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -89,5 +90,34 @@ func TestSessionStatusNamesTheAttempt(t *testing.T) {
 	st.Attempt = nil
 	if json.Unmarshal([]byte(got.raw), &st) != nil || st.Attempt != nil {
 		t.Fatalf("the coordinator's status: %s", got.raw)
+	}
+}
+
+// An observation with its content as the launcher cuts it to the server's
+// bound (here a review body of 16 KiB, three log excerpts of 8 KiB and a
+// failed check's output of 8 KiB) passes the route; the step routes' bound
+// would refuse it.
+func TestLargeObservationPassesTheRoute(t *testing.T) {
+	e := setupCoordination(t)
+	e.runningOffer(t)
+	head := "0123456789abcdef0123456789abcdef01234567"
+	obs := map[string]any{"host": "git.example.test", "repository": "crew/project-example", "number": 7,
+		"url": "https://git.example.test/crew/project-example/pulls/7", "state": "open", "head": "work/task-1",
+		"head_commit": head, "labels": []string{}, "checks": "pending", "comments": 0}
+	if got := e.call(t, e.worker.token, PullsPath, "", obs); got.status != http.StatusOK {
+		t.Fatalf("the baseline: %d %s", got.status, got.raw)
+	}
+	var failed []map[string]any
+	for i := 0; i < 3; i++ {
+		failed = append(failed, map[string]any{"name": "job", "conclusion": "failure", "excerpt": strings.Repeat("x", 8<<10)})
+	}
+	obs["checks"], obs["comments"], obs["content"] = "failure", 1, true
+	obs["review"] = map[string]any{"author": "hands-bot", "url": "https://git.example.test/c/1", "head": head, "at_head": true,
+		"verdict": "RETURN_TO_IMPLEMENTATION", "blocker": true, "body": strings.Repeat("x", 16<<10)}
+	obs["failed"] = failed
+	obs["pre_push"] = map[string]any{"command": "bash scripts/check-repo.sh", "exit": 1, "output": strings.Repeat("x", 8<<10)}
+	got := e.call(t, e.worker.token, PullsPath, "", obs)
+	if got.status != http.StatusOK || got.body["event_id"] == nil {
+		t.Fatalf("the large observation: %d %s", got.status, got.raw)
 	}
 }

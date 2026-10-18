@@ -562,11 +562,19 @@ func TestCommandHasNoCredentialPath(t *testing.T) {
 	if len(rep.Steps) > 0 {
 		out = rep.Steps[0].Text
 	}
-	if rep.Outcome != runFailed || strings.Contains(out, "helper-secret") || strings.Contains(rep.Error, "helper-secret") {
-		t.Fatalf("the probe as a declared command: %s %q\n%s", rep.Outcome, rep.Error, out)
+	// At after-push a nonzero exit is the check's verdict for the worker
+	// (2d-b): the run is handled, and the failure it keeps holds no secret
+	// either.
+	if rep.Outcome != runHandled || rep.check == nil || strings.Contains(out, "helper-secret") ||
+		strings.Contains(rep.check.failure.Output, "helper-secret") || rep.Exit == nil || *rep.Exit == 0 {
+		t.Fatalf("the probe as a declared command: %s %q exit %v\n%s", rep.Outcome, rep.Error, rep.Exit, out)
 	}
-	if rep.Exit == nil || *rep.Exit == 0 {
-		t.Fatalf("the probe as a declared command exited %v", rep.Exit)
+	// At any other point it is a failed run, with the same silence.
+	rep = automationReport{AttemptID: "att-cred", Point: automation.PointBeforeSubmit, Name: "probe", Source: automation.SourceCommand,
+		Pull: 4, URL: "https://git.example.test/crew/project-t/pulls/4", Head: strings.Repeat("a", 40)}
+	srv.runCommand(ctx, &rep, []string{"git", "probe"})
+	if rep.Outcome != runFailed || rep.Exit == nil || *rep.Exit == 0 || (len(rep.Steps) > 0 && strings.Contains(rep.Steps[0].Text, "helper-secret")) {
+		t.Fatalf("the probe at before-submit: %s %q exit %v", rep.Outcome, rep.Error, rep.Exit)
 	}
 
 	// The helper command itself is refused: by name, and under any other

@@ -79,6 +79,23 @@ type PullObservation struct {
 	Review  *ObservedReview   `json:"review,omitempty"`
 	Failed  []ObservedFailure `json:"failed,omitempty"`
 	Passed  []ObservedPass    `json:"passed,omitempty"`
+	// PrePush is the declared check that failed at this head's after-push
+	// point (dispatch.go), sent with every observation at the head while
+	// it stands, so aicrewd wakes the worker with it and clears the need
+	// once a head passes.
+	PrePush *PrePushFailure `json:"pre_push,omitempty"`
+}
+
+// PrePushFailure is a declared check that failed after a push, as the
+// observation carries it: the command in words, its exit status and its
+// output, bounded to maxPrePushOutput, and the names of the other checks
+// that failed at the point.
+type PrePushFailure struct {
+	Command string   `json:"command"`
+	Exit    int      `json:"exit"`
+	Output  string   `json:"output"`
+	Cut     bool     `json:"cut,omitempty"`
+	Others  []string `json:"others,omitempty"`
 }
 
 // ObservedReview is the external review at the pull request's head.
@@ -199,6 +216,44 @@ func (s *StepServer) markSeen(key string, st forge.PullStatus) {
 	s.seen[key] = pullSeen{head: st.HeadCommit, checks: st.Checks, comments: st.Comments}
 }
 
+// maxObservationEncoded bounds an observation as encoded, under aicrewd's
+// bound on a request body (server.MaxBodyBytes, 64 KiB): JSON escaping can
+// multiply a text's bytes.
+const maxObservationEncoded = 56 << 10
+
+// fitObservation cuts o's content to what aicrewd takes, and encodes it:
+// the passed checks beyond what a message shows, then the review's body,
+// the failed checks' excerpts and the failed check's output halved in turn
+// until the encoding fits, and at last the failed checks beyond the first.
+// A cut is marked, and the message shows no more anyway (the bounds in
+// store/actions.go).
+func fitObservation(o *PullObservation) []byte {
+	body, _ := json.Marshal(o)
+	if len(body) > maxObservationEncoded && len(o.Passed) > 30 {
+		o.Passed = o.Passed[:30]
+		body, _ = json.Marshal(o)
+	}
+	for n := 16 << 10; len(body) > maxObservationEncoded && n >= 512; n /= 2 {
+		if o.Review != nil && len(o.Review.Body) > n {
+			o.Review.Body, o.Review.Cut = bound(o.Review.Body, n), true
+		}
+		for i := range o.Failed {
+			if len(o.Failed[i].Excerpt) > n {
+				o.Failed[i].Excerpt, o.Failed[i].Cut = bound(o.Failed[i].Excerpt, n), true
+			}
+		}
+		if o.PrePush != nil && len(o.PrePush.Output) > n {
+			o.PrePush.Output, o.PrePush.Cut = bound(o.PrePush.Output, n), true
+		}
+		body, _ = json.Marshal(o)
+	}
+	for len(body) > maxObservationEncoded && len(o.Failed) > 1 {
+		o.Failed = o.Failed[:len(o.Failed)/2]
+		body, _ = json.Marshal(o)
+	}
+	return body
+}
+
 func observation(host, path string, st forge.PullStatus) PullObservation {
 	labels := st.Labels
 	if labels == nil {
@@ -263,6 +318,12 @@ func (s *StepServer) observePull(ctx context.Context, body []byte, f pullFacts) 
 	var o PullObservation
 	if err := json.Unmarshal(body, &o); err != nil || o.Number < 1 || o.Host == "" || o.Repository == "" {
 		return nil, &Refusal{Code: "invalid_request", Message: "The observation names no pull request."}
+	}
+	if o.PrePush == nil {
+		if pp := s.prePushAt(pullKey(o.Host, o.Repository, o.Number), o.HeadCommit); pp != nil {
+			o.PrePush = pp
+			body = fitObservation(&o)
+		}
 	}
 	w := watchedPull{Host: o.Host, Repository: o.Repository, Number: o.Number}
 	out, err := s.local.LocalStep(ctx, newKey("pull"), s.driver.Session.stepToken(), pullsPath, body)
@@ -340,7 +401,7 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 					"error", RedactForgeTokens(s.home, err.Error()))
 			}
 		}
-		body, _ := json.Marshal(o)
+		body := fitObservation(&o)
 		if _, err := s.observePull(ctx, body, facts); err != nil {
 			s.log.Warn("forge events: report a pull request", "pull", w.Number, "error", err.Error())
 			continue

@@ -59,6 +59,12 @@ type PullObservation struct {
 	Review  *PullReview   `json:"review,omitempty"`
 	Failed  []FailedCheck `json:"failed,omitempty"`
 	Passed  []PassedCheck `json:"passed,omitempty"`
+	// PrePush is the declared check that failed at this head's after-push
+	// point (increment 2d-b), which the launcher sends with every
+	// observation at the head while it stands; nil when none failed, or
+	// none has run yet. The observation is the authority: one without it
+	// at the same head clears the failure.
+	PrePush *PrePushFailure `json:"pre_push,omitempty"`
 }
 
 // ForgeDetail is the pull request a forge subject carries: the pull request as
@@ -130,6 +136,22 @@ func (o PullObservation) validate() error {
 	}
 	if !o.Content && (o.Review != nil || len(o.Failed) > 0 || len(o.Passed) > 0) {
 		return bad("content without the content mark")
+	}
+	if p := o.PrePush; p != nil {
+		if err := validText(p.Command, maxCheckField, "the failed check's command", true); err != nil {
+			return err
+		}
+		if err := validText(p.Output, maxObservedLen, "the failed check's output", false); err != nil {
+			return err
+		}
+		if strings.ContainsAny(p.Command, "\r\n") || len(p.Others) > 4*maxFailed {
+			return bad("failed check")
+		}
+		for _, n := range p.Others {
+			if err := validText(n, maxCheckField, "a failed check's name", true); err != nil {
+				return err
+			}
+		}
 	}
 	// A review read at the head names that head: one at another head was
 	// read with another status, and is refused rather than recorded.
@@ -211,13 +233,18 @@ func (s *Store) ObservePullWithToken(ctx context.Context, token string, o PullOb
 			cf.Failed, cf.Passed = pf.Failed, pf.Passed
 		}
 	}
+	cf.PrePush = o.PrePush
 	boundContent(&cf)
+	var prevPrePush *PrePushFailure
+	if pf != nil && pf.Head == o.HeadCommit {
+		prevPrePush = pf.PrePush
+	}
 	newReview := o.Content && cf.Review != nil && (pf == nil || pf.Review == nil || pf.Review.URL != cf.Review.URL ||
 		pf.Review.Head != cf.Review.Head || pf.Review.Verdict != cf.Review.Verdict)
 	labels, _ := json.Marshal(o.Labels)
 	if prev != nil && prev.Number == o.Number && prev.URL == o.URL && prev.State == o.State &&
 		prev.HeadCommit == o.HeadCommit && slices.Equal(prev.Labels, o.Labels) && prev.Checks == o.Checks &&
-		prev.Comments == o.Comments && !newReview {
+		prev.Comments == o.Comments && !newReview && prePushEqual(prevPrePush, cf.PrePush) {
 		return res, tx.Commit()
 	}
 	if err := writePullFacts(ctx, tx, a.ID, cf); err != nil {
@@ -250,6 +277,7 @@ func (s *Store) ObservePullWithToken(ctx context.Context, token string, o PullOb
 		// observation's own copy of the content is left out.
 		ev := forgeEvent{AttemptID: a.ID, Observation: o, Changes: changes, Needs: needs}
 		ev.Observation.Content, ev.Observation.Review, ev.Observation.Failed, ev.Observation.Passed = false, nil, nil, nil
+		ev.Observation.PrePush = nil
 		for _, n := range needs {
 			switch n {
 			case NeedReview, NeedGates:
@@ -259,6 +287,8 @@ func (s *Store) ObservePullWithToken(ctx context.Context, token string, o PullOb
 				}
 			case NeedCI:
 				ev.Failed = cf.Failed
+			case NeedPrePush:
+				ev.PrePush = cf.PrePush
 			}
 		}
 		if err := fitForgeEvent(&ev); err != nil {

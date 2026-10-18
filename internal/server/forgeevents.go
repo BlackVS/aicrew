@@ -21,6 +21,13 @@ import (
 const (
 	PullsPath       = "/v1/crew/pulls"
 	AutomationsPath = "/v1/crew/automations"
+
+	// maxObserveBody is an observation with its content (a review's body,
+	// the failed checks' excerpts, a failed check's output): the server's
+	// own bound, which the launcher cuts an observation to fit
+	// (agent/forgewatch.go fitObservation). The step routes' bound would
+	// refuse one.
+	maxObserveBody = MaxBodyBytes
 )
 
 func (s *Server) registerForgeEvents() {
@@ -32,7 +39,7 @@ func (s *Server) registerForgeEvents() {
 // the pull request of one of its running attempts.
 func (s *Server) observePull(w http.ResponseWriter, r *http.Request) {
 	var in store.PullObservation
-	token, _, ok := s.stepRequest(w, r, false, &in)
+	token, _, ok := s.stepRequestMax(w, r, false, &in, maxObserveBody)
 	if !ok {
 		return
 	}

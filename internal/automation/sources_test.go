@@ -85,6 +85,15 @@ func TestEntriesMatchTheSchema(t *testing.T) {
 	if es, err := ParseManifest([]byte(today)); err != nil || es != nil {
 		t.Fatalf("a manifest without automations: %+v, %v", es, err)
 	}
+	// The manifest's own version is the manifest format's: a later one
+	// still validates and parses.
+	later := strings.Replace(manifestJSON, `"name": "delivery",`, `"version": 2, "name": "delivery",`, 1)
+	if errs := schematest.Validate(schema, decode(t, later), "manifest"); len(errs) != 0 {
+		t.Fatalf("a manifest of a later format version does not match the schema:\n%s", strings.Join(errs, "\n"))
+	}
+	if es, err := ParseManifest([]byte(later)); err != nil || len(es) != 4 {
+		t.Fatalf("a manifest of a later format version: %+v, %v", es, err)
+	}
 }
 
 // The schemas name the code's vocabulary and shapes: the points, the event

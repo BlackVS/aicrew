@@ -100,8 +100,10 @@ func attemptSources(a *memberAttempt, base string) AutomationSources {
 // the process manifest alone, never on the base branch, so they are kept
 // per pin and read again only when the pin changes. When the manifest
 // cannot be read the names are nil and not kept: aicrewd then wakes the
-// worker as it would without automations, which is also what the points do
-// while the set cannot be read.
+// worker as it would without automations. A set that fails later, at a
+// repository-sourced script's base read, still names its automations:
+// the point then records no edge and fires again at the next observation
+// (firePoint), so the transition the names promise is not lost.
 func (s *StepServer) AutomationNames(ctx context.Context, src AutomationSources) []string {
 	key := "release " + version.Get().Version
 	if src.Process != nil {

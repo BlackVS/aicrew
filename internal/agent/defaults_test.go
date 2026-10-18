@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/BlackVS/aicrew/defaults"
@@ -157,5 +158,149 @@ func TestDefaultsThroughTheLauncher(t *testing.T) {
 				t.Fatalf("the worker was woken for the gates the launcher performed: %+v", sub)
 			}
 		}
+	}
+}
+
+// The repository-source case of the 2d-a follow-up, from 2d-d's review: the
+// observation names gates-green from the release and the manifest, while
+// the set at the point also reads a repository-sourced script at the base
+// branch. With the base unreadable at the gates-green edge the point
+// records no edge and is logged once over two polls, and the worker gets
+// no gates wake, since the names promise the transition; once the base
+// reads, the next poll runs the point: the pull request is ready and the
+// attempt submitted.
+func TestRepositorySourceBaseUnreadable(t *testing.T) {
+	ctx := context.Background()
+	a := setupAutomationSources(t)
+	releaseAutomations = func() ([]automation.Entry, error) {
+		raw, err := fs.ReadFile(defaults.Automations, defaults.AutomationsFile)
+		if err != nil {
+			return nil, err
+		}
+		return automation.ParseDefaults(raw)
+	}
+	releaseFS = defaults.Automations
+	pin := a.commit(t, a.process, a.processBare, "main", map[string]string{
+		"process/manifest.json": `{"name": "delivery", "automations": [` +
+			`{"name": "project-check", "source": {"repository": "automations/check.star"}, "point": "after-push"}]}`})
+	s := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
+	body := s.claimBody()
+	body["process"] = map[string]string{"repo": testProcessRepo, "commit": pin, "manifest": "process/manifest.json"}
+	r, err := s.run(t, attemptsPath+"/claim", body)
+	if err != nil || r.Outcome != "committed" {
+		t.Fatalf("claim: %+v %v", r, err)
+	}
+	id := r.AttemptID
+	provisionTestForge(t, s.cfg.Home, "git.example.test", "member-forge-token")
+	srv := s.serve(t)
+	wt := filepath.Join(s.cfg.Home, "worktrees", id)
+	os.MkdirAll(filepath.Dir(wt), 0o700)
+	git(t, filepath.Dir(wt), "clone", "-q", "-b", "work/task-1", a.projectBare, wt)
+	git(t, wt, "remote", "set-url", "origin", "https://git.example.test/crew/project-t.git")
+	head := git(t, wt, "rev-parse", "HEAD")
+	url := "https://git.example.test/crew/project-t/pulls/4"
+	fake := &fakeStatus{token: "member-forge-token", st: forge.PullStatus{Pull: forge.Pull{Number: 4, URL: url,
+		State: forge.PullOpen, Head: "work/task-1", HeadCommit: head, Base: "main", Labels: []string{}}, Checks: forge.ChecksPending}}
+	oldAPI := newPullStatusAPI
+	newPullStatusAPI = func() PullStatusAPI { return fake }
+	t.Cleanup(func() { newPullStatusAPI = oldAPI })
+	f := &automationForge{token: "member-forge-token",
+		pull: forge.Pull{Number: 4, URL: url, State: forge.PullOpen, Draft: true, Title: "WIP: the change", Head: "work/task-1",
+			HeadCommit: head, Base: "main", Labels: []string{}, Mergeable: true},
+		content: forge.PullContent{Checks: []forge.Check{{Name: "go-test", State: forge.ChecksSuccess}}}}
+	oldForge := newAutomationForge
+	newAutomationForge = func() AutomationForge { return f }
+	t.Cleanup(func() { newAutomationForge = oldForge })
+	key := pullKey("git.example.test", "crew/project-t", 4)
+	fired := func(point string) []string {
+		if p := readPoints(s.cfg.Home).Pulls[key]; p != nil {
+			return p.Fired[point]
+		}
+		return nil
+	}
+	// The lines logged for the gates-green point (after-ci fires at the
+	// same poll and is logged on its own).
+	logged := func() int { return strings.Count(s.logs.String(), "at the next observation"+`" point=gates-green`) }
+	gatesWakes := func() int {
+		var answers []byte
+		page := s.call(t, &answers, StepCall{Op: "inbox"})
+		var inbox struct {
+			Messages []store.InboxItem `json:"messages"`
+		}
+		if err := json.Unmarshal(page.Result, &inbox); err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, m := range inbox.Messages {
+			if m.Action == nil {
+				continue
+			}
+			for _, sub := range m.Action.Subjects {
+				if sub.Kind == "pull" && slices.Contains(sub.Needs, store.NeedGates) {
+					n++
+				}
+			}
+		}
+		return n
+	}
+
+	// 1. The base readable: after-push runs the release's review-request
+	// and the repository's script.
+	var answers []byte
+	obs, _ := json.Marshal(observation("git.example.test", "crew/project-t", fake.st))
+	if ans := s.call(t, &answers, StepCall{Op: "watch-pull", Body: obs}); !ans.OK {
+		t.Fatalf("the baseline: %+v", ans)
+	}
+	srv.waitPoints()
+	if push := runsAt(dispatchRecords(t, s.cfg.Home), automation.PointAfterPush); len(push) != 2 ||
+		push["review-request.star"].Outcome != "handled" || push["automations/check.star"].Outcome != "handled" {
+		t.Fatalf("after-push: %+v\n%s", push, s.logs.String())
+	}
+
+	// 2. Both gates green while the base branch cannot be read: the
+	// gates-green edge fires, the set cannot be read, no edge is recorded,
+	// the error is logged once over two polls, and no gates wake reaches
+	// the worker, since the observation names gates-green.
+	review := func(reviewer, verdict string) forge.PullComment {
+		return forge.PullComment{Kind: forge.CommentIssue, Author: reviewer, Body: "reviewed at head " + head + "\n\nVERDICT\n" + verdict,
+			Review: &forge.ReviewHeader{Reviewer: reviewer, Head: head[:12], AtHead: true, Verdict: verdict}}
+	}
+	fake.mu.Lock()
+	fake.content = forge.PullContent{Comments: []forge.PullComment{review(forge.ReviewerExternal, verdictReady), review(forge.ReviewerLocal, verdictReady)},
+		Checks: []forge.Check{{Name: "go-test", State: forge.ChecksSuccess}}}
+	fake.mu.Unlock()
+	fake.set(func(st *forge.PullStatus) {
+		st.Checks, st.Comments, st.Labels, st.Base = forge.ChecksSuccess, 2, []string{"hands-reviewed"}, "nowhere"
+	})
+	for i := 1; i <= 2; i++ {
+		srv.pollPulls(ctx)
+		srv.waitPoints()
+		if gates := runsAt(dispatchRecords(t, s.cfg.Home), automation.PointGatesGreen); len(gates) != 0 ||
+			len(fired(automation.PointGatesGreen)) != 0 || logged() != 1 || f.ready != 0 || gatesWakes() != 0 {
+			t.Fatalf("poll %d with the base unreadable: gates %+v, fired %v, logged %d, ready %d, wakes %d\n%s",
+				i, gates, fired(automation.PointGatesGreen), logged(), f.ready, gatesWakes(), s.logs.String())
+		}
+	}
+	if !strings.Contains(s.logs.String(), "nowhere") {
+		t.Errorf("the log does not name the base branch that could not be read:\n%s", s.logs.String())
+	}
+
+	// 3. The base readable again: the next poll runs gates-green, the
+	// pull request is ready and the attempt submitted.
+	fake.set(func(st *forge.PullStatus) { st.Base = "main" })
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	if gates := runsAt(dispatchRecords(t, s.cfg.Home), automation.PointGatesGreen); len(gates) != 1 ||
+		gates["gates-green.star"].Outcome != "handled" || !slices.Equal(fired(automation.PointGatesGreen), []string{head}) {
+		t.Fatalf("gates-green once the base reads: %+v, fired %v\n%s", gates, fired(automation.PointGatesGreen), s.logs.String())
+	}
+	if f.ready != 1 || f.pull.Draft || f.pull.Title != "the change" {
+		t.Errorf("the pull request: ready %d, draft %v, title %q", f.ready, f.pull.Draft, f.pull.Title)
+	}
+	if st, err := srv.Status(ctx); err != nil || st.Attempt == nil || st.Attempt.Phase != "submitted" {
+		t.Fatalf("the attempt: %+v, %v", st.Attempt, err)
+	}
+	if gatesWakes() != 0 {
+		t.Errorf("the worker was woken for the gates the launcher performed")
 	}
 }

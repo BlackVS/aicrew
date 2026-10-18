@@ -516,14 +516,7 @@ func (s *StepServer) runPoint(ctx context.Context, p *pullPoints, point string, 
 		s.log.Info("automations: the pull request's attempt is no longer the member's open attempt", "point", point, "attempt", p.Attempt)
 		return nil
 	}
-	var src AutomationSources
-	if a := st.Attempt; a.Process != nil && a.Repository != nil {
-		src = AutomationSources{Process: a.Process, Repository: a.Repository.URL, BaseBranch: a.Repository.DefaultBranch}
-		if p.Base != "" {
-			src.BaseBranch = p.Base
-		}
-	}
-	set, err := s.Automations(ctx, src)
+	set, err := s.Automations(ctx, attemptSources(st.Attempt, p.Base))
 	if err != nil {
 		s.log.Warn("automations: the effective set could not be read", "point", point, "error", RedactForgeTokens(s.home, err.Error()))
 		return nil

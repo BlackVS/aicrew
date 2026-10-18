@@ -1397,6 +1397,10 @@ carries one observation of a pull request:
   branch) and `head_commit`;
 - `labels`, `checks` (the head commit's CI: `none`, `pending`, `success` or
   `failure`) and `comments` (how many it carries);
+- `automations`, the names of the automations in the launcher's effective
+  set that run, every entry but a disabled one (increment 2d-d, "Automation
+  runs" below): the transitions the launcher performs itself. Omitted when
+  the launcher could not read its set;
 - `pre_push`, when a declared check failed at the head's `after-push`
   point ("Automation runs", below): the command in words, its `exit`, its
   `output` (bounded, `cut` when cut) and `others`, the names of the other
@@ -1485,9 +1489,13 @@ needs a decision when it is one of:
   is not `READY_FOR_HUMAN_MERGE`), once per review;
 - `ci`: the CI of the head failed, once per head commit;
 - `gates`: both gates are green at the head: the external review there is
-  `READY_FOR_HUMAN_MERGE` and the CI of that head passed. Until increment
-  2's `gates-green` automation, this is the worker's cue to mark the pull
-  request ready and submit;
+  `READY_FOR_HUMAN_MERGE` and the CI of that head passed. It is the worker's
+  cue to mark the pull request ready and submit, and is sent only when the
+  observation's `automations` lack `gates-green`: with that release default
+  in the launcher's set (increment 2d-d), the launcher marks the pull
+  request ready and submits the attempt itself, and the worker learns of
+  the submit through the attempt's lifecycle message; a process that
+  disables the default keeps the wake;
 - `merged`, `closed` or `reopened`.
 
 A change that needs none of these (a label added or removed, CI starting

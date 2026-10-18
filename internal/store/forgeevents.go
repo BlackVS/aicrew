@@ -65,7 +65,23 @@ type PullObservation struct {
 	// none has run yet. The observation is the authority: one without it
 	// at the same head clears the failure.
 	PrePush *PrePushFailure `json:"pre_push,omitempty"`
+	// Automations names the automations of the launcher's effective set
+	// that run, every entry but a disabled one (increment 2d-d): the
+	// transitions the launcher performs itself. While AutomationGatesGreen
+	// is among them the gates need is the launcher's, and no wake is sent
+	// for it. Empty when the launcher could not read its set, which keeps
+	// the wake as before.
+	Automations []string `json:"automations,omitempty"`
 }
+
+// AutomationGatesGreen is the release default that performs the gates
+// transition itself, marking the pull request ready and submitting the
+// attempt (docs/DESIGN-TURNS.md 4.2 and 13.1).
+const AutomationGatesGreen = "gates-green"
+
+// handles reports whether the launcher that sent o runs the automation
+// named name.
+func (o PullObservation) handles(name string) bool { return slices.Contains(o.Automations, name) }
 
 // ForgeDetail is the pull request a forge subject carries: the pull request as
 // observed, and what changed since the observation before it.

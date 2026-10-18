@@ -78,8 +78,8 @@ func TestEntriesMatchTheSchema(t *testing.T) {
 	if errs := schematest.Validate(schema, decode(t, string(raw)), "defaults"); len(errs) != 0 {
 		t.Fatalf("the release's defaults do not match the schema:\n%s", strings.Join(errs, "\n"))
 	}
-	if d, err := ParseDefaults(raw); err != nil || len(d) != 0 {
-		t.Fatalf("the release's defaults (empty placeholders until 2d and 2e): %+v, %v", d, err)
+	if d, err := ParseDefaults(raw); err != nil || len(d) != 3 {
+		t.Fatalf("the release's defaults (review-request, ci-rerun and gates-green since 2d-d; base-update follows in 2e): %+v, %v", d, err)
 	}
 	// A manifest without automations has none, as an aiskills process
 	// manifest of today's shape.

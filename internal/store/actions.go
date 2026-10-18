@@ -31,8 +31,11 @@ import (
 // the after-push point and reports the first failure with its observations
 // of the pull request, and the need holds while the failure stands at the
 // head. A conflict in the update from the base has its field too; increment
-// 2e's base update fills it. Its gates-green automation replaces the
-// gates-green wake with the harness's own transition.
+// 2e's base update fills it. The gates wake is sent only when the
+// launcher's effective set lacks the gates-green automation (increment
+// 2d-d): with it, the launcher marks the pull request ready and submits
+// the attempt itself, and the worker learns of the submit through the
+// attempt's lifecycle message.
 
 // KindActionNeeded is a message that wakes a member for a decision, with
 // its content.
@@ -296,7 +299,8 @@ func pullNeeds(prev PullObservation, pf *pullContentFacts, cur PullObservation, 
 	gates := func(r *PullReview, checks, head string) bool {
 		return r != nil && !r.Blocker && r.Verdict == verdictReady && checks == "success" && sameCommit(r.Head, head)
 	}
-	if gates(rv, cur.Checks, cur.HeadCommit) && !(gates(pr, prev.Checks, prev.HeadCommit) && prev.HeadCommit == cur.HeadCommit) {
+	if gates(rv, cur.Checks, cur.HeadCommit) && !(gates(pr, prev.Checks, prev.HeadCommit) && prev.HeadCommit == cur.HeadCommit) &&
+		!cur.handles(AutomationGatesGreen) {
 		needs = append(needs, NeedGates)
 	}
 	return needs
@@ -508,7 +512,8 @@ func holdingNeeds(needs []string, o PullObservation, cf pullContentFacts) []stri
 		case NeedPrePush:
 			holds = o.State == "open" && cf.PrePush != nil
 		case NeedGates:
-			holds = o.State == "open" && atHead && !rv.Blocker && rv.Verdict == verdictReady && o.Checks == "success"
+			holds = o.State == "open" && atHead && !rv.Blocker && rv.Verdict == verdictReady && o.Checks == "success" &&
+				!o.handles(AutomationGatesGreen)
 		case NeedMerged:
 			holds = o.State == "merged"
 		case NeedClosed:

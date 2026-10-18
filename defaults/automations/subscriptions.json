@@ -1,5 +1,24 @@
 {
   "$schema": "https://github.com/BlackVS/aicrew/blob/main/internal/automation/automations.schema.json",
   "version": 1,
-  "automations": []
+  "automations": [
+    {
+      "name": "review-request",
+      "description": "After a push that is not a base-only update: clear hands-reviewed and request the external review once with review-this; never while hands-reviewing is present.",
+      "source": {"release": "review-request.star"},
+      "point": "after-push"
+    },
+    {
+      "name": "ci-rerun",
+      "description": "After a CI failure that is the runner's, not the change's: re-run the failed jobs once per head.",
+      "source": {"release": "ci-rerun.star"},
+      "point": "ci-failed"
+    },
+    {
+      "name": "gates-green",
+      "description": "When both reviews are READY and CI passed at the head: drop the WIP prefix and the draft, and submit the attempt.",
+      "source": {"release": "gates-green.star"},
+      "point": "gates-green"
+    }
+  ]
 }

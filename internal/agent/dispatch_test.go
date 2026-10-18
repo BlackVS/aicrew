@@ -2,12 +2,14 @@ package agent
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -669,6 +671,133 @@ func TestPointsKeepEveryEdge(t *testing.T) {
 	o := PullObservation{Number: 9, State: forge.PullOpen, HeadCommit: strings.Repeat("f", 40)}
 	if got := p.edges(o, pullFacts{}, nil, key); !slices.Equal(got, []string{automation.PointAfterPush}) {
 		t.Fatalf("a new head fires %v", got)
+	}
+}
+
+// sleepHelperMain is the test binary as a declared command that takes its
+// time: it writes marker and sleeps until the launcher stops it. A marker
+// already there is the run after a restart, which ends at once.
+func sleepHelperMain(marker string) int {
+	if _, err := os.Stat(marker); err == nil {
+		return 0
+	}
+	if err := os.WriteFile(marker, []byte("started\n"), 0o600); err != nil {
+		return 3
+	}
+	time.Sleep(20 * time.Second)
+	return 0
+}
+
+// A run the launcher's exit cut (the 2d-a follow-up 2a39; DESIGN-TURNS
+// 12.4, at least once): after-push fires a declared command that takes its
+// time, Close cuts it, and the point keeps no edge, the home's log no end
+// record and aicrewd no report; the next launcher's first poll fires the
+// point again and the command runs to its end.
+func TestPointCutByShutdown(t *testing.T) {
+	ctx := context.Background()
+	a := setupAutomationSources(t)
+	dir := t.TempDir()
+	marker := filepath.ToSlash(filepath.Join(dir, "started"))
+	// The test binary on PATH as aicrew-agent, which the turn's allow list
+	// admits by name: a declared command is a bare command name.
+	bin := filepath.Join(dir, "bin")
+	os.MkdirAll(bin, 0o755)
+	self, dst := selfPath(t), filepath.Join(dir, "bin", "aicrew-agent")
+	if runtime.GOOS == "windows" {
+		dst += ".exe"
+	}
+	// A running executable's hard link cannot be removed on Windows.
+	if runtime.GOOS == "windows" || os.Link(self, dst) != nil {
+		raw, err := os.ReadFile(self)
+		if err != nil || os.WriteFile(dst, raw, 0o755) != nil {
+			t.Fatal("cannot place the stand-in")
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	manifest, _ := json.Marshal(map[string]any{"name": "delivery", "automations": []map[string]any{
+		{"name": "slow", "source": map[string]any{"command": []string{"aicrew-agent", "sleep-helper", marker}}, "point": "after-push"}}})
+	pin := a.commit(t, a.process, a.processBare, "main", map[string]string{"process/manifest.json": string(manifest)})
+	s := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
+	body := s.claimBody()
+	body["process"] = map[string]string{"repo": testProcessRepo, "commit": pin, "manifest": "process/manifest.json"}
+	r, err := s.run(t, attemptsPath+"/claim", body)
+	if err != nil || r.Outcome != "committed" {
+		t.Fatalf("claim: %+v %v", r, err)
+	}
+	id := r.AttemptID
+	provisionTestForge(t, s.cfg.Home, "git.example.test", "member-forge-token")
+	srv := s.serve(t)
+	wt := filepath.Join(s.cfg.Home, "worktrees", id)
+	os.MkdirAll(filepath.Dir(wt), 0o700)
+	git(t, filepath.Dir(wt), "clone", "-q", "-b", "work/task-1", a.projectBare, wt)
+	head := git(t, wt, "rev-parse", "HEAD")
+	fake := &fakeStatus{token: "member-forge-token", st: forge.PullStatus{Pull: forge.Pull{Number: 4,
+		URL: "https://git.example.test/crew/project-t/pulls/4", State: forge.PullOpen, Head: "work/task-1", HeadCommit: head,
+		Base: "main", Labels: []string{}}, Checks: forge.ChecksPending}}
+	oldAPI := newPullStatusAPI
+	newPullStatusAPI = func() PullStatusAPI { return fake }
+	t.Cleanup(func() { newPullStatusAPI = oldAPI })
+	key := pullKey("git.example.test", "crew/project-t", 4)
+	fired := func() []string {
+		if p := readPoints(s.cfg.Home).Pulls[key]; p != nil {
+			return p.Fired[automation.PointAfterPush]
+		}
+		return nil
+	}
+	// The runs aicrewd recorded for the attempt, read from its store.
+	reported := func() int {
+		db, err := sql.Open("sqlite", s.storePath+"?_pragma=query_only(1)&_pragma=busy_timeout(10000)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var n int
+		if err := db.QueryRow(`SELECT count(*) FROM attempt_automation_runs WHERE attempt_id = ?`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	// 1. The baseline fires after-push; the command starts and takes its
+	// time.
+	var answers []byte
+	obs, _ := json.Marshal(observation("git.example.test", "crew/project-t", fake.st))
+	if ans := s.call(t, &answers, StepCall{Op: "watch-pull", Body: obs}); !ans.OK {
+		t.Fatalf("the baseline: %+v", ans)
+	}
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the command did not start: %+v\n%s", dispatchRecords(t, s.cfg.Home), s.logs.String())
+		}
+	}
+
+	// 2. The launcher's exit cuts it: no edge, no end record, no report.
+	srv.Close()
+	recs := dispatchRecords(t, s.cfg.Home)
+	if ends := countRuns(recs, automation.PointAfterPush); ends != 0 || len(fired()) != 0 || reported() != 0 {
+		t.Fatalf("after the cut: %d ends, fired %v, reported %d\n%s", ends, fired(), reported(), s.logs.String())
+	}
+	if readPoints(s.cfg.Home).Pulls[key] == nil {
+		t.Fatal("the pull request left the points' state")
+	}
+	// Nor was a report attempted: the cut is not a result to send.
+	if strings.Contains(s.logs.String(), "automations: report a run") {
+		t.Fatalf("a report of the cut run was attempted:\n%s", s.logs.String())
+	}
+
+	// 3. The next launcher's first poll fires the point again, and the
+	// command runs to its end.
+	srv = s.serve(t)
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	recs = dispatchRecords(t, s.cfg.Home)
+	slow := runsAt(recs, automation.PointAfterPush)["slow"]
+	if ends := countRuns(recs, automation.PointAfterPush); slow.Outcome != "handled" || slow.Exit == nil || *slow.Exit != 0 || ends != 1 ||
+		!slices.Equal(fired(), []string{head}) || reported() != 1 {
+		t.Fatalf("after the restart: %+v, %d ends, fired %v, reported %d\n%s", slow, ends, fired(), reported(), s.logs.String())
 	}
 }
 

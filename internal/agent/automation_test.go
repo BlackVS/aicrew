@@ -520,7 +520,7 @@ def main(event):
 	if !slices.Equal(kinds, want) {
 		t.Errorf("the steps:\n%s\nwant\n%s", strings.Join(kinds, "\n"), strings.Join(want, "\n"))
 	}
-	if p := readPoints(a.cfg.Home).Pulls[pullKey("git.example.test", "crew/project-t", 7)]; p == nil || p.Rerun != a.head {
+	if p := readPoints(a.cfg.Home).Pulls[pullKey("git.example.test", "crew/project-t", 7)]; p == nil || !slices.Equal(p.Reruns, []string{a.head}) {
 		t.Errorf("the points keep the re-run: %+v", p)
 	}
 	// A later run at the head re-runs nothing either; a forge without a
@@ -538,6 +538,16 @@ def main(event):
 	res = a.run(t, "def main(event):\n    r = rerun()\n    if not r.reran:\n        fail(r)\n", AutomationRun{})
 	if res.Failed != "" || len(a.forge.reruns) != 3 {
 		t.Errorf("the same head once the forge re-runs: %+v, re-runs %v", res, a.forge.reruns)
+	}
+	// The branch back at the first head, re-run there before the second:
+	// nothing is re-run and the forge is not asked; the points keep both.
+	a.forge.pull.HeadCommit = a.head
+	res = a.run(t, "def main(event):\n    r = rerun()\n    if r.reran or \"already\" not in r.reason:\n        fail(r)\n", AutomationRun{})
+	if res.Failed != "" || len(a.forge.reruns) != 3 {
+		t.Errorf("back at the first head: %+v, re-runs %v", res, a.forge.reruns)
+	}
+	if p := readPoints(a.cfg.Home).Pulls[pullKey("git.example.test", "crew/project-t", 7)]; p == nil || !slices.Equal(p.Reruns, []string{a.head, "0123456789abcdef0123456789abcdef01234567"}) {
+		t.Errorf("the points keep both heads: %+v", p)
 	}
 	// submit() at the before-submit point, and with a reference that is
 	// no URL, fails the script and sends nothing.

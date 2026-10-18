@@ -866,10 +866,11 @@ run`, since the interpreter has no memory limit of its own:
   would submit it, outside the script's wall clock; a submit that fails
   fails the run (a run at `before-submit` itself cannot submit: the step
   that runs it does); `rerun()` re-runs the failed jobs at the head once
-  per head,
-  the head claimed in `state/points.json` before the forge is asked, so a
-  second call at the head, in the same run or a later one, re-runs
-  nothing and says so. The forge's call is `forge.RerunFailed`: GitHub
+  per head, the head claimed among the pull request's re-run heads in
+  `state/points.json` (at most 64, the oldest forgotten first) before the
+  forge is asked, so a second call at the head, in the same run or a
+  later one, or after the branch came back to the head, re-runs nothing
+  and says so. The forge's call is `forge.RerunFailed`: GitHub
   re-runs the failed jobs of each workflow run a failed job belongs to
   (the credential needs write access to Actions; without it the forge
   refuses and the script fails), GitLab retries each failed job, and

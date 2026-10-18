@@ -1452,8 +1452,8 @@ member's session token once the script ended without failing and after
 the `before-submit` point ran, so aicrewd sees no difference from a
 submit the member's turn sends; `label()`,
 `ready()` and `rerun()` act on the forge with the member's credential,
-and `state/points.json` remembers the head whose failed jobs were
-re-run, once per head. A declared command at `after-push` that exits nonzero is not a
+and `state/points.json` remembers the heads whose failed jobs were
+re-run, once per head, also when the branch comes back to one. A declared command at `after-push` that exits nonzero is not a
 failed run but the check's verdict on the head: the run is reported as
 handled with its exit, and the failure reaches the worker through the
 observation's `pre_push` (increment 2d-b), as the `pre_push` need of the

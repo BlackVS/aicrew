@@ -747,12 +747,17 @@ func (s *StepServer) submitResult(ctx context.Context, run *liveRun, u string) e
 	return s.recordStep(run, stepHostSubmit, "the result "+u+" is submitted")
 }
 
+// maxReruns bounds the heads a pull request's points remember as re-run:
+// the oldest is forgotten first.
+const maxReruns = 64
+
 // hostRerun is rerun(): the failed jobs of the pull request's head re-run
 // once per head, with the home's credential. The head is claimed in the
-// points' state before the forge is asked, so a second call at the head,
-// in this run or a later one, re-runs nothing; a forge without a re-run
-// call, or a head with no failed job it names, re-runs nothing and leaves
-// the head unclaimed.
+// points' state before the forge is asked, and the claimed heads are kept
+// for the pull request, so a second call at the head, in this run or a
+// later one, or after the branch came back to the head, re-runs nothing;
+// a forge without a re-run call, or a head with no failed job it names,
+// re-runs nothing and leaves the head unclaimed.
 func (s *StepServer) hostRerun(ctx context.Context, run *liveRun) (automation.RerunResult, error) {
 	t, err := s.runTarget(ctx, run)
 	if err != nil {
@@ -773,7 +778,9 @@ func (s *StepServer) hostRerun(ctx context.Context, run *liveRun) (automation.Re
 		return s.rerunResult(run, automation.RerunResult{Reason: "no failed job at the head that the forge can re-run"})
 	}
 	key := pullKey(t.host, t.path, run.pull)
-	claim := func(head string) (prev string, claimed bool, err error) {
+	// mark claims head among the pull request's re-run heads, or releases
+	// it; changed is false when it was so already.
+	mark := func(head string, claim bool) (changed bool, err error) {
 		s.points.mu.Lock()
 		defer s.points.mu.Unlock()
 		doc := readPoints(s.home)
@@ -782,23 +789,31 @@ func (s *StepServer) hostRerun(ctx context.Context, run *liveRun) (automation.Re
 			cur = &pullPoints{Attempt: run.attempt, Number: run.pull, URL: p.URL}
 			doc.Pulls[key] = cur
 		}
-		if cur.Rerun == head {
-			return cur.Rerun, false, nil
+		i := slices.Index(cur.Reruns, head)
+		if claim == (i >= 0) {
+			return false, nil
 		}
-		prev, cur.Rerun = cur.Rerun, head
-		return prev, true, writePoints(s.home, doc, key)
+		if claim {
+			cur.Reruns = append(cur.Reruns, head)
+			if n := len(cur.Reruns) - maxReruns; n > 0 {
+				cur.Reruns = slices.Clone(cur.Reruns[n:])
+			}
+		} else {
+			cur.Reruns = slices.Delete(cur.Reruns, i, i+1)
+		}
+		return true, writePoints(s.home, doc, key)
 	}
-	prev, claimed, err := claim(p.HeadCommit)
-	if !claimed {
-		return s.rerunResult(run, automation.RerunResult{Reason: "the failed jobs were re-run at this head already"})
-	}
+	claimed, err := mark(p.HeadCommit, true)
 	if err != nil {
 		return automation.RerunResult{}, fmt.Errorf("record the re-run: %w", err)
+	}
+	if !claimed {
+		return s.rerunResult(run, automation.RerunResult{Reason: "the failed jobs were re-run at this head already"})
 	}
 	names, err := f.RerunFailed(ctx, t.host, t.kind(), t.token, t.path, c.Checks)
 	if errors.Is(err, forge.ErrNoRerun) {
 		// Nothing was re-run: the head is given back.
-		if _, _, werr := claim(prev); werr != nil {
+		if _, werr := mark(p.HeadCommit, false); werr != nil {
 			s.log.Warn("automations: the re-run's state was not written", "error", werr.Error())
 		}
 		return s.rerunResult(run, automation.RerunResult{Reason: err.Error()})

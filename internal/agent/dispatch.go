@@ -85,11 +85,12 @@ type pullPoints struct {
 	// across polls and restarts; nil when none failed, or the point has not
 	// run at the head.
 	PrePush *pointPrePush `json:"pre_push,omitempty"`
-	// Rerun is the head whose failed jobs a script's rerun() re-ran
-	// (automation.go): once per head, so a second call at the head re-runs
-	// nothing.
-	Rerun string    `json:"rerun,omitempty"`
-	Seen  time.Time `json:"seen"`
+	// Reruns are the heads whose failed jobs a script's rerun() re-ran
+	// (automation.go), oldest first and at most maxReruns of them: once per
+	// head, so a second call at a head re-runs nothing, also after the
+	// branch moved away and came back to it.
+	Reruns []string  `json:"reruns,omitempty"`
+	Seen   time.Time `json:"seen"`
 }
 
 // pointPrePush is a failed check with the head it failed at.

@@ -249,7 +249,13 @@ func (p *pullPoints) edges(o PullObservation, f pullFacts, inflight map[string]b
 		if o.Checks == forge.ChecksFailure {
 			fire(automation.PointCIFailed, head+" "+o.Checks)
 		}
-		if o.Checks == forge.ChecksSuccess && p.Reviews[forge.ReviewerLocal].ready(head) && p.Reviews[forge.ReviewerExternal].ready(head) {
+		// The gates edge is not taken while an external review is in
+		// flight: a run then would consume the head's one edge without
+		// the transition, and the worker gets no gates wake while
+		// gates-green is in the set. The first observation without the
+		// label takes it.
+		if o.Checks == forge.ChecksSuccess && p.Reviews[forge.ReviewerLocal].ready(head) && p.Reviews[forge.ReviewerExternal].ready(head) &&
+			!slices.Contains(o.Labels, labelReviewing) {
 			fire(automation.PointGatesGreen, head)
 		}
 	}
@@ -260,6 +266,10 @@ func (p *pullPoints) edges(o PullObservation, f pullFacts, inflight map[string]b
 }
 
 // edgeOf is the edge a point fired for at o.
+// labelReviewing is the external reviewer's in-progress label (the
+// external-review row of docs/DESIGN-TURNS.md 4.2).
+const labelReviewing = "hands-reviewing"
+
 func edgeOf(point string, o PullObservation, head string) string {
 	switch point {
 	case automation.PointAfterCI, automation.PointCIFailed:
@@ -516,14 +526,7 @@ func (s *StepServer) runPoint(ctx context.Context, p *pullPoints, point string, 
 		s.log.Info("automations: the pull request's attempt is no longer the member's open attempt", "point", point, "attempt", p.Attempt)
 		return nil
 	}
-	var src AutomationSources
-	if a := st.Attempt; a.Process != nil && a.Repository != nil {
-		src = AutomationSources{Process: a.Process, Repository: a.Repository.URL, BaseBranch: a.Repository.DefaultBranch}
-		if p.Base != "" {
-			src.BaseBranch = p.Base
-		}
-	}
-	set, err := s.Automations(ctx, src)
+	set, err := s.Automations(ctx, attemptSources(st.Attempt, p.Base))
 	if err != nil {
 		s.log.Warn("automations: the effective set could not be read", "point", point, "error", RedactForgeTokens(s.home, err.Error()))
 		return nil

@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,10 +69,80 @@ type AutomationSet struct {
 	key string
 }
 
-// automationCache holds the last set read for each source.
+// automationCache holds the last set read for each source, and the names
+// of the effective set per release and pin (AutomationNames).
 type automationCache struct {
-	mu   sync.Mutex
-	sets map[string]*AutomationSet
+	mu    sync.Mutex
+	sets  map[string]*AutomationSet
+	names map[string][]string
+}
+
+// attemptSources is where the automations of the member's attempt a are
+// read from: its process pin and its repository at base, the pull
+// request's base branch, or the repository's default branch when none is
+// known. An attempt without a pin reads the release's defaults alone.
+func attemptSources(a *memberAttempt, base string) AutomationSources {
+	var src AutomationSources
+	if a != nil && a.Process != nil && a.Repository != nil {
+		src = AutomationSources{Process: a.Process, Repository: a.Repository.URL, BaseBranch: a.Repository.DefaultBranch}
+		if base != "" {
+			src.BaseBranch = base
+		}
+	}
+	return src
+}
+
+// AutomationNames is the names of the automations that run in the effective
+// set for src: every entry but a disabled one, in the set's order. They go
+// with each observation the launcher reports (PullObservation.Automations,
+// increment 2d-d), so aicrewd knows which transitions the launcher performs
+// itself and sends no wake for them. The names depend on the release and
+// the process manifest alone, never on the base branch, so they are kept
+// per pin and read again only when the pin changes. When the manifest
+// cannot be read the names are nil and not kept: aicrewd then wakes the
+// worker as it would without automations, which is also what the points do
+// while the set cannot be read.
+func (s *StepServer) AutomationNames(ctx context.Context, src AutomationSources) []string {
+	key := "release " + version.Get().Version
+	if src.Process != nil {
+		key += "\x00" + src.Process.Repository + "\x00" + src.Process.Commit + "\x00" + src.Process.Manifest
+	}
+	s.autos.mu.Lock()
+	names, ok := s.autos.names[key]
+	s.autos.mu.Unlock()
+	if ok {
+		return slices.Clone(names)
+	}
+	release, err := releaseAutomations()
+	if err != nil {
+		s.log.Warn("automations: the release's defaults could not be read", "error", err.Error())
+		return nil
+	}
+	var process []automation.Entry
+	if src.Process != nil {
+		r := automationReader{home: s.home, git: automationGit, self: automationSelf}
+		if r.git == nil {
+			r.git = execGit
+		}
+		if _, process, err = r.manifest(ctx, *src.Process); err != nil {
+			s.log.Warn("automations: the process manifest could not be read; the observation names no automation",
+				"error", RedactForgeTokens(s.home, err.Error()))
+			return nil
+		}
+	}
+	names = []string{}
+	for _, e := range automation.Resolve(release, process) {
+		if e.Source != automation.SourceDisabled {
+			names = append(names, e.Name)
+		}
+	}
+	s.autos.mu.Lock()
+	if s.autos.names == nil {
+		s.autos.names = map[string][]string{}
+	}
+	s.autos.names[key] = names
+	s.autos.mu.Unlock()
+	return slices.Clone(names)
 }
 
 // releaseAutomations is the release's defaults, read once.

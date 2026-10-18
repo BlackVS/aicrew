@@ -890,8 +890,20 @@ runs, at an extension point (`after-push`, `after-ci`, `ci-failed`,
 subscribes to, or both. The entries come from three sources:
 - **The release's defaults,** embedded from `defaults/automations/`:
   `subscriptions.json` holds their entries with the source `release`, and
-  the scripts sit beside it. They are empty placeholders until 2d and 2e
-  fill them.
+  the scripts sit beside it. Since increment 2d-d they are the transitions
+  of `docs/DESIGN-TURNS.md` 4.2 the launcher performs itself:
+  `review-request` at `after-push` (clear `hands-reviewed`, add
+  `review-this` once; nothing for a base-only update, while
+  `hands-reviewing` or `review-this` is present, or when the external
+  review at the head exists), `ci-rerun` at `ci-failed` (`rerun()` once a
+  check failed on the runner) and `gates-green` at `gates-green`
+  (`ready()`, then `submit(pr().url)`, unless the attempt is submitted
+  already; the script reads no label, the point's edge does); `base-update`
+  follows in 2e.
+  Their tests run against the fake host
+  (`internal/automation/defaults_test.go`), and one asserts the scripts
+  name no host, endpoint or instance: a default is universal release
+  content.
 - **The process manifest at the attempt's pin:** its `automations` list.
   A `process` script sits beside the manifest at the pinned commit, named
   from the repository's root as the manifest names its other files. A
@@ -922,8 +934,11 @@ defaults.
 from what its forge poll observes, once per edge: `after-push` for a head
 it had not seen, `after-ci` for a head and a CI conclusion, `ci-failed`
 for a head whose CI failed, `gates-green` for a head whose local and
-external reviews are both `READY_FOR_HUMAN_MERGE` while its CI passed,
-`after-merge` for the merge, and `before-submit` in the `work` step that
+external reviews are both `READY_FOR_HUMAN_MERGE` while its CI passed and
+no external review is in flight (`hands-reviewing` absent: a run then would
+consume the head's one edge without the transition, so the first
+observation without the label takes it), `after-merge` for the merge, and
+`before-submit` in the `work` step that
 carries the submit, before it is sent. The fired edges are the home's
 `state/points.json`, so a restarted launcher does not fire a point it
 already fired, and an edge once fired stays fired however the
@@ -933,6 +948,17 @@ ends, so a run cut short by a restart runs again at the next observation
 (at least once, 12.4). A merged pull request leaves the watch list, so
 the file keeps it until its `after-merge` ran, and the next poll runs the
 point first.
+
+**The gates wake** (increment 2d-d). Each observation the launcher
+reports names the automations of its attempt's effective set that run
+(`automations`: every entry but a disabled one, read from the release and
+the process manifest and kept per pin, so a poll reads nothing anew).
+aicrewd adds the `gates` need, the worker's cue to mark the pull request
+ready and submit, only when `gates-green` is not among them: with the
+default in the set the launcher performs the transition, and the worker
+learns of the submit through the attempt's lifecycle message. A process
+that disables the default gets the wake as before, and so does a launcher
+whose set cannot be read, which names no automation.
 The event a script gets at a point names the point as its kind and the
 pull request with its head as its ID, and carries `base_only`: at
 `after-push`, whether the new head's patch identity (`git diff

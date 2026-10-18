@@ -84,6 +84,11 @@ type PullObservation struct {
 	// it stands, so aicrewd wakes the worker with it and clears the need
 	// once a head passes.
 	PrePush *PrePushFailure `json:"pre_push,omitempty"`
+	// Automations names the automations of the attempt's effective set that
+	// run, every entry but a disabled one (AutomationNames, increment 2d-d),
+	// so aicrewd sends no wake for a transition the launcher performs
+	// itself; nil when the set could not be read.
+	Automations []string `json:"automations,omitempty"`
 }
 
 // PrePushFailure is a declared check that failed after a push, as the
@@ -368,6 +373,12 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, pollBudget)
 	defer cancel()
+	// Each observation names the automations the launcher runs for its
+	// attempt, so aicrewd sends no wake for a transition they perform.
+	var names []string
+	if st, err := s.Status(ctx); err == nil && st.Attempt != nil {
+		names = s.AutomationNames(ctx, attemptSources(st.Attempt, ""))
+	}
 	api := newPullStatusAPI()
 	for _, w := range watched {
 		e, tok, err := forgeTokenFor(s.home, doc, w.Host)
@@ -382,6 +393,7 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 			continue
 		}
 		o := observation(w.Host, w.Repository, st)
+		o.Automations = names
 		key := pullKey(w.Host, w.Repository, w.Number)
 		facts := pullFacts{Base: st.Base}
 		if s.wantsContent(key, st) {

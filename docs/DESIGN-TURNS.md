@@ -505,7 +505,8 @@ of 4.2:
 - `after push`: a new head, before the self-review;
 - `after CI`: CI concluded at the head, whatever the conclusion;
 - `ci failed`: the change failed CI, before the action-needed message;
-- `both gates green`: the reviews and CI are green at the head;
+- `both gates green`: the reviews and CI are green at the head, and no
+  external review is in flight;
 - `before submit`: the last point before the harness submits;
 - `after merge`: before the delivery is recorded.
 
@@ -641,11 +642,15 @@ functions, and nothing else.
 
 | Name | What it does |
 | --- | --- |
-| `pr()` | The pull request's state from the launcher's facts (4.1): `number`, `head`, `base`, `branch`, `behind`, `draft`, `labels`, `mergeable`; `reviews`, local and external, each with its head, its verdict, its findings and its body (bounded to 16 KiB); `checks`, each with its name and conclusion, and for a failed job its log excerpt (bounded to 8 KiB, as in section 5). |
+| `pr()` | The pull request's state from the launcher's facts (4.1): `number`, `url`, `head`, `base`, `branch`, `behind`, `draft`, `labels`, `mergeable`; `reviews`, local and external, each with its head, its verdict, its findings and its body (bounded to 16 KiB); `checks`, each with its name and conclusion, for a failed job its log excerpt (bounded to 8 KiB, as in section 5), and `runner_failure` when the failure is the runner's, not the change's. |
 | `attempt()` | The attempt's state: `id`, `phase`, `task` (`id`, `size`), `base_commit`, `spent_usd`, `budget_usd`. |
 | `run(cmd, args)` | Runs one command, with an argument list and no shell. It runs in the attempt's worktree, under the member's account, within the turn's allow list. It returns `exit` and `output`, the output bounded to 64 KiB. A command outside the allow list fails the script. |
 | `step(kind, text)` | Records a step of the attempt. A kind the state machine knows, such as `update_conflict`, moves it, for example to an action needed. |
 | `comment(body)` | Posts a comment on the pull request, with the member's forge credential, bounded to 16 KiB. |
+| `label(add, remove)` | Adds and removes labels on the pull request, with the member's forge credential: at most 8 names per list, the removals first (increment 2d-c, decision Q1: a structured API, not parsed CLI output). |
+| `ready()` | Drops the pull request's draft flag and its `WIP:` prefix. |
+| `submit(url)` | Submits the attempt with `url` as its result. It is the holder's own work step, sent by the launcher once the script ended without failing and after `before-submit` ran, so aicrewd's fences apply unchanged; a run at `before-submit` itself cannot submit. |
+| `rerun()` | Re-runs the failed jobs of the head where the forge has a call for it, once per head (decision Q4), and returns `reran`, `jobs` and `reason`. |
 | `turn(kind, content)` | A value, not an action: returned from `main`, it asks for a model turn of that kind with that content (12.3). It has no side effect. |
 
 There is no file access, no network, no clock and no environment. Values

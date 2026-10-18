@@ -167,11 +167,41 @@ func printCheck(w io.Writer, rep agent.CheckReport) {
 			fmt.Fprintf(w, "%-20s %-44s %-24s %-20s %-8s %s\n", p.Project, p.Repository, p.Host, orNone(p.Account), p.Required, p.State)
 		}
 	}
+	if a := rep.Automations; a != nil {
+		printAutomations(w, a)
+	}
 	for _, n := range rep.Notices {
 		fmt.Fprintf(w, "notice: %s\n", n)
 	}
 	for _, i := range rep.Instructions {
 		fmt.Fprintf(w, "to do: %s\n", i)
+	}
+}
+
+// printAutomations prints the effective automations: each entry's name,
+// when it runs, its source and the commit its script was read at.
+func printAutomations(w io.Writer, a *agent.AutomationsReport) {
+	if a.Attempt != "" {
+		fmt.Fprintf(w, "automations of attempt %s:\n", a.Attempt)
+	} else {
+		fmt.Fprintln(w, "automations (the release's defaults; no open attempt names a process pin):")
+	}
+	if len(a.Entries) == 0 {
+		fmt.Fprintln(w, "  none")
+		return
+	}
+	fmt.Fprintf(w, "  %-24s %-28s %-10s %s\n", "name", "runs at", "source", "commit")
+	for _, e := range a.Entries {
+		at := strings.Join(append([]string{e.Point}, e.Events...), ", ")
+		at = strings.TrimPrefix(at, ", ")
+		if at == "" {
+			at = "-"
+		}
+		commit := e.Commit
+		if commit == "" {
+			commit = "-"
+		}
+		fmt.Fprintf(w, "  %-24s %-28s %-10s %s\n", e.Name, at, e.Source, commit)
 	}
 }
 

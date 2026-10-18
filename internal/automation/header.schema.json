@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/BlackVS/aicrew/blob/main/internal/automation/header.schema.json",
+  "title": "aicrew automation script header, host API 1",
+  "description": "A workflow script's first line is \"# aicrew-automation: \" followed by this JSON object on the same line (docs/DESIGN-TURNS.md, 13.3). host_api names the version of the host API (10.3) the script was written for; a release refuses a script written for a newer one.",
+  "type": "object",
+  "required": ["host_api"],
+  "additionalProperties": false,
+  "properties": {
+    "host_api": {"type": "integer", "minimum": 1, "maximum": 1},
+    "description": {"type": "string", "maxLength": 1000}
+  }
+}

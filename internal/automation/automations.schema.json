@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/BlackVS/aicrew/blob/main/internal/automation/automations.schema.json",
+  "title": "aicrew automations, host API 1",
+  "description": "The automations entries of a process manifest, and of the defaults an aicrew release embeds (docs/DESIGN-TURNS.md, 13.1 and 13.3). An entry names an automation, where its script comes from, and when it runs: at an extension point (9.1), for the event kinds it subscribes to (12.2), or both. A manifest's entry replaces the release default of the same name; the source \"disabled\" turns that default off. The \"release\" source is the release's own and is refused in a manifest. A \"process\" script is named from the process repository's root, as the manifest names its other files, and sits in the manifest's directory; a \"repository\" script is under the repository's automations/, read at the base branch's merged commit. Other fields of a manifest, its version among them, are the manifest format's, not this schema's; the release's defaults file checks its own version.",
+  "type": "object",
+  "properties": {
+    "$schema": {"type": "string"},
+    "automations": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "$defs": {
+    "entry": {
+      "oneOf": [
+        {"$ref": "#/$defs/disabled"},
+        {"$ref": "#/$defs/script"}
+      ]
+    },
+    "disabled": {
+      "type": "object",
+      "required": ["name", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "description": {"$ref": "#/$defs/description"},
+        "source": {"const": "disabled"}
+      }
+    },
+    "script": {
+      "type": "object",
+      "required": ["name", "source"],
+      "additionalProperties": false,
+      "anyOf": [
+        {"type": "object", "required": ["point"]},
+        {"type": "object", "required": ["events"]}
+      ],
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "description": {"$ref": "#/$defs/description"},
+        "source": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["process"],
+              "additionalProperties": false,
+              "properties": {"process": {"type": "string", "maxLength": 256, "pattern": "^([A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\\.star$"}}
+            },
+            {
+              "type": "object",
+              "required": ["repository"],
+              "additionalProperties": false,
+              "properties": {"repository": {"type": "string", "maxLength": 256, "pattern": "^automations/([A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\\.star$"}}
+            },
+            {
+              "type": "object",
+              "required": ["release"],
+              "additionalProperties": false,
+              "properties": {"release": {"type": "string", "maxLength": 256, "pattern": "^([A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\\.star$"}}
+            }
+          ]
+        },
+        "point": {"enum": ["after-push", "after-ci", "ci-failed", "gates-green", "before-submit", "after-merge"]},
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["board.changed", "forge.changed", "attempt.changed", "member.changed", "timer.due"]}
+        },
+        "turn": {"type": "string", "pattern": "^[a-z0-9_]{1,64}$"}
+      }
+    },
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},
+    "description": {"type": "string", "maxLength": 1000}
+  }
+}

@@ -141,6 +141,9 @@ type StepServer struct {
 	runsMu sync.Mutex
 	runs   map[string]*liveRun
 	env    []string
+	// autos are the effective automation sets last read
+	// (automationsources.go).
+	autos automationCache
 }
 
 // ServeSteps makes the agent home's state directory private, verifies it,
@@ -341,6 +344,15 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 			return answerErr(err)
 		}
 		return done(rows)
+	case call.Op == "automations":
+		// The effective automations of the member's open attempt
+		// (aicrew-agent check): each entry with its name, point, source
+		// and commit.
+		id, set, err := s.AttemptAutomations(ctx)
+		if err != nil {
+			return answerErr(err)
+		}
+		return done(AutomationsReport{Attempt: id, AutomationSet: set})
 	case call.Op == "ack":
 		// Acknowledge delivered messages: {"ids": [...]}.
 		var in struct {

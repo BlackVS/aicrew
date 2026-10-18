@@ -828,6 +828,40 @@ run`, since the interpreter has no memory limit of its own:
   the process ending) is a result and an `automation_failed` step. The
   launcher never retries it.
 
+**Which automations run** (increment 2c, `docs/DESIGN-TURNS.md` 13.1). An
+automation is an entry: a name, where its script comes from, and when it
+runs, at an extension point (`after-push`, `after-ci`, `ci-failed`,
+`gates-green`, `before-submit`, `after-merge`), for the event kinds it
+subscribes to, or both. The entries come from three sources:
+- **The release's defaults,** embedded from `defaults/automations/`:
+  `subscriptions.json` holds their entries with the source `release`, and
+  the scripts sit beside it. They are empty placeholders until 2d and 2e
+  fill them.
+- **The process manifest at the attempt's pin:** its `automations` list.
+  A `process` script sits beside the manifest at the pinned commit, named
+  from the repository's root as the manifest names its other files. A
+  `repository` script is under the repository's `automations/` at the
+  base branch's merged commit, which the launcher fetches; the attempt's
+  head is never read, so a worker cannot change the script that acts on
+  its own pull request.
+- **Precedence by name:** the manifest's entry replaces the release default
+  of the same name, or turns it off with the source `"disabled"`; a name
+  the defaults lack is added; a default the manifest does not name
+  applies.
+
+A script's first line is its header, `# aicrew-automation: {"host_api":
+1}`, naming the host API it was written for. The entries and the header
+have published JSON Schemas, `internal/automation/automations.schema.json`
+and `header.schema.json`, versioned with the host API; the tests validate
+the defaults and examples against them (`internal/schematest`). The
+launcher keeps the resolved set (`StepServer.Automations`) and reads it
+again only when the pin changes or the base branch's commit changes
+`automations/`, without a restart. A script it cannot read, or whose
+header it refuses, stays in the set with its problem. `aicrew-agent check`
+lists the open attempt's effective set, each entry with its name, when it
+runs, its source and its commit; without an attempt, the release's
+defaults.
+
 ## Teams
 
 A team has a name and a hub. Its projects are the grants its hub's

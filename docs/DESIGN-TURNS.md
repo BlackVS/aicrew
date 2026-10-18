@@ -525,6 +525,12 @@ reviewed and released as Go.
 
 ### 9.2 The process
 
+Amended by [DESIGN-INSTANCE-BOUNDARY.md](DESIGN-INSTANCE-BOUNDARY.md) D2
+and D3: the manifest and the scripts beside it live in the instance
+configuration repository, seeded from an aiskills template, and the
+launcher reads them from the hub-served process set, never from a git
+clone; a change is a pull request on the instance repository.
+
 The process says when and what. The process manifest that the offer pins
 from the aiskills repository (`processes/<name>/manifest.json`) declares,
 per extension point, the commands or scripts to run. For example:
@@ -675,6 +681,13 @@ are frozen between calls.
   is never retried in a loop.
 
 ### 10.4 Worked example: the base update
+
+Amended by [DESIGN-INSTANCE-BOUNDARY.md](DESIGN-INSTANCE-BOUNDARY.md) D6
+(increment 2e, task `01a14478-8366`): a script never runs network git and
+never holds a credential, so the fetch, merge, identity and push below
+become the host function `update_base()`, performed by the launcher with
+the member's credential; the script keeps the decision and the turn. The
+example stands as the illustration of the shape.
 
 This is today's "branch behind main, patch identity unchanged" case as a
 script at `after CI`. It updates the branch by merging the base, so no
@@ -947,8 +960,11 @@ They are not in the aiskills processes. A default is part of what an
 aicrew version does, and it moves with that version. A process is a
 project's choice, and it moves with the project's pin.
 
-**Precedence.** One rule, by name. The process manifest may list
-`automations`, each with a name and a source:
+**Precedence.** One rule, by name. The same rule orders the skills set,
+and the instance level ranks above the process for both
+([DESIGN-INSTANCE-BOUNDARY.md](DESIGN-INSTANCE-BOUNDARY.md) D1 and D3).
+The process manifest may list `automations`, each with a name and a
+source:
 - a script beside the manifest in the pinned process;
 - a script in the repository's `automations/` at the base branch's commit;
 - `disabled`.

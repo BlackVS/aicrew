@@ -417,6 +417,12 @@ exact command. aicrewd is not a credential courier. The deposits of task
 
 ## 3. The provider profile
 
+Amended by [DESIGN-INSTANCE-BOUNDARY.md](DESIGN-INSTANCE-BOUNDARY.md) D5:
+the profile gains an endpoint facet (`vendor`, `gateway`, `local`; the
+runner passes the base URL to the client, the model never sets it, no
+fallback between endpoints), and the browser-less login flows are the
+normal path of 3.3, wrapped by `aicrew member login`.
+
 The provider profile is one facet of the member's worker profile (8.3): the
 client, the model, the auth mode and the limits. A member may override this
 facet alone, because a subscription login belongs to its host.

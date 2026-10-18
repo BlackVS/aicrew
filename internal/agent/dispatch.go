@@ -154,6 +154,10 @@ func pointsPathIn(home string) string { return filepath.Join(home, filepath.From
 type pointState struct {
 	mu       sync.Mutex
 	inflight map[string]bool
+	// prepared is, per point and edge in flight, the preparation error
+	// last logged for it, so a point that cannot be prepared is logged
+	// once per edge, not at every poll; cleared once the point ran.
+	prepared map[string]string
 	// run serializes the dispatches: the points of one launcher run in
 	// order, one at a time, beside the steps.
 	run sync.Mutex
@@ -340,16 +344,20 @@ func (s *StepServer) replayPoints() {
 // firePoint runs the automations at point for the pull request, records the
 // edge as fired, and clears it from the edges in flight. A run the
 // launcher's exit cut short records no edge: the next launcher runs the
-// point again at its next observation (12.4, at least once). At
-// after-push, the first declared check that failed is kept for the head
-// and sent to aicrewd at once with the observation that fired the point,
-// so the worker is woken with it (2d-b).
+// point again at its next observation (12.4, at least once). A point that
+// could not be prepared, because the session status or the effective set
+// could not be read before any entry started, records no edge either: it
+// is not a failed run, nothing ran, so the next accepted observation
+// fires it again, and the error is logged once per edge. At after-push,
+// the first declared check that failed is kept for the head and sent to
+// aicrewd at once with the observation that fired the point, so the
+// worker is woken with it (2d-b).
 func (s *StepServer) firePoint(ctx context.Context, key string, p *pullPoints, point string, o PullObservation) {
 	baseOnly := false
 	if point == automation.PointAfterPush {
 		baseOnly = s.baseOnly(ctx, p)
 	}
-	failed := s.runPoint(ctx, p, point, o, baseOnly)
+	failed, prep := s.runPoint(ctx, p, point, o, baseOnly)
 	edge := edgeOf(point, o, p.Head)
 	s.points.mu.Lock()
 	delete(s.points.inflight, key+" "+point)
@@ -357,6 +365,19 @@ func (s *StepServer) firePoint(ctx context.Context, key string, p *pullPoints, p
 		s.points.mu.Unlock()
 		return
 	}
+	if prep != nil {
+		if s.points.prepared == nil {
+			s.points.prepared = map[string]string{}
+		}
+		if s.points.prepared[key+" "+point+" "+edge] != prep.Error() {
+			s.points.prepared[key+" "+point+" "+edge] = prep.Error()
+			s.log.Warn("automations: the point was not prepared and fires again at the next observation",
+				"point", point, "pull", p.Number, "edge", edge, "error", prep.Error())
+		}
+		s.points.mu.Unlock()
+		return
+	}
+	delete(s.points.prepared, key+" "+point+" "+edge)
 	doc := readPoints(s.home)
 	cur := doc.Pulls[key]
 	if cur == nil {
@@ -515,21 +536,25 @@ func patchIdentity(ctx context.Context, worktree, base, head string) string {
 
 // runPoint runs the effective automations declared at point for the pull
 // request of p's attempt, and reports each run to aicrewd. It returns the
-// declared checks that failed at after-push, in the set's order.
-func (s *StepServer) runPoint(ctx context.Context, p *pullPoints, point string, o PullObservation, baseOnly bool) (failed []checkFailure) {
+// declared checks that failed at after-push, in the set's order, or the
+// preparation error when nothing ran because the session status or the
+// effective set could not be read; a pull request whose attempt is no
+// longer the member's open attempt runs nothing and is no error.
+func (s *StepServer) runPoint(ctx context.Context, p *pullPoints, point string, o PullObservation, baseOnly bool) (failed []checkFailure, prep error) {
 	st, err := s.Status(ctx)
 	if err != nil {
-		s.log.Warn("automations: read the session status", "point", point, "error", err.Error())
-		return nil
+		return nil, fmt.Errorf("read the session status: %w", err)
 	}
 	if st.Attempt == nil || st.Attempt.ID != p.Attempt {
+		// Not a preparation error: the attempt is gone, nothing is owed at
+		// the point, and the edge is recorded so the old attempt's pull
+		// request does not fire it again.
 		s.log.Info("automations: the pull request's attempt is no longer the member's open attempt", "point", point, "attempt", p.Attempt)
-		return nil
+		return nil, nil
 	}
 	set, err := s.Automations(ctx, attemptSources(st.Attempt, p.Base))
 	if err != nil {
-		s.log.Warn("automations: the effective set could not be read", "point", point, "error", RedactForgeTokens(s.home, err.Error()))
-		return nil
+		return nil, fmt.Errorf("the effective set could not be read: %s", RedactForgeTokens(s.home, err.Error()))
 	}
 	head := p.Head
 	event := automation.Event{Kinds: []string{point}, IDs: []string{pullKey(o.Host, o.Repository, o.Number) + "@" + head}, BaseOnly: baseOnly}
@@ -568,11 +593,11 @@ func (s *StepServer) runPoint(ctx context.Context, p *pullPoints, point string, 
 		if ctx.Err() != nil {
 			// The launcher is stopping: the run it cut is not a failure
 			// of the automation, and the point runs again.
-			return nil
+			return nil, nil
 		}
 		s.reportRun(ctx, rep)
 	}
-	return failed
+	return failed, nil
 }
 
 // How a run ended, as aicrewd names it (store/automations.go).

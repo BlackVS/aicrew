@@ -3,12 +3,14 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -635,5 +637,75 @@ func TestPointsKeepEveryEdge(t *testing.T) {
 	o := PullObservation{Number: 9, State: forge.PullOpen, HeadCommit: strings.Repeat("f", 40)}
 	if got := p.edges(o, pullFacts{}, nil, key); !slices.Equal(got, []string{automation.PointAfterPush}) {
 		t.Fatalf("a new head fires %v", got)
+	}
+}
+
+// A point that could not be prepared records no edge (the 2d-a follow-up):
+// with the release's defaults unreadable, after-push fires, runs nothing
+// and is logged once over two polls; once the defaults read again the next
+// poll fires it and its entries run, and the edge is recorded then.
+func TestPreparationErrorKeepsTheEdge(t *testing.T) {
+	ctx := context.Background()
+	a := setupAutomationSources(t)
+	orig := releaseAutomations
+	var failing atomic.Bool
+	failing.Store(true)
+	releaseAutomations = func() ([]automation.Entry, error) {
+		if failing.Load() {
+			return nil, errors.New("the release's defaults are unreadable on purpose")
+		}
+		return orig()
+	}
+	t.Cleanup(func() { releaseAutomations = orig })
+	s := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
+	body := s.claimBody()
+	body["process"] = map[string]string{"repo": testProcessRepo, "commit": a.pin, "manifest": "process/manifest.json"}
+	r, err := s.run(t, attemptsPath+"/claim", body)
+	if err != nil || r.Outcome != "committed" {
+		t.Fatalf("claim: %+v %v", r, err)
+	}
+	id := r.AttemptID
+	provisionTestForge(t, s.cfg.Home, "git.example.test", "member-forge-token")
+	srv := s.serve(t)
+	wt := filepath.Join(s.cfg.Home, "worktrees", id)
+	os.MkdirAll(filepath.Dir(wt), 0o700)
+	git(t, filepath.Dir(wt), "clone", "-q", "-b", "work/task-1", a.projectBare, wt)
+	head := git(t, wt, "rev-parse", "HEAD")
+	fake := &fakeStatus{token: "member-forge-token", st: forge.PullStatus{Pull: forge.Pull{Number: 4,
+		URL: "https://git.example.test/crew/project-t/pulls/4", State: forge.PullOpen, Head: "work/task-1", HeadCommit: head,
+		Base: "main", Labels: []string{}}, Checks: forge.ChecksPending}}
+	oldAPI := newPullStatusAPI
+	newPullStatusAPI = func() PullStatusAPI { return fake }
+	t.Cleanup(func() { newPullStatusAPI = oldAPI })
+	key := pullKey("git.example.test", "crew/project-t", 4)
+	fired := func() []string {
+		if p := readPoints(s.cfg.Home).Pulls[key]; p != nil {
+			return p.Fired[automation.PointAfterPush]
+		}
+		return nil
+	}
+	logged := func() int { return strings.Count(s.logs.String(), "the point was not prepared") }
+
+	var answers []byte
+	obs, _ := json.Marshal(observation("git.example.test", "crew/project-t", fake.st))
+	if ans := s.call(t, &answers, StepCall{Op: "watch-pull", Body: obs}); !ans.OK {
+		t.Fatalf("the baseline: %+v", ans)
+	}
+	srv.waitPoints()
+	if recs := dispatchRecords(t, s.cfg.Home); len(recs) != 0 || len(fired()) != 0 || logged() != 1 {
+		t.Fatalf("after-push with the set unreadable: records %+v, fired %v, logged %d\n%s", recs, fired(), logged(), s.logs.String())
+	}
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	if recs := dispatchRecords(t, s.cfg.Home); len(recs) != 0 || len(fired()) != 0 || logged() != 1 {
+		t.Fatalf("the second poll, still unreadable: records %+v, fired %v, logged %d", recs, fired(), logged())
+	}
+	failing.Store(false)
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	recs := dispatchRecords(t, s.cfg.Home)
+	push := runsAt(recs, automation.PointAfterPush)
+	if len(push) != 1 || push["automations/check.star"].Outcome != "handled" || !slices.Equal(fired(), []string{head}) || logged() != 1 {
+		t.Fatalf("after-push once the set reads: %+v, fired %v, logged %d\n%s", push, fired(), logged(), s.logs.String())
 	}
 }

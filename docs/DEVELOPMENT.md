@@ -954,7 +954,12 @@ already fired, and an edge once fired stays fired however the
 observations flap (CI failed, passed and failed again at one head fires
 `after-ci` twice, not three times); an edge is recorded after its run
 ends, so a run cut short by a restart runs again at the next observation
-(at least once, 12.4). A merged pull request leaves the watch list, so
+(at least once, 12.4). A point that could not be prepared, because the
+session status or the effective set could not be read before any entry
+started, records no edge either: nothing ran, so it is not a failed run;
+the next accepted observation fires it again, and the error is logged
+once per edge, not at every poll.
+A merged pull request leaves the watch list, so
 the file keeps it until its `after-merge` ran, and the next poll runs the
 point first.
 
@@ -967,7 +972,11 @@ ready and submit, only when `gates-green` is not among them: with the
 default in the set the launcher performs the transition, and the worker
 learns of the submit through the attempt's lifecycle message. A process
 that disables the default gets the wake as before, and so does a launcher
-whose set cannot be read, which names no automation.
+whose release or process manifest cannot be read, which names no
+automation. A set that fails later, at a repository-sourced script's base
+read, still names its automations: the point then records no edge and
+fires again at the next observation, so the transition the names promise
+is performed once the base reads.
 The event a script gets at a point names the point as its kind and the
 pull request with its head as its ID, and carries `base_only`: at
 `after-push`, whether the new head's patch identity (`git diff

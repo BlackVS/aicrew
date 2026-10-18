@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -70,10 +71,34 @@ type pullPoints struct {
 	// Reviews is the newest review of each reviewer (local, external), as
 	// the last content read saw them.
 	Reviews map[string]pointReview `json:"reviews,omitempty"`
-	// Fired is, per point, the edge it last fired for: the head, the head
-	// with the CI conclusion, or "merged".
-	Fired map[string]string `json:"fired,omitempty"`
-	Seen  time.Time         `json:"seen"`
+	// State is the pull request's state as last observed. A merged pull
+	// request leaves the watch list, and stays here until after-merge ran.
+	State string `json:"state,omitempty"`
+	// Fired is, per point, the edges it fired for, the newest last: the
+	// head, the head with the CI conclusion, or "merged". An edge fires
+	// once however the observations flap between it and another.
+	Fired map[string][]string `json:"fired,omitempty"`
+	Seen  time.Time           `json:"seen"`
+}
+
+// maxFiredEdges bounds the edges kept per point.
+const maxFiredEdges = 16
+
+// pendingMerge reports whether p was merged and after-merge has not run.
+func (p *pullPoints) pendingMerge() bool {
+	return p.State == forge.PullMerged && !slices.Contains(p.Fired[automation.PointAfterMerge], "merged")
+}
+
+// observation is p as an observation of the pull request key names, for a
+// point fired from the kept state rather than from a forge read.
+func (p *pullPoints) observation(key string) PullObservation {
+	host, rest, _ := strings.Cut(key, "/")
+	repository, _, _ := strings.Cut(rest, "#")
+	state := p.State
+	if state == "" {
+		state = forge.PullOpen
+	}
+	return PullObservation{Host: host, Repository: repository, Number: p.Number, URL: p.URL, State: state, HeadCommit: p.Head}
 }
 
 // pointReview is a review as the points read it.
@@ -119,14 +144,14 @@ func readPoints(home string) pointsDoc {
 }
 
 // writePoints writes d, without the pull requests the launcher no longer
-// watches, except keep.
+// watches, except keep and the merged ones whose after-merge has not run.
 func writePoints(home string, d pointsDoc, keep string) error {
 	watched := map[string]bool{keep: true}
 	for _, w := range readWatched(home) {
 		watched[pullKey(w.Host, w.Repository, w.Number)] = true
 	}
-	for k := range d.Pulls {
-		if !watched[k] {
+	for k, p := range d.Pulls {
+		if !watched[k] && !p.pendingMerge() {
 			delete(d.Pulls, k)
 		}
 	}
@@ -177,14 +202,14 @@ func (p *pullPoints) edges(o PullObservation, f pullFacts, inflight map[string]b
 	if f.Reviews != nil {
 		p.Reviews = f.Reviews
 	}
-	p.Number, p.URL, p.Seen = o.Number, o.URL, time.Now().UTC()
-	if p.Fired == nil {
-		p.Fired = map[string]string{}
+	if o.State != "" {
+		p.State = o.State
 	}
+	p.Number, p.URL, p.Seen = o.Number, o.URL, time.Now().UTC()
 	head := p.Head
 	var out []string
 	fire := func(point, edge string) {
-		if edge != "" && p.Fired[point] != edge && !inflight[key+" "+point] {
+		if edge != "" && !slices.Contains(p.Fired[point], edge) && !inflight[key+" "+point] {
 			out = append(out, point)
 		}
 	}
@@ -259,6 +284,21 @@ func (s *StepServer) noticePull(o PullObservation, attempt string, f pullFacts) 
 // waitPoints waits for the dispatches in flight; the tests use it.
 func (s *StepServer) waitPoints() { s.points.wg.Wait() }
 
+// replayPoints dispatches the points the kept state still owes: a merged
+// pull request whose after-merge run the launcher's exit cut short. The
+// merge took the pull request off the watch list, so no poll sees it
+// again; the poll calls this first.
+func (s *StepServer) replayPoints() {
+	s.points.mu.Lock()
+	doc := readPoints(s.home)
+	s.points.mu.Unlock()
+	for key, p := range doc.Pulls {
+		if p.pendingMerge() {
+			s.noticePull(p.observation(key), p.Attempt, pullFacts{})
+		}
+	}
+}
+
 // firePoint runs the automations at point for the pull request, records the
 // edge as fired, and clears it from the edges in flight. A run the
 // launcher's exit cut short records no edge: the next launcher runs the
@@ -283,9 +323,14 @@ func (s *StepServer) firePoint(ctx context.Context, key string, p *pullPoints, p
 		doc.Pulls[key] = cur
 	}
 	if cur.Fired == nil {
-		cur.Fired = map[string]string{}
+		cur.Fired = map[string][]string{}
 	}
-	cur.Fired[point] = edge
+	if !slices.Contains(cur.Fired[point], edge) {
+		cur.Fired[point] = append(cur.Fired[point], edge)
+	}
+	if n := len(cur.Fired[point]); n > maxFiredEdges {
+		cur.Fired[point] = cur.Fired[point][n-maxFiredEdges:]
+	}
 	if point == automation.PointAfterPush {
 		cur.Identity = p.Identity
 	}
@@ -516,6 +561,10 @@ func (s *StepServer) runCommand(ctx context.Context, rep *automationReport, cmdl
 		fail(err.Error())
 		return
 	}
+	if isCredentialCommand(cmdline) {
+		fail("a declared command gets no path to the member's forge credential: " + strings.Join(cmdline, " "))
+		return
+	}
 	cctx, cancel := context.WithTimeout(ctx, commandWall)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, cmdline[0], cmdline[1:]...)
@@ -551,6 +600,17 @@ func (s *StepServer) runCommand(ctx context.Context, rep *automationReport, cmdl
 	}
 }
 
+// isCredentialCommand reports whether cmdline is the credential helper
+// itself, `aicrew-agent git-credential ...`, which the allow list's
+// `Bash(aicrew-agent *)` would admit; a declared command never runs it.
+func isCredentialCommand(cmdline []string) bool {
+	if len(cmdline) < 2 {
+		return false
+	}
+	prog := strings.TrimSuffix(strings.ToLower(filepath.Base(cmdline[0])), ".exe")
+	return prog == "aicrew-agent" && cmdline[1] == "git-credential"
+}
+
 // recordEnd records how a command's run ended in the home's log.
 func (s *StepServer) recordEnd(run *liveRun, outcome string, cmdline []string, exit *int) {
 	if err := appendAutomationRecord(s.home, automationRecord{At: time.Now().UTC(), Run: run.id, Attempt: run.attempt,
@@ -568,19 +628,48 @@ func bound(s string, n int) string {
 // reportRun reports a run to aicrewd as the launcher's session. A report
 // aicrewd does not take is logged; the home's log holds the run.
 func (s *StepServer) reportRun(ctx context.Context, rep automationReport) {
-	if len(rep.Steps) > maxReportSteps {
-		rep.Steps = rep.Steps[:maxReportSteps]
-	}
-	for i := range rep.Steps {
-		rep.Steps[i].Text = bound(rep.Steps[i].Text, maxReportStepText)
-	}
-	rep.Content, rep.Error = bound(rep.Content, maxReportContent), bound(rep.Error, maxReportError)
-	body, _ := json.Marshal(rep)
+	body := fitReport(&rep)
 	rctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	if _, err := s.local.LocalStep(rctx, newKey("automation"), s.driver.Session.stepToken(), automationsPath, body); err != nil {
 		s.log.Warn("automations: report a run", "run", rep.RunID, "name", rep.Name, "point", rep.Point, "error", err.Error())
 	}
+}
+
+// maxReportEncoded bounds a report as encoded, under the route's body
+// limit (server/attempts.go maxReportBody): JSON escaping can multiply a
+// text's bytes.
+const maxReportEncoded = 40 << 10
+
+// fitReport cuts rep to what aicrewd takes, and encodes it: the texts
+// without NUL (which aicrewd refuses), each bounded, then the steps' texts,
+// the content and the error halved until the encoding fits, and at last
+// the steps themselves. A failed run keeps an error.
+func fitReport(rep *automationReport) []byte {
+	clean := func(s string, n int) string { return bound(strings.ReplaceAll(s, "\x00", ""), n) }
+	if len(rep.Steps) > maxReportSteps {
+		rep.Steps = rep.Steps[:maxReportSteps]
+	}
+	for i := range rep.Steps {
+		rep.Steps[i].Text = clean(rep.Steps[i].Text, maxReportStepText)
+	}
+	rep.Content, rep.Error = clean(rep.Content, maxReportContent), clean(rep.Error, maxReportError)
+	if rep.Outcome == runFailed && strings.TrimSpace(rep.Error) == "" {
+		rep.Error = "the run failed; its error text could not be reported"
+	}
+	body, _ := json.Marshal(rep)
+	for n := maxReportStepText / 2; len(body) > maxReportEncoded && n >= 64; n /= 2 {
+		for i := range rep.Steps {
+			rep.Steps[i].Text = bound(rep.Steps[i].Text, n)
+		}
+		rep.Content, rep.Error = bound(rep.Content, 4*n), bound(rep.Error, 2*n)
+		body, _ = json.Marshal(rep)
+	}
+	for len(body) > maxReportEncoded && len(rep.Steps) > 0 {
+		rep.Steps = rep.Steps[:len(rep.Steps)/2]
+		body, _ = json.Marshal(rep)
+	}
+	return body
 }
 
 // beforeSubmit fires the before-submit point for the attempt's watched pull
@@ -597,7 +686,8 @@ func (s *StepServer) beforeSubmit(ctx context.Context, attemptID string) {
 			key, p = k, cand
 		}
 	}
-	fires := p != nil && p.Head != "" && p.Fired[automation.PointBeforeSubmit] != p.Head && !s.points.inflight[key+" "+automation.PointBeforeSubmit]
+	fires := p != nil && p.Head != "" && !slices.Contains(p.Fired[automation.PointBeforeSubmit], p.Head) &&
+		!s.points.inflight[key+" "+automation.PointBeforeSubmit]
 	if fires {
 		if s.points.inflight == nil {
 			s.points.inflight = map[string]bool{}
@@ -609,9 +699,8 @@ func (s *StepServer) beforeSubmit(ctx context.Context, attemptID string) {
 		return
 	}
 	snapshot := *p
-	host, rest, _ := strings.Cut(key, "/")
-	repository, _, _ := strings.Cut(rest, "#")
-	o := PullObservation{Host: host, Repository: repository, Number: p.Number, URL: p.URL, State: forge.PullOpen, HeadCommit: p.Head}
+	o := p.observation(key)
+	o.State = forge.PullOpen
 	s.points.run.Lock()
 	defer s.points.run.Unlock()
 	s.firePoint(ctx, key, &snapshot, automation.PointBeforeSubmit, o)

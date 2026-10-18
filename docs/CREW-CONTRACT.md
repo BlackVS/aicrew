@@ -1422,7 +1422,11 @@ of them.
 the pull request's extension points as it observes them (DEVELOPMENT,
 "Workflow scripts": `after-push`, `after-ci`, `ci-failed`, `gates-green`,
 `before-submit`, `after-merge`), once per edge, and remembers the fired
-edges in the home's `state/points.json`, which holds no secret. It reports
+edges in the home's `state/points.json`, which holds no secret. A
+declared command runs in the attempt's worktree with the client's
+environment and no path to the member's forge credential: the clone's
+credential helper is reset for its process and the helper command is
+refused to it, so network git at a point fails by design. It reports
 each run with `POST /v1/crew/automations` and the member's session token:
 the attempt, a run ID, the point, the entry's name, source and commit, its
 script or command, the pull request and head, whether the head was a

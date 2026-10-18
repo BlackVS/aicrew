@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -28,7 +29,7 @@ func TestPointEdges(t *testing.T) {
 			forge.ReviewerExternal: {Head: head, Verdict: verdictReady}}
 	}
 	h1, h2 := "0123456789abcdef0123456789abcdef01234567", "89abcdef0123456789abcdef0123456789abcdef"
-	p := &pullPoints{Attempt: "att-1"}
+	p := &pullPoints{Attempt: "att-1", Fired: map[string][]string{}}
 	inflight := map[string]bool{}
 	fired := func(want ...string) {
 		t.Helper()
@@ -40,7 +41,7 @@ func TestPointEdges(t *testing.T) {
 			t.Fatalf("%s: fired %v, want %v", lastWhat, got, want)
 		}
 		for _, pt := range got {
-			p.Fired[pt] = edgeOf(pt, lastO, p.Head)
+			p.Fired[pt] = append(p.Fired[pt], edgeOf(pt, lastO, p.Head))
 		}
 	}
 	say := func(what string, o PullObservation, f pullFacts) { lastWhat, lastO, lastF = what, o, f }
@@ -55,6 +56,10 @@ func TestPointEdges(t *testing.T) {
 	fired()
 	say("CI passed after a re-run", open(h1, forge.ChecksSuccess), pullFacts{})
 	fired(automation.PointAfterCI)
+	say("CI failed once more: an edge already consumed", open(h1, forge.ChecksFailure), pullFacts{})
+	fired()
+	say("and passed once more", open(h1, forge.ChecksSuccess), pullFacts{})
+	fired()
 	say("the external review READY alone", open(h1, forge.ChecksSuccess),
 		pullFacts{Reviews: map[string]pointReview{forge.ReviewerExternal: {Head: h1, Verdict: verdictReady}}})
 	fired()
@@ -372,7 +377,32 @@ func TestPointsDispatch(t *testing.T) {
 		t.Fatalf("the points' state: %s", raw)
 	}
 
-	// 6. The submit: before-submit runs in the work step, before the
+	// 6. A report aicrewd would refuse as sent, twenty steps whose JSON
+	// escaping multiplies their bytes and a NUL in the error, is cut to
+	// what the route takes, and the failed run still wakes the coordinator.
+	big := automationReport{AttemptID: id, RunID: newUUID(), Point: automation.PointAfterPush, Name: "big", Source: "process",
+		Script: "process/big.star", Pull: 4, URL: fake.st.URL, Head: head3, Outcome: runFailed, Error: "check\x00 failed"}
+	for i := 0; i < 20; i++ {
+		big.Steps = append(big.Steps, automationStep{Kind: "check", Text: strings.Repeat("<", 1024)})
+	}
+	srv.reportRun(ctx, big)
+	var bigWake *store.AutomationRunReport
+	for deadline := time.Now().Add(15 * time.Second); bigWake == nil && time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		// A wake may carry several runs of the queue (a run of the point
+		// reported just before this one, delivered together).
+		for _, w := range automationWakes(t, s, 0) {
+			for i := range w.Runs {
+				if w.Runs[i].Name == "big" {
+					bigWake = &w.Runs[i]
+				}
+			}
+		}
+	}
+	if bigWake == nil || bigWake.Error != "check failed" || len(bigWake.Steps) == 0 || len(bigWake.Steps[0].Text) > 512 {
+		t.Fatalf("the big report's wake: %+v", bigWake)
+	}
+
+	// 7. The submit: before-submit runs in the work step, before the
 	// submit is sent.
 	submit, _ := json.Marshal(map[string]string{"intent": "submit", "detail": "https://git.example.test/crew/project-t/pulls/4"})
 	s.call(t, &answers, StepCall{Op: "work", AttemptID: id, TaskID: "task-1", Body: submit})
@@ -382,7 +412,7 @@ func TestPointsDispatch(t *testing.T) {
 		t.Fatalf("before-submit: %+v, step %q", sub, lastStep(recs, "submit"))
 	}
 
-	// 7. Merged: after-merge fires, and its turn reaches the worker.
+	// 8. Merged: after-merge fires, and its turn reaches the worker.
 	fake.set(func(st *forge.PullStatus) { st.State = forge.PullMerged })
 	srv.pollPulls(ctx)
 	srv.waitPoints()
@@ -406,6 +436,35 @@ func TestPointsDispatch(t *testing.T) {
 	if len(worker) != 1 || worker[0].Runs[0].Turn != "rework" || !strings.Contains(worker[0].Text, "asks for a rework turn:\n  | merged: decide the follow-up") {
 		t.Fatalf("the worker's wake: %+v", worker)
 	}
+
+	// 9. An after-merge run the launcher's exit cut short: the merge took
+	// the pull request off the watch list, the kept state still owes the
+	// point, and the next launcher's first poll runs it.
+	key := "git.example.test/crew/project-t#4"
+	pts = pointsDoc{}
+	raw, _ = os.ReadFile(pointsPathIn(s.cfg.Home))
+	if json.Unmarshal(raw, &pts) != nil || pts.Pulls[key] == nil || pts.Pulls[key].State != forge.PullMerged {
+		t.Fatalf("the points' state after the merge: %s", raw)
+	}
+	delete(pts.Pulls[key].Fired, automation.PointAfterMerge)
+	raw, _ = json.Marshal(pts)
+	os.WriteFile(pointsPathIn(s.cfg.Home), raw, 0o600)
+	if len(readWatched(s.cfg.Home)) != 0 {
+		t.Fatal("the merged pull request is still watched")
+	}
+	srv.Close()
+	srv = s.serve(t)
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	if n := countRuns(dispatchRecords(t, s.cfg.Home), automation.PointAfterMerge); n != 2 {
+		t.Fatalf("after-merge ran %d times after the replay, want 2", n)
+	}
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	if n := countRuns(dispatchRecords(t, s.cfg.Home), automation.PointAfterMerge); n != 2 {
+		t.Fatalf("after-merge ran %d times after a second poll, want 2", n)
+	}
+
 	if strings.Contains(string(answers), "member-forge-token") || strings.Contains(s.logs.String(), "member-forge-token") {
 		t.Fatal("the forge token reached an answer or the log")
 	}
@@ -429,4 +488,61 @@ func lastStep(recs []automationRecord, kind string) string {
 		}
 	}
 	return out
+}
+
+// A declared command runs code from the attempt's head and gets no path to
+// the member's forge credential: its environment holds none
+// (TestPointsDispatch), the clone's credential helper is reset for its
+// process, so `git credential fill` and any network git fail, and the
+// helper command itself is refused.
+func TestCommandHasNoCredentialPath(t *testing.T) {
+	ctx := context.Background()
+	s := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
+	srv := s.serve(t)
+	wt := filepath.Join(s.cfg.Home, "worktrees", "att-cred")
+	os.MkdirAll(wt, 0o700)
+	git(t, wt, "init", "-q", "-b", "work/task-1")
+	// The clone's helper, as Clone configures it; here one that answers.
+	git(t, wt, "config", "--local", "--add", "credential.helper", "")
+	git(t, wt, "config", "--local", "--add", "credential.helper", "!f() { echo username=u; echo password=helper-secret; }; f")
+	git(t, wt, "config", "--local", "alias.probe", "!printf 'protocol=https\\nhost=git.example.test\\n\\n' | git credential fill")
+	// The probe has teeth: run outside the command's environment, the
+	// helper answers.
+	direct := exec.Command("git", "probe")
+	direct.Dir = wt
+	direct.Env = append(os.Environ(), gitEnv...)
+	if out, _ := direct.CombinedOutput(); !strings.Contains(string(out), "password=helper-secret") {
+		t.Fatalf("the probe without the reset: %s", out)
+	}
+
+	rep := automationReport{AttemptID: "att-cred", Point: automation.PointAfterPush, Name: "probe", Source: automation.SourceCommand,
+		Pull: 4, URL: "https://git.example.test/crew/project-t/pulls/4", Head: strings.Repeat("a", 40)}
+	srv.runCommand(ctx, &rep, []string{"git", "probe"})
+	out := ""
+	if len(rep.Steps) > 0 {
+		out = rep.Steps[0].Text
+	}
+	if rep.Outcome != runFailed || strings.Contains(out, "helper-secret") || strings.Contains(rep.Error, "helper-secret") {
+		t.Fatalf("the probe as a declared command: %s %q\n%s", rep.Outcome, rep.Error, out)
+	}
+	if rep.Exit == nil || *rep.Exit == 0 {
+		t.Fatalf("the probe as a declared command exited %v", rep.Exit)
+	}
+
+	// The helper command itself is refused: by name, and under any other
+	// spelling of the program by the allow list, which admits bare names.
+	for prog, want := range map[string]string{"aicrew-agent": "no path to the member's forge credential",
+		"aicrew-agent.exe": "outside the turn's allow list", "/opt/aicrew/aicrew-agent": "outside the turn's allow list"} {
+		rep := automationReport{AttemptID: "att-cred", Point: automation.PointAfterPush, Name: "helper", Source: automation.SourceCommand,
+			Pull: 4, URL: "https://git.example.test/crew/project-t/pulls/4", Head: strings.Repeat("a", 40)}
+		srv.runCommand(ctx, &rep, []string{prog, "git-credential", "--home", s.cfg.Home, "get"})
+		if rep.Outcome != runFailed || !strings.Contains(rep.Error, want) {
+			t.Fatalf("%s git-credential: %s %q", prog, rep.Outcome, rep.Error)
+		}
+	}
+	for _, line := range dispatchRecords(t, s.cfg.Home) {
+		if strings.Contains(line.Text, "helper-secret") {
+			t.Fatal("the secret reached the automation log")
+		}
+	}
 }

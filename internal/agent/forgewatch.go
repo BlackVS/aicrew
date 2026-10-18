@@ -290,6 +290,7 @@ func (s *StepServer) observePull(ctx context.Context, body []byte, f pullFacts) 
 // reports it. A pull request the home cannot read is left for the next
 // poll; nothing here ends the member's wait.
 func (s *StepServer) pollPulls(ctx context.Context) {
+	s.replayPoints()
 	watched := readWatched(s.home)
 	if len(watched) == 0 {
 		return

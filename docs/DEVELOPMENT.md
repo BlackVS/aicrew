@@ -878,8 +878,13 @@ external reviews are both `READY_FOR_HUMAN_MERGE` while its CI passed,
 `after-merge` for the merge, and `before-submit` in the `work` step that
 carries the submit, before it is sent. The fired edges are the home's
 `state/points.json`, so a restarted launcher does not fire a point it
-already fired; an edge is recorded after its run ends, so a run cut short
-by a restart runs again at the next observation (at least once, 12.4).
+already fired, and an edge once fired stays fired however the
+observations flap (CI failed, passed and failed again at one head fires
+`after-ci` twice, not three times); an edge is recorded after its run
+ends, so a run cut short by a restart runs again at the next observation
+(at least once, 12.4). A merged pull request leaves the watch list, so
+the file keeps it until its `after-merge` ran, and the next poll runs the
+point first.
 The event a script gets at a point names the point as its kind and the
 pull request with its head as its ID, and carries `base_only`: at
 `after-push`, whether the new head's patch identity (`git diff
@@ -890,11 +895,17 @@ worktree) equals the previous head's. A manifest entry may declare a
 and never in the release defaults. The launcher runs it without a shell in
 the attempt's worktree, under the turn's allow list and within the
 wall-clock limit, with the client's environment only: a command runs code
-from the attempt's head, so it never receives the home's forge credential,
-the session token or any other token, and a test reads the environment a
-command received. Its output, bounded, and its exit status are recorded in
+from the attempt's head, so it gets no path to the member's forge
+credential, the session token or any other token. Its environment holds
+none (a test reads the environment a command received), git's credential
+helpers are reset for its process (an empty `credential.helper` through
+`GIT_CONFIG_*`, so `git credential fill` and any network git at a point
+fail by design; forge actions are the host API's), and the helper command
+`aicrew-agent git-credential` is refused to it. Its output, bounded, and
+its exit status are recorded in
 `logs/automations.jsonl`; a nonzero exit is a failed run. Every run is
-reported to aicrewd (`POST /v1/crew/automations`; store schema 36 keeps
+reported to aicrewd, the report cut to what the route takes as encoded
+(`POST /v1/crew/automations`; store schema 36 keeps
 one row per run, so a report sent twice is one run) and journaled as
 `automation.run`. The default `automation-wake` subscription wakes the
 team's coordinators on a failed run and the worker on a turn; a handled

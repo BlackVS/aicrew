@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -662,10 +663,31 @@ func (s *StepServer) hostRun(ctx context.Context, run *liveRun, name string, arg
 // commandEnv is the environment a run() command gets: the turn's, as the
 // launcher gives its client.
 func (s *StepServer) commandEnv() []string {
-	if s.env != nil {
-		return s.env
+	env := s.env
+	if env == nil {
+		env = append(os.Environ(), gitEnv...)
 	}
-	return append(os.Environ(), gitEnv...)
+	return withoutCredentialHelper(env)
+}
+
+// withoutCredentialHelper is env with git's credential helpers reset for
+// the process: an empty credential.helper given as GIT_CONFIG_* applies
+// after every config file and empties the list the clone configured, so
+// `git credential fill`, and any network git, finds no helper and fails.
+// A declared command runs code from the attempt's head and gets no path
+// to the member's forge credential (dispatch.go).
+func withoutCredentialHelper(env []string) []string {
+	n := 0
+	out := make([]string, 0, len(env)+3)
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "GIT_CONFIG_COUNT="); ok {
+			n, _ = strconv.Atoi(v)
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, fmt.Sprintf("GIT_CONFIG_COUNT=%d", n+1),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=credential.helper", n), fmt.Sprintf("GIT_CONFIG_VALUE_%d=", n))
 }
 
 // hostComment is comment(): body on the attempt's pull request, with the

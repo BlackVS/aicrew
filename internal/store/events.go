@@ -630,7 +630,7 @@ func (s *Store) wake(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent
 	case events.KindAttemptChanged:
 		return wakeAttempt(ctx, tx, evs, roles)
 	case events.KindAutomationRun:
-		return wakeAutomation(ctx, tx, evs, roles)
+		return wakeAutomation(ctx, tx, evs)
 	}
 	return nil, fmt.Errorf("the wake handler takes no %s event", evs[0].Kind)
 }

@@ -1022,8 +1022,10 @@ the steps' texts first and the command's words last, a cut marked
 (`POST /v1/crew/automations`; store schema 36 keeps
 one row per run, so a report sent twice is one run) and journaled as
 `automation.run`. The default `automation-wake` subscription wakes the
-team's coordinators on a failed run and the worker on a turn; a handled
-run wakes no one. A failed run is never retried (10.3): the message names
+team's coordinators on a failed run and the worker on a turn, each role in
+a message of its own holding only its runs, so a queue with both does not
+hand the worker a failure only a coordinator can act on; a handled run
+wakes no one. A failed run is never retried (10.3): the message names
 the entry, the point, the pull request and the error, with the run's
 steps, and the coordinator fixes or disables the entry. `aicrew-agent
 check` shows a command entry with the source `command`, the manifest's

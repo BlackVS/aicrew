@@ -23,9 +23,10 @@ import (
 // automation.run event per run. The default automation-wake subscription
 // wakes the team's coordinators on a failed run, naming the handler, the
 // subject and the error, and the attempt's worker on a run that asked for
-// a model turn, with the turn's content. A run that handled its point
-// wakes no one. aicrewd never retries a run: the launcher decides what
-// runs, and only at the next edge of a point.
+// a model turn, with the turn's content, each role in a message of its
+// own holding only its runs. A run that handled its point wakes no one.
+// aicrewd never retries a run: the launcher decides what runs, and only at
+// the next edge of a point.
 
 // How a run ended.
 const (
@@ -261,13 +262,20 @@ func fitAutomationEvent(ev *automationEvent) {
 
 // wakeAutomation wakes the roles the runs' events name: the coordinators
 // for the failed runs, the worker for the runs that asked for a turn, with
-// each run's content. The subject lists every run of the queue that still
-// calls for one.
-func wakeAutomation(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []string) (*wakeOut, error) {
+// each run's content. The runs whose events name the same roles are one
+// subject to those roles' members, so a queue holding a failed run and a
+// turn yields a message to the coordinators with the failed run and one to
+// the worker with the turn, each reading only what is its own; the first
+// is the queue's run's message, the others follow it (wakeOut.more).
+func wakeAutomation(ctx context.Context, tx *sql.Tx, evs []queuedEvent) (*wakeOut, error) {
+	type part struct {
+		roles []string
+		runs  []AutomationRunReport
+		texts []string
+		cut   bool
+	}
 	var last automationEvent
-	var runs []AutomationRunReport
-	var texts []string
-	cut := false
+	var parts []*part
 	for i, ev := range evs {
 		var e automationEvent
 		if err := json.Unmarshal(ev.Payload, &e); err != nil {
@@ -280,42 +288,59 @@ func wakeAutomation(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []
 		if e.Run.Outcome == RunHandled {
 			continue
 		}
-		runs = append(runs, e.Run)
-		texts = append(texts, runText(e.Run))
-		cut = cut || e.Cut
+		roles := slices.Compact(slices.Sorted(slices.Values(ev.Roles)))
+		k := slices.IndexFunc(parts, func(p *part) bool { return slices.Equal(p.roles, roles) })
+		if k < 0 {
+			parts = append(parts, &part{roles: roles})
+			k = len(parts) - 1
+		}
+		parts[k].runs = append(parts[k].runs, e.Run)
+		parts[k].texts = append(parts[k].texts, runText(e.Run))
+		parts[k].cut = parts[k].cut || e.Cut
 	}
-	if len(runs) == 0 {
+	if len(parts) == 0 {
 		return nil, nil
 	}
 	a, err := getAttempt(ctx, tx, last.AttemptID)
 	if err != nil {
 		return nil, err
 	}
-	var recipients []string
-	if slices.Contains(roles, events.RoleWorker) {
-		recipients = append(recipients, a.WorkerAgentID)
-	}
-	if slices.Contains(roles, events.RoleCoordinator) {
-		coords, err := activeCoordinators(ctx, tx, a.TeamID)
-		if err != nil {
-			return nil, err
+	var coords []string
+	var first *wakeOut
+	for _, p := range parts {
+		var recipients []string
+		if slices.Contains(p.roles, events.RoleWorker) {
+			recipients = append(recipients, a.WorkerAgentID)
 		}
-		for _, c := range coords {
-			if !slices.Contains(recipients, c) {
-				recipients = append(recipients, c)
+		if slices.Contains(p.roles, events.RoleCoordinator) {
+			if coords == nil {
+				if coords, err = activeCoordinators(ctx, tx, a.TeamID); err != nil {
+					return nil, err
+				}
+			}
+			for _, c := range coords {
+				if !slices.Contains(recipients, c) {
+					recipients = append(recipients, c)
+				}
 			}
 		}
+		if len(recipients) == 0 {
+			continue
+		}
+		text := strings.Join(p.texts, "\n")
+		if p.cut {
+			text += "\n- A text was cut for room; the attempt's run record holds it whole."
+		}
+		task := a.Task
+		out := &wakeOut{recipients: recipients,
+			subject: ActionSubject{Kind: "automation", AttemptID: a.ID, Task: &task, Runs: p.runs, Text: boundedText(text)}}
+		if first == nil {
+			first = out
+		} else {
+			first.more = append(first.more, out)
+		}
 	}
-	if len(recipients) == 0 {
-		return nil, nil
-	}
-	text := strings.Join(texts, "\n")
-	if cut {
-		text += "\n- A text was cut for room; the attempt's run record holds it whole."
-	}
-	task := a.Task
-	sub := ActionSubject{Kind: "automation", AttemptID: a.ID, Task: &task, Runs: runs, Text: boundedText(text)}
-	return &wakeOut{recipients: recipients, subject: sub}, nil
+	return first, nil
 }
 
 // runText is one run in words: a failed run with its handler, subject and

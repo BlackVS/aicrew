@@ -117,6 +117,51 @@ func TestAutomationRunReports(t *testing.T) {
 	}
 }
 
+// One queue holding a failed run and a turn wakes each role with its own
+// message: the coordinators read the failed run only, the worker the turn
+// only, and the queue is delivered once (the 2d-a follow-up 2a2b).
+func TestAutomationWakeSplitPerRole(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+
+	exit := 2
+	failed := runReport(a.ID, "run-2", RunFailed)
+	failed.Error, failed.Exit = "exit status 2", &exit
+	turn := runReport(a.ID, "run-3", RunTurn)
+	turn.Source, turn.Command, turn.Script = "process", nil, "process/triage.star"
+	turn.Turn, turn.Content = "rework", "Decide which finding to fix."
+	for _, r := range []AutomationRunReport{failed, turn} {
+		if res, err := e.s.RecordAutomationRunWithToken(ctx, e.indepTk, r); err != nil || !res.Recorded {
+			t.Fatalf("%s: %+v, %v", r.RunID, res, err)
+		}
+	}
+	runs := settle(t, e.s, e.now)
+	if len(runs) != 1 || runs[0].Subscription != "automation-wake" || runs[0].Events != 2 || runs[0].MessageID == "" {
+		t.Fatalf("the queue's delivery: %+v", runs)
+	}
+	coord := actionItems(t, e.s, e.leadTok, "automation")
+	if len(coord) != 1 || len(coord[0].Action.Subjects) != 1 || len(coord[0].Action.Subjects[0].Runs) != 1 ||
+		coord[0].Action.Subjects[0].Runs[0].RunID != "run-2" || coord[0].ID != runs[0].MessageID {
+		t.Fatalf("the coordinator's message: %+v", coord)
+	}
+	if !strings.Contains(coord[0].Text, "failed at after-push") || strings.Contains(coord[0].Text, "asks for a") {
+		t.Errorf("the coordinator's text:\n%s", coord[0].Text)
+	}
+	worker := actionItems(t, e.s, e.indepTk, "automation")
+	if len(worker) != 1 || len(worker[0].Action.Subjects) != 1 || len(worker[0].Action.Subjects[0].Runs) != 1 ||
+		worker[0].Action.Subjects[0].Runs[0].RunID != "run-3" || worker[0].ID == coord[0].ID {
+		t.Fatalf("the worker's message: %+v", worker)
+	}
+	if !strings.Contains(worker[0].Text, "asks for a rework turn:\n  | Decide which finding to fix.") || strings.Contains(worker[0].Text, "failed at") {
+		t.Errorf("the worker's text:\n%s", worker[0].Text)
+	}
+	// Nothing is delivered twice.
+	if again := settle(t, e.s, e.now); len(again) != 0 {
+		t.Fatalf("a second delivery: %+v", again)
+	}
+}
+
 // A report of another member's attempt, of a closed attempt, or with a
 // shape the store does not take is refused and records nothing; a report
 // whose texts would not fit an event is cut, not refused.

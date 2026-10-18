@@ -13,11 +13,12 @@
     },
     {
       "name": "forge-wake",
-      "description": "A change of an attempt's pull request that needs a decision (a BLOCKER at the head, CI failing, both gates green, a merge or close): the worker is woken, and the coordinators when it bears on a submit. Progress alone wakes no one.",
+      "description": "A change of an attempt's pull request that needs a decision (a BLOCKER at the head, CI failing, a declared check failing at the head, both gates green, a merge or close): the worker is woken, and the coordinators when it bears on a submit or when the same declared check failed at the bound of heads in a row. Progress alone wakes no one.",
       "kinds": ["forge.changed"],
       "to": [
         {"role": "worker", "when": ["action"]},
-        {"role": "coordinator", "when": ["submit-or-submitted", "action"]}
+        {"role": "coordinator", "when": ["submit-or-submitted", "action"]},
+        {"role": "coordinator", "when": ["check-streak"]}
       ],
       "handler": "wake"
     },

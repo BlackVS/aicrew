@@ -119,6 +119,7 @@ func TestRoles(t *testing.T) {
 		{forge, Facts{Submit: true, Action: true}, []string{RoleWorker, RoleCoordinator}},
 		{forge, Facts{Submitted: true, Action: true}, []string{RoleWorker, RoleCoordinator}},
 		{forge, Facts{Submitted: true}, nil},
+		{forge, Facts{Action: true, CheckStreak: true}, []string{RoleWorker, RoleCoordinator}},
 		{blocked, Facts{Blocked: true}, []string{RoleCoordinator}},
 		{blocked, Facts{}, nil},
 		{auto, Facts{Failed: true}, []string{RoleCoordinator}},

@@ -39,6 +39,7 @@ const (
 	head3 = "fedcba9876543210fedcba9876543210fedcba98"
 	head4 = "1111111111111111111111111111111111111111"
 	head5 = "2222222222222222222222222222222222222222"
+	head6 = "3333333333333333333333333333333333333333"
 )
 
 // hands is the external review at head with the verdict, as the worker's
@@ -512,5 +513,108 @@ func TestFailedCheckAfterPush(t *testing.T) {
 	o.PrePush = &PrePushFailure{Exit: 1, Output: "x"}
 	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("a failure without a command: %v", err)
+	}
+}
+
+// A worker that keeps failing the same declared check head after head (the
+// 2d-b follow-up): the facts count the consecutive heads, the worker alone
+// is woken below the bound, and from the bound on the coordinators read the
+// wake too, its text naming the count. A head is observed before its checks
+// run and again with the failure, as the launcher reports it; a run that
+// passes at a failing head ends the count, so does a head that never fails,
+// and another command's failure starts its own.
+func TestFailedCheckStreakEscalates(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	o := observed(a.Branch)
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	// streak is the count in the facts, zero for none.
+	streak := func() int {
+		t.Helper()
+		tx, err := e.s.db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback() //nolint:errcheck // read only
+		f, err := readPullFacts(ctx, tx, a.ID)
+		if err != nil || f == nil {
+			t.Fatalf("the facts: %+v, %v", f, err)
+		}
+		if f.Streak == nil {
+			return 0
+		}
+		return f.Streak.Heads
+	}
+	// wake observes head with the failure p and returns what the worker
+	// and the coordinator then read.
+	wake := func(head string, p *PrePushFailure) ([]InboxItem, []InboxItem) {
+		t.Helper()
+		o.HeadCommit, o.PrePush = head, p
+		if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, e.s, e.now)
+		w, c := forgeEvents(t, e.s, e.indepTk), forgeEvents(t, e.s, e.leadTok)
+		if len(w) > 0 {
+			ackTok(t, e.s, e.indepTk, w)
+		}
+		if len(c) > 0 {
+			ackTok(t, e.s, e.leadTok, c)
+		}
+		return w, c
+	}
+	fail := &PrePushFailure{Command: "bash scripts/check-repo.sh", Exit: 1, Output: "FAIL\n"}
+	const line = "The same command failed at 3 heads in a row; the team's coordinators read this too."
+	// The first head fails; the second is observed clean first, then with
+	// the failure: the count rises, the worker alone hears.
+	if w, c := wake(head1, fail); streak() != 1 || len(w) != 1 || len(c) != 0 || strings.Contains(w[0].Text, "in a row") {
+		t.Fatalf("the first head: streak %d, worker %+v, coordinator %+v", streak(), w, c)
+	}
+	if w, c := wake(head2, nil); streak() != 1 || len(w) != 0 || len(c) != 0 {
+		t.Fatalf("the second head before its checks: streak %d, worker %+v, coordinator %+v", streak(), w, c)
+	}
+	if w, c := wake(head2, fail); streak() != 2 || len(w) != 1 || len(c) != 0 || strings.Contains(w[0].Text, "in a row") {
+		t.Fatalf("the second head: streak %d, worker %+v, coordinator %+v", streak(), w, c)
+	}
+	// The same head again with other output: news for the worker, and one
+	// head in the count.
+	if w, c := wake(head2, &PrePushFailure{Command: fail.Command, Exit: 1, Output: "FAIL again\n"}); streak() != 2 || len(w) != 1 || len(c) != 0 {
+		t.Fatalf("the second head again: streak %d, worker %+v, coordinator %+v", streak(), w, c)
+	}
+	// The third head is the bound: the coordinators read the wake too.
+	if w, c := wake(head3, nil); streak() != 2 || len(w) != 0 || len(c) != 0 {
+		t.Fatalf("the third head before its checks: streak %d, worker %+v, coordinator %+v", streak(), w, c)
+	}
+	w, c := wake(head3, fail)
+	if streak() != 3 || len(w) != 1 || len(c) != 1 || w[0].Text != c[0].Text || !strings.Contains(w[0].Text, line) ||
+		len(c[0].Action.Subjects) != 1 || c[0].Action.Subjects[0].PrePush == nil || c[0].Action.Subjects[0].PrePush.Command != fail.Command {
+		t.Fatalf("the third head: streak %d, worker %+v, coordinator %+v", streak(), w, c)
+	}
+	// A run that passes at the head ends the count; the next failure starts
+	// at one, for the worker alone.
+	if w, c := wake(head3, nil); streak() != 0 || len(w) != 0 || len(c) != 0 {
+		t.Fatalf("a passing run: streak %d, worker %+v, coordinator %+v", streak(), w, c)
+	}
+	if w, c := wake(head4, fail); streak() != 1 || len(w) != 1 || len(c) != 0 {
+		t.Fatalf("after the passing run: streak %d, worker %+v, coordinator %+v", streak(), w, c)
+	}
+	// A head that never fails ends the count too: the one after it starts
+	// at one.
+	if w, c := wake(head5, nil); streak() != 1 || len(w) != 0 || len(c) != 0 {
+		t.Fatalf("a clean head: streak %d, worker %+v, coordinator %+v", streak(), w, c)
+	}
+	if w, c := wake(head6, nil); streak() != 0 || len(w) != 0 || len(c) != 0 {
+		t.Fatalf("the head after a clean one: streak %d, worker %+v, coordinator %+v", streak(), w, c)
+	}
+	if w, c := wake(head6, fail); streak() != 1 || len(w) != 1 || len(c) != 0 {
+		t.Fatalf("after a clean head: streak %d, worker %+v, coordinator %+v", streak(), w, c)
+	}
+	// Another command failing at the head is its own streak.
+	other := &PrePushFailure{Command: "go vet ./...", Exit: 2, Output: "vet\n"}
+	if w, c := wake(head6, other); streak() != 1 || len(w) != 1 || len(c) != 0 || strings.Contains(w[0].Text, "in a row") {
+		t.Fatalf("another command: streak %d, worker %+v, coordinator %+v", streak(), w, c)
 	}
 }

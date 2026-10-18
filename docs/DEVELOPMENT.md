@@ -696,7 +696,14 @@ home's own forge credential:
   is the observation's: it is news at a head whose facts held no such
   failure, holds at delivery while the last observation at the head still
   carries it, and clears at a new head or when an observation at the head
-  carries none (a run there passed).
+  carries none (a run there passed). A worker that pushes head after head
+  with the same command failing is heard by the coordinators too: the facts
+  count the consecutive heads whose last observation carried a failure of
+  one command (a run that passes at a failing head ends the count, and so
+  does a head that never fails; a head's first observation, before its
+  checks ran, does not), and from the third head on the `pre_push` wake
+  goes to the team's coordinators with the worker, its text naming the
+  count (the `check-streak` condition of `forge-wake`).
 - **The end of a watch:** a merged or closed pull request, or one that is no
   running attempt's (`no_attempt`), is no longer watched. A command on a
   merged or closed pull request reports it and prints `watch: not watched:
@@ -723,7 +730,8 @@ event is data; the bus is core.
     team has an attempt for it;
   - `forge-wake`: `forge.changed` to the worker always, and to the
     coordinators when the change bears on a submit or the result is
-    submitted;
+    submitted, or when the same declared check failed at the bound of
+    heads in a row;
   - `blocked-wake`: `attempt.changed` to the coordinators when the change
     is a worker's blocked report (increment 1d, below);
   - `automation-wake`: `automation.run` to the coordinators when the run

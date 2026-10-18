@@ -250,6 +250,7 @@ func (s *Store) ObservePullWithToken(ctx context.Context, token string, o PullOb
 		}
 	}
 	cf.PrePush = o.PrePush
+	cf.Streak = nextStreak(pf, cf)
 	boundContent(&cf)
 	var prevPrePush *PrePushFailure
 	if pf != nil && pf.Head == o.HeadCommit {
@@ -288,7 +289,8 @@ func (s *Store) ObservePullWithToken(ctx context.Context, token string, o PullOb
 			return ObserveResult{}, err
 		}
 		ms := matches(events.KindForgeChanged, a.TeamID,
-			events.Facts{Submit: submit, Submitted: a.Phase == PhaseSubmitted, Action: len(needs) > 0})
+			events.Facts{Submit: submit, Submitted: a.Phase == PhaseSubmitted, Action: len(needs) > 0,
+				CheckStreak: slices.Contains(needs, NeedPrePush) && cf.Streak != nil && cf.Streak.Heads >= prePushStreakBound})
 		// The event carries the content its needs call for, bounded; the
 		// observation's own copy of the content is left out.
 		ev := forgeEvent{AttemptID: a.ID, Observation: o, Changes: changes, Needs: needs}

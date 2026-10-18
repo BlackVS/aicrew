@@ -386,6 +386,34 @@ func TestAutomationRefusedRun(t *testing.T) {
 	}
 }
 
+// The child's standard error says whether the memory limit ended it: the
+// runtime's own fatal error, the watchdog, ThreadSanitizer, a thread the
+// limit refused, as the runtime reports it with and without cgo, and a
+// signal from a mapping the limit refused where nothing checked; anything
+// else is not the limit.
+func TestMemoryFailureSigns(t *testing.T) {
+	for _, line := range []string{
+		"fatal error: out of memory\n\ngoroutine 1 [running]:",
+		"fatal error: runtime: cannot allocate memory",
+		"runtime: mmap(0xc000400000, 4194304) returned 0x0, 12\nfatal error: runtime: cannot map pages in arena address space",
+		memoryWatchdogMessage + ": 140000000 bytes held, the limit is 134217728",
+		"==12==ERROR: ThreadSanitizer failed to allocate 0x1000000 bytes",
+		"runtime/cgo: pthread_create failed: Resource temporarily unavailable\nSIGABRT: abort",
+		"runtime: failed to create new OS thread (have 9 already; errno=11)\nfatal error: newosproc",
+		"SIGSEGV: segmentation violation\nPC=0x7f3a1c0e2a40 m=5 sigcode=1 addr=0x0",
+		"SIGBUS: bus error\nPC=0x4a2b10 m=3 sigcode=2",
+	} {
+		if got := memoryFailure(line); got == "" || strings.Contains(got, "\n") {
+			t.Errorf("%q: %q", line, got)
+		}
+	}
+	for _, line := range []string{"", "panic: the script's own panic\n", "the launcher refused the call: no_run"} {
+		if got := memoryFailure(line); got != "" {
+			t.Errorf("%q read as the memory limit: %q", line, got)
+		}
+	}
+}
+
 // A script that allocates past the memory limit is ended by it, on each
 // platform's mechanism, and the failure is recorded; so is a script that
 // passes its step limit, and one whose text is invalid.

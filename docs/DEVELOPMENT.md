@@ -988,7 +988,10 @@ body is kept). A change is the head moved, the state or the checks
 conclusion changed, labels added or removed, or the comment count risen;
 the first observation of a pull request sets the state and is no change,
 and the first content read sets the comment mark and names no comment as
-new, so history is never acted on. The event's `change` (`event.change`
+new, so history is never acted on (a pull request observed without a
+comment has its mark already, so each comment that then arrives is new,
+and the ten the event carries are chosen with the external reviewer's
+notice first, so the bound never drops it). The event's `change` (`event.change`
 in the script; `None` at a point, so host API 1 stands) carries
 `head_moved`, `state` and `checks` (the new value when it changed),
 `labels_added`, `labels_removed`, `comments` (the new ones since the mark,

@@ -93,10 +93,11 @@ type pullPoints struct {
 	Reruns []string  `json:"reruns,omitempty"`
 	Seen   time.Time `json:"seen"`
 	// Labels, Checks and Comments are the pull request's labels, checks
-	// conclusion and comment count as last observed, ContentRead says a
-	// content read came with an observation, and LastComment is the time
-	// of the newest comment one saw: the state the forge.changed event is
-	// computed against (change). No comment body is kept.
+	// conclusion and comment count as last observed, ContentRead says the
+	// comments are known (a content read came, or there was none), and
+	// LastComment is the time of the newest comment one saw: the state the
+	// forge.changed event is computed against (change). No comment body is
+	// kept.
 	Observed    bool      `json:"observed,omitempty"`
 	Labels      []string  `json:"labels,omitempty"`
 	Checks      string    `json:"checks,omitempty"`
@@ -238,7 +239,9 @@ const labelReviewFailed = "hands-review-failed"
 // unset: a new pull request, or a record a launcher before this state
 // wrote) sets the state and is no change, and the first content read sets
 // the comment mark and names no comment as new, so history is never acted
-// on. It runs before edges, which takes the head and the state.
+// on; a pull request observed without a comment has its mark already, and
+// each comment that then arrives is new. It runs before edges, which takes
+// the head and the state.
 func (p *pullPoints) change(o PullObservation, f pullFacts) *automation.ForgeChange {
 	if f.Replay {
 		return nil
@@ -255,18 +258,23 @@ func (p *pullPoints) change(o PullObservation, f pullFacts) *automation.ForgeCha
 	}
 	more := o.Comments > p.Comments
 	p.Labels, p.Checks, p.Comments = slices.Clone(o.Labels), o.Checks, o.Comments
-	if f.Content {
-		seen := p.ContentRead
+	switch {
+	case f.Content:
+		var fresh []forge.PullComment
 		mark := p.LastComment
 		for _, cm := range f.Comments {
 			if cm.At.After(p.LastComment) {
 				p.LastComment = cm.At
 			}
-			if seen && cm.At.After(mark) && len(c.Comments) < automation.MaxChangeComments {
-				body, _ := automation.Bound(cm.Body, automation.MaxChangeComment)
-				c.Comments = append(c.Comments, automation.ChangedComment{Author: cm.Author, Kind: cm.Kind, Body: body, Notice: cm.Notice})
+			if p.ContentRead && cm.At.After(mark) {
+				fresh = append(fresh, cm)
 			}
 		}
+		c.Comments = boundComments(fresh)
+		p.ContentRead = true
+	case o.Comments == 0:
+		// Nothing to read: the comments are known to be none, so the
+		// first read after this names each of them as new.
 		p.ContentRead = true
 	}
 	if first {
@@ -289,6 +297,30 @@ func (p *pullPoints) change(o PullObservation, f pullFacts) *automation.ForgeCha
 		return nil
 	}
 	return c
+}
+
+// boundComments is cms as the change carries them: at most
+// automation.MaxChangeComments, in cms's order, the ones with a notice kept
+// before any other, so the bound never drops the external reviewer's
+// notice; each body bounded.
+func boundComments(cms []forge.PullComment) []automation.ChangedComment {
+	n := automation.MaxChangeComments
+	keep := make([]bool, len(cms))
+	for _, withNotice := range []bool{true, false} {
+		for i, cm := range cms {
+			if n > 0 && (cm.Notice != "") == withNotice {
+				keep[i], n = true, n-1
+			}
+		}
+	}
+	var out []automation.ChangedComment
+	for i, cm := range cms {
+		if keep[i] {
+			body, _ := automation.Bound(cm.Body, automation.MaxChangeComment)
+			out = append(out, automation.ChangedComment{Author: cm.Author, Kind: cm.Kind, Body: body, Notice: cm.Notice})
+		}
+	}
+	return out
 }
 
 // missingIn is the names of a that b lacks, in a's order.

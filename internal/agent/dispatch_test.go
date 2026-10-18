@@ -564,10 +564,11 @@ const changeManifest = `{
 
 // The change against the kept state (task 05cf): the first observation is
 // none; a label, a checks conclusion, a comment count and a head each are
-// one; the first content read marks the comments and names none as new,
-// later reads name the ones after the mark with their notice, bounded; the
-// external reviewer's failures are counted per head; and the state kept
-// survives the file.
+// one; the first content read marks the comments it finds and names none
+// as new, where a pull request observed without a comment has each one
+// that arrives as new; later reads name the ones after the mark with their
+// notice, bounded with the notice kept; the external reviewer's failures
+// are counted per head; and the state kept survives the file.
 func TestForgeChangeState(t *testing.T) {
 	t0 := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 	// A record a launcher before this state wrote: seen, but not observed
@@ -586,23 +587,26 @@ func TestForgeChangeState(t *testing.T) {
 		p.edges(o, f, map[string]bool{}, "k")
 		return c
 	}
-	if c := step(obs("h1", forge.ChecksPending, 0), pullFacts{}); c != nil {
-		t.Fatalf("the first observation: %+v", c)
+	// The first observation comes with its content, as the poll reads it
+	// for a pull request with comments: its two comments are the mark, not
+	// news, and nothing is a change.
+	two := []forge.PullComment{comment(t0, ""), comment(t0.Add(time.Minute), "")}
+	if c := step(obs("h1", forge.ChecksPending, 2), pullFacts{Content: true, Comments: two}); c != nil ||
+		!p.ContentRead || !p.LastComment.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("the first observation: %+v, state %+v", c, p)
 	}
-	if c := step(obs("h1", forge.ChecksPending, 0), pullFacts{}); c != nil {
+	if c := step(obs("h1", forge.ChecksPending, 2), pullFacts{}); c != nil {
 		t.Fatalf("the same observation again: %+v", c)
 	}
-	c := step(obs("h1", forge.ChecksPending, 0, "review-this"), pullFacts{})
+	c := step(obs("h1", forge.ChecksPending, 2, "review-this"), pullFacts{})
 	if c == nil || !slices.Equal(c.LabelsAdded, []string{"review-this"}) || c.Checks != "" || c.HeadMoved || c.ReviewFailures != 0 {
 		t.Fatalf("a label added: %+v", c)
 	}
-	// The first content read: its two comments are the mark, not news;
-	// the conclusion is the change.
-	two := []forge.PullComment{comment(t0, ""), comment(t0.Add(time.Minute), "")}
+	// The conclusion, with the same two comments read again: the
+	// conclusion is the change, and no comment is new.
 	c = step(obs("h1", forge.ChecksSuccess, 2, "review-this"), pullFacts{Content: true, Comments: two})
-	if c == nil || c.Checks != forge.ChecksSuccess || len(c.Comments) != 0 || len(c.LabelsAdded) != 0 ||
-		!p.ContentRead || !p.LastComment.Equal(t0.Add(time.Minute)) {
-		t.Fatalf("the first content read: %+v, state %+v", c, p)
+	if c == nil || c.Checks != forge.ChecksSuccess || len(c.Comments) != 0 || len(c.LabelsAdded) != 0 {
+		t.Fatalf("the conclusion: %+v, state %+v", c, p)
 	}
 	// A later read: the notice is new, and the first failure at h1.
 	three := append(slices.Clone(two), comment(t0.Add(2*time.Minute), forge.NoticeReviewFailed))
@@ -633,30 +637,49 @@ func TestForgeChangeState(t *testing.T) {
 		!slices.Equal(p.Labels, kept.Labels) || p.Comments != kept.Comments || p.Checks != kept.Checks {
 		t.Fatalf("the replay: %+v, state %+v", c, p)
 	}
-	// The comments are bounded, and the state survives the file.
+	// The comments are bounded with the notice kept, whatever its place
+	// (the fifteenth new comment is the second failure at h2), and the
+	// state survives the file.
 	var many []forge.PullComment
-	for i := 0; i < automation.MaxChangeComments+5; i++ {
+	for i := 0; i < automation.MaxChangeComments+4; i++ {
 		many = append(many, comment(t0.Add(time.Duration(10+i)*time.Minute), ""))
 	}
+	many = append(many, comment(t0.Add(30*time.Minute), forge.NoticeReviewFailed))
 	c = step(obs("h2", forge.ChecksPending, 20, labelReviewFailed), pullFacts{Content: true, Comments: many})
-	if c == nil || len(c.Comments) != automation.MaxChangeComments {
+	if c == nil || len(c.Comments) != automation.MaxChangeComments || c.ReviewFailures != 2 ||
+		c.Comments[automation.MaxChangeComments-1].Notice != forge.NoticeReviewFailed || c.Comments[0].Notice != "" {
 		t.Fatalf("many comments: %+v", c)
 	}
 	raw, _ := json.Marshal(p)
 	var back pullPoints
-	if json.Unmarshal(raw, &back) != nil || !slices.Equal(back.ReviewFailures, []string{"h1", "h1", "h2"}) ||
+	if json.Unmarshal(raw, &back) != nil || !slices.Equal(back.ReviewFailures, []string{"h1", "h1", "h2", "h2"}) ||
 		!back.LastComment.Equal(many[len(many)-1].At) || back.Comments != 20 || !slices.Equal(back.Labels, []string{labelReviewFailed}) ||
 		strings.Contains(string(raw), "a comment") {
 		t.Fatalf("the kept state: %s", raw)
+	}
+
+	// A pull request observed without a comment, as a new one with its CI
+	// pending is (the poll reads no content for it): its comments are
+	// known to be none, so the first one, the external reviewer's notice,
+	// is new at the first content read and the first failure at the head.
+	p = &pullPoints{}
+	if c := step(obs("h1", forge.ChecksPending, 0, "review-this"), pullFacts{}); c != nil || !p.ContentRead {
+		t.Fatalf("the first observation without a comment: %+v, state %+v", c, p)
+	}
+	c = step(obs("h1", forge.ChecksPending, 1), pullFacts{Content: true, Comments: []forge.PullComment{comment(t0, forge.NoticeReviewFailed)}})
+	if c == nil || len(c.Comments) != 1 || c.Comments[0].Notice != forge.NoticeReviewFailed || c.ReviewFailures != 1 ||
+		!slices.Equal(c.LabelsRemoved, []string{"review-this"}) {
+		t.Fatalf("the first comment: %+v", c)
 	}
 }
 
 // The launcher dispatches forge.changed once per observation that changed
 // the pull request against its kept state: the first observation runs
 // nothing for it, a label added runs the entries subscribed to it with the
-// change, the same labels again and a restart run nothing, a new comment
-// arrives with its author and notice, the reviewer's failures at the head
-// are counted, and a failed run reaches the coordinator naming the event.
+// change, the same labels again and a restart run nothing, the reviewer's
+// notice as the first comment of a pull request watched from none arrives
+// with its author and notice, the reviewer's failures at the head are
+// counted, and a failed run reaches the coordinator naming the event.
 // A point entry sees event.change as None and never runs for the event.
 func TestForgeChangeDispatch(t *testing.T) {
 	ctx := context.Background()
@@ -727,34 +750,36 @@ func TestForgeChangeDispatch(t *testing.T) {
 		t.Fatalf("an unchanged pull request ran forge.changed: %d runs", changes())
 	}
 
-	// 3. CI concludes and the content is read for the first time: its
-	// comment is the mark, not news; the conclusion is the change.
+	// 3. The reviewer fails while CI is pending: its working label goes
+	// and the notice arrives as the pull request's first comment, which
+	// brings the first content read. The pull request was observed
+	// without a comment, so the notice is new: the run sees it and the
+	// first failure at the head (the external reviewer's first blocker).
 	t0 := time.Now().UTC().Add(-time.Hour)
 	fake.mu.Lock()
-	fake.content = forge.PullContent{Checks: []forge.Check{{Name: "build", State: forge.ChecksSuccess}},
-		Comments: []forge.PullComment{{Kind: forge.CommentIssue, Author: "member", At: t0, Body: "a first comment"}}}
+	fake.content = forge.PullContent{Checks: []forge.Check{{Name: "build", State: forge.ChecksPending}},
+		Comments: []forge.PullComment{{Kind: forge.CommentIssue, Author: "hands-bot", At: t0,
+			Body: "[hands-bot review] could not run: the runner is down", Notice: forge.NoticeReviewFailed}}}
 	fake.mu.Unlock()
-	fake.set(func(st *forge.PullStatus) { st.Checks, st.Comments = forge.ChecksSuccess, 1 })
+	fake.set(func(st *forge.PullStatus) { st.Labels, st.Comments = []string{}, 1 })
 	srv.pollPulls(ctx)
 	srv.waitPoints()
 	if recs = dispatchRecords(t, s.cfg.Home); changes() != 2 ||
-		lastStep(recs, "change") != "kinds=forge.changed moved=False checks=success added= removed= failures=0 comments=" {
-		t.Fatalf("the first content read: %d runs, step %q", changes(), lastStep(recs, "change"))
+		lastStep(recs, "change") != "kinds=forge.changed moved=False checks= added= removed=review-this failures=1 comments=hands-bot:comment:review-failed" {
+		t.Fatalf("the notice: %d runs, step %q\n%s", changes(), lastStep(recs, "change"), s.logs.String())
 	}
 
-	// 4. The reviewer fails: its working label goes and the notice
-	// arrives. The run sees the new comment with its notice and the first
-	// failure at the head.
+	// 4. CI concludes and the content is read again: the conclusion is
+	// the change, and no comment is new.
 	fake.mu.Lock()
-	fake.content.Comments = append(fake.content.Comments, forge.PullComment{Kind: forge.CommentIssue, Author: "hands-bot",
-		At: t0.Add(time.Minute), Body: "[hands-bot review] could not run: the runner is down", Notice: forge.NoticeReviewFailed})
+	fake.content.Checks = []forge.Check{{Name: "build", State: forge.ChecksSuccess}}
 	fake.mu.Unlock()
-	fake.set(func(st *forge.PullStatus) { st.Labels, st.Comments = []string{}, 2 })
+	fake.set(func(st *forge.PullStatus) { st.Checks = forge.ChecksSuccess })
 	srv.pollPulls(ctx)
 	srv.waitPoints()
 	if recs = dispatchRecords(t, s.cfg.Home); changes() != 3 ||
-		lastStep(recs, "change") != "kinds=forge.changed moved=False checks= added= removed=review-this failures=1 comments=hands-bot:comment:review-failed" {
-		t.Fatalf("the notice: %d runs, step %q", changes(), lastStep(recs, "change"))
+		lastStep(recs, "change") != "kinds=forge.changed moved=False checks=success added= removed= failures=0 comments=" {
+		t.Fatalf("the conclusion: %d runs, step %q", changes(), lastStep(recs, "change"))
 	}
 
 	// 5. The failure label at the same head is the second failure: the

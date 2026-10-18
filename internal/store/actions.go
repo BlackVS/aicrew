@@ -385,17 +385,28 @@ type wakeOut struct {
 	project    *ProjectRef
 	board      *BoardDetail
 	forge      *ForgeDetail
+	// more are further outputs of the same handler run, to other
+	// recipients; the queue's run records the first's message.
+	more []*wakeOut
 }
 
 // writeWakes writes the action.needed messages for one team's handler
-// outputs: those with the same recipients become one message, as long as
-// its text fits. It returns each output's message ID.
+// outputs, each with its further outputs: those with the same recipients
+// become one message, as long as its text fits. It returns each output's
+// message ID.
 func writeWakes(ctx context.Context, tx *sql.Tx, teamID string, outs []*wakeOut, now time.Time) (map[*wakeOut]string, error) {
 	ids := map[*wakeOut]string{}
 	groups := map[string][]*wakeOut{}
 	var order []string
+	var all []*wakeOut
 	for _, o := range outs {
-		if o == nil || len(o.recipients) == 0 {
+		if o != nil {
+			all = append(all, o)
+			all = append(all, o.more...)
+		}
+	}
+	for _, o := range all {
+		if len(o.recipients) == 0 {
 			continue
 		}
 		r := slices.Clone(o.recipients)

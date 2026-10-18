@@ -695,6 +695,10 @@ func (s *StepServer) runCommand(ctx context.Context, rep *automationReport, cmdl
 		fail("a declared command is never the credential helper: " + strings.Join(cmdline, " "))
 		return
 	}
+	if name := credentialSetting(cmdline[1:]); name != "" {
+		fail(fmt.Sprintf("a declared command cannot set %s: %s", name, strings.Join(cmdline, " ")))
+		return
+	}
 	cctx, cancel := context.WithTimeout(ctx, commandWall)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, cmdline[0], cmdline[1:]...)
@@ -744,6 +748,51 @@ func isCredentialCommand(cmdline []string) bool {
 	}
 	prog := strings.TrimSuffix(strings.ToLower(filepath.Base(cmdline[0])), ".exe")
 	return prog == "aicrew-agent" && cmdline[1] == "git-credential"
+}
+
+// credentialSetting is the git credential setting a declared command's
+// own arguments would set, as git spells it, or "" when they set none: a
+// helper (`credential.helper`, also scoped to a URL) or an askpass
+// (`core.askPass`, `GIT_ASKPASS`), as a `-c key=value` (the next word), a
+// `--config-env=key=ENV`, a bare `key=value` word or a bare key (`git
+// config credential.helper ...`, which would persist the helper in the
+// clone), or a `GIT_CONFIG_PARAMETERS` or `GIT_CONFIG_KEY_<n>` word
+// carrying one. The helper chain is reset for the command's process
+// (withoutCredentialHelper) and a setting given on the command line
+// applies after that reset; refusing it keeps a mistaken manifest from
+// undoing the reset, and is no boundary (DESIGN-TURNS 9.1). Git reads
+// config keys without regard to case, and Windows its environment.
+func credentialSetting(args []string) string {
+	for _, arg := range args {
+		word := strings.ToLower(strings.TrimPrefix(arg, "--config-env="))
+		key, value, _ := strings.Cut(word, "=")
+		if name := credentialKey(key); name != "" {
+			return name
+		}
+		if key == "git_config_parameters" || strings.HasPrefix(key, "git_config_key_") {
+			for _, pair := range strings.Fields(strings.ReplaceAll(value, "'", "")) {
+				k, _, _ := strings.Cut(pair, "=")
+				if name := credentialKey(k); name != "" {
+					return name
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// credentialKey is the credential setting the lower-cased config key or
+// variable name key names, as git spells it, or "".
+func credentialKey(key string) string {
+	switch {
+	case key == "credential.helper" || strings.HasPrefix(key, "credential.") && strings.HasSuffix(key, ".helper"):
+		return "credential.helper"
+	case key == "core.askpass":
+		return "core.askPass"
+	case key == "git_askpass":
+		return "GIT_ASKPASS"
+	}
+	return ""
 }
 
 // recordEnd records how a command's run ended in the home's log.

@@ -993,10 +993,15 @@ session token or other token (a test reads the environment a command
 received); git's credential helpers are reset for its process (an empty
 `credential.helper` through `GIT_CONFIG_*`), so `git credential fill` and
 any network git at a point fail by design, and forge actions are the host
-API's; and the declared command itself is never the helper command
-`aicrew-agent git-credential`. The code it runs still has the member's
-OS-user access, as a worker turn's code does (`docs/DESIGN-TURNS.md` 9.1:
-a command runs under the member's own account; 5.3 for the host). Its
+API's; the declared command itself is never the helper command
+`aicrew-agent git-credential`; and its arguments cannot name
+`credential.helper` (also scoped to a URL), `core.askPass` or
+`GIT_ASKPASS`, as a `-c` or `--config-env` setting, a bare `key=value`
+word or key, or a `GIT_CONFIG_*` word carrying one, which would re-add a
+helper after the reset: such a command is refused as a failed run naming
+the setting. The code it runs still has the member's OS-user access, as a
+worker turn's code does (`docs/DESIGN-TURNS.md` 9.1: a command runs under
+the member's own account; 5.3 for the host). Its
 output, bounded, and its exit status are recorded in
 `logs/automations.jsonl`. A refused command, one that did not start or one
 that passed its wall-clock limit is a failed run at every point, and so is

@@ -1396,9 +1396,16 @@ carries one observation of a pull request:
 - `number`, `url`, `state` (`open`, `closed` or `merged`), `head` (the head
   branch) and `head_commit`;
 - `labels`, `checks` (the head commit's CI: `none`, `pending`, `success` or
-  `failure`) and `comments` (how many it carries).
+  `failure`) and `comments` (how many it carries);
+- `pre_push`, when a declared check failed at the head's `after-push`
+  point ("Automation runs", below): the command in words, its `exit`, its
+  `output` (bounded, `cut` when cut) and `others`, the names of the other
+  checks that failed there. The launcher sends it with every observation
+  at the head while the failure stands; an observation at the head without
+  it means a run there passed.
 
-aicrewd matches it to the member's running attempt whose repository (host,
+The route takes a body of at most 64 KiB; the launcher cuts an observation
+to it. aicrewd matches it to the member's running attempt whose repository (host,
 and path without regard to case) and branch are the pull request's. A pull
 request that is none of the member's running attempts' is refused with
 `no_attempt`. The answer names the attempt, whether the observation was the
@@ -1439,7 +1446,12 @@ run's steps, bounded. aicrewd keeps one row per attempt and run ID
 A run of an attempt that is not the member's running attempt is refused
 with `no_attempt`. The event is `automation.run`; a failed run wakes the
 team's coordinators, a turn the worker, a handled run no one ("Event
-delivery").
+delivery"). A declared command at `after-push` that exits nonzero is not a
+failed run but the check's verdict on the head: the run is reported as
+handled with its exit, and the failure reaches the worker through the
+observation's `pre_push` (increment 2d-b), as the `pre_push` need of the
+pull request's `action.needed` message, which holds while the failure
+stands at the head and clears at a head where the checks pass.
 
 **The content.** When a watched pull request's status changes so that a
 decision may be due (CI concluded, or its comments changed), the launcher
@@ -1448,6 +1460,13 @@ the newest external review at the head (`[hands-bot review] reviewed at
 head SHA`) with its author, verdict and body, the failed checks with their
 log excerpts or why there is none, and the passed checks. Without a new
 read, the content reported before stands.
+
+**The failed check.** A `pre_push` in the observation is news when the
+facts at the head held no such failure, and the worker's `action.needed`
+message then carries it in its subject's `pre_push` field with the text
+showing the command, the exit and the output (the output cut to 5 KiB in
+the message). The need clears, even one still queued, at a new head or at
+an observation of the head without it.
 
 **What needs a decision.** aicrewd keeps the last observation and content
 of each attempt's pull request (schemas 30 and 35). The first observation
@@ -1520,9 +1539,10 @@ core"). The routing is the subscription file embedded in the release.
   woke the member: for the coordinators a failed run with its error and
   steps, for the worker a run that asks for a turn, with the turn's kind
   and content.
-  The message's `conflict` and `pre_push` fields are filled from increment
-  2: a conflict in the update from the base, and a check that failed after
-  a push.
+  A pull subject's `pre_push` field is the declared check that failed
+  after the push (increment 2d-b: the command, its exit, its output and
+  the other failed checks' names); its `conflict` field, a conflict in the
+  update from the base, is filled from increment 2e.
 - **Across restarts:** an event waits in the journal until it is
   delivered; a delivery and its message are one transaction.
 - **Failures:** a delivery that fails three times in a row is parked, and

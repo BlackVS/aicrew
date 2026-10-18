@@ -674,15 +674,29 @@ home's own forge credential:
 - **The content:** when CI concluded or the comments changed since the
   launcher last reported the pull request, it also reads the content (the
   newest external review at the head with its verdict, the failed checks
-  with their excerpts, the passed checks) and reports it.
+  with their excerpts, the passed checks) and reports it. An observation
+  also carries the declared check that failed at the head's `after-push`
+  point (`pre_push`: the command, its exit and its output, with the names
+  of the other checks that failed there; "The extension points", below)
+  for as long as the launcher keeps it for the head. The launcher cuts an
+  observation to aicrewd's request bound before sending it (the passed
+  checks beyond 30, then the review's body, the excerpts and the check's
+  output halved in turn, each cut marked; the message shows no more
+  anyway); the route takes the server's 64 KiB, not the step routes'
+  4 KiB.
 - **The message:** aicrewd compares a report with the last one and
   journals one `forge.changed` event for a change, in the same transaction.
   A change that needs a decision (the review at the head asks for changes,
-  CI failed, both gates green, a merge, close or reopen) is delivered by
-  the event core ("The event core", below) as an `action.needed` message
-  with that content, to the worker, and to the coordinators while the
-  result is submitted or when the pull request was merged or closed.
-  Progress alone wakes no one. A repeated report journals nothing.
+  CI failed, a declared check failed at the head, both gates green, a
+  merge, close or reopen) is delivered by the event core ("The event
+  core", below) as an `action.needed` message with that content, to the
+  worker, and to the coordinators while the result is submitted or when
+  the pull request was merged or closed. Progress alone wakes no one. A
+  repeated report journals nothing. The failed check's need (`pre_push`)
+  is the observation's: it is news at a head whose facts held no such
+  failure, holds at delivery while the last observation at the head still
+  carries it, and clears at a new head or when an observation at the head
+  carries none (a run there passed).
 - **The end of a watch:** a merged or closed pull request, or one that is no
   running attempt's (`no_attempt`), is no longer watched. A command on a
   merged or closed pull request reports it and prints `watch: not watched:
@@ -906,7 +920,20 @@ API's; and the declared command itself is never the helper command
 OS-user access, as a worker turn's code does (`docs/DESIGN-TURNS.md` 9.1:
 a command runs under the member's own account; 5.3 for the host). Its
 output, bounded, and its exit status are recorded in
-`logs/automations.jsonl`; a nonzero exit is a failed run. Every run is
+`logs/automations.jsonl`. A refused command, one that did not start or one
+that passed its wall-clock limit is a failed run at every point, and so is
+a nonzero exit, except at `after-push`, where it is the check's verdict on
+the head (increment 2d-b, `docs/DESIGN-TURNS.md` 9.1 and 5): the run is
+handled, with its exit recorded, and the first check that failed (the
+command, its exit, up to 8 KiB of its output, and the names of the other
+checks that failed there) is kept in `state/points.json` for the head and
+sent as `pre_push` with the pull request's observations, cut to what the
+observation takes (the command within 1 KiB with the cut marked, forty
+names, the output without NUL; the manifest admits more), once right after
+the run and with every poll at the head, so that aicrewd wakes the worker
+with it and the need holds across polls and restarts; a head where the
+checks pass clears it. The coordinators are not woken for a failing check:
+it is the worker's change to fix. Every run is
 reported to aicrewd, the report cut to what the route takes as encoded,
 the steps' texts first and the command's words last, a cut marked
 (`POST /v1/crew/automations`; store schema 36 keeps

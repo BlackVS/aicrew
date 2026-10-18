@@ -594,12 +594,13 @@ type forgeEvent struct {
 	AttemptID   string          `json:"attempt_id"`
 	Observation PullObservation `json:"observation"`
 	Changes     []string        `json:"changes"`
-	// Needs is what the change needs a decision on, and Review, Failed and
-	// Passed the content those needs call for (actions.go).
-	Needs  []string      `json:"needs,omitempty"`
-	Review *PullReview   `json:"review,omitempty"`
-	Failed []FailedCheck `json:"failed,omitempty"`
-	Passed []PassedCheck `json:"passed,omitempty"`
+	// Needs is what the change needs a decision on, and Review, Failed,
+	// Passed and PrePush the content those needs call for (actions.go).
+	Needs   []string        `json:"needs,omitempty"`
+	Review  *PullReview     `json:"review,omitempty"`
+	Failed  []FailedCheck   `json:"failed,omitempty"`
+	Passed  []PassedCheck   `json:"passed,omitempty"`
+	PrePush *PrePushFailure `json:"pre_push,omitempty"`
 	// Omitted says what fitForgeEvent left out for room, "" for nothing.
 	Omitted string `json:"omitted,omitempty"`
 }
@@ -737,6 +738,11 @@ func wakeForge(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []strin
 	if pf != nil && pf.Review != nil {
 		content.Review = pf.Review // the newest review recorded, cut as stored
 	}
+	if pf != nil && pf.Head == final.HeadCommit {
+		// The failed check as last observed at the head: nil once a run
+		// there passed, so the need clears.
+		content.PrePush = pf.PrePush
+	}
 	needs = holdingNeeds(needs, final, content)
 	if len(needs) == 0 {
 		return nil, nil
@@ -776,6 +782,9 @@ func wakeForge(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []strin
 	}
 	if slices.Contains(needs, NeedGates) {
 		sub.Passed = content.Passed
+	}
+	if slices.Contains(needs, NeedPrePush) {
+		sub.PrePush = content.PrePush
 	}
 	return &wakeOut{recipients: recipients, forge: detail, subject: sub}, nil
 }

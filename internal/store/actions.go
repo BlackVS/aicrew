@@ -26,10 +26,13 @@ import (
 // READY review while CI runs) is recorded and wakes no one. Subjects due
 // together for the same recipients are one message, which lists each.
 //
-// A conflict in the update from the base and a failed check after a push
-// have their fields here; increment 2's base update and post-push checks
-// fill them. Its gates-green automation replaces the gates-green wake with
-// the harness's own transition.
+// A declared check that failed after a push has its field here, filled
+// since increment 2d-b: the worker's launcher runs the checks declared at
+// the after-push point and reports the first failure with its observations
+// of the pull request, and the need holds while the failure stands at the
+// head. A conflict in the update from the base has its field too; increment
+// 2e's base update fills it. Its gates-green automation replaces the
+// gates-green wake with the harness's own transition.
 
 // KindActionNeeded is a message that wakes a member for a decision, with
 // its content.
@@ -43,6 +46,7 @@ const (
 	NeedMerged   = "merged"   // the pull request was merged
 	NeedClosed   = "closed"   // the pull request was closed without a merge
 	NeedReopened = "reopened" // the pull request was reopened
+	NeedPrePush  = "pre_push" // a declared check failed after the push (2d-b)
 )
 
 // ActionDetail is an action.needed message's subjects.
@@ -64,8 +68,8 @@ type ActionSubject struct {
 	Passed []PassedCheck   `json:"passed,omitempty"`
 	Board  *BoardDetail    `json:"board,omitempty"`
 	Block  *BlockedSubject `json:"blocked,omitempty"`
-	// Conflict and PrePush are filled from increment 2: the base update's
-	// conflict, and a check that failed after a push.
+	// Conflict is the base update's conflict, filled from increment 2e;
+	// PrePush the declared check that failed after the push (NeedPrePush).
 	Conflict *ConflictDetail `json:"conflict,omitempty"`
 	PrePush  *PrePushFailure `json:"pre_push,omitempty"`
 	// Runs are an automation subject's runs (automations.go): those that
@@ -89,11 +93,27 @@ type ConflictDetail struct {
 	Hunks string   `json:"hunks,omitempty"`
 }
 
-// PrePushFailure is a check that failed after a push: its command and its
-// output, bounded.
+// PrePushFailure is a declared check that failed after a push (increment
+// 2d-b): the command in words, its exit status and its output, bounded.
 type PrePushFailure struct {
 	Command string `json:"command"`
+	Exit    int    `json:"exit"`
 	Output  string `json:"output"`
+	// Cut says the output was cut to the message's room.
+	Cut bool `json:"cut,omitempty"`
+	// Others names the other checks that failed at the same point, whose
+	// output the home's automation log holds.
+	Others []string `json:"others,omitempty"`
+}
+
+// prePushEqual reports whether two failures are one.
+func prePushEqual(a, b *PrePushFailure) bool {
+	switch {
+	case a == nil || b == nil:
+		return a == b
+	default:
+		return a.Command == b.Command && a.Exit == b.Exit && a.Output == b.Output && slices.Equal(a.Others, b.Others)
+	}
 }
 
 // PullReview is the external review at a pull request's head, as the
@@ -140,6 +160,7 @@ const (
 	maxPassed      = 30
 	maxObservedLen = 32 << 10 // a body or an excerpt as the launcher sends it
 	maxCheckField  = 1 << 10  // a check's name, conclusion or note, a review's author or verdict
+	maxPrePushOut  = 5 << 10  // a failed check's output, as the excerpts' budget
 )
 
 // schemaV35 adds the action.needed message kind and its detail, and the
@@ -199,6 +220,10 @@ type pullContentFacts struct {
 	Review *PullReview   `json:"review,omitempty"`
 	Failed []FailedCheck `json:"failed,omitempty"`
 	Passed []PassedCheck `json:"passed,omitempty"`
+	// PrePush is the declared check that failed at the head's after-push
+	// point, as the last observation carried it; nil once an observation at
+	// the head carries none (a run there passed) or the head moved.
+	PrePush *PrePushFailure `json:"pre_push,omitempty"`
 }
 
 func readPullFacts(ctx context.Context, tx *sql.Tx, attemptID string) (*pullContentFacts, error) {
@@ -251,6 +276,11 @@ func pullNeeds(prev PullObservation, pf *pullContentFacts, cur PullObservation, 
 	}
 	if cur.Checks == "failure" && (prev.Checks != "failure" || prev.HeadCommit != cur.HeadCommit) {
 		needs = append(needs, NeedCI)
+	}
+	// A declared check failed at the head: news unless the facts before,
+	// read at this head, held the same failure.
+	if cf.PrePush != nil && (pf == nil || pf.Head != cur.HeadCommit || !prePushEqual(pf.PrePush, cf.PrePush)) {
+		needs = append(needs, NeedPrePush)
 	}
 	rv := cf.Review
 	if rv == nil || !rv.AtHead || !sameCommit(rv.Head, cur.HeadCommit) {
@@ -313,6 +343,16 @@ func boundContent(f *pullContentFacts) {
 	}
 	if len(f.Passed) > maxPassed {
 		f.Passed = f.Passed[:maxPassed]
+	}
+	if f.PrePush != nil {
+		p := *f.PrePush
+		var cut bool
+		p.Output, cut = fitText(p.Output, maxPrePushOut)
+		p.Cut = p.Cut || cut
+		if len(p.Others) > maxFailed {
+			p.Others = p.Others[:maxFailed]
+		}
+		f.PrePush = &p
 	}
 	left := maxExcerpts
 	for i := range f.Failed {
@@ -450,9 +490,10 @@ func encodeAction(d *ActionDetail) (string, error) {
 }
 
 // holdingNeeds is the needs that still hold at the observation o with the
-// content cf: a review at its head that asks for changes, CI failing, both
-// gates green at its head, and the state it is in. A run that queued a
-// gates-green wake and then a blocking review keeps the review alone.
+// content cf: a review at its head that asks for changes, CI failing, a
+// declared check failing at its head, both gates green at its head, and the
+// state it is in. A run that queued a gates-green wake and then a blocking
+// review keeps the review alone.
 func holdingNeeds(needs []string, o PullObservation, cf pullContentFacts) []string {
 	rv := cf.Review
 	atHead := rv != nil && sameCommit(rv.Head, o.HeadCommit)
@@ -464,6 +505,8 @@ func holdingNeeds(needs []string, o PullObservation, cf pullContentFacts) []stri
 			holds = o.State == "open" && atHead && rv.Blocker
 		case NeedCI:
 			holds = o.State == "open" && o.Checks == "failure"
+		case NeedPrePush:
+			holds = o.State == "open" && cf.PrePush != nil
 		case NeedGates:
 			holds = o.State == "open" && atHead && !rv.Blocker && rv.Verdict == verdictReady && o.Checks == "success"
 		case NeedMerged:
@@ -515,6 +558,13 @@ func fitForgeEvent(ev *forgeEvent) error {
 			}
 		}
 		note(n, "log excerpt(s)")
+	}
+	if ev.PrePush != nil && size() > eventBudget {
+		p := *ev.PrePush
+		p.Output, _ = fitText(p.Output, 1<<10)
+		p.Cut = true
+		ev.PrePush = &p
+		omitted = append(omitted, "most of the failed check's output")
 	}
 	dropped = 0
 	for len(ev.Failed) > 0 && size() > eventBudget {
@@ -569,6 +619,22 @@ func pullText(o PullObservation, needs []string, cf pullContentFacts, omitted st
 			}
 			if len(cf.Failed) == 0 {
 				b.WriteString(" `aicrew-agent forge pr show` names the failed jobs.")
+			}
+		case NeedPrePush:
+			p := cf.PrePush
+			fmt.Fprintf(&b, "\n- A declared check failed after the push: `%s` (exit %d). Fix the change and push again; the checks run at the next head.",
+				p.Command, p.Exit)
+			if strings.TrimSpace(p.Output) == "" {
+				b.WriteString("\n  | [no output]")
+			} else {
+				indentInto(&b, p.Output)
+			}
+			if p.Cut {
+				b.WriteString("\n  | [cut: the home's logs/automations.jsonl holds it whole]")
+			}
+			if len(p.Others) > 0 {
+				fmt.Fprintf(&b, "\n  Other checks failed at this point too: %s; the home's logs/automations.jsonl holds their output.",
+					strings.Join(p.Others, ", "))
 			}
 		case NeedGates:
 			names := make([]string, 0, len(cf.Passed))

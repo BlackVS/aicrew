@@ -79,7 +79,32 @@ type pullPoints struct {
 	// once however the observations flap between it and another; the
 	// edges are kept for as long as the pull request is (writePoints).
 	Fired map[string][]string `json:"fired,omitempty"`
-	Seen  time.Time           `json:"seen"`
+	// PrePush is the declared check that failed at Head's after-push point,
+	// kept until a head where the checks pass and sent with every
+	// observation at the head (forgewatch.go), so the worker's need holds
+	// across polls and restarts; nil when none failed, or the point has not
+	// run at the head.
+	PrePush *pointPrePush `json:"pre_push,omitempty"`
+	Seen    time.Time     `json:"seen"`
+}
+
+// pointPrePush is a failed check with the head it failed at.
+type pointPrePush struct {
+	Head    string         `json:"head"`
+	Failure PrePushFailure `json:"failure"`
+}
+
+// prePushAt is the failed check kept for the pull request key at head, as
+// an observation carries it, or nil.
+func (s *StepServer) prePushAt(key, head string) *PrePushFailure {
+	s.points.mu.Lock()
+	defer s.points.mu.Unlock()
+	p := readPoints(s.home).Pulls[key]
+	if p == nil || p.PrePush == nil || head == "" || p.PrePush.Head != head {
+		return nil
+	}
+	f := p.PrePush.Failure
+	return &f
 }
 
 // pendingMerge reports whether p was merged and after-merge has not run.
@@ -300,18 +325,21 @@ func (s *StepServer) replayPoints() {
 // firePoint runs the automations at point for the pull request, records the
 // edge as fired, and clears it from the edges in flight. A run the
 // launcher's exit cut short records no edge: the next launcher runs the
-// point again at its next observation (12.4, at least once).
+// point again at its next observation (12.4, at least once). At
+// after-push, the first declared check that failed is kept for the head
+// and sent to aicrewd at once with the observation that fired the point,
+// so the worker is woken with it (2d-b).
 func (s *StepServer) firePoint(ctx context.Context, key string, p *pullPoints, point string, o PullObservation) {
 	baseOnly := false
 	if point == automation.PointAfterPush {
 		baseOnly = s.baseOnly(ctx, p)
 	}
-	s.runPoint(ctx, p, point, o, baseOnly)
+	failed := s.runPoint(ctx, p, point, o, baseOnly)
 	edge := edgeOf(point, o, p.Head)
 	s.points.mu.Lock()
-	defer s.points.mu.Unlock()
 	delete(s.points.inflight, key+" "+point)
 	if ctx.Err() != nil {
+		s.points.mu.Unlock()
 		return
 	}
 	doc := readPoints(s.home)
@@ -326,11 +354,75 @@ func (s *StepServer) firePoint(ctx context.Context, key string, p *pullPoints, p
 	if !slices.Contains(cur.Fired[point], edge) {
 		cur.Fired[point] = append(cur.Fired[point], edge)
 	}
+	var announce *PullObservation
 	if point == automation.PointAfterPush {
 		cur.Identity = p.Identity
+		cur.PrePush = nil
+		if len(failed) > 0 {
+			cur.PrePush = &pointPrePush{Head: p.Head, Failure: prePushOf(failed)}
+			if o.HeadCommit == p.Head {
+				again := o
+				again.Baseline, again.PrePush = false, &cur.PrePush.Failure
+				announce = &again
+			}
+		}
 	}
 	if err := writePoints(s.home, doc, key); err != nil {
 		s.log.Warn("the points' state was not written", "error", err.Error())
+	}
+	s.points.mu.Unlock()
+	if announce != nil {
+		body := fitObservation(announce)
+		rctx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		if _, err := s.local.LocalStep(rctx, newKey("pull"), s.driver.Session.stepToken(), pullsPath, body); err != nil {
+			s.log.Warn("automations: report the failed check", "pull", p.Number, "error", err.Error())
+		}
+	}
+}
+
+// checkFailure is a declared check at after-push that ran and exited
+// nonzero: the check's verdict on the head, for the worker.
+type checkFailure struct {
+	name    string
+	failure PrePushFailure
+}
+
+// prePushOf is the failure the observation carries: the first check that
+// failed, naming the others, in the shape aicrewd takes.
+func prePushOf(failed []checkFailure) PrePushFailure {
+	out := failed[0].failure
+	for _, f := range failed[1:] {
+		out.Others = append(out.Others, f.name)
+	}
+	normalizePrePush(&out)
+	return out
+}
+
+// The bounds of a failed check as aicrewd's observation takes it
+// (store/forgeevents.go, validate): the output as a log excerpt is bounded
+// (forge.MaxExcerpt), the command in words within a check field, and the
+// other checks' names within the failed checks the route takes. The
+// manifest admits more (32 words of 256 bytes, 64 entries), so the
+// failure is cut to these before it is sent.
+const (
+	maxPrePushOutput  = 8 << 10
+	maxPrePushCommand = 1 << 10
+	maxPrePushOthers  = 40
+)
+
+// normalizePrePush cuts p to the bounds above and to the text contract:
+// no NUL and valid UTF-8 in the output, a cut marked; the command on one
+// line, a cut marked at its end; at most maxPrePushOthers names.
+func normalizePrePush(p *PrePushFailure) {
+	out, cut := automation.Bound(strings.ReplaceAll(p.Output, "\x00", ""), maxPrePushOutput)
+	p.Output, p.Cut = out, p.Cut || cut
+	p.Command = strings.NewReplacer("\r", " ", "\n", " ", "\x00", "").Replace(p.Command)
+	if mark := " [cut]"; len(p.Command) > maxPrePushCommand {
+		p.Command = bound(p.Command, maxPrePushCommand-len(mark)) + mark
+	}
+	if len(p.Others) > maxPrePushOthers {
+		p.Others = p.Others[:maxPrePushOthers]
 	}
 }
 
@@ -407,16 +499,17 @@ func patchIdentity(ctx context.Context, worktree, base, head string) string {
 }
 
 // runPoint runs the effective automations declared at point for the pull
-// request of p's attempt, and reports each run to aicrewd.
-func (s *StepServer) runPoint(ctx context.Context, p *pullPoints, point string, o PullObservation, baseOnly bool) {
+// request of p's attempt, and reports each run to aicrewd. It returns the
+// declared checks that failed at after-push, in the set's order.
+func (s *StepServer) runPoint(ctx context.Context, p *pullPoints, point string, o PullObservation, baseOnly bool) (failed []checkFailure) {
 	st, err := s.Status(ctx)
 	if err != nil {
 		s.log.Warn("automations: read the session status", "point", point, "error", err.Error())
-		return
+		return nil
 	}
 	if st.Attempt == nil || st.Attempt.ID != p.Attempt {
 		s.log.Info("automations: the pull request's attempt is no longer the member's open attempt", "point", point, "attempt", p.Attempt)
-		return
+		return nil
 	}
 	var src AutomationSources
 	if a := st.Attempt; a.Process != nil && a.Repository != nil {
@@ -428,7 +521,7 @@ func (s *StepServer) runPoint(ctx context.Context, p *pullPoints, point string, 
 	set, err := s.Automations(ctx, src)
 	if err != nil {
 		s.log.Warn("automations: the effective set could not be read", "point", point, "error", RedactForgeTokens(s.home, err.Error()))
-		return
+		return nil
 	}
 	head := p.Head
 	event := automation.Event{Kinds: []string{point}, IDs: []string{pullKey(o.Host, o.Repository, o.Number) + "@" + head}, BaseOnly: baseOnly}
@@ -444,6 +537,9 @@ func (s *StepServer) runPoint(ctx context.Context, p *pullPoints, point string, 
 			s.recordProblem(rep)
 		case e.Source == automation.SourceCommand:
 			s.runCommand(ctx, &rep, e.Command)
+			if rep.check != nil {
+				failed = append(failed, *rep.check)
+			}
 		default:
 			res, err := s.RunAutomation(ctx, AutomationRun{AttemptID: p.Attempt, Pull: o.Number, Name: e.Script, Source: e.Code, Event: event, Point: point})
 			if err != nil {
@@ -464,10 +560,11 @@ func (s *StepServer) runPoint(ctx context.Context, p *pullPoints, point string, 
 		if ctx.Err() != nil {
 			// The launcher is stopping: the run it cut is not a failure
 			// of the automation, and the point runs again.
-			return
+			return nil
 		}
 		s.reportRun(ctx, rep)
 	}
+	return failed
 }
 
 // How a run ended, as aicrewd names it (store/automations.go).
@@ -498,6 +595,9 @@ type automationReport struct {
 	Error     string           `json:"error,omitempty"`
 	Exit      *int             `json:"exit,omitempty"`
 	Steps     []automationStep `json:"steps,omitempty"`
+	// check is a declared check at after-push that exited nonzero: the
+	// worker's, through the observation, not part of the report.
+	check *checkFailure
 }
 
 // automationStep is a step a run recorded, as reported.
@@ -528,8 +628,10 @@ func (s *StepServer) recordProblem(rep automationReport) {
 // runCommand runs a declared command for rep: no shell, in the attempt's
 // worktree, under the turn's allow list, with the client's environment and
 // nothing of the home's. Its output, bounded and redacted, is the run's
-// one step; a nonzero exit, a refused command or one that cannot start is
-// a failed run.
+// one step; a refused command, one that cannot start or one that passes
+// its wall-clock limit is a failed run, and so is a nonzero exit, except
+// at after-push, where it is the check's verdict on the head: the run is
+// handled, and the failure goes to the worker (firePoint).
 func (s *StepServer) runCommand(ctx context.Context, rep *automationReport, cmdline []string) {
 	rep.RunID = newUUID()
 	run := &liveRun{id: rep.RunID, attempt: rep.AttemptID, script: rep.Name, point: rep.Point}
@@ -584,6 +686,11 @@ func (s *StepServer) runCommand(ctx context.Context, rep *automationReport, cmdl
 		switch {
 		case errors.Is(cctx.Err(), context.DeadlineExceeded):
 			fail(fmt.Sprintf("the command passed its wall-clock limit of %s, and was stopped", commandWall))
+		case code != 0 && rep.Point == automation.PointAfterPush:
+			out, cut := automation.Bound(text, maxPrePushOutput)
+			rep.Outcome = runHandled
+			rep.check = &checkFailure{name: rep.Name, failure: PrePushFailure{Command: strings.Join(cmdline, " "), Exit: code, Output: out, Cut: cut}}
+			s.recordEnd(run, rep.Outcome, cmdline, rep.Exit)
 		case code != 0:
 			fail(fmt.Sprintf("exit status %d", code))
 		default:

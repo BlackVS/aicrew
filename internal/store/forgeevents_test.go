@@ -423,3 +423,94 @@ func TestQueuedGatesAfterProgress(t *testing.T) {
 		t.Fatalf("the gates wake: %+v", got)
 	}
 }
+
+// A declared check that failed after the push (2d-b) wakes the worker with
+// the command, its exit and its output in the message's pre_push field; the
+// coordinators hear nothing. The failure is the observation's: one at the
+// same head with it again is nothing new, one without it (a run there
+// passed) or at a new head clears a queued need, and a new head that fails
+// again is a new need. The output is bounded.
+func TestFailedCheckAfterPush(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	o := observed(a.Branch)
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	fail := &PrePushFailure{Command: "bash scripts/check-repo.sh", Exit: 1, Output: "lint: main.go:12: unused variable x\nFAIL\n", Others: []string{"second"}}
+	o.PrePush = fail
+	res, err := e.s.ObservePullWithToken(ctx, e.indepTk, o)
+	if err != nil || strings.Join(res.Needs, ",") != NeedPrePush || res.EventID == "" {
+		t.Fatalf("the failed check: %+v, %v", res, err)
+	}
+	settle(t, e.s, e.now)
+	got := forgeEvents(t, e.s, e.indepTk)
+	if len(got) != 1 || len(got[0].Action.Subjects) != 1 {
+		t.Fatalf("the worker's message: %+v", got)
+	}
+	sub := got[0].Action.Subjects[0]
+	if strings.Join(sub.Needs, ",") != NeedPrePush || sub.PrePush == nil || sub.PrePush.Command != fail.Command || sub.PrePush.Exit != 1 ||
+		sub.PrePush.Output != fail.Output || strings.Join(sub.PrePush.Others, ",") != "second" || sub.Review != nil || sub.Failed != nil {
+		t.Fatalf("the pre_push subject: %+v", sub)
+	}
+	if text := got[0].Text; !strings.Contains(text, "A declared check failed after the push: `bash scripts/check-repo.sh` (exit 1).") ||
+		!strings.Contains(text, "\n  | lint: main.go:12: unused variable x\n  | FAIL") ||
+		!strings.Contains(text, "Other checks failed at this point too: second") {
+		t.Fatalf("the message's text:\n%s", text)
+	}
+	if l := forgeEvents(t, e.s, e.leadTok); len(l) != 0 {
+		t.Fatalf("the coordinator heard of a failed check: %+v", l)
+	}
+	ackTok(t, e.s, e.indepTk, got)
+	// The same observation again, a poll: nothing new.
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || res.EventID != "" {
+		t.Fatalf("the failure again: %+v, %v", res, err)
+	}
+	// A new head fails too, and a head after it passes before the queue
+	// runs: the need is gone with the head.
+	o.HeadCommit = head2
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || strings.Join(res.Needs, ",") != NeedPrePush {
+		t.Fatalf("a new head's failure: %+v, %v", res, err)
+	}
+	o.HeadCommit, o.PrePush = head3, nil
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || len(res.Needs) != 0 {
+		t.Fatalf("a passing head: %+v, %v", res, err)
+	}
+	if runs := settle(t, e.s, e.now); len(runs) != 1 || runs[0].MessageID != "" {
+		t.Fatalf("a cleared need was delivered: %+v", runs)
+	}
+	if got := forgeEvents(t, e.s, e.indepTk); len(got) != 0 {
+		t.Fatalf("a passing head woke the worker: %+v", got)
+	}
+	// A failure at that head, then a run there that passes before the
+	// queue runs: cleared too. Then the failure again: delivered.
+	o.PrePush = fail
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || strings.Join(res.Needs, ",") != NeedPrePush {
+		t.Fatalf("the failure at the third head: %+v, %v", res, err)
+	}
+	o.PrePush = nil
+	if _, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, e.s, e.now)
+	if got := forgeEvents(t, e.s, e.indepTk); len(got) != 0 {
+		t.Fatalf("a passing run woke the worker: %+v", got)
+	}
+	long := &PrePushFailure{Command: "bash scripts/check-repo.sh", Exit: 2, Output: strings.Repeat("x", 20<<10)}
+	o.PrePush = long
+	if res, err = e.s.ObservePullWithToken(ctx, e.indepTk, o); err != nil || strings.Join(res.Needs, ",") != NeedPrePush {
+		t.Fatalf("the failure once more: %+v, %v", res, err)
+	}
+	settle(t, e.s, e.now)
+	got = forgeEvents(t, e.s, e.indepTk)
+	if len(got) != 1 || got[0].Action.Subjects[0].PrePush == nil || !got[0].Action.Subjects[0].PrePush.Cut ||
+		len(got[0].Action.Subjects[0].PrePush.Output) > maxPrePushOut || !strings.Contains(got[0].Text, "[cut: the home's logs/automations.jsonl holds it whole]") {
+		t.Fatalf("the long output's message: %+v", got)
+	}
+	// A failure that names no command is refused.
+	o.PrePush = &PrePushFailure{Exit: 1, Output: "x"}
+	if _, err := e.s.ObservePullWithToken(ctx, e.indepTk, o); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a failure without a command: %v", err)
+	}
+}

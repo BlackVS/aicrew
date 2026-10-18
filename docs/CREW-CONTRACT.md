@@ -1479,7 +1479,11 @@ facts at the head held no such failure, and the worker's `action.needed`
 message then carries it in its subject's `pre_push` field with the text
 showing the command, the exit and the output (the output cut to 5 KiB in
 the message). The need clears, even one still queued, at a new head or at
-an observation of the head without it.
+an observation of the head without it. From the third consecutive head
+failing the same command (a run that passes at a failing head ends the
+count, and so does a head that never fails), the message goes to the team's
+coordinators as well as the worker, and its text names the count; the
+subject is the same.
 
 **What needs a decision.** aicrewd keeps the last observation and content
 of each attempt's pull request (schemas 30 and 35). The first observation

@@ -166,6 +166,11 @@ const (
 	maxPrePushOut  = 5 << 10  // a failed check's output, as the excerpts' budget
 )
 
+// prePushStreakBound is the number of consecutive heads failing the same
+// declared check from which the coordinators read the worker's pre_push
+// wake too (the 2d-b follow-up).
+const prePushStreakBound = 3
+
 // schemaV35 adds the action.needed message kind and its detail, and the
 // content facts of each attempt's pull request (the external review at the
 // head, the checks), which the next observation is compared with. SQLite
@@ -227,6 +232,55 @@ type pullContentFacts struct {
 	// point, as the last observation carried it; nil once an observation at
 	// the head carries none (a run there passed) or the head moved.
 	PrePush *PrePushFailure `json:"pre_push,omitempty"`
+	// Streak is the run of consecutive heads whose last observation carried
+	// a failure of one declared command (the 2d-b follow-up); nil for none.
+	Streak *prePushStreak `json:"pre_push_streak,omitempty"`
+}
+
+// prePushStreak is a run of consecutive heads failing one declared
+// command: the command, the number of heads, and the last head counted.
+type prePushStreak struct {
+	Command string `json:"command"`
+	Heads   int    `json:"heads"`
+	Head    string `json:"head"`
+}
+
+// nextStreak is the streak after the observation the facts cf record, pf
+// being the facts before (nil for none). A head's first observation comes
+// before its checks run, so an observation without a failure ends the
+// streak only when it is a run that passed at a head that failed, or a new
+// head after one that never failed; the same command failing at the head
+// after the last counted adds the head, at the counted head keeps it, and
+// any other failure starts a streak of one.
+func nextStreak(pf *pullContentFacts, cf pullContentFacts) *prePushStreak {
+	var st *prePushStreak
+	if pf != nil {
+		st = pf.Streak
+	}
+	if f := cf.PrePush; f != nil {
+		switch {
+		case st == nil || st.Command != f.Command:
+		case st.Head == cf.Head:
+			return st
+		case pf.Head == st.Head || pf.Head == cf.Head:
+			// The head after the last counted: observed with the failure
+			// at once, or first without one and carried below.
+			return &prePushStreak{Command: f.Command, Heads: st.Heads + 1, Head: cf.Head}
+		}
+		return &prePushStreak{Command: f.Command, Heads: 1, Head: cf.Head}
+	}
+	switch {
+	case st == nil:
+		return nil
+	case pf.Head == cf.Head:
+		if pf.PrePush != nil {
+			return nil // a run at the head passed
+		}
+		return st
+	case pf.Head == st.Head:
+		return st // a new head after a counted one, before its checks ran
+	}
+	return nil // a new head after one that never failed
 }
 
 func readPullFacts(ctx context.Context, tx *sql.Tx, attemptID string) (*pullContentFacts, error) {
@@ -651,6 +705,9 @@ func pullText(o PullObservation, needs []string, cf pullContentFacts, omitted st
 			if len(p.Others) > 0 {
 				fmt.Fprintf(&b, "\n  Other checks failed at this point too: %s; the home's logs/automations.jsonl holds their output.",
 					strings.Join(p.Others, ", "))
+			}
+			if cf.Streak != nil && cf.Streak.Heads >= prePushStreakBound {
+				fmt.Fprintf(&b, "\n  The same command failed at %d heads in a row; the team's coordinators read this too.", cf.Streak.Heads)
 			}
 		case NeedGates:
 			names := make([]string, 0, len(cf.Passed))

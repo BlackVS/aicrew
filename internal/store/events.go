@@ -741,7 +741,7 @@ func wakeForge(ctx context.Context, tx *sql.Tx, evs []queuedEvent, roles []strin
 	if pf != nil && pf.Head == final.HeadCommit {
 		// The failed check as last observed at the head: nil once a run
 		// there passed, so the need clears.
-		content.PrePush = pf.PrePush
+		content.PrePush, content.Streak = pf.PrePush, pf.Streak
 	}
 	needs = holdingNeeds(needs, final, content)
 	if len(needs) == 0 {

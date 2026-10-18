@@ -80,6 +80,10 @@ const (
 	// WhenTurn holds for an automation run that asked for a model turn
 	// (12.3): its content goes to the worker.
 	WhenTurn = "turn"
+	// WhenCheckStreak holds for a pull request change whose declared check
+	// failed at the bound of consecutive heads with the same command (the
+	// 2d-b follow-up): the coordinators read the worker's wake too.
+	WhenCheckStreak = "check-streak"
 )
 
 // HandlerWake writes one action.needed message per handler run, carrying
@@ -91,7 +95,7 @@ var (
 	kinds      = []string{KindBoardChanged, KindForgeChanged, KindAttemptChanged, KindMemberChanged, KindTimerDue, KindAutomationRun}
 	roles      = []string{RoleWorker, RoleCoordinator}
 	conditions = []string{WhenAlways, WhenNotOwnChange, WhenReadyOrTeamAttempt, WhenSubmitOrSubmitted, WhenBlocked, WhenAction,
-		WhenFailed, WhenTurn}
+		WhenFailed, WhenTurn, WhenCheckStreak}
 	handlers  = []string{HandlerWake}
 	nameShape = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 )
@@ -244,6 +248,7 @@ type Facts struct {
 	Action      bool // a pull request change that needs a decision
 	Failed      bool // an automation run that failed
 	Turn        bool // an automation run that asked for a model turn
+	CheckStreak bool // a declared check failed at the bound of heads in a row
 }
 
 // Roles is the roles s wakes for an event with facts f, each once, in the
@@ -283,6 +288,8 @@ func holds(when string, f Facts) bool {
 		return f.Failed
 	case WhenTurn:
 		return f.Turn
+	case WhenCheckStreak:
+		return f.CheckStreak
 	}
 	return false
 }

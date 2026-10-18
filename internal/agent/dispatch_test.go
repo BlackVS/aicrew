@@ -597,6 +597,38 @@ func TestCommandHasNoCredentialPath(t *testing.T) {
 			t.Fatalf("%s git-credential: %s %q", prog, rep.Outcome, rep.Error)
 		}
 	}
+	// An argument that would set a helper or an askpass after the reset is
+	// refused before any process starts, under any spelling git or the
+	// environment reads (2a00); an ordinary setting still runs.
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"git", "-c", "credential.helper=store", "fetch"}, "credential.helper"},
+		{[]string{"git", "-c", "Credential.Helper=store", "fetch"}, "credential.helper"},
+		{[]string{"git", "-c", "credential.https://git.example.test.helper=store", "fetch"}, "credential.helper"},
+		{[]string{"git", "--config-env=core.askPass=PROMPT", "fetch"}, "core.askPass"},
+		{[]string{"git", "--config-env", "credential.helper=HELPER", "fetch"}, "credential.helper"},
+		{[]string{"git", "config", "credential.helper", "store"}, "credential.helper"},
+		{[]string{"git", "GIT_ASKPASS=/bin/echo", "fetch"}, "GIT_ASKPASS"},
+		{[]string{"git", "GIT_CONFIG_KEY_0=credential.helper", "fetch"}, "credential.helper"},
+		{[]string{"git", "GIT_CONFIG_PARAMETERS='core.askpass'='/bin/echo'", "fetch"}, "core.askPass"},
+	} {
+		rep := automationReport{AttemptID: "att-cred", Point: automation.PointAfterPush, Name: "setting", Source: automation.SourceCommand,
+			Pull: 4, URL: "https://git.example.test/crew/project-t/pulls/4", Head: strings.Repeat("a", 40)}
+		srv.runCommand(ctx, &rep, c.args)
+		if rep.Outcome != runFailed || !strings.Contains(rep.Error, "cannot set "+c.want) || rep.Exit != nil || len(rep.Steps) != 0 {
+			t.Fatalf("%q: %s %q exit %v steps %d", c.args, rep.Outcome, rep.Error, rep.Exit, len(rep.Steps))
+		}
+	}
+	for _, args := range [][]string{{"git", "-c", "alias.x=status", "x"}, {"git", "-c", "core.pager=cat", "status", "--short"}} {
+		rep := automationReport{AttemptID: "att-cred", Point: automation.PointAfterPush, Name: "plain", Source: automation.SourceCommand,
+			Pull: 4, URL: "https://git.example.test/crew/project-t/pulls/4", Head: strings.Repeat("a", 40)}
+		srv.runCommand(ctx, &rep, args)
+		if rep.Outcome != runHandled || rep.Exit == nil || *rep.Exit != 0 {
+			t.Fatalf("%q: %s %q exit %v", args, rep.Outcome, rep.Error, rep.Exit)
+		}
+	}
 	for _, line := range dispatchRecords(t, s.cfg.Home) {
 		if strings.Contains(line.Text, "helper-secret") {
 			t.Fatal("the secret reached the automation log")

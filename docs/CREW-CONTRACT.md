@@ -1437,9 +1437,11 @@ edges in the home's `state/points.json`, which holds no secret. A
 declared command runs in the attempt's worktree with the client's
 environment, and receives no credential through its environment or
 through git: the clone's credential helper is reset for its process, so
-network git at a point fails by design, and the command itself is never
-the helper command. The code it runs has the member's OS-user access, as
-a worker turn's code does. It reports
+network git at a point fails by design, the command itself is never the
+helper command, and a command whose arguments name `credential.helper`,
+`core.askPass` or `GIT_ASKPASS` is refused as a failed run. The code it
+runs has the member's OS-user access, as a worker turn's code does. It
+reports
 each run with `POST /v1/crew/automations` and the member's session token:
 the attempt, a run ID, the point, the entry's name, source and commit, its
 script or command, the pull request and head, whether the head was a

@@ -26,6 +26,10 @@ const (
 	ClaimPath    = AttemptsPath + "/claim"
 
 	maxStepBody = 4 << 10
+	// maxReportBody is an automation run's report (forgeevents.go): up to
+	// 20 steps of a kibibyte, 4 KiB of turn content, 2 KiB of error and a
+	// command of 32 arguments, as the launcher bounds them.
+	maxReportBody = 48 << 10
 )
 
 // The actions on one attempt, at AttemptsPath/{id}/{action}.
@@ -128,6 +132,11 @@ func attemptRefusal(err error) string {
 // object. The store operation authenticates the token again inside its
 // transaction.
 func (s *Server) stepRequest(w http.ResponseWriter, r *http.Request, wantKey bool, v any) (token, key string, ok bool) {
+	return s.stepRequestMax(w, r, wantKey, v, maxStepBody)
+}
+
+// stepRequestMax is stepRequest with the body bound to max bytes.
+func (s *Server) stepRequestMax(w http.ResponseWriter, r *http.Request, wantKey bool, v any, max int64) (token, key string, ok bool) {
 	token = sessionToken(r)
 	b, err := s.store.AuthenticateSessionToken(r.Context(), token)
 	if err != nil {
@@ -141,7 +150,7 @@ func (s *Server) stepRequest(w http.ResponseWriter, r *http.Request, wantKey boo
 			return "", "", false
 		}
 	}
-	body, bodyOK := readBody(r, maxStepBody)
+	body, bodyOK := readBody(r, max)
 	switch {
 	case !bodyOK:
 		s.refuseSession(w, r, "invalid_request", false, 0)

@@ -52,7 +52,7 @@ type ActionDetail struct {
 
 // ActionSubject is one subject that needs a decision, with its content.
 type ActionSubject struct {
-	// Kind is pull, blocked or board.
+	// Kind is pull, blocked, board or automation.
 	Kind      string   `json:"kind"`
 	AttemptID string   `json:"attempt_id,omitempty"`
 	Task      *TaskRef `json:"task,omitempty"`
@@ -68,6 +68,9 @@ type ActionSubject struct {
 	// conflict, and a check that failed after a push.
 	Conflict *ConflictDetail `json:"conflict,omitempty"`
 	PrePush  *PrePushFailure `json:"pre_push,omitempty"`
+	// Runs are an automation subject's runs (automations.go): those that
+	// failed, for the coordinators, or asked for a turn, for the worker.
+	Runs []AutomationRunReport `json:"runs,omitempty"`
 	// Text is the subject in words, as the message's text holds it.
 	Text string `json:"text"`
 }

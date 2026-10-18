@@ -41,7 +41,9 @@ const manifestJSON = `{
     {"name": "gates-green", "source": "disabled", "description": "the team marks ready by hand"},
     {"name": "project-check", "source": {"repository": "automations/check.star"}, "point": "after-push",
      "events": ["forge.changed"], "turn": "rework"},
-    {"name": "board-note", "source": {"process": "processes/delivery/note.star"}, "events": ["board.changed", "timer.due"]}
+    {"name": "board-note", "source": {"process": "processes/delivery/note.star"}, "events": ["board.changed", "timer.due"]},
+    {"name": "repo-check", "source": {"command": ["bash", "scripts/check-repo.sh"]}, "point": "after-push",
+     "description": "the repository's own checks"}
   ]
 }`
 
@@ -62,6 +64,8 @@ func TestEntriesMatchTheSchema(t *testing.T) {
 		{Name: "project-check", Source: SourceRepository, Script: "automations/check.star", Point: PointAfterPush,
 			Events: []string{"forge.changed"}, Turn: "rework"},
 		{Name: "board-note", Source: SourceProcess, Script: "processes/delivery/note.star", Events: []string{"board.changed", "timer.due"}},
+		{Name: "repo-check", Source: SourceCommand, Command: []string{"bash", "scripts/check-repo.sh"}, Point: PointAfterPush,
+			Description: "the repository's own checks"},
 	}
 	if !reflect.DeepEqual(es, want) {
 		t.Fatalf("parsed %+v", es)
@@ -91,7 +95,7 @@ func TestEntriesMatchTheSchema(t *testing.T) {
 	if errs := schematest.Validate(schema, decode(t, later), "manifest"); len(errs) != 0 {
 		t.Fatalf("a manifest of a later format version does not match the schema:\n%s", strings.Join(errs, "\n"))
 	}
-	if es, err := ParseManifest([]byte(later)); err != nil || len(es) != 4 {
+	if es, err := ParseManifest([]byte(later)); err != nil || len(es) != 5 {
 		t.Fatalf("a manifest of a later format version: %+v, %v", es, err)
 	}
 }
@@ -129,6 +133,14 @@ func TestSchemasNameTheCodesShapes(t *testing.T) {
 			t.Errorf("the schema's pattern %s, the code's %s", c.schema, c.code)
 		}
 	}
+	command := defs["command"].(map[string]any)["properties"].(map[string]any)
+	if got := strs(command["point"].(map[string]any)["enum"]); !slices.Equal(got, points) {
+		t.Errorf("the command schema's points %v, the code's %v", got, points)
+	}
+	args := command["source"].(map[string]any)["properties"].(map[string]any)["command"].(map[string]any)
+	if args["maxItems"].(float64) != MaxCommandArgs || args["items"].(map[string]any)["maxLength"].(float64) != maxCommandArg {
+		t.Errorf("the command schema's bounds %v, the code's %d and %d", args, MaxCommandArgs, maxCommandArg)
+	}
 	host := schemaOf(t, HeaderSchemaJSON)["properties"].(map[string]any)["host_api"].(map[string]any)
 	if host["maximum"].(float64) != HostAPIVersion {
 		t.Errorf("the header schema allows host API %v, the release serves %d", host["maximum"], HostAPIVersion)
@@ -157,6 +169,16 @@ func TestParseManifestRefuses(t *testing.T) {
 		"a disabled entry with a point":          `{"name":"x","source":"disabled","point":"after-ci"}`,
 		"a source that is another word":          `{"name":"x","source":"off"}`,
 		"too many entries":                       strings.Repeat(entry+",", MaxEntries) + entry,
+		// A command: an argument list at a point, nothing else.
+		"a command with no arguments":   `{"name":"x","source":{"command":[]},"point":"after-push"}`,
+		"a command that is a string":    `{"name":"x","source":{"command":"bash scripts/x.sh"},"point":"after-push"}`,
+		"a command with an empty word":  `{"name":"x","source":{"command":["bash",""]},"point":"after-push"}`,
+		"a command with a newline":      `{"name":"x","source":{"command":["bash","a\nb"]},"point":"after-push"}`,
+		"a command without a point":     `{"name":"x","source":{"command":["bash","x.sh"]}}`,
+		"a command at an event":         `{"name":"x","source":{"command":["bash","x.sh"]},"point":"after-push","events":["forge.changed"]}`,
+		"a command with a turn":         `{"name":"x","source":{"command":["bash","x.sh"]},"point":"after-push","turn":"rework"}`,
+		"a command with too many words": `{"name":"x","source":{"command":[` + strings.Repeat(`"a",`, MaxCommandArgs) + `"a"]},"point":"after-push"}`,
+		"a command with a long word":    `{"name":"x","source":{"command":["bash","` + strings.Repeat("a", maxCommandArg+1) + `"]},"point":"after-push"}`,
 		// The schema allows the release source, which is the defaults
 		// file's; the parser refuses it in a manifest.
 		"the release source": strings.Replace(entry, `"process"`, `"release"`, 1),
@@ -177,6 +199,9 @@ func TestParseManifestRefuses(t *testing.T) {
 	}
 	if _, err := ParseDefaults([]byte(`{"version":1,"automations":[` + entry + `]}`)); err == nil {
 		t.Error("a release default whose source is the process was taken")
+	}
+	if _, err := ParseDefaults([]byte(`{"version":1,"automations":[{"name":"x","source":{"command":["bash","x.sh"]},"point":"after-push"}]}`)); err == nil {
+		t.Error("a release default that is a command was taken")
 	}
 	if _, err := ParseDefaults([]byte(`{"version":2,"automations":[]}`)); err == nil {
 		t.Error("another version of the defaults file was taken")

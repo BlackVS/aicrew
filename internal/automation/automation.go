@@ -109,10 +109,15 @@ type Host interface {
 	Comment(ctx context.Context, body string) error
 }
 
-// Event is what a run covers: the kinds and the IDs of its events.
+// Event is what a run covers: the kinds and the IDs of its events. At an
+// extension point the kind is the point's name, and the ID names the pull
+// request and its head. BaseOnly says the head is a base-only update of
+// the one before it: its patch identity against the merge base is
+// unchanged (docs/DESIGN-TURNS.md, 4.1 and 10.4), so the reviews stand.
 type Event struct {
-	Kinds []string
-	IDs   []string
+	Kinds    []string
+	IDs      []string
+	BaseOnly bool
 }
 
 // Turn is a request for a model turn: its kind and its content.
@@ -198,8 +203,9 @@ func Run(ctx context.Context, s Script, ev Event) (*Turn, error) {
 		return nil, fmt.Errorf("%w: it defines no main(event)", ErrInvalid)
 	}
 	event := starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{
-		"kinds": stringList(ev.Kinds),
-		"ids":   stringList(ev.IDs),
+		"kinds":     stringList(ev.Kinds),
+		"ids":       stringList(ev.IDs),
+		"base_only": starlark.Bool(ev.BaseOnly),
 	})
 	event.Freeze()
 	out, err := starlark.Call(thread, mainFn, starlark.Tuple{event}, nil)

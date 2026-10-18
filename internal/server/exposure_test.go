@@ -76,8 +76,9 @@ var (
 		// (5570); the store refuses every other caller.
 		"BoardCursor": true, "RecordBoardPage": true, "ResetBoardCursor": true,
 		// The worker's observation of its running attempt's pull request, by
-		// its session token (forge events).
-		"ObservePullWithToken": true,
+		// its session token (forge events), and its launcher's report of an
+		// automation run at one of its extension points (increment 2d-a).
+		"ObservePullWithToken": true, "RecordAutomationRunWithToken": true,
 		// The event queues' delivery, as aicrewd's reconciler (increment
 		// 1b); the store refuses every other caller.
 		"DeliverEvents": true,

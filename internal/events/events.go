@@ -37,6 +37,11 @@ const (
 	KindMemberChanged = "member.changed"
 	// KindTimerDue is a deadline aicrewd stored, passed.
 	KindTimerDue = "timer.due"
+	// KindAutomationRun is an automation's run at an extension point of an
+	// attempt's pull request, as its worker's launcher reported it: it
+	// handled the point, asked for a model turn, or failed
+	// (docs/DESIGN-TURNS.md, 9.1 and 10.3).
+	KindAutomationRun = "automation.run"
 )
 
 // The roles a subscription wakes.
@@ -69,6 +74,12 @@ const (
 	// or a merge, close or reopen. A change that only reports progress (a
 	// label, CI starting, a READY review alone) is not one.
 	WhenAction = "action"
+	// WhenFailed holds for an automation run that failed: a fail(), a
+	// limit, a refused or failing command, a host error (10.3).
+	WhenFailed = "failed"
+	// WhenTurn holds for an automation run that asked for a model turn
+	// (12.3): its content goes to the worker.
+	WhenTurn = "turn"
 )
 
 // HandlerWake writes one action.needed message per handler run, carrying
@@ -77,11 +88,12 @@ const (
 const HandlerWake = "wake"
 
 var (
-	kinds      = []string{KindBoardChanged, KindForgeChanged, KindAttemptChanged, KindMemberChanged, KindTimerDue}
+	kinds      = []string{KindBoardChanged, KindForgeChanged, KindAttemptChanged, KindMemberChanged, KindTimerDue, KindAutomationRun}
 	roles      = []string{RoleWorker, RoleCoordinator}
-	conditions = []string{WhenAlways, WhenNotOwnChange, WhenReadyOrTeamAttempt, WhenSubmitOrSubmitted, WhenBlocked, WhenAction}
-	handlers   = []string{HandlerWake}
-	nameShape  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+	conditions = []string{WhenAlways, WhenNotOwnChange, WhenReadyOrTeamAttempt, WhenSubmitOrSubmitted, WhenBlocked, WhenAction,
+		WhenFailed, WhenTurn}
+	handlers  = []string{HandlerWake}
+	nameShape = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 )
 
 // Kinds is the event kinds this release knows, which an automation's
@@ -230,6 +242,8 @@ type Facts struct {
 	Submitted   bool // the attempt's result is submitted
 	Blocked     bool // an attempt's change to the blocked phase
 	Action      bool // a pull request change that needs a decision
+	Failed      bool // an automation run that failed
+	Turn        bool // an automation run that asked for a model turn
 }
 
 // Roles is the roles s wakes for an event with facts f, each once, in the
@@ -265,6 +279,10 @@ func holds(when string, f Facts) bool {
 		return f.Blocked
 	case WhenAction:
 		return f.Action
+	case WhenFailed:
+		return f.Failed
+	case WhenTurn:
+		return f.Turn
 	}
 	return false
 }

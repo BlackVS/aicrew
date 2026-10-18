@@ -709,7 +709,12 @@ event is data; the bus is core.
     team has an attempt for it;
   - `forge-wake`: `forge.changed` to the worker always, and to the
     coordinators when the change bears on a submit or the result is
-    submitted.
+    submitted;
+  - `blocked-wake`: `attempt.changed` to the coordinators when the change
+    is a worker's blocked report (increment 1d, below);
+  - `automation-wake`: `automation.run` to the coordinators when the run
+    failed, and to the worker when it asks for a turn (increment 2d-a,
+    "Workflow scripts").
 
   These reproduce the routing from before the event core. The kinds, roles,
   conditions and handlers a file may name are this release's; a test
@@ -758,7 +763,9 @@ event is data; the bus is core.
   `event_deliveries` and `event_runs` tables; nothing earlier is journaled.
   Schema 34 adds `attempt_blocks` and `timers`. Schema 35 rebuilds
   `messages` to admit the `action.needed` kind (SQLite cannot change a
-  CHECK in place), every row kept, and adds `attempt_pull_facts`.
+  CHECK in place), every row kept, and adds `attempt_pull_facts`. Schema
+  36 adds `attempt_automation_runs`, one row per automation run reported
+  at an extension point.
   An older aicrewd refuses a schema-33 store, as for every schema change.
   Going back means restoring the store copy the upgrade made
   (`<store>.backup-<UTC time>`), which loses what was written since: the
@@ -861,6 +868,56 @@ header it refuses, stays in the set with its problem. `aicrew-agent check`
 lists the open attempt's effective set, each entry with its name, when it
 runs, its source and its commit; without an attempt, the release's
 defaults.
+
+**The extension points** (increment 2d-a, `docs/DESIGN-TURNS.md` 9.1 and
+4.1). The launcher dispatches the points of its attempt's pull request
+from what its forge poll observes, once per edge: `after-push` for a head
+it had not seen, `after-ci` for a head and a CI conclusion, `ci-failed`
+for a head whose CI failed, `gates-green` for a head whose local and
+external reviews are both `READY_FOR_HUMAN_MERGE` while its CI passed,
+`after-merge` for the merge, and `before-submit` in the `work` step that
+carries the submit, before it is sent. The fired edges are the home's
+`state/points.json`, so a restarted launcher does not fire a point it
+already fired, and an edge once fired stays fired however the
+observations flap (CI failed, passed and failed again at one head fires
+`after-ci` twice, not three times); an edge is recorded after its run
+ends, so a run cut short by a restart runs again at the next observation
+(at least once, 12.4). A merged pull request leaves the watch list, so
+the file keeps it until its `after-merge` ran, and the next poll runs the
+point first.
+The event a script gets at a point names the point as its kind and the
+pull request with its head as its ID, and carries `base_only`: at
+`after-push`, whether the new head's patch identity (`git diff
+<merge-base> <head> | git patch-id --stable`, computed in the attempt's
+worktree) equals the previous head's. A manifest entry may declare a
+**command** instead of a script, `"source": {"command": ["git", "status",
+"--short"]}`: 1 to 32 arguments, at a point only, with no events or turn,
+and never in the release defaults. The launcher runs it without a shell in
+the attempt's worktree, under the turn's allow list and within the
+wall-clock limit, with the client's environment only: a command runs code
+from the attempt's head, so it receives no credential through its
+environment or through git. Its environment holds no forge credential,
+session token or other token (a test reads the environment a command
+received); git's credential helpers are reset for its process (an empty
+`credential.helper` through `GIT_CONFIG_*`), so `git credential fill` and
+any network git at a point fail by design, and forge actions are the host
+API's; and the declared command itself is never the helper command
+`aicrew-agent git-credential`. The code it runs still has the member's
+OS-user access, as a worker turn's code does (`docs/DESIGN-TURNS.md` 9.1:
+a command runs under the member's own account; 5.3 for the host). Its
+output, bounded, and its exit status are recorded in
+`logs/automations.jsonl`; a nonzero exit is a failed run. Every run is
+reported to aicrewd, the report cut to what the route takes as encoded,
+the steps' texts first and the command's words last, a cut marked
+(`POST /v1/crew/automations`; store schema 36 keeps
+one row per run, so a report sent twice is one run) and journaled as
+`automation.run`. The default `automation-wake` subscription wakes the
+team's coordinators on a failed run and the worker on a turn; a handled
+run wakes no one. A failed run is never retried (10.3): the message names
+the entry, the point, the pull request and the error, with the run's
+steps, and the coordinator fixes or disables the entry. `aicrew-agent
+check` shows a command entry with the source `command`, the manifest's
+commit and the command's words.
 
 ## Teams
 

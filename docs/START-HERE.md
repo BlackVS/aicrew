@@ -11,7 +11,10 @@ either backlog. Do not join the old Pilot team or launch workers.
    (`DESIGN-AIFORGE.md`, `DESIGN-AIFORGE-CONTEXT.md`,
    `DESIGN-AIFORGE-RESERVATIONS.md`). Aicrew's own contracts are
    `docs/WORKSPACE.md`, `docs/CREW-CONTRACT.md` and
-   `docs/ONBOARDING-CONTRACT.md`. Endpoint shapes, wire
+   `docs/ONBOARDING-CONTRACT.md`; its reviewed designs are
+   `docs/DESIGN-CONTROL-PLANE.md`, `docs/DESIGN-TURNS.md` and
+   `docs/DESIGN-INSTANCE-BOUNDARY.md` (the public/instance boundary,
+   hub-served sets and closed-network installation). Endpoint shapes, wire
    encoding, storage schemas and migration are still open implementation
    reviews; do not infer them. Aimem owns its documents; do not keep copies
    here. Move the pin only to a later reviewed aimem commit.

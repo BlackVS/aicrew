@@ -389,18 +389,42 @@ type checkFailure struct {
 }
 
 // prePushOf is the failure the observation carries: the first check that
-// failed, naming the others.
+// failed, naming the others, in the shape aicrewd takes.
 func prePushOf(failed []checkFailure) PrePushFailure {
 	out := failed[0].failure
 	for _, f := range failed[1:] {
 		out.Others = append(out.Others, f.name)
 	}
+	normalizePrePush(&out)
 	return out
 }
 
-// maxPrePushOutput bounds a failed check's output as the observation
-// carries it, as a log excerpt is bounded (forge.MaxExcerpt).
-const maxPrePushOutput = 8 << 10
+// The bounds of a failed check as aicrewd's observation takes it
+// (store/forgeevents.go, validate): the output as a log excerpt is bounded
+// (forge.MaxExcerpt), the command in words within a check field, and the
+// other checks' names within the failed checks the route takes. The
+// manifest admits more (32 words of 256 bytes, 64 entries), so the
+// failure is cut to these before it is sent.
+const (
+	maxPrePushOutput  = 8 << 10
+	maxPrePushCommand = 1 << 10
+	maxPrePushOthers  = 40
+)
+
+// normalizePrePush cuts p to the bounds above and to the text contract:
+// no NUL and valid UTF-8 in the output, a cut marked; the command on one
+// line, a cut marked at its end; at most maxPrePushOthers names.
+func normalizePrePush(p *PrePushFailure) {
+	out, cut := automation.Bound(strings.ReplaceAll(p.Output, "\x00", ""), maxPrePushOutput)
+	p.Output, p.Cut = out, p.Cut || cut
+	p.Command = strings.NewReplacer("\r", " ", "\n", " ", "\x00", "").Replace(p.Command)
+	if mark := " [cut]"; len(p.Command) > maxPrePushCommand {
+		p.Command = bound(p.Command, maxPrePushCommand-len(mark)) + mark
+	}
+	if len(p.Others) > maxPrePushOthers {
+		p.Others = p.Others[:maxPrePushOthers]
+	}
+}
 
 // baseOnly computes the head's patch identity against its merge base in
 // the attempt's worktree, keeps it with the previous head's, and reports

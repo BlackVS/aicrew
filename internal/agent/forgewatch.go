@@ -222,12 +222,17 @@ func (s *StepServer) markSeen(key string, st forge.PullStatus) {
 const maxObservationEncoded = 56 << 10
 
 // fitObservation cuts o's content to what aicrewd takes, and encodes it:
-// the passed checks beyond what a message shows, then the review's body,
-// the failed checks' excerpts and the failed check's output halved in turn
-// until the encoding fits, and at last the failed checks beyond the first.
-// A cut is marked, and the message shows no more anyway (the bounds in
-// store/actions.go).
+// the failed check to its contract (normalizePrePush), the passed checks
+// beyond what a message shows, then the review's body, the failed checks'
+// excerpts and the failed check's output halved in turn until the encoding
+// fits, and at last the failed checks beyond the first. A cut is marked,
+// and the message shows no more anyway (the bounds in store/actions.go).
 func fitObservation(o *PullObservation) []byte {
+	if o.PrePush != nil {
+		p := *o.PrePush
+		normalizePrePush(&p)
+		o.PrePush = &p
+	}
 	body, _ := json.Marshal(o)
 	if len(body) > maxObservationEncoded && len(o.Passed) > 30 {
 		o.Passed = o.Passed[:30]

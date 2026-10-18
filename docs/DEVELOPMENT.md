@@ -927,7 +927,9 @@ the head (increment 2d-b, `docs/DESIGN-TURNS.md` 9.1 and 5): the run is
 handled, with its exit recorded, and the first check that failed (the
 command, its exit, up to 8 KiB of its output, and the names of the other
 checks that failed there) is kept in `state/points.json` for the head and
-sent as `pre_push` with the pull request's observations, once right after
+sent as `pre_push` with the pull request's observations, cut to what the
+observation takes (the command within 1 KiB with the cut marked, forty
+names, the output without NUL; the manifest admits more), once right after
 the run and with every poll at the head, so that aicrewd wakes the worker
 with it and the need holds across polls and restarts; a head where the
 checks pass clears it. The coordinators are not woken for a failing check:

@@ -109,7 +109,7 @@ func downgradeToV10(t *testing.T, path string) {
 	}
 	stmts = append(stmts,
 		// Tables added after v10 that reference attempts go first.
-		`DROP TABLE attempt_pull_facts`, `DROP TABLE attempt_blocks`, `DROP TABLE timers`, `DROP TABLE event_runs`, `DROP TABLE event_deliveries`, `DROP TABLE events`,
+		`DROP TABLE attempt_automation_runs`, `DROP TABLE attempt_pull_facts`, `DROP TABLE attempt_blocks`, `DROP TABLE timers`, `DROP TABLE event_runs`, `DROP TABLE event_deliveries`, `DROP TABLE events`,
 		`DROP TABLE scan_finals`, `DROP TABLE coordination_proofs`, `DROP TABLE superseded_updates`,
 		`DROP TABLE attempt_pulls`, `ALTER TABLE messages DROP COLUMN forge`,
 		`INSERT INTO attempts_v10 (`+attemptsV10Columns+`) SELECT `+attemptsV10Columns+` FROM attempts`,
@@ -319,7 +319,7 @@ func TestMigrationV12AddsIntrospectionTables(t *testing.T) {
 	}
 	raw := rawDB(t, path)
 	dropDeliveryColumns(t, raw)
-	for _, stmt := range []string{`DROP TABLE IF EXISTS attempt_pull_facts`, `DROP TABLE IF EXISTS attempt_blocks`, `DROP TABLE IF EXISTS timers`, `DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`, `DROP TABLE session_handles`,
+	for _, stmt := range []string{`DROP TABLE IF EXISTS attempt_automation_runs`, `DROP TABLE IF EXISTS attempt_pull_facts`, `DROP TABLE IF EXISTS attempt_blocks`, `DROP TABLE IF EXISTS timers`, `DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`, `DROP TABLE session_handles`,
 		`DROP TABLE introspection_credentials`, `ALTER TABLE attempts DROP COLUMN process_verified_receipt`,
 		`UPDATE schema_version SET version = 11`} {
 		if _, err := raw.Exec(stmt); err != nil {
@@ -353,7 +353,7 @@ func TestMigrationV13AddsSessionTokens(t *testing.T) {
 	}
 	raw := rawDB(t, path)
 	dropDeliveryColumns(t, raw)
-	for _, stmt := range []string{`DROP TABLE IF EXISTS attempt_pull_facts`, `DROP TABLE IF EXISTS attempt_blocks`, `DROP TABLE IF EXISTS timers`, `DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`,
+	for _, stmt := range []string{`DROP TABLE IF EXISTS attempt_automation_runs`, `DROP TABLE IF EXISTS attempt_pull_facts`, `DROP TABLE IF EXISTS attempt_blocks`, `DROP TABLE IF EXISTS timers`, `DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `DROP TABLE coordination_proofs`, `DROP TABLE session_tokens`,
 		`ALTER TABLE introspection_credentials DROP COLUMN operations`,
 		`ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 12`} {
 		if _, err := raw.Exec(stmt); err != nil {
@@ -393,7 +393,7 @@ func TestMigrationV16AddsVerifiedPinReceipt(t *testing.T) {
 	}
 	raw := rawDB(t, path)
 	dropDeliveryColumns(t, raw)
-	for _, stmt := range []string{`DROP TABLE IF EXISTS attempt_pull_facts`, `DROP TABLE IF EXISTS attempt_blocks`, `DROP TABLE IF EXISTS timers`, `DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 15`} {
+	for _, stmt := range []string{`DROP TABLE IF EXISTS attempt_automation_runs`, `DROP TABLE IF EXISTS attempt_pull_facts`, `DROP TABLE IF EXISTS attempt_blocks`, `DROP TABLE IF EXISTS timers`, `DROP TABLE IF EXISTS event_runs`, `DROP TABLE IF EXISTS event_deliveries`, `DROP TABLE IF EXISTS events`, `ALTER TABLE attempts DROP COLUMN process_verified_receipt`, `UPDATE schema_version SET version = 15`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}
@@ -501,10 +501,19 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 		PRIMARY KEY (team_id, hub_id, project_id)
 	)`
 
+// dropAutomations takes a store back to v35.
+func dropAutomations(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	if _, err := raw.Exec(`DROP TABLE attempt_automation_runs`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // dropActions takes a store back to v34. The messages table keeps its
 // v35 shape, a superset of v34's: v35 rebuilds it from the named columns.
 func dropActions(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropAutomations(t, raw)
 	for _, stmt := range []string{`DROP TABLE attempt_pull_facts`, `ALTER TABLE messages DROP COLUMN action`} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatal(err)

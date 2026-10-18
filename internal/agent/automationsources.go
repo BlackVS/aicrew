@@ -151,8 +151,12 @@ func (s *StepServer) Automations(ctx context.Context, src AutomationSources) (*A
 		case automation.SourceRepository:
 			ae.Commit = set.BaseCommit
 			ae.Code, err = r.blob(ctx, repoClone, set.BaseCommit, e.Script)
+		case automation.SourceCommand:
+			// A declared command has no script: the manifest's commit
+			// names what declared it.
+			ae.Commit = src.Process.Commit
 		}
-		if e.Source != automation.SourceDisabled {
+		if e.Source != automation.SourceDisabled && e.Source != automation.SourceCommand {
 			if err == nil && len(ae.Code) > automation.MaxSource {
 				err = fmt.Errorf("the script is %d bytes, more than %d", len(ae.Code), automation.MaxSource)
 			}
@@ -204,6 +208,11 @@ func (s *StepServer) AttemptAutomations(ctx context.Context) (string, *Automatio
 	if a := st.Attempt; a != nil && a.Process != nil && a.Repository != nil {
 		id = a.ID
 		src = AutomationSources{Process: a.Process, Repository: a.Repository.URL, BaseBranch: a.Repository.DefaultBranch}
+		// The branch the attempt's pull request targets, once a poll read
+		// it (dispatch.go); the default branch until then.
+		if base := s.attemptBase(a.ID); base != "" {
+			src.BaseBranch = base
+		}
 	}
 	set, err := s.Automations(ctx, src)
 	return id, set, err

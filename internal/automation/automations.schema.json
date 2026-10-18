@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/BlackVS/aicrew/blob/main/internal/automation/automations.schema.json",
   "title": "aicrew automations, host API 1",
-  "description": "The automations entries of a process manifest, and of the defaults an aicrew release embeds (docs/DESIGN-TURNS.md, 13.1 and 13.3). An entry names an automation, where its script comes from, and when it runs: at an extension point (9.1), for the event kinds it subscribes to (12.2), or both. A manifest's entry replaces the release default of the same name; the source \"disabled\" turns that default off. The \"release\" source is the release's own and is refused in a manifest. A \"process\" script is named from the process repository's root, as the manifest names its other files, and sits in the manifest's directory; a \"repository\" script is under the repository's automations/, read at the base branch's merged commit. Other fields of a manifest, its version among them, are the manifest format's, not this schema's; the release's defaults file checks its own version.",
+  "description": "The automations entries of a process manifest, and of the defaults an aicrew release embeds (docs/DESIGN-TURNS.md, 9.1, 13.1 and 13.3). An entry names an automation, where it comes from, and when it runs: a script at an extension point (9.1), for the event kinds it subscribes to (12.2), or both; or a declared command at a point. A manifest's entry replaces the release default of the same name; the source \"disabled\" turns that default off. The \"release\" source is the release's own and is refused in a manifest. A \"process\" script is named from the process repository's root, as the manifest names its other files, and sits in the manifest's directory; a \"repository\" script is under the repository's automations/, read at the base branch's merged commit. A \"command\" is an argument list, the program first, with no shell: the launcher runs it at the point in the attempt's worktree, under the turn's allow list, with the client's environment and no credential, and records it as a step with its exit status and output. Other fields of a manifest, its version among them, are the manifest format's, not this schema's; the release's defaults file checks its own version.",
   "type": "object",
   "properties": {
     "$schema": {"type": "string"},
@@ -16,7 +16,8 @@
     "entry": {
       "oneOf": [
         {"$ref": "#/$defs/disabled"},
-        {"$ref": "#/$defs/script"}
+        {"$ref": "#/$defs/script"},
+        {"$ref": "#/$defs/command"}
       ]
     },
     "disabled": {
@@ -67,9 +68,32 @@
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"enum": ["board.changed", "forge.changed", "attempt.changed", "member.changed", "timer.due"]}
+          "items": {"enum": ["board.changed", "forge.changed", "attempt.changed", "member.changed", "timer.due", "automation.run"]}
         },
         "turn": {"type": "string", "pattern": "^[a-z0-9_]{1,64}$"}
+      }
+    },
+    "command": {
+      "type": "object",
+      "required": ["name", "source", "point"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "description": {"$ref": "#/$defs/description"},
+        "source": {
+          "type": "object",
+          "required": ["command"],
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\x00-\\x1f\\x7f]+$"}
+            }
+          }
+        },
+        "point": {"enum": ["after-push", "after-ci", "ci-failed", "gates-green", "before-submit", "after-merge"]}
       }
     },
     "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},

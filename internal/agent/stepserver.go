@@ -142,8 +142,10 @@ type StepServer struct {
 	runs   map[string]*liveRun
 	env    []string
 	// autos are the effective automation sets last read
-	// (automationsources.go).
-	autos automationCache
+	// (automationsources.go), and points the extension points' state
+	// (dispatch.go).
+	autos  automationCache
+	points pointState
 }
 
 // ServeSteps makes the agent home's state directory private, verifies it,
@@ -206,6 +208,7 @@ func (s *StepServer) Close() error {
 	err := s.ln.Close()
 	s.cancel()
 	s.wg.Wait()
+	s.points.wg.Wait()
 	if cur, lerr := os.Lstat(StepSocket(s.home)); lerr == nil && os.SameFile(cur, s.sock) {
 		os.Remove(StepSocket(s.home))
 	}
@@ -369,7 +372,7 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 	case call.Op == "watch-pull":
 		// A forge pr command's observation of the pull request it acted on:
 		// the baseline of its forge events (forgewatch.go).
-		out, err := s.observePull(ctx, call.Body)
+		out, err := s.observePull(ctx, call.Body, pullFacts{})
 		if err != nil {
 			return answerErr(err)
 		}
@@ -439,6 +442,11 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 			return refuse("invalid_request", "This step needs the attempt's ID and the aimem task's ID.", "Pass -attempt and -task.")
 		}
 		req.Path = attemptsPath + "/" + url.PathEscape(call.AttemptID) + "/" + op.action
+	}
+	if call.Op == "work" && workIntent(req.Body) == "submit" {
+		// The last point before the submit (dispatch.go): its automations
+		// run in this step, before the submit is sent.
+		s.beforeSubmit(ctx, call.AttemptID)
 	}
 	res, err := s.driver.Run(ctx, req)
 	if err != nil {

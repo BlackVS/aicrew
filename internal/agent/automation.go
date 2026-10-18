@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/automation"
@@ -78,6 +79,9 @@ type AutomationRun struct {
 	Name   string
 	Source []byte
 	Event  automation.Event
+	// Point is the extension point the run is at, when it is (dispatch.go);
+	// recorded with the run.
+	Point string
 	// Memory is the process's memory limit; 0 is AutomationMemory.
 	Memory int64
 	// Limits are the interpreter's; zero values are 10.3's.
@@ -97,6 +101,9 @@ type AutomationResult struct {
 	Invalid bool `json:"invalid,omitempty"`
 	// Memory says the process passed its memory limit.
 	Memory bool `json:"memory,omitempty"`
+	// Steps are the steps the run recorded, each bounded, for the report
+	// to aicrewd (dispatch.go).
+	Steps []automationStep `json:"steps,omitempty"`
 }
 
 // automationRequest is what the launcher writes to the child's standard
@@ -140,8 +147,12 @@ type liveRun struct {
 	attempt  string
 	pull     int64
 	script   string
+	point    string
 	worktree string
 	allow    automation.AllowList
+	// steps are the steps recorded so far, bounded, for the run's report.
+	stepsMu sync.Mutex
+	steps   []automationStep
 }
 
 // AutomationForge is what a script's host asks of the forge;
@@ -184,7 +195,7 @@ func (s *StepServer) RunAutomation(ctx context.Context, r AutomationRun) (Automa
 	}
 	runCtx, cancel := context.WithTimeout(ctx, wall+automationGrace)
 	defer cancel()
-	run := &liveRun{ctx: runCtx, id: newUUID(), attempt: r.AttemptID, pull: r.Pull, script: r.Name, worktree: worktree,
+	run := &liveRun{ctx: runCtx, id: newUUID(), attempt: r.AttemptID, pull: r.Pull, script: r.Name, point: r.Point, worktree: worktree,
 		allow: automation.NewAllowList(allow, deny)}
 	s.runsMu.Lock()
 	if s.runs == nil {
@@ -268,6 +279,9 @@ func (s *StepServer) RunAutomation(ctx context.Context, r AutomationRun) (Automa
 		res.Failed = redactTurnText(s.home, res.Failed)
 	}
 	s.recordRun(run, r.Event, res)
+	run.stepsMu.Lock()
+	res.Steps = run.steps
+	run.stepsMu.Unlock()
 	return res, nil
 }
 
@@ -312,11 +326,16 @@ type automationRecord struct {
 	Outcome string   `json:"outcome,omitempty"`
 	Turn    string   `json:"turn,omitempty"`
 	Events  []string `json:"events,omitempty"`
+	// A run at an extension point (dispatch.go): the point, and for a
+	// declared command its argument list and exit status.
+	Point   string   `json:"point,omitempty"`
+	Command []string `json:"command,omitempty"`
+	Exit    *int     `json:"exit,omitempty"`
 }
 
 // recordRun records how a run ended, and a failed run as a step too.
 func (s *StepServer) recordRun(run *liveRun, ev automation.Event, res AutomationResult) {
-	rec := automationRecord{At: time.Now().UTC(), Run: run.id, Attempt: run.attempt, Script: run.script, Events: ev.IDs}
+	rec := automationRecord{At: time.Now().UTC(), Run: run.id, Attempt: run.attempt, Script: run.script, Point: run.point, Events: ev.IDs}
 	switch {
 	case res.Failed != "":
 		s.recordStep(run, stepAutomationFailed, res.Failed)
@@ -331,10 +350,17 @@ func (s *StepServer) recordRun(run *liveRun, ev automation.Event, res Automation
 	}
 }
 
-// recordStep records a step of the attempt in AutomationLogFile.
+// recordStep records a step of the attempt in AutomationLogFile, and keeps
+// it on the run, bounded, for the run's report.
 func (s *StepServer) recordStep(run *liveRun, kind, text string) error {
+	text = redactText(s.home, text)
+	run.stepsMu.Lock()
+	if len(run.steps) < maxReportSteps {
+		run.steps = append(run.steps, automationStep{Kind: kind, Text: bound(text, maxReportStepText)})
+	}
+	run.stepsMu.Unlock()
 	return appendAutomationRecord(s.home, automationRecord{At: time.Now().UTC(), Run: run.id, Attempt: run.attempt,
-		Script: run.script, Kind: kind, Text: redactText(s.home, text)})
+		Script: run.script, Point: run.point, Kind: kind, Text: text})
 }
 
 // redactText is s without the home's forge tokens and the known token

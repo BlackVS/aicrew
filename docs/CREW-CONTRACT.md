@@ -1418,6 +1418,23 @@ of them.
   reported merged or closed, is no longer watched. The list is the home's
   `state/pulls.json`, at most 20 entries, and holds no secret.
 
+**Automation runs.** The launcher also runs the process's automations at
+the pull request's extension points as it observes them (DEVELOPMENT,
+"Workflow scripts": `after-push`, `after-ci`, `ci-failed`, `gates-green`,
+`before-submit`, `after-merge`), once per edge, and remembers the fired
+edges in the home's `state/points.json`, which holds no secret. It reports
+each run with `POST /v1/crew/automations` and the member's session token:
+the attempt, a run ID, the point, the entry's name, source and commit, its
+script or command, the pull request and head, whether the head was a
+base-only update, the outcome (`handled`, `turn` with the turn's kind and
+content, or `failed` with the error), a command's exit status and the
+run's steps, bounded. aicrewd keeps one row per attempt and run ID
+(schema 36): a report sent again is recorded once and journals nothing.
+A run of an attempt that is not the member's running attempt is refused
+with `no_attempt`. The event is `automation.run`; a failed run wakes the
+team's coordinators, a turn the worker, a handled run no one ("Event
+delivery").
+
 **The content.** When a watched pull request's status changes so that a
 decision may be due (CI concluded, or its comments changed), the launcher
 also reads its content and reports it with the observation (increment 1c):
@@ -1492,7 +1509,11 @@ core"). The routing is the subscription file embedded in the release.
   events name, as the team is at that moment: a burst of changes about one
   subject wakes a member once. Subjects due at the same tick for the same
   members are one message, whose `action.subjects` list each (`pull`,
-  `blocked`, `board`) with its content and whose text holds each in turn.
+  `blocked`, `board`, `automation`) with its content and whose text holds
+  each in turn. An `automation` subject carries the runs (`runs`) that
+  woke the member: for the coordinators a failed run with its error and
+  steps, for the worker a run that asks for a turn, with the turn's kind
+  and content.
   The message's `conflict` and `pre_push` fields are filled from increment
   2: a conflict in the update from the base, and a check that failed after
   a push.
@@ -1505,6 +1526,9 @@ core"). The routing is the subscription file embedded in the release.
   a member's session starting, resuming or ending, and a stored deadline
   passing. Of these, only a worker's blocked report wakes anyone: the
   team's coordinators.
+- **Automation runs** at the extension points (`automation.run`, "Forge
+  events") wake the team's coordinators when the run failed and the
+  worker when it asks for a turn.
 
 ## Cross-project references
 

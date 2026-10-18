@@ -201,7 +201,11 @@ func printAutomations(w io.Writer, a *agent.AutomationsReport) {
 		if commit == "" {
 			commit = "-"
 		}
-		fmt.Fprintf(w, "  %-24s %-28s %-10s %s\n", e.Name, at, e.Source, commit)
+		fmt.Fprintf(w, "  %-24s %-28s %-10s %s", e.Name, at, e.Source, commit)
+		if len(e.Command) != 0 {
+			fmt.Fprintf(w, "  %s", strings.Join(e.Command, " "))
+		}
+		fmt.Fprintln(w)
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -258,8 +257,9 @@ func setWatched(home string, p watchedPull, watch bool) error {
 // observePull reports an observation to aicrewd as the launcher's session,
 // and keeps the pull request watched while it is open and an attempt's;
 // one that is no running attempt's of the member, or is merged or closed,
-// is no longer watched.
-func (s *StepServer) observePull(ctx context.Context, body []byte) (json.RawMessage, error) {
+// is no longer watched. An observation aicrewd took for an attempt is
+// then given to the extension points with f (dispatch.go).
+func (s *StepServer) observePull(ctx context.Context, body []byte, f pullFacts) (json.RawMessage, error) {
 	var o PullObservation
 	if err := json.Unmarshal(body, &o); err != nil || o.Number < 1 || o.Host == "" || o.Repository == "" {
 		return nil, &Refusal{Code: "invalid_request", Message: "The observation names no pull request."}
@@ -276,6 +276,12 @@ func (s *StepServer) observePull(ctx context.Context, body []byte) (json.RawMess
 	}
 	if werr := setWatched(s.home, w, o.State == forge.PullOpen); werr != nil {
 		s.log.Warn("forge events: record the watched pull request", "error", werr.Error())
+	}
+	var res struct {
+		AttemptID string `json:"attempt_id"`
+	}
+	if json.Unmarshal(out, &res) == nil && res.AttemptID != "" {
+		s.noticePull(o, res.AttemptID, f)
 	}
 	return out, nil
 }
@@ -309,7 +315,8 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 			continue
 		}
 		o := observation(w.Host, w.Repository, st)
-		key := fmt.Sprintf("%s/%s#%d", w.Host, w.Repository, w.Number)
+		key := pullKey(w.Host, w.Repository, w.Number)
+		facts := pullFacts{Base: st.Base}
 		if s.wantsContent(key, st) {
 			// The content tells aicrewd whether a decision is needed; a read
 			// that fails sends the status alone, and the next poll tries again.
@@ -320,6 +327,7 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 			}
 			switch {
 			case added:
+				facts.Reviews = reviewsOf(c)
 			case err == nil:
 				// The branch moved between the two reads: this content is
 				// another head's. The status goes alone, and the next poll
@@ -332,7 +340,7 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 			}
 		}
 		body, _ := json.Marshal(o)
-		if _, err := s.observePull(ctx, body); err != nil {
+		if _, err := s.observePull(ctx, body, facts); err != nil {
 			s.log.Warn("forge events: report a pull request", "pull", w.Number, "error", err.Error())
 			continue
 		}

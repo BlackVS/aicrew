@@ -1,0 +1,432 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/BlackVS/aicrew/internal/automation"
+	"github.com/BlackVS/aicrew/internal/forge"
+	"github.com/BlackVS/aicrew/internal/store"
+)
+
+// A point fires once for its edge: after-push for a head, after-ci for a
+// head and a conclusion, ci-failed for a failed head, gates-green for a
+// head whose two reviews are READY while CI passed, after-merge for the
+// merge. An edge in flight, or fired already, does not fire again.
+func TestPointEdges(t *testing.T) {
+	open := func(head, checks string) PullObservation {
+		return PullObservation{Number: 4, State: forge.PullOpen, HeadCommit: head, Checks: checks}
+	}
+	ready := func(head string) map[string]pointReview {
+		return map[string]pointReview{forge.ReviewerLocal: {Head: head[:12], Verdict: verdictReady},
+			forge.ReviewerExternal: {Head: head, Verdict: verdictReady}}
+	}
+	h1, h2 := "0123456789abcdef0123456789abcdef01234567", "89abcdef0123456789abcdef0123456789abcdef"
+	p := &pullPoints{Attempt: "att-1"}
+	inflight := map[string]bool{}
+	fired := func(want ...string) {
+		t.Helper()
+		if len(want) == 0 {
+			want = nil
+		}
+		got := p.edges(lastO, lastF, inflight, "k")
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s: fired %v, want %v", lastWhat, got, want)
+		}
+		for _, pt := range got {
+			p.Fired[pt] = edgeOf(pt, lastO, p.Head)
+		}
+	}
+	say := func(what string, o PullObservation, f pullFacts) { lastWhat, lastO, lastF = what, o, f }
+
+	say("a new head", open(h1, forge.ChecksPending), pullFacts{Base: "main"})
+	fired(automation.PointAfterPush)
+	say("the same head again", open(h1, forge.ChecksPending), pullFacts{})
+	fired()
+	say("CI failed", open(h1, forge.ChecksFailure), pullFacts{})
+	fired(automation.PointAfterCI, automation.PointCIFailed)
+	say("CI failed, read again", open(h1, forge.ChecksFailure), pullFacts{})
+	fired()
+	say("CI passed after a re-run", open(h1, forge.ChecksSuccess), pullFacts{})
+	fired(automation.PointAfterCI)
+	say("the external review READY alone", open(h1, forge.ChecksSuccess),
+		pullFacts{Reviews: map[string]pointReview{forge.ReviewerExternal: {Head: h1, Verdict: verdictReady}}})
+	fired()
+	say("both reviews READY, CI green", open(h1, forge.ChecksSuccess), pullFacts{Reviews: ready(h1)})
+	fired(automation.PointGatesGreen)
+	say("the same, polled again", open(h1, forge.ChecksSuccess), pullFacts{})
+	fired()
+	say("a review with a BLOCKER", open(h1, forge.ChecksSuccess), pullFacts{Reviews: map[string]pointReview{
+		forge.ReviewerLocal: {Head: h1, Verdict: verdictReady}, forge.ReviewerExternal: {Head: h1, Verdict: "RETURN", Blocker: true}}})
+	fired()
+	say("a new head with CI already green and stale reviews", open(h2, forge.ChecksSuccess), pullFacts{})
+	fired(automation.PointAfterPush, automation.PointAfterCI)
+	if p.Previous != h1 || p.Head != h2 || p.Base != "main" {
+		t.Fatalf("the heads: %+v", p)
+	}
+	inflight["k "+automation.PointGatesGreen] = true
+	say("gates green while that point is in flight", open(h2, forge.ChecksSuccess), pullFacts{Reviews: ready(h2)})
+	fired()
+	delete(inflight, "k "+automation.PointGatesGreen)
+	say("gates green once the run ended", open(h2, forge.ChecksSuccess), pullFacts{})
+	fired(automation.PointGatesGreen)
+	say("merged", PullObservation{Number: 4, State: forge.PullMerged, HeadCommit: h2, Checks: forge.ChecksSuccess}, pullFacts{})
+	fired(automation.PointAfterMerge)
+	say("merged, polled again", PullObservation{Number: 4, State: forge.PullMerged, HeadCommit: h2, Checks: forge.ChecksSuccess}, pullFacts{})
+	fired()
+}
+
+var (
+	lastWhat string
+	lastO    PullObservation
+	lastF    pullFacts
+)
+
+const dispatchManifest = `{
+  "name": "delivery",
+  "automations": [
+    {"name": "push-note", "source": {"process": "process/push-note.star"}, "point": "after-push"},
+    {"name": "push-check", "source": {"command": ["git", "status", "--short"]}, "point": "after-push"},
+    {"name": "env-probe", "source": {"command": ["git", "-c", "alias.dumpenv=!env", "dumpenv"]}, "point": "after-push"},
+    {"name": "refused", "source": {"command": ["curl", "https://example.test"]}, "point": "after-push"},
+    {"name": "ci-note", "source": {"process": "process/ci-note.star"}, "point": "after-ci"},
+    {"name": "gates", "source": {"process": "process/gates.star"}, "point": "gates-green"},
+    {"name": "submit", "source": {"process": "process/submit.star"}, "point": "before-submit"},
+    {"name": "merged", "source": {"process": "process/merged.star"}, "point": "after-merge"}
+  ]
+}`
+
+func starlark(body string) string { return automation.HeaderPrefix + `{"host_api": 1}` + "\n" + body }
+
+// dispatchRecords are the home's automation records, in order.
+func dispatchRecords(t *testing.T, home string) []automationRecord {
+	t.Helper()
+	raw, _ := os.ReadFile(filepath.Join(home, filepath.FromSlash(AutomationLogFile)))
+	var out []automationRecord
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var r automationRecord
+		if line != "" && json.Unmarshal([]byte(line), &r) == nil {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// runsAt are the records of the runs' ends at point, by entry name.
+func runsAt(recs []automationRecord, point string) map[string]automationRecord {
+	out := map[string]automationRecord{}
+	for _, r := range recs {
+		if r.Point == point && r.Outcome != "" {
+			out[r.Script] = r
+		}
+	}
+	return out
+}
+
+// stepOf is the text of the step kind of run.
+func stepOf(recs []automationRecord, run, kind string) string {
+	for _, r := range recs {
+		if r.Run == run && r.Kind == kind {
+			return r.Text
+		}
+	}
+	return ""
+}
+
+// automationWakes are the action.needed messages with an automation
+// subject in the coordinator's inbox, waited for.
+func automationWakes(t *testing.T, s *stepEnv, want int) []store.ActionSubject {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		items, err := s.store.ReadInbox(context.Background(), s.coord, s.coordSess.ID, s.coordSess.Generation, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []store.ActionSubject
+		for _, it := range items {
+			if it.Action != nil {
+				for _, sub := range it.Action.Subjects {
+					if sub.Kind == "automation" {
+						out = append(out, sub)
+					}
+				}
+			}
+		}
+		if len(out) >= want || time.Now().After(deadline) {
+			return out
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// The launcher dispatches the extension points of its attempt's pull
+// request from what it observes, and runs the effective automations at
+// each: a declared command in the worktree under the allow list, with the
+// client's environment and no credential, recorded with its exit and
+// output; a script in its own process, told the point and whether the head
+// is a base-only update. Each run is reported to aicrewd, which wakes the
+// coordinators on a failed run and the worker on a turn. A point fires once
+// for its edge, across a restart too.
+func TestPointsDispatch(t *testing.T) {
+	ctx := context.Background()
+	a := setupAutomationSources(t)
+	pin := a.commit(t, a.process, a.processBare, "main", map[string]string{
+		"process/manifest.json":  dispatchManifest,
+		"process/push-note.star": starlark("def main(event):\n    step(\"push\", \"kinds=%s base_only=%s\" % (\",\".join(event.kinds), event.base_only))\n    return None\n"),
+		"process/ci-note.star":   starlark("def main(event):\n    step(\"ci\", \"kinds=%s ids=%s\" % (\",\".join(event.kinds), \",\".join(event.ids)))\n    return None\n"),
+		"process/gates.star":     starlark("def main(event):\n    fail(\"the gates script fails on purpose\")\n"),
+		"process/submit.star":    starlark("def main(event):\n    step(\"submit\", \"before the submit at %s\" % event.ids[0])\n    return None\n"),
+		"process/merged.star":    starlark("def main(event):\n    return turn(\"rework\", \"merged: decide the follow-up\")\n"),
+	})
+	s := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
+	body := s.claimBody()
+	body["process"] = map[string]string{"repo": testProcessRepo, "commit": pin, "manifest": "process/manifest.json"}
+	r, err := s.run(t, attemptsPath+"/claim", body)
+	if err != nil || r.Outcome != "committed" {
+		t.Fatalf("claim: %+v %v", r, err)
+	}
+	id := r.AttemptID
+	provisionTestForge(t, s.cfg.Home, "git.example.test", "member-forge-token")
+	srv := s.serve(t)
+	srv.env = append(os.Environ(), "AICREW_CLIENT_MARK=client-env-mark")
+
+	// The worktree: the attempt's branch, cloned from the project.
+	wt := filepath.Join(s.cfg.Home, "worktrees", id)
+	os.MkdirAll(filepath.Dir(wt), 0o700)
+	git(t, filepath.Dir(wt), "clone", "-q", "-b", "work/task-1", a.projectBare, wt)
+	git(t, wt, "config", "user.email", "setup@example")
+	git(t, wt, "config", "user.name", "setup")
+	head1 := git(t, wt, "rev-parse", "HEAD")
+
+	fake := &fakeStatus{token: "member-forge-token", st: forge.PullStatus{Pull: forge.Pull{Number: 4,
+		URL: "https://git.example.test/crew/project-t/pulls/4", State: forge.PullOpen, Head: "work/task-1", HeadCommit: head1,
+		Base: "main", Labels: []string{}}, Checks: forge.ChecksPending}}
+	oldAPI := newPullStatusAPI
+	newPullStatusAPI = func() PullStatusAPI { return fake }
+	t.Cleanup(func() { newPullStatusAPI = oldAPI })
+
+	// 1. The forge pr command's baseline is the first sight of the head:
+	// after-push fires, and the four entries at it run.
+	var answers []byte
+	obs, _ := json.Marshal(observation("git.example.test", "crew/project-t", fake.st))
+	if ans := s.call(t, &answers, StepCall{Op: "watch-pull", Body: obs}); !ans.OK {
+		t.Fatalf("the baseline: %+v", ans)
+	}
+	srv.waitPoints()
+	recs := dispatchRecords(t, s.cfg.Home)
+	push := runsAt(recs, automation.PointAfterPush)
+	if len(push) != 4 {
+		raw, _ := os.ReadFile(filepath.Join(s.cfg.Home, filepath.FromSlash(AutomationLogFile)))
+		t.Fatalf("the runs at after-push: %+v\n%s\n%s", push, raw, s.logs.String())
+	}
+	if note := push["process/push-note.star"]; note.Outcome != "handled" ||
+		stepOf(recs, note.Run, "push") != "kinds=after-push base_only=False" {
+		t.Errorf("push-note: %+v, step %q", note, stepOf(recs, note.Run, "push"))
+	}
+	if check := push["push-check"]; check.Outcome != "handled" || check.Exit == nil || *check.Exit != 0 ||
+		!slices.Equal(check.Command, []string{"git", "status", "--short"}) {
+		t.Errorf("push-check: %+v", check)
+	}
+	probe := push["env-probe"]
+	env := stepOf(recs, probe.Run, stepCommand)
+	if probe.Outcome != "handled" || !strings.Contains(env, "AICREW_CLIENT_MARK=client-env-mark") {
+		t.Fatalf("env-probe: %+v\n%s", probe, env)
+	}
+	sess, _ := os.ReadFile(s.e.AimemFile())
+	for name, secret := range map[string]string{"the forge token": "member-forge-token", "the step token": s.e.stepToken(),
+		"the session file's content": strings.TrimSpace(string(sess))} {
+		if secret != "" && strings.Contains(env, secret) {
+			t.Errorf("the command's environment holds %s", name)
+		}
+	}
+	if refused := push["refused"]; refused.Outcome != "failed" ||
+		!strings.Contains(stepOf(recs, refused.Run, stepAutomationFailed), "outside the turn's allow list") {
+		t.Errorf("refused: %+v", refused)
+	}
+	// The failed run woke the coordinator with the handler, the subject
+	// and the error; the handled runs woke no one.
+	wakes := automationWakes(t, s, 1)
+	if len(wakes) != 1 || len(wakes[0].Runs) != 1 || wakes[0].Runs[0].Name != "refused" || wakes[0].AttemptID != id ||
+		!strings.Contains(wakes[0].Text, "the automation refused (the command curl https://example.test) failed at after-push for pull request #4") ||
+		!strings.Contains(wakes[0].Text, "outside the turn's allow list") {
+		t.Fatalf("the coordinator's wakes: %+v", wakes)
+	}
+
+	// 2. The same status polled again: nothing fires; nor after a restart.
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	if n := len(dispatchRecords(t, s.cfg.Home)); n != len(recs) {
+		t.Fatalf("a poll of an unchanged pull request ran something: %d records, had %d", n, len(recs))
+	}
+	srv.Close()
+	srv = s.serve(t)
+	srv.env = append(os.Environ(), "AICREW_CLIENT_MARK=client-env-mark")
+	if ans := s.call(t, &answers, StepCall{Op: "watch-pull", Body: obs}); !ans.OK {
+		t.Fatalf("the baseline after the restart: %+v", ans)
+	}
+	srv.waitPoints()
+	if n := len(dispatchRecords(t, s.cfg.Home)); n != len(recs) {
+		t.Fatalf("a restarted launcher fired after-push again: %d records, had %d", n, len(recs))
+	}
+
+	// 3. CI fails at the head: after-ci and ci-failed fire (ci-note at the
+	// first, nothing declared at the second); CI passes after a re-run:
+	// after-ci fires for the new conclusion.
+	fake.set(func(st *forge.PullStatus) { st.Checks = forge.ChecksFailure })
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	recs = dispatchRecords(t, s.cfg.Home)
+	// The release default base-update runs at after-ci too.
+	ci := runsAt(recs, automation.PointAfterCI)
+	if note := ci["process/ci-note.star"]; len(ci) != 2 || note.Outcome != "handled" ||
+		stepOf(recs, note.Run, "ci") != "kinds=after-ci ids=git.example.test/crew/project-t#4@"+head1 {
+		t.Fatalf("ci-note after a failure: %+v, step %q", ci, stepOf(recs, note.Run, "ci"))
+	}
+	fake.set(func(st *forge.PullStatus) { st.Checks = forge.ChecksSuccess })
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	if n := countRuns(dispatchRecords(t, s.cfg.Home), automation.PointAfterCI); n != 4 {
+		t.Fatalf("after-ci ran %d entries for two conclusions, want 4", n)
+	}
+
+	// 4. Reviews: the external review READY alone fires nothing; with the
+	// local review READY too, gates-green fires, and its failing script
+	// wakes the coordinator.
+	review := func(reviewer, head, verdict string) forge.PullComment {
+		return forge.PullComment{Kind: forge.CommentIssue, Author: reviewer, Body: "reviewed at head " + head + "\n\nVERDICT\n" + verdict,
+			Review: &forge.ReviewHeader{Reviewer: reviewer, Head: head[:12], AtHead: true, Verdict: verdict}}
+	}
+	fake.mu.Lock()
+	fake.content = forge.PullContent{Comments: []forge.PullComment{review(forge.ReviewerExternal, head1, verdictReady)},
+		Checks: []forge.Check{{Name: "build", State: forge.ChecksSuccess}}}
+	fake.mu.Unlock()
+	fake.set(func(st *forge.PullStatus) { st.Comments = 1 })
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	if n := countRuns(dispatchRecords(t, s.cfg.Home), automation.PointGatesGreen); n != 0 {
+		t.Fatalf("gates-green fired on the external review alone")
+	}
+	fake.mu.Lock()
+	fake.content.Comments = append(fake.content.Comments, review(forge.ReviewerLocal, head1, verdictReady))
+	fake.mu.Unlock()
+	fake.set(func(st *forge.PullStatus) { st.Comments = 2 })
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	recs = dispatchRecords(t, s.cfg.Home)
+	if gates := runsAt(recs, automation.PointGatesGreen); len(gates) != 2 || gates["process/gates.star"].Outcome != "failed" ||
+		gates["gates-green.star"].Outcome != "handled" {
+		t.Fatalf("gates-green: %+v", gates)
+	}
+	wakes = automationWakes(t, s, 2)
+	if len(wakes) != 2 || wakes[1].Runs[0].Name != "gates" || !strings.Contains(wakes[1].Text, "the gates script fails on purpose") {
+		t.Fatalf("the gates wake: %+v", wakes)
+	}
+
+	// 5. A base-only update: main moves, the branch is rebased onto it,
+	// the patch identity is unchanged, and the after-push event says so.
+	a.commit(t, a.project, a.projectBare, "main", map[string]string{"moved.txt": "the base moved\n"})
+	git(t, wt, "fetch", "-q", "origin")
+	git(t, wt, "rebase", "-q", "origin/main")
+	git(t, wt, "push", "-q", "-f", "origin", "HEAD:refs/heads/work/task-1")
+	head2 := git(t, wt, "rev-parse", "HEAD")
+	fake.mu.Lock()
+	for _, c := range fake.content.Comments {
+		c.Review.AtHead = false // the reviews name the old head
+	}
+	fake.mu.Unlock()
+	fake.set(func(st *forge.PullStatus) { st.HeadCommit, st.Checks, st.Comments = head2, forge.ChecksPending, 2 })
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	recs = dispatchRecords(t, s.cfg.Home)
+	if got := lastStep(recs, "push"); got != "kinds=after-push base_only=True" {
+		raw, _ := os.ReadFile(pointsPathIn(s.cfg.Home))
+		t.Fatalf("after-push at the rebased head: %q\n%s\n%s", got, raw, s.logs.String())
+	}
+	// A head that changes the patch: not base-only.
+	os.WriteFile(filepath.Join(wt, "more.txt"), []byte("more\n"), 0o600)
+	git(t, wt, "add", "more.txt")
+	git(t, wt, "commit", "-q", "-m", "more")
+	git(t, wt, "push", "-q", "origin", "HEAD:refs/heads/work/task-1")
+	head3 := git(t, wt, "rev-parse", "HEAD")
+	fake.set(func(st *forge.PullStatus) { st.HeadCommit = head3 })
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	recs = dispatchRecords(t, s.cfg.Home)
+	if got := lastStep(recs, "push"); got != "kinds=after-push base_only=False" {
+		t.Fatalf("after-push at a changed head: %q", got)
+	}
+	if n := countRuns(recs, automation.PointAfterPush); n != 12 {
+		t.Fatalf("after-push ran %d entries for three heads, want 12", n)
+	}
+	var pts pointsDoc
+	raw, _ := os.ReadFile(pointsPathIn(s.cfg.Home))
+	if json.Unmarshal(raw, &pts) != nil || pts.Pulls["git.example.test/crew/project-t#4"] == nil ||
+		pts.Pulls["git.example.test/crew/project-t#4"].Base != "main" || len(pts.Pulls["git.example.test/crew/project-t#4"].Identity) != 2 {
+		t.Fatalf("the points' state: %s", raw)
+	}
+
+	// 6. The submit: before-submit runs in the work step, before the
+	// submit is sent.
+	submit, _ := json.Marshal(map[string]string{"intent": "submit", "detail": "https://git.example.test/crew/project-t/pulls/4"})
+	s.call(t, &answers, StepCall{Op: "work", AttemptID: id, TaskID: "task-1", Body: submit})
+	recs = dispatchRecords(t, s.cfg.Home)
+	if sub := runsAt(recs, automation.PointBeforeSubmit); len(sub) != 1 || sub["process/submit.star"].Outcome != "handled" ||
+		lastStep(recs, "submit") != "before the submit at git.example.test/crew/project-t#4@"+head3 {
+		t.Fatalf("before-submit: %+v, step %q", sub, lastStep(recs, "submit"))
+	}
+
+	// 7. Merged: after-merge fires, and its turn reaches the worker.
+	fake.set(func(st *forge.PullStatus) { st.State = forge.PullMerged })
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	recs = dispatchRecords(t, s.cfg.Home)
+	if merged := runsAt(recs, automation.PointAfterMerge); len(merged) != 1 || merged["process/merged.star"].Outcome != "turn" {
+		t.Fatalf("after-merge: %+v", merged)
+	}
+	var worker []store.ActionSubject
+	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline) && len(worker) == 0; time.Sleep(100 * time.Millisecond) {
+		page := s.call(t, &answers, StepCall{Op: "inbox"})
+		var inbox struct {
+			Messages []store.InboxItem `json:"messages"`
+		}
+		json.Unmarshal(page.Result, &inbox)
+		for _, m := range inbox.Messages {
+			if m.Action != nil && m.Action.Subjects[0].Kind == "automation" {
+				worker = append(worker, m.Action.Subjects[0])
+			}
+		}
+	}
+	if len(worker) != 1 || worker[0].Runs[0].Turn != "rework" || !strings.Contains(worker[0].Text, "asks for a rework turn:\n  | merged: decide the follow-up") {
+		t.Fatalf("the worker's wake: %+v", worker)
+	}
+	if strings.Contains(string(answers), "member-forge-token") || strings.Contains(s.logs.String(), "member-forge-token") {
+		t.Fatal("the forge token reached an answer or the log")
+	}
+}
+
+func countRuns(recs []automationRecord, point string) int {
+	n := 0
+	for _, r := range recs {
+		if r.Point == point && r.Outcome != "" {
+			n++
+		}
+	}
+	return n
+}
+
+func lastStep(recs []automationRecord, kind string) string {
+	out := ""
+	for _, r := range recs {
+		if r.Kind == kind {
+			out = r.Text
+		}
+	}
+	return out
+}

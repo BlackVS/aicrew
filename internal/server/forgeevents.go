@@ -15,11 +15,17 @@ import (
 // and, when it bears on a submit, to the team's coordinators. aicrewd
 // itself reads no forge.
 
-// PullsPath is where a member reports a pull request it observed.
-const PullsPath = "/v1/crew/pulls"
+// PullsPath is where a member reports a pull request it observed, and
+// AutomationsPath where its launcher reports an automation's run at one of
+// the pull request's extension points (store/automations.go).
+const (
+	PullsPath       = "/v1/crew/pulls"
+	AutomationsPath = "/v1/crew/automations"
+)
 
 func (s *Server) registerForgeEvents() {
 	s.handle(http.MethodPost, PullsPath, s.observePull)
+	s.handle(http.MethodPost, AutomationsPath, s.recordAutomationRun)
 }
 
 // observePull is POST /v1/crew/pulls: the token's member's observation of
@@ -31,6 +37,27 @@ func (s *Server) observePull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := s.store.ObservePullWithToken(r.Context(), token, in)
+	if err != nil {
+		code := refusalCode(err)
+		if errors.Is(err, store.ErrNoAttempt) {
+			code = "no_attempt"
+		}
+		s.refuseSession(w, r, code, false, 0)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// recordAutomationRun is POST /v1/crew/automations: the token's member's
+// report of an automation run at an extension point of its running
+// attempt's pull request.
+func (s *Server) recordAutomationRun(w http.ResponseWriter, r *http.Request) {
+	var in store.AutomationRunReport
+	token, _, ok := s.stepRequestMax(w, r, false, &in, maxReportBody)
+	if !ok {
+		return
+	}
+	res, err := s.store.RecordAutomationRunWithToken(r.Context(), token, in)
 	if err != nil {
 		code := refusalCode(err)
 		if errors.Is(err, store.ErrNoAttempt) {

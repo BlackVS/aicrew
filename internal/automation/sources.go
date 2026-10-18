@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/BlackVS/aicrew/internal/events"
@@ -59,6 +60,10 @@ const (
 	SourceRepository = "repository"
 	// SourceDisabled turns the release default of the same name off.
 	SourceDisabled = "disabled"
+	// SourceCommand is a declared command (9.1): an argument list the
+	// launcher runs at a point, with no shell, in the attempt's worktree,
+	// under the turn's allow list. It has no script.
+	SourceCommand = "command"
 )
 
 // The bounds of the entries.
@@ -72,6 +77,10 @@ const (
 	// maxDescription bounds an entry's or a header's description, in
 	// characters.
 	maxDescription = 1000
+	// MaxCommandArgs bounds a declared command's argument list, and
+	// maxCommandArg each argument, in bytes.
+	MaxCommandArgs = 32
+	maxCommandArg  = 256
 )
 
 // The shapes the schemas name; TestSchemasNameTheCodesShapes keeps them
@@ -96,12 +105,15 @@ var (
 // other files, and in the manifest's directory (the launcher checks that,
 // since it knows the manifest's path); for the repository, from its root
 // and under automations/; for the release, under defaults/automations/. A
-// disabled entry has no script, point or events.
+// disabled entry has no script, point or events. A command entry has
+// Command in place of Script, and a point alone: it is run by the launcher
+// at that point, never for an event.
 type Entry struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description,omitempty"`
 	Source      string   `json:"source"`
 	Script      string   `json:"script,omitempty"`
+	Command     []string `json:"command,omitempty"`
 	Point       string   `json:"point,omitempty"`
 	Events      []string `json:"events,omitempty"`
 	Turn        string   `json:"turn,omitempty"`
@@ -217,14 +229,30 @@ func parseEntry(raw json.RawMessage, release bool) (Entry, error) {
 		e.Source = SourceDisabled
 		return e, nil
 	}
-	var src map[string]string
+	var src map[string]json.RawMessage
 	if err := json.Unmarshal(j.Source, &src); err != nil || len(src) != 1 {
 		return e, errors.New("the source is not \"disabled\" or an object naming one source and the script's path")
 	}
 	for k, v := range src {
-		e.Source, e.Script = k, v
+		e.Source = k
+		if k == SourceCommand {
+			if err := json.Unmarshal(v, &e.Command); err != nil {
+				return e, errors.New("the command is not a list of strings")
+			}
+		} else if err := json.Unmarshal(v, &e.Script); err != nil {
+			return e, errors.New("the script's path is not a string")
+		}
 	}
 	switch {
+	case e.Source == SourceCommand && release:
+		return e, errors.New("a release default's source is the release, not a command")
+	case e.Source == SourceCommand:
+		if err := checkCommand(e.Command); err != nil {
+			return e, err
+		}
+		if e.Point == "" || len(e.Events) != 0 || e.Turn != "" {
+			return e, errors.New("a command runs at a point: it names a point, and no events or turn")
+		}
 	case e.Source == SourceRelease && !release:
 		return e, errors.New("the release source is the release's own; a manifest names process or repository")
 	case e.Source != SourceRelease && release:
@@ -262,6 +290,23 @@ func parseEntry(raw json.RawMessage, release bool) (Entry, error) {
 		return e, fmt.Errorf("the turn kind %q is not lowercase letters, digits and '_'", e.Turn)
 	}
 	return e, nil
+}
+
+// checkCommand is the shape of a declared command: one to MaxCommandArgs
+// arguments, each one to maxCommandArg bytes of UTF-8 without control
+// characters. The first is the program, which the launcher checks against
+// the turn's allow list when it runs the command.
+func checkCommand(cmd []string) error {
+	if len(cmd) == 0 || len(cmd) > MaxCommandArgs {
+		return fmt.Errorf("a command is a list of 1 to %d strings, the program first", MaxCommandArgs)
+	}
+	for i, a := range cmd {
+		if a == "" || len(a) > maxCommandArg || !utf8.ValidString(a) || strings.ContainsAny(a, "\x00\n\r\t") ||
+			strings.IndexFunc(a, unicode.IsControl) >= 0 {
+			return fmt.Errorf("command argument %d is empty, longer than %d bytes, or holds a control character", i+1, maxCommandArg)
+		}
+	}
+	return nil
 }
 
 // Resolve applies the precedence of 13.1 by name. A process entry wins over

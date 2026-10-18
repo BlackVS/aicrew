@@ -29,6 +29,16 @@
         {"role": "coordinator", "when": ["blocked"]}
       ],
       "handler": "wake"
+    },
+    {
+      "name": "automation-wake",
+      "description": "An automation ran at an extension point of an attempt's pull request. One that failed wakes the team's coordinators with the handler, the subject and the error; one that asked for a model turn wakes the attempt's worker with the turn's content. A run that handled its point wakes no one.",
+      "kinds": ["automation.run"],
+      "to": [
+        {"role": "worker", "when": ["turn"]},
+        {"role": "coordinator", "when": ["failed"]}
+      ],
+      "handler": "wake"
     }
   ]
 }

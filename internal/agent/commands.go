@@ -147,7 +147,10 @@ var crewCommands = []crewCommand{
 			"2. Take it through the gates the project's process requires: `aicrew-agent forge pr show --pr N` " +
 			"reads it, `aicrew-agent forge pr label add|remove --pr N LABEL` labels it, `aicrew-agent forge " +
 			"pr comment --pr N --body-file FILE` comments on it, and `aicrew-agent forge pr ready --pr N` marks a " +
-			"draft ready when the process says its gates are green. " + pullRequestNever + "\n" +
+			"draft ready when the process says its gates are green. The release's `gates-green` automation does " +
+			"that and submits the attempt for you once both reviews and CI are green at the head, and the " +
+			"attempt's lifecycle message tells you; mark ready and submit yourself only where the project's " +
+			"process disables it (`aicrew-agent check` lists the effective set). " + pullRequestNever + "\n" +
 			"3. Submit its URL with the work step below with `submit`; `block` with the reason, or `resume` " +
 			"after a block, use the same step.",
 		Ops: []string{"work"}},

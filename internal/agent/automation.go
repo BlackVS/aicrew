@@ -673,9 +673,11 @@ func (s *StepServer) commandEnv() []string {
 // withoutCredentialHelper is env with git's credential helpers reset for
 // the process: an empty credential.helper given as GIT_CONFIG_* applies
 // after every config file and empties the list the clone configured, so
-// `git credential fill`, and any network git, finds no helper and fails.
-// A declared command runs code from the attempt's head and gets no path
-// to the member's forge credential (dispatch.go).
+// `git credential fill`, and any network git, finds no helper and fails:
+// a declared command runs code from the attempt's head, and receives no
+// credential through its environment or through git (dispatch.go). The
+// code it runs keeps the member's OS-user access, as a worker turn's
+// code does.
 func withoutCredentialHelper(env []string) []string {
 	n := 0
 	out := make([]string, 0, len(env)+3)

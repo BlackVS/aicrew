@@ -76,13 +76,11 @@ type pullPoints struct {
 	State string `json:"state,omitempty"`
 	// Fired is, per point, the edges it fired for, the newest last: the
 	// head, the head with the CI conclusion, or "merged". An edge fires
-	// once however the observations flap between it and another.
+	// once however the observations flap between it and another; the
+	// edges are kept for as long as the pull request is (writePoints).
 	Fired map[string][]string `json:"fired,omitempty"`
 	Seen  time.Time           `json:"seen"`
 }
-
-// maxFiredEdges bounds the edges kept per point.
-const maxFiredEdges = 16
 
 // pendingMerge reports whether p was merged and after-merge has not run.
 func (p *pullPoints) pendingMerge() bool {
@@ -328,9 +326,6 @@ func (s *StepServer) firePoint(ctx context.Context, key string, p *pullPoints, p
 	if !slices.Contains(cur.Fired[point], edge) {
 		cur.Fired[point] = append(cur.Fired[point], edge)
 	}
-	if n := len(cur.Fired[point]); n > maxFiredEdges {
-		cur.Fired[point] = cur.Fired[point][n-maxFiredEdges:]
-	}
 	if point == automation.PointAfterPush {
 		cur.Identity = p.Identity
 	}
@@ -562,7 +557,7 @@ func (s *StepServer) runCommand(ctx context.Context, rep *automationReport, cmdl
 		return
 	}
 	if isCredentialCommand(cmdline) {
-		fail("a declared command gets no path to the member's forge credential: " + strings.Join(cmdline, " "))
+		fail("a declared command is never the credential helper: " + strings.Join(cmdline, " "))
 		return
 	}
 	cctx, cancel := context.WithTimeout(ctx, commandWall)
@@ -643,8 +638,9 @@ const maxReportEncoded = 40 << 10
 
 // fitReport cuts rep to what aicrewd takes, and encodes it: the texts
 // without NUL (which aicrewd refuses), each bounded, then the steps' texts,
-// the content and the error halved until the encoding fits, and at last
-// the steps themselves. A failed run keeps an error.
+// the content and the error halved until the encoding fits, then the
+// steps themselves, and at last the command's words, each cut and the cut
+// marked. A failed run keeps an error.
 func fitReport(rep *automationReport) []byte {
 	clean := func(s string, n int) string { return bound(strings.ReplaceAll(s, "\x00", ""), n) }
 	if len(rep.Steps) > maxReportSteps {
@@ -667,6 +663,24 @@ func fitReport(rep *automationReport) []byte {
 	}
 	for len(body) > maxReportEncoded && len(rep.Steps) > 0 {
 		rep.Steps = rep.Steps[:len(rep.Steps)/2]
+		body, _ = json.Marshal(rep)
+	}
+	for n := 64; len(body) > maxReportEncoded && len(rep.Command) > 0 && n >= 4; n /= 4 {
+		cut := false
+		for i, a := range rep.Command {
+			if len(a) > n {
+				rep.Command[i], cut = bound(a, n), true
+			}
+		}
+		if last := len(rep.Command) - 1; cut && rep.Command[last] != "[cut]" {
+			// The mark takes a word's place when the list is full:
+			// aicrewd takes MaxCommandArgs words, as the manifest does.
+			if len(rep.Command) >= automation.MaxCommandArgs {
+				rep.Command[last] = "[cut]"
+			} else {
+				rep.Command = append(rep.Command, "[cut]")
+			}
+		}
 		body, _ = json.Marshal(rep)
 	}
 	return body

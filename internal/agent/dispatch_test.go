@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,6 +82,16 @@ func TestPointEdges(t *testing.T) {
 	delete(inflight, "k "+automation.PointGatesGreen)
 	say("gates green once the run ended", open(h2, forge.ChecksSuccess), pullFacts{})
 	fired(automation.PointGatesGreen)
+	// Many heads later, a force-push back to the first: its edge is still
+	// consumed.
+	for i := 0; i < 20; i++ {
+		say("another head", open(fmt.Sprintf("%040d", i), forge.ChecksPending), pullFacts{})
+		fired(automation.PointAfterPush)
+	}
+	say("back to the first head", open(h1, forge.ChecksPending), pullFacts{})
+	fired()
+	say("and to the second", open(h2, forge.ChecksSuccess), pullFacts{})
+	fired()
 	say("merged", PullObservation{Number: 4, State: forge.PullMerged, HeadCommit: h2, Checks: forge.ChecksSuccess}, pullFacts{})
 	fired(automation.PointAfterMerge)
 	say("merged, polled again", PullObservation{Number: 4, State: forge.PullMerged, HeadCommit: h2, Checks: forge.ChecksSuccess}, pullFacts{})
@@ -401,6 +412,35 @@ func TestPointsDispatch(t *testing.T) {
 	if bigWake == nil || bigWake.Error != "check failed" || len(bigWake.Steps) == 0 || len(bigWake.Steps[0].Text) > 512 {
 		t.Fatalf("the big report's wake: %+v", bigWake)
 	}
+	// A command the manifest admits (32 words of 256 bytes) that the allow
+	// list refuses: its words alone exceed the route once escaped, and the
+	// failed run still reaches the coordinator, the words cut and marked.
+	wide := automationReport{AttemptID: id, Point: automation.PointAfterPush, Name: "wide", Source: automation.SourceCommand,
+		Pull: 4, URL: fake.st.URL, Head: head3}
+	var words []string
+	for i := 0; i < automation.MaxCommandArgs; i++ {
+		words = append(words, strings.Repeat("<", 256))
+	}
+	wide.Command = words
+	srv.runCommand(ctx, &wide, words)
+	if wide.Outcome != runFailed {
+		t.Fatalf("the wide command: %+v", wide)
+	}
+	srv.reportRun(ctx, wide)
+	var wideWake *store.AutomationRunReport
+	for deadline := time.Now().Add(15 * time.Second); wideWake == nil && time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		for _, w := range automationWakes(t, s, 0) {
+			for i := range w.Runs {
+				if w.Runs[i].Name == "wide" {
+					wideWake = &w.Runs[i]
+				}
+			}
+		}
+	}
+	if wideWake == nil || len(wideWake.Command) < 2 || wideWake.Command[len(wideWake.Command)-1] != "[cut]" || len(wideWake.Command[0]) > 64 ||
+		!strings.Contains(wideWake.Error, "outside the turn's allow list") {
+		t.Fatalf("the wide command's wake: %+v", wideWake)
+	}
 
 	// 7. The submit: before-submit runs in the work step, before the
 	// submit is sent.
@@ -490,11 +530,11 @@ func lastStep(recs []automationRecord, kind string) string {
 	return out
 }
 
-// A declared command runs code from the attempt's head and gets no path to
-// the member's forge credential: its environment holds none
-// (TestPointsDispatch), the clone's credential helper is reset for its
-// process, so `git credential fill` and any network git fail, and the
-// helper command itself is refused.
+// A declared command runs code from the attempt's head and receives no
+// credential through its environment or through git: its environment
+// holds none (TestPointsDispatch), the clone's credential helper is reset
+// for its process, so `git credential fill` and any network git fail, and
+// the declared command itself is never the helper command.
 func TestCommandHasNoCredentialPath(t *testing.T) {
 	ctx := context.Background()
 	s := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
@@ -531,7 +571,7 @@ func TestCommandHasNoCredentialPath(t *testing.T) {
 
 	// The helper command itself is refused: by name, and under any other
 	// spelling of the program by the allow list, which admits bare names.
-	for prog, want := range map[string]string{"aicrew-agent": "no path to the member's forge credential",
+	for prog, want := range map[string]string{"aicrew-agent": "never the credential helper",
 		"aicrew-agent.exe": "outside the turn's allow list", "/opt/aicrew/aicrew-agent": "outside the turn's allow list"} {
 		rep := automationReport{AttemptID: "att-cred", Point: automation.PointAfterPush, Name: "helper", Source: automation.SourceCommand,
 			Pull: 4, URL: "https://git.example.test/crew/project-t/pulls/4", Head: strings.Repeat("a", 40)}
@@ -544,5 +584,41 @@ func TestCommandHasNoCredentialPath(t *testing.T) {
 		if strings.Contains(line.Text, "helper-secret") {
 			t.Fatal("the secret reached the automation log")
 		}
+	}
+}
+
+// The edges a point fired for are kept for as long as the pull request
+// is: after many heads, and a restart, a return to an old head fires
+// nothing. The edges are recorded by the production path (firePoint, for
+// a pull request whose attempt is not the member's open one, so no
+// automation runs).
+func TestPointsKeepEveryEdge(t *testing.T) {
+	ctx := context.Background()
+	s := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
+	srv := s.serve(t)
+	key := "git.example.test/crew/project-t#9"
+	heads := make([]string, 24)
+	for i := range heads {
+		heads[i] = fmt.Sprintf("%040d", i+1)
+		o := PullObservation{Host: "git.example.test", Repository: "crew/project-t", Number: 9, State: forge.PullOpen, HeadCommit: heads[i]}
+		p := &pullPoints{Attempt: "att-x", Number: 9, Head: heads[i]}
+		srv.firePoint(ctx, key, p, automation.PointAfterPush, o)
+	}
+	srv.Close()
+	srv = s.serve(t)
+	doc := readPoints(s.cfg.Home)
+	p := doc.Pulls[key]
+	if p == nil || len(p.Fired[automation.PointAfterPush]) != len(heads) {
+		t.Fatalf("the kept edges after a restart: %+v", p)
+	}
+	for _, h := range []string{heads[0], heads[1], heads[len(heads)-1]} {
+		o := PullObservation{Number: 9, State: forge.PullOpen, HeadCommit: h}
+		if got := p.edges(o, pullFacts{}, nil, key); len(got) != 0 {
+			t.Fatalf("a return to the old head %s fires %v", h, got)
+		}
+	}
+	o := PullObservation{Number: 9, State: forge.PullOpen, HeadCommit: strings.Repeat("f", 40)}
+	if got := p.edges(o, pullFacts{}, nil, key); !slices.Equal(got, []string{automation.PointAfterPush}) {
+		t.Fatalf("a new head fires %v", got)
 	}
 }

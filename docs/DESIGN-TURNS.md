@@ -899,10 +899,12 @@ and returns can run in aicrewd, in the same sandbox.
   - **A crash between two effects is not covered by reading the state
     alone.** If the push succeeded and the run stopped before its comment
     and step, the replay sees an up-to-date branch and returns. The delta
-    note is then missing. Increment 2 specifies the recovery before it
-    ships `base-update`, with a fake-host test that crashes between the
-    push and the comment. The likely shape: the host records each effect of
-    a run, and a replay of the same run completes the missing ones.
+    note is then missing. The recovery (increment 2e-2): the host records
+    the update in progress in its points file, before the push and after
+    each effect, and a later `update_base()` that finds the branch at the
+    recorded new head completes the note and the step without another
+    merge or push, then clears the record; a launcher test cuts the run
+    between the push and the comment.
 - **Failure.** A handler that fails three times in a row parks its events
   and sends one action-needed message to the coordinator, naming the
   handler, the subject and the last error. The events are not dropped, and

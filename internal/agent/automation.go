@@ -907,6 +907,18 @@ func (s *StepServer) hostUpdateBase(ctx context.Context, run *liveRun) (automati
 	if old = strings.TrimSpace(old); err != nil || !baseShape.MatchString(old) {
 		return automation.UpdateBaseResult{}, fmt.Errorf("the origin has no branch %s", branch)
 	}
+	// An update in progress: cut after its push, the origin's head is its
+	// recorded new head and the rest is completed here, without another
+	// merge or push; at any other head the record is stale and goes.
+	key := pullKey(t.host, t.path, run.pull)
+	if rec := s.readBaseUpdate(key); rec != nil {
+		if old == rec.New {
+			return s.finishBaseUpdate(ctx, run, t, f, key, p.URL, rec, git, "completed the update cut after its push")
+		}
+		if err := s.writeBaseUpdate(key, run, p.URL, nil); err != nil {
+			return automation.UpdateBaseResult{}, fmt.Errorf("clear the stale record of an update: %w", err)
+		}
+	}
 	if _, err := git(ctx, wt, gitEnv, "merge-base", "--is-ancestor", baseRef, old); err == nil {
 		return s.updateBaseResult(run, automation.UpdateBaseResult{OldHead: old, Reason: "the branch is up to date with " + base})
 	}
@@ -944,18 +956,88 @@ func (s *StepServer) hostUpdateBase(ctx context.Context, run *liveRun) (automati
 		return s.updateBaseResult(run, automation.UpdateBaseResult{OldHead: old, IdentityChanged: true,
 			Reason: fmt.Sprintf("merging %s into %s changes the patch identity from %s to %s; update the branch by hand", base, branch, before, after)})
 	}
+	// The record goes before the push, so a run cut after it is completed
+	// at the next call; a push that fails leaves the record, which the next
+	// call completes when the origin applied the push after all, and
+	// clears otherwise.
+	rec := &pointBaseUpdate{Old: old, New: head, Base: base, Identity: after}
+	if err := s.writeBaseUpdate(key, run, p.URL, rec); err != nil {
+		return automation.UpdateBaseResult{}, fmt.Errorf("record the update before its push: %w", err)
+	}
 	if _, err := git(ctx, dir, gitEnv, "push", "--quiet", "origin", "HEAD:refs/heads/"+branch); err != nil {
 		return s.updateBaseResult(run, automation.UpdateBaseResult{OldHead: old,
 			Reason: fmt.Sprintf("the push of %s was refused, the branch moved during the update: %s", branch, err)})
 	}
+	rec.Pushed = true
+	s.noteBaseUpdate(key, run, p.URL, rec)
 	git(ctx, wt, gitEnv, "update-ref", branchRef, head, old)
-	res := automation.UpdateBaseResult{Updated: true, OldHead: old, NewHead: head}
-	note := fmt.Sprintf(baseUpdateNote, old, head, base, after, base, old, head)
-	if _, err := f.CommentPull(ctx, t.host, t.kind(), t.token, t.path, run.pull, note); err != nil {
-		res.Reason = fmt.Sprintf("the delta note was not posted on pull request %d of %s on %s: %s", run.pull, t.path, t.host, err)
+	return s.finishBaseUpdate(ctx, run, t, f, key, p.URL, rec, git, "")
+}
+
+// finishBaseUpdate is an update's effects after its push, from its
+// record: the attempt's worktree fast-forwarded, the delta note posted
+// unless it was, the step recorded, and the record cleared once the note
+// is posted (a note the forge refused leaves it, for the next call);
+// reason, when set, is the completion of an update a run left cut.
+func (s *StepServer) finishBaseUpdate(ctx context.Context, run *liveRun, t pullTarget, f AutomationForge, key, url string,
+	rec *pointBaseUpdate, git GitRunner, reason string) (automation.UpdateBaseResult, error) {
+	res := automation.UpdateBaseResult{Updated: true, OldHead: rec.Old, NewHead: rec.New, Reason: reason}
+	fastForward(ctx, git, run.worktree, rec.Old, rec.New)
+	if !rec.Commented {
+		note := fmt.Sprintf(baseUpdateNote, rec.Old, rec.New, rec.Base, rec.Identity, rec.Base, rec.Old, rec.New)
+		if _, err := f.CommentPull(ctx, t.host, t.kind(), t.token, t.path, run.pull, note); err != nil {
+			res.Reason = fmt.Sprintf("the delta note was not posted on pull request %d of %s on %s: %s", run.pull, t.path, t.host, err)
+			return s.updateBaseResult(run, res)
+		}
+		rec.Commented = true
+		s.noteBaseUpdate(key, run, url, rec)
 	}
-	fastForward(ctx, git, wt, old, head)
-	return s.updateBaseResult(run, res)
+	out, err := s.updateBaseResult(run, res)
+	if err != nil {
+		return out, err
+	}
+	if err := s.writeBaseUpdate(key, run, url, nil); err != nil {
+		return out, fmt.Errorf("clear the record of the completed update: %w", err)
+	}
+	return out, nil
+}
+
+// readBaseUpdate is the base update in progress for the pull request key,
+// nil when none.
+func (s *StepServer) readBaseUpdate(key string) *pointBaseUpdate {
+	s.points.mu.Lock()
+	defer s.points.mu.Unlock()
+	if p := readPoints(s.home).Pulls[key]; p != nil && p.BaseUpdate != nil {
+		rec := *p.BaseUpdate
+		return &rec
+	}
+	return nil
+}
+
+// writeBaseUpdate records rec as the base update in progress for the pull
+// request key, or clears it when rec is nil.
+func (s *StepServer) writeBaseUpdate(key string, run *liveRun, url string, rec *pointBaseUpdate) error {
+	s.points.mu.Lock()
+	defer s.points.mu.Unlock()
+	doc := readPoints(s.home)
+	cur := doc.Pulls[key]
+	if cur == nil {
+		if rec == nil {
+			return nil
+		}
+		cur = &pullPoints{Attempt: run.attempt, Number: run.pull, URL: url}
+		doc.Pulls[key] = cur
+	}
+	cur.BaseUpdate = rec
+	return writePoints(s.home, doc, key)
+}
+
+// noteBaseUpdate writes rec after an effect; a write that fails is logged,
+// the origin's head being what the next call reads.
+func (s *StepServer) noteBaseUpdate(key string, run *liveRun, url string, rec *pointBaseUpdate) {
+	if err := s.writeBaseUpdate(key, run, url, rec); err != nil {
+		s.log.Warn("the base update's record was not written", "error", err.Error())
+	}
 }
 
 // conflictIn is the conflict a failed merge left in dir: the unmerged

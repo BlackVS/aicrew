@@ -90,8 +90,16 @@ type pullPoints struct {
 	// (automation.go), oldest first, kept as long as the pull request is:
 	// once per head, so a second call at a head re-runs nothing, also after
 	// the branch moved away and came back to it.
-	Reruns []string  `json:"reruns,omitempty"`
-	Seen   time.Time `json:"seen"`
+	Reruns []string `json:"reruns,omitempty"`
+	// BaseUpdate is the base update a script's update_base() has in
+	// progress (automation.go): the heads, the base and the identity of
+	// the merge, and the effects done, written before the push and after
+	// each effect and cleared after the step once the note is posted, so
+	// a run cut between its push and its delta note is completed at the
+	// next call (DESIGN-TURNS 12.4) and a run that ended is never
+	// repeated; nil when none is in progress.
+	BaseUpdate *pointBaseUpdate `json:"base_update,omitempty"`
+	Seen       time.Time        `json:"seen"`
 	// Labels, Checks and Comments are the pull request's labels, checks
 	// conclusion and comment count as last observed, ContentRead says the
 	// comments are known (a content read came, or there was none), and
@@ -148,6 +156,18 @@ func (p *pullPoints) observation(key string) PullObservation {
 		state = forge.PullOpen
 	}
 	return PullObservation{Host: host, Repository: repository, Number: p.Number, URL: p.URL, State: state, HeadCommit: p.Head}
+}
+
+// pointBaseUpdate is a base update in progress: the old head and the
+// merged head update_base() pushes, the base merged, the patch identity
+// both heads have, and which effects are done.
+type pointBaseUpdate struct {
+	Old       string `json:"old"`
+	New       string `json:"new"`
+	Base      string `json:"base"`
+	Identity  string `json:"identity"`
+	Pushed    bool   `json:"pushed"`
+	Commented bool   `json:"commented"`
 }
 
 // pointReview is a review as the points read it.

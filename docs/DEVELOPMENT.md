@@ -878,7 +878,8 @@ run`, since the interpreter has no memory limit of its own:
   checks the allow list again; `step()` and the run's outcome go to
   `logs/automations.jsonl`, redacted, the run's end record carrying the
   event it was for (its kinds and IDs, `base_only`, and on
-  `forge.changed` the change) and the facts `pr()` and `attempt()`
+  `forge.changed` the change, its texts redacted as `pr()`'s are, before
+  the script's process sees it) and the facts `pr()` and `attempt()`
   returned to the script, so a replay runs a script against the log
   (increment 2f, below); `comment()` posts on the attempt's
   pull request. The transitions act with the home's credential too, and

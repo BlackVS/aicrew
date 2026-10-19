@@ -228,6 +228,37 @@ func (a *automationEnv) records(t *testing.T, run string) []automationRecord {
 	return out
 }
 
+// The event a run is for is redacted as pr() is, once, before the script's
+// process and the run's record: a forge.changed change carrying a comment
+// with a credential reaches the script and logs/automations.jsonl as the
+// same redacted text, and the log holds no other (hands review of #186).
+func TestAutomationEventIsRedacted(t *testing.T) {
+	a := setupAutomation(t)
+	body := "see ghp_ABCDEFGHIJKLMNOPQRSTUV and " + automationForgeToken + " here"
+	want := "see [redacted] and [a forge credential] here"
+	res := a.run(t, fmt.Sprintf(`
+def main(event):
+    if event.change.comments[0].body != %q:
+        fail("the script's event: %%s" %% event.change.comments[0].body)
+    return None
+`, want), AutomationRun{Event: automation.Event{Kinds: []string{"forge.changed"}, IDs: []string{"pull#7@" + a.head},
+		Change: &automation.ForgeChange{LabelsAdded: []string{"review-this"},
+			Comments: []automation.ChangedComment{{Author: "reviewer", Kind: "comment", Body: body}}}}})
+	if res.Failed != "" {
+		t.Fatalf("the run failed: %s", res.Failed)
+	}
+	recs := a.records(t, res.RunID)
+	if len(recs) != 1 || recs[0].Outcome != "handled" || recs[0].Event == nil || recs[0].Event.Change == nil ||
+		len(recs[0].Event.Change.Comments) != 1 || recs[0].Event.Change.Comments[0].Body != want ||
+		!slices.Equal(recs[0].Event.Change.LabelsAdded, []string{"review-this"}) {
+		t.Fatalf("the run's record: %+v", recs)
+	}
+	raw, _ := os.ReadFile(filepath.Join(a.cfg.Home, filepath.FromSlash(AutomationLogFile)))
+	if strings.Contains(string(raw), "ghp_") || strings.Contains(string(raw), automationForgeToken) {
+		t.Fatalf("the log holds a credential:\n%s", raw)
+	}
+}
+
 // Every host call of 10.3 reaches the launcher over the step socket from
 // the script's own process: pr() from the forge with the home's
 // credential, attempt() from the session status, run() in the attempt's

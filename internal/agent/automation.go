@@ -261,6 +261,9 @@ func (s *StepServer) RunAutomation(ctx context.Context, r AutomationRun) (Automa
 	if err != nil {
 		return AutomationResult{}, err
 	}
+	// The event's texts are redacted as pr()'s are: the script sees the
+	// redacted event, and the run's record holds the same value.
+	r.Event = redactEvent(hostRedactor(s.home), r.Event)
 	in, _ := json.Marshal(automationRequest{Version: 1, Socket: sock, Token: token, Name: r.Name, Source: string(r.Source),
 		Event: r.Event, Allow: allow, Deny: deny, Memory: memory, Steps: r.Limits.Steps, Wall: wall})
 	cmd := exec.CommandContext(runCtx, selfExecutable(), "automation", "run")
@@ -630,6 +633,31 @@ func redactPR(r func(string) string, p automation.PR) automation.PR {
 	}
 	p.Reviews, p.Checks = reviews, checks
 	return p
+}
+
+// redactEvent is ev with every text redacted: its IDs and, on
+// forge.changed, the change's state, checks, labels and comments (a
+// comment's body is the forge's text, bounded by dispatch.go).
+func redactEvent(r func(string) string, ev automation.Event) automation.Event {
+	list := func(ss []string) []string {
+		out := make([]string, 0, len(ss))
+		for _, s := range ss {
+			out = append(out, r(s))
+		}
+		return out
+	}
+	ev.Kinds, ev.IDs = list(ev.Kinds), list(ev.IDs)
+	if ev.Change != nil {
+		c := *ev.Change
+		c.State, c.Checks, c.LabelsAdded, c.LabelsRemoved = r(c.State), r(c.Checks), list(c.LabelsAdded), list(c.LabelsRemoved)
+		comments := make([]automation.ChangedComment, 0, len(c.Comments))
+		for _, cm := range c.Comments {
+			comments = append(comments, automation.ChangedComment{Author: r(cm.Author), Kind: r(cm.Kind), Body: r(cm.Body), Notice: r(cm.Notice)})
+		}
+		c.Comments = comments
+		ev.Change = &c
+	}
+	return ev
 }
 
 // automationKind is a step's kind (automation.stepKind).

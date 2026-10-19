@@ -808,7 +808,8 @@ nothing more.
 - **The host API:** `pr()`, `attempt()`, `run(cmd, args)`,
   `step(kind, text)`, `comment(body)`, the transitions of 4.2 (increment
   2d-c) `label(add=[...], remove=[...])`, `ready()`, `submit(url)` and
-  `rerun()`, and `turn(kind, content)` as a value `main(event)` returns.
+  `rerun()`, the base update (increment 2e) `update_base()`, and
+  `turn(kind, content, conflict=None)` as a value `main(event)` returns.
   Any other name fails the script at load, which is how a script written
   for a newer release fails on an older one: the host API version stays
   1, since the additions break no script. The results are bounded: a
@@ -874,7 +875,7 @@ run`, since the interpreter has no memory limit of its own:
   `logs/automations.jsonl`, redacted; `comment()` posts on the attempt's
   pull request. The transitions act with the home's credential too, and
   each is recorded as a step of the run (`host_label`, `host_ready`,
-  `host_submit`, `host_rerun`): `label()` removes, then adds, labels the
+  `host_submit`, `host_rerun`, `host_update_base`): `label()` removes, then adds, labels the
   repository defines; `ready()` lifts the draft and its prefix
   (`forge.ReadyPull`); `submit(url)` asks for the submit, which the
   launcher sends once the script ended without failing: the
@@ -896,6 +897,36 @@ run`, since the interpreter has no memory limit of its own:
   1.26, and a commit status names no job), so there `rerun()` re-runs
   nothing, leaves the head unclaimed and the CI failure reaches the
   worker as today.
+- **`update_base()`** (increment 2e, the "branch behind its base" rows of
+  4.2 and the worked example of 10.4) brings the pull request's branch up
+  to date with its base, with the launcher's git and the clone's
+  credential helper, so the script runs no network git and holds no
+  credential: the launcher fetches the base and the branch, and in a
+  temporary detached worktree of the attempt's clone at the branch's
+  head as the origin has it (a turn's uncommitted work in the attempt's
+  worktree is never touched) merges the base with no edit, computes the
+  patch identity before and after (`patchIdentityAt`, around
+  `git patch-id --stable` against the merge base), pushes the merge
+  without force when the identity is unchanged, and posts the delta note
+  of 10.4 (the old and the new head, the identity, the command) as a
+  comment. The result is a struct: `updated`, `old_head`, `new_head`,
+  `identity_changed`, `conflict` (None, or `base`, `files` and `hunks`,
+  bounded to 50 files and 16 KiB) and `reason`. A conflict aborts the
+  merge and is a result, as is a changed identity (nothing pushed), a
+  push the origin refused because the branch moved (nothing else done;
+  the new head is an event of its own) and a branch up to date; the
+  forge or git failing is an error that fails the script. The attempt's
+  worktree is fast-forwarded to the new head when it is clean and at the
+  old head. The outcome is one `host_update_base` step; the temporary
+  worktree is removed whatever happened. The pushed head reaches the
+  launcher as an observation like any other: `after-push` fires with
+  `base_only` true (the identities match), so `review-request` leaves the
+  reviews standing. `turn(kind, content, conflict=u.conflict)` carries
+  the conflict to the worker: the run report's `conflict` field, and the
+  action subject's (CREW-CONTRACT, "Event delivery"). Known limit until
+  task 01a1529a-cae3 (2e-2): a launcher that exits between the push and
+  the comment leaves the delta note unposted; the next run finds the
+  branch up to date and posts nothing.
 - **A failed run** (`fail()`, a limit, a refused command, a host error,
   the process ending) is a result and an `automation_failed` step. The
   launcher never retries it.
@@ -922,8 +953,12 @@ subscribes to, or both. The entries come from three sources:
   read adds nothing), `ci-rerun` at `ci-failed` (`rerun()` once a
   check failed on the runner) and `gates-green` at `gates-green`
   (`ready()`, then `submit(pr().url)`, unless the attempt is submitted
-  already; the script reads no label, the point's edge does); `base-update`
-  follows in 2e.
+  already; the script reads no label, the point's edge does) and
+  `base-update` at `after-ci` (task 2e: for a pull request behind its
+  base, unless `hands-reviewing` is present, `update_base()`; a conflict
+  is a `fix` turn carrying it, a changed identity a `fix` turn with the
+  reason, and a refused push, a clean update and a branch up to date ask
+  for nothing: the reviews stand under the base-only rule).
   Their tests run against the fake host
   (`internal/automation/defaults_test.go`), and one asserts the scripts
   name no host, endpoint or instance: a default is universal release

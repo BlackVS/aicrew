@@ -1,7 +1,7 @@
 // Package automation runs a workflow script (docs/DESIGN-TURNS.md, section
 // 10): Starlark, hermetic by construction, with the host API of 10.3 and
 // nothing more. A script defines main(event); main returns None when the
-// event is handled, or turn(kind, content) when judgement is needed. Every
+// event is handled, or turn(kind, content, conflict=None) when judgement is needed. Every
 // action goes through the host: pr(), attempt(), run(cmd, args), step(kind,
 // text) and comment(body). The script has no file access, no network, no
 // clock and no environment; while loops and recursion are off; values are
@@ -117,6 +117,32 @@ type RerunResult struct {
 	Reason string
 }
 
+// UpdateBaseResult is what update_base() did: the branch brought up to
+// date with its base by a merge and pushed (Updated, from OldHead to
+// NewHead), or why not: the branch is up to date, the merge conflicts
+// (Conflict), the merge changes the patch identity (IdentityChanged), or
+// the push was refused because the branch moved; Reason says which.
+type UpdateBaseResult struct {
+	Updated         bool      `json:"updated"`
+	OldHead         string    `json:"old_head,omitempty"`
+	NewHead         string    `json:"new_head,omitempty"`
+	IdentityChanged bool      `json:"identity_changed,omitempty"`
+	Conflict        *Conflict `json:"conflict,omitempty"`
+	Reason          string    `json:"reason,omitempty"`
+}
+
+// Conflict is a conflict in the update of a branch from its base: the
+// base, the conflicting files (at most MaxConflictFiles) and their hunks
+// (at most MaxText). A turn carries it to the worker's action needed.
+type Conflict struct {
+	Base  string   `json:"base"`
+	Files []string `json:"files"`
+	Hunks string   `json:"hunks,omitempty"`
+}
+
+// MaxConflictFiles bounds the files a conflict names.
+const MaxConflictFiles = 50
+
 // Host is what a script reaches the world through. The launcher serves it
 // over the step socket (increment 2b); tests use a fake.
 type Host interface {
@@ -139,6 +165,13 @@ type Host interface {
 	Ready(ctx context.Context) error
 	Submit(ctx context.Context, url string) error
 	Rerun(ctx context.Context) (RerunResult, error)
+	// UpdateBase brings the pull request's branch up to date with its
+	// base (increment 2e, docs/DESIGN-TURNS.md 10.4): a merge of the base
+	// pushed without force when the patch identity is unchanged, with the
+	// delta note as a comment; a conflict, a changed identity, a refused
+	// push and an up-to-date branch are results, not errors. The git and
+	// the credential are the launcher's; the script holds neither.
+	UpdateBase(ctx context.Context) (UpdateBaseResult, error)
 }
 
 // Event is what a run covers: the kinds and the IDs of its events. At an
@@ -197,10 +230,13 @@ const (
 	MaxChangeComment  = 4 << 10
 )
 
-// Turn is a request for a model turn: its kind and its content.
+// Turn is a request for a model turn: its kind and its content, and the
+// base update's conflict when the turn carries one (turn(kind, content,
+// conflict=...)).
 type Turn struct {
-	Kind    string
-	Content string
+	Kind     string    `json:"kind"`
+	Content  string    `json:"content"`
+	Conflict *Conflict `json:"conflict,omitempty"`
 }
 
 // Limits bound a run; zero values take MaxSteps and MaxWall.
@@ -297,7 +333,7 @@ func Run(ctx context.Context, s Script, ev Event) (*Turn, error) {
 		t := v.t
 		return &t, nil
 	}
-	return nil, fmt.Errorf("%w: main returned %s; it returns None or turn(kind, content)", ErrScript, out.Type())
+	return nil, fmt.Errorf("%w: main returned %s; it returns None or turn(kind, content, conflict=None)", ErrScript, out.Type())
 }
 
 // runner holds a run's host and allow list for the builtins.
@@ -323,6 +359,8 @@ func (r *runner) predeclared() starlark.StringDict {
 		"submit":  starlark.NewBuiltin("submit", r.submit),
 		"rerun":   starlark.NewBuiltin("rerun", r.rerun),
 		"turn":    starlark.NewBuiltin("turn", turnBuiltin),
+
+		"update_base": starlark.NewBuiltin("update_base", r.updateBase),
 	}
 }
 
@@ -564,10 +602,48 @@ func (r *runner) rerun(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tu
 	}), nil
 }
 
-// turnBuiltin is turn(kind, content): a value, with no side effect.
+// update_base(): the branch is brought up to date with its base by the
+// launcher (Host.UpdateBase). The result says whether it was (updated,
+// old_head, new_head), or why not: conflict (None, or a struct with base,
+// files and hunks that turn(..., conflict=) takes), identity_changed, and
+// reason in words.
+func (r *runner) updateBase(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs); err != nil {
+		return nil, err
+	}
+	res, err := r.host.UpdateBase(r.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("update_base: %w", err)
+	}
+	return frozenStruct(starlark.StringDict{
+		"updated":          starlark.Bool(res.Updated),
+		"old_head":         starlark.String(res.OldHead),
+		"new_head":         starlark.String(res.NewHead),
+		"identity_changed": starlark.Bool(res.IdentityChanged),
+		"conflict":         conflictValue(res.Conflict),
+		"reason":           starlark.String(res.Reason),
+	}), nil
+}
+
+// conflictValue is a conflict as a script sees it: None, or a struct.
+func conflictValue(c *Conflict) starlark.Value {
+	if c == nil {
+		return starlark.None
+	}
+	return frozenStruct(starlark.StringDict{
+		"base":  starlark.String(c.Base),
+		"files": stringList(c.Files),
+		"hunks": starlark.String(c.Hunks),
+	})
+}
+
+// turnBuiltin is turn(kind, content, conflict=None): a value, with no side
+// effect. conflict is the struct update_base() returned, carried to the
+// worker with the turn.
 func turnBuiltin(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var kind, content string
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 2, &kind, &content); err != nil {
+	var conflict starlark.Value = starlark.None
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "kind", &kind, "content", &content, "conflict?", &conflict); err != nil {
 		return nil, err
 	}
 	if !stepKind(kind) {
@@ -576,7 +652,54 @@ func turnBuiltin(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, k
 	if len(content) > MaxText {
 		return nil, fmt.Errorf("turn: the content is %d bytes, more than %d", len(content), MaxText)
 	}
-	return &turnValue{t: Turn{Kind: kind, Content: content}}, nil
+	c, err := conflictOf(conflict)
+	if err != nil {
+		return nil, fmt.Errorf("turn: %w", err)
+	}
+	return &turnValue{t: Turn{Kind: kind, Content: content, Conflict: c}}, nil
+}
+
+// conflictOf reads a turn's conflict argument: None, or the struct
+// update_base() returned, within its bounds.
+func conflictOf(v starlark.Value) (*Conflict, error) {
+	if v == starlark.None {
+		return nil, nil
+	}
+	st, ok := v.(*starlarkstruct.Struct)
+	if !ok {
+		return nil, fmt.Errorf("conflict is None or the conflict update_base() returned, not %s", v.Type())
+	}
+	var c Conflict
+	for name, into := range map[string]*string{"base": &c.Base, "hunks": &c.Hunks} {
+		a, err := st.Attr(name)
+		if err != nil {
+			return nil, fmt.Errorf("conflict has no %s: %w", name, err)
+		}
+		s, ok := starlark.AsString(a)
+		if !ok {
+			return nil, fmt.Errorf("conflict's %s is not a string", name)
+		}
+		*into = s
+	}
+	files, err := st.Attr("files")
+	if err != nil {
+		return nil, fmt.Errorf("conflict has no files: %w", err)
+	}
+	it, ok := files.(starlark.Iterable)
+	if !ok {
+		return nil, errors.New("conflict's files is not a list")
+	}
+	for f := range starlark.Elements(it) {
+		s, ok := starlark.AsString(f)
+		if !ok {
+			return nil, errors.New("conflict's files holds a value that is not a string")
+		}
+		c.Files = append(c.Files, s)
+	}
+	if c.Base == "" || len(c.Files) == 0 || len(c.Files) > MaxConflictFiles || len(c.Hunks) > MaxText {
+		return nil, fmt.Errorf("conflict names a base, 1 to %d files and at most %d bytes of hunks", MaxConflictFiles, MaxText)
+	}
+	return &c, nil
 }
 
 // turnValue is turn(...)'s value: immutable, so frozen from the start.

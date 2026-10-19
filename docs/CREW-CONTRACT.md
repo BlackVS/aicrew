@@ -1452,7 +1452,10 @@ point alone, which launchers before task 05cf send, stays accepted), the
 entry's name, source and commit, its
 script or command, the pull request and head, whether the head was a
 base-only update, the outcome (`handled`, `turn` with the turn's kind and
-content, or `failed` with the error), a command's exit status and the
+content and, when the turn carries one, the base update's `conflict`
+(increment 2e: `base`, `files`, at most 50, and `hunks`, at most 16 KiB;
+a report without it stays accepted), or `failed` with the error), a
+command's exit status and the
 run's steps, bounded. aicrewd keeps one row per attempt and run ID
 (schema 36): a report sent again is recorded once and journals nothing.
 A run of an attempt that is not the member's running attempt is refused
@@ -1568,8 +1571,10 @@ core"). The routing is the subscription file embedded in the release.
   and content.
   A pull subject's `pre_push` field is the declared check that failed
   after the push (increment 2d-b: the command, its exit, its output and
-  the other failed checks' names); its `conflict` field, a conflict in the
-  update from the base, is filled from increment 2e.
+  the other failed checks' names). An automation subject's `conflict`
+  field is the conflict in the update from the base that the run's turn
+  carries (increment 2e: the base, the files and the hunks, bounded), and
+  the subject's text names the base and the files.
 - **Across restarts:** an event waits in the journal until it is
   delivered; a delivery and its message are one transaction.
 - **Failures:** a delivery that fails three times in a row is parked, and

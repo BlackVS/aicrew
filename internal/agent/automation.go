@@ -154,6 +154,8 @@ const (
 	stepHostReady  = "host_ready"
 	stepHostSubmit = "host_submit"
 	stepHostRerun  = "host_rerun"
+	// stepHostUpdateBase is update_base()'s outcome (increment 2e).
+	stepHostUpdateBase = "host_update_base"
 )
 
 // liveRun is a run the launcher serves host calls for.
@@ -544,8 +546,14 @@ func (s *StepServer) serveAutomation(call StepCall) StepAnswer {
 			return s.hostErr(err)
 		}
 		return done(res)
+	case "update_base":
+		res, err := s.hostUpdateBase(ctx, run)
+		if err != nil {
+			return s.hostErr(err)
+		}
+		return done(res)
 	}
-	return refuse("invalid_request", "Unknown host call "+in.Call+".", "Use pr, attempt, run, step, comment, label, ready, submit or rerun.")
+	return refuse("invalid_request", "Unknown host call "+in.Call+".", "Use pr, attempt, run, step, comment, label, ready, submit, rerun or update_base.")
 }
 
 // hostRedactor removes the home's forge tokens and the known token shapes
@@ -841,6 +849,163 @@ func (s *StepServer) rerunResult(run *liveRun, res automation.RerunResult) (auto
 	return res, s.recordStep(run, stepHostRerun, text)
 }
 
+// baseUpdateNote is the delta note update_base() posts after a base-only
+// update (docs/DESIGN-TURNS.md 10.4): the old and the new head, the
+// identity both have, and the command that computes it.
+const baseUpdateNote = `Base-only update: %s -> %s, merged from %s.
+Patch identity unchanged: %s
+(git diff $(git merge-base origin/%s HEAD) HEAD | git patch-id --stable)
+The reviews at %s stand; CI runs on %s.`
+
+// The bounds of a conflict update_base() returns.
+const (
+	maxConflictFiles = automation.MaxConflictFiles
+	maxConflictHunks = automation.MaxText
+)
+
+// hostUpdateBase is update_base(): the pull request's branch brought up to
+// date with its base by a merge, pushed without force when the patch
+// identity is unchanged, with the delta note as a comment. It works in a
+// temporary detached worktree of the attempt's clone at the branch's head
+// as the origin has it, so a turn's uncommitted work in the attempt's
+// worktree is never touched; the clone's credential helper serves the
+// fetch and the push, and the script holds nothing. A conflict aborts the
+// merge and is returned with the base, the files and the hunks, bounded;
+// a changed identity is returned with no push; a push the origin refuses
+// (the branch moved) is returned with its reason, the new head being an
+// event of its own; an up-to-date branch is returned as not updated. The
+// attempt's worktree is fast-forwarded to the new head when it is clean
+// and at the old head. The outcome is one step, host_update_base.
+func (s *StepServer) hostUpdateBase(ctx context.Context, run *liveRun) (automation.UpdateBaseResult, error) {
+	t, err := s.runTarget(ctx, run)
+	if err != nil {
+		return automation.UpdateBaseResult{}, err
+	}
+	f := newAutomationForge()
+	p, _, err := f.GetPullContent(ctx, t.host, t.kind(), t.token, t.path, run.pull)
+	if err != nil {
+		return automation.UpdateBaseResult{}, fmt.Errorf("read pull request %d of %s on %s: %w", run.pull, t.path, t.host, err)
+	}
+	base, branch := p.Base, p.Head
+	for _, b := range []string{base, branch} {
+		if !branchShape.MatchString(b) || strings.Contains(b, "..") {
+			return automation.UpdateBaseResult{}, fmt.Errorf("pull request %d names the branch %q, which is not a branch name", run.pull, b)
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	git := automationGit
+	if git == nil {
+		git = execGit
+	}
+	wt := run.worktree
+	baseRef, branchRef := "refs/remotes/origin/"+base, "refs/remotes/origin/"+branch
+	if _, err := git(ctx, wt, gitEnv, "fetch", "--quiet", "origin", "+refs/heads/"+base+":"+baseRef, "+refs/heads/"+branch+":"+branchRef); err != nil {
+		return automation.UpdateBaseResult{}, fmt.Errorf("fetch %s and %s: %w", base, branch, err)
+	}
+	old, err := git(ctx, wt, gitEnv, "rev-parse", "--verify", "--quiet", branchRef+"^{commit}")
+	if old = strings.TrimSpace(old); err != nil || !baseShape.MatchString(old) {
+		return automation.UpdateBaseResult{}, fmt.Errorf("the origin has no branch %s", branch)
+	}
+	if _, err := git(ctx, wt, gitEnv, "merge-base", "--is-ancestor", baseRef, old); err == nil {
+		return s.updateBaseResult(run, automation.UpdateBaseResult{OldHead: old, Reason: "the branch is up to date with " + base})
+	}
+	before := patchIdentityAt(ctx, git, wt, baseRef, old)
+	if before == "" {
+		return automation.UpdateBaseResult{}, fmt.Errorf("the patch identity of %s against %s could not be computed", branch, base)
+	}
+	// The temporary worktree: a stale one of an earlier run goes first.
+	dir := wt + ".base-update"
+	removeWorktree := func(ctx context.Context) {
+		git(ctx, wt, gitEnv, "worktree", "remove", "--force", dir)
+		os.RemoveAll(dir)
+		git(ctx, wt, gitEnv, "worktree", "prune")
+	}
+	removeWorktree(ctx)
+	if _, err := git(ctx, wt, gitEnv, "worktree", "add", "--quiet", "--detach", dir, old); err != nil {
+		return automation.UpdateBaseResult{}, fmt.Errorf("make the update's worktree: %w", err)
+	}
+	defer removeWorktree(context.WithoutCancel(ctx))
+	if _, err := git(ctx, dir, gitEnv, "merge", "--quiet", "--no-edit", "-m", "Merge "+base+" into "+branch+" (base-only update)", baseRef); err != nil {
+		c := conflictIn(ctx, git, dir, base)
+		git(ctx, dir, gitEnv, "merge", "--abort")
+		if c == nil {
+			return automation.UpdateBaseResult{}, fmt.Errorf("merge %s into %s: %w", base, branch, err)
+		}
+		return s.updateBaseResult(run, automation.UpdateBaseResult{OldHead: old, Conflict: c,
+			Reason: fmt.Sprintf("merging %s into %s conflicts in %s", base, branch, strings.Join(c.Files, ", "))})
+	}
+	head, err := git(ctx, dir, gitEnv, "rev-parse", "HEAD")
+	if head = strings.TrimSpace(head); err != nil || !baseShape.MatchString(head) {
+		return automation.UpdateBaseResult{}, fmt.Errorf("the merged head: %w", err)
+	}
+	after := patchIdentityAt(ctx, git, dir, baseRef, head)
+	if after != before {
+		return s.updateBaseResult(run, automation.UpdateBaseResult{OldHead: old, IdentityChanged: true,
+			Reason: fmt.Sprintf("merging %s into %s changes the patch identity from %s to %s; update the branch by hand", base, branch, before, after)})
+	}
+	if _, err := git(ctx, dir, gitEnv, "push", "--quiet", "origin", "HEAD:refs/heads/"+branch); err != nil {
+		return s.updateBaseResult(run, automation.UpdateBaseResult{OldHead: old,
+			Reason: fmt.Sprintf("the push of %s was refused, the branch moved during the update: %s", branch, err)})
+	}
+	git(ctx, wt, gitEnv, "update-ref", branchRef, head, old)
+	res := automation.UpdateBaseResult{Updated: true, OldHead: old, NewHead: head}
+	note := fmt.Sprintf(baseUpdateNote, old, head, base, after, base, old, head)
+	if _, err := f.CommentPull(ctx, t.host, t.kind(), t.token, t.path, run.pull, note); err != nil {
+		res.Reason = fmt.Sprintf("the delta note was not posted on pull request %d of %s on %s: %s", run.pull, t.path, t.host, err)
+	}
+	fastForward(ctx, git, wt, old, head)
+	return s.updateBaseResult(run, res)
+}
+
+// conflictIn is the conflict a failed merge left in dir: the unmerged
+// files and their hunks, bounded; nil when the merge failed with none.
+func conflictIn(ctx context.Context, git GitRunner, dir, base string) *automation.Conflict {
+	names, err := git(ctx, dir, gitEnv, "diff", "--name-only", "--diff-filter=U")
+	if err != nil || strings.TrimSpace(names) == "" {
+		return nil
+	}
+	c := &automation.Conflict{Base: base}
+	for _, n := range strings.Split(strings.TrimSpace(names), "\n") {
+		if len(c.Files) < maxConflictFiles {
+			c.Files = append(c.Files, n)
+		}
+	}
+	hunks, _ := git(ctx, dir, gitEnv, "diff", "--diff-filter=U")
+	c.Hunks, _ = automation.Bound(hunks, maxConflictHunks)
+	return c
+}
+
+// fastForward moves the worktree to head when it is at old with no change
+// to a tracked file; an untracked file is no reason to leave the branch
+// behind the head it was pushed to.
+func fastForward(ctx context.Context, git GitRunner, worktree, old, head string) {
+	if st, err := git(ctx, worktree, gitEnv, "status", "--porcelain", "--untracked-files=no"); err != nil || strings.TrimSpace(st) != "" {
+		return
+	}
+	if at, err := git(ctx, worktree, gitEnv, "rev-parse", "HEAD"); err != nil || strings.TrimSpace(at) != old {
+		return
+	}
+	git(ctx, worktree, gitEnv, "merge", "--quiet", "--ff-only", head)
+}
+
+// updateBaseResult redacts res, records it as a step and returns it.
+func (s *StepServer) updateBaseResult(run *liveRun, res automation.UpdateBaseResult) (automation.UpdateBaseResult, error) {
+	red := hostRedactor(s.home)
+	res.Reason = red(res.Reason)
+	text := "not updated: " + res.Reason
+	switch {
+	case res.Conflict != nil:
+		res.Conflict.Hunks = red(res.Conflict.Hunks)
+	case res.Updated:
+		text = fmt.Sprintf("%s -> %s", res.OldHead, res.NewHead)
+		if res.Reason != "" {
+			text += "; " + res.Reason
+		}
+	}
+	return res, s.recordStep(run, stepHostUpdateBase, text)
+}
+
 // findingLine is a review's finding: a list item that opens with its
 // disposition in brackets, as oh-code-review and the external reviewer
 // write them.
@@ -1089,4 +1254,9 @@ func (h *socketHost) Submit(ctx context.Context, u string) error {
 func (h *socketHost) Rerun(ctx context.Context) (automation.RerunResult, error) {
 	var r automation.RerunResult
 	return r, h.call(ctx, automationCall{Call: "rerun"}, &r)
+}
+
+func (h *socketHost) UpdateBase(ctx context.Context) (automation.UpdateBaseResult, error) {
+	var r automation.UpdateBaseResult
+	return r, h.call(ctx, automationCall{Call: "update_base"}, &r)
 }

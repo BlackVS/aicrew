@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -157,6 +158,7 @@ func TestAutomationWakeSplitPerRole(t *testing.T) {
 	turn := runReport(a.ID, "run-3", RunTurn)
 	turn.Source, turn.Command, turn.Script = "process", nil, "process/triage.star"
 	turn.Turn, turn.Content = "rework", "Decide which finding to fix."
+	turn.Conflict = &ConflictDetail{Base: "main", Files: []string{"work.txt"}, Hunks: "<<<<<<< HEAD\nwork\n=======\nbase\n>>>>>>> main\n"}
 	for _, r := range []AutomationRunReport{failed, turn} {
 		if res, err := e.s.RecordAutomationRunWithToken(ctx, e.indepTk, r); err != nil || !res.Recorded {
 			t.Fatalf("%s: %+v, %v", r.RunID, res, err)
@@ -179,8 +181,15 @@ func TestAutomationWakeSplitPerRole(t *testing.T) {
 		worker[0].Action.Subjects[0].Runs[0].RunID != "run-3" || worker[0].ID == coord[0].ID {
 		t.Fatalf("the worker's message: %+v", worker)
 	}
-	if !strings.Contains(worker[0].Text, "asks for a rework turn:\n  | Decide which finding to fix.") || strings.Contains(worker[0].Text, "failed at") {
+	if !strings.Contains(worker[0].Text, "asks for a rework turn:\n  | Decide which finding to fix.\n  The update from main conflicts in work.txt;") ||
+		strings.Contains(worker[0].Text, "failed at") {
 		t.Errorf("the worker's text:\n%s", worker[0].Text)
+	}
+	// The turn's conflict is the subject's, hunks and all; the
+	// coordinators' subject has none.
+	if c := worker[0].Action.Subjects[0].Conflict; c == nil || c.Base != "main" || !slices.Equal(c.Files, []string{"work.txt"}) ||
+		!strings.Contains(c.Hunks, ">>>>>>> main") || coord[0].Action.Subjects[0].Conflict != nil {
+		t.Errorf("the subjects' conflicts: worker %+v, coordinator %+v", c, coord[0].Action.Subjects[0].Conflict)
 	}
 	// Nothing is delivered twice.
 	if again := settle(t, e.s, e.now); len(again) != 0 {
@@ -202,10 +211,23 @@ func TestAutomationRunRefusalsAndBounds(t *testing.T) {
 		t.Fatalf("an unknown attempt: %v", err)
 	}
 	for name, change := range map[string]func(r *AutomationRunReport){
-		"an unknown outcome":           func(r *AutomationRunReport) { r.Outcome = "done" },
-		"a failure without an error":   func(r *AutomationRunReport) { r.Outcome = RunFailed },
-		"a turn without a kind":        func(r *AutomationRunReport) { r.Outcome = RunTurn },
-		"content on a handled run":     func(r *AutomationRunReport) { r.Content = "x" },
+		"an unknown outcome":          func(r *AutomationRunReport) { r.Outcome = "done" },
+		"a failure without an error":  func(r *AutomationRunReport) { r.Outcome = RunFailed },
+		"a turn without a kind":       func(r *AutomationRunReport) { r.Outcome = RunTurn },
+		"content on a handled run":    func(r *AutomationRunReport) { r.Content = "x" },
+		"a conflict on a handled run": func(r *AutomationRunReport) { r.Conflict = &ConflictDetail{Base: "main", Files: []string{"a"}} },
+		"a conflict without files": func(r *AutomationRunReport) {
+			r.Outcome, r.Turn, r.Conflict = RunTurn, "fix", &ConflictDetail{Base: "main"}
+		},
+		"a conflict with a two-line base": func(r *AutomationRunReport) {
+			r.Outcome, r.Turn, r.Conflict = RunTurn, "fix", &ConflictDetail{Base: "ma\nin", Files: []string{"a"}}
+		},
+		"a conflict with a two-line file": func(r *AutomationRunReport) {
+			r.Outcome, r.Turn, r.Conflict = RunTurn, "fix", &ConflictDetail{Base: "main", Files: []string{"a\nb"}}
+		},
+		"a conflict with too many files": func(r *AutomationRunReport) {
+			r.Outcome, r.Turn, r.Conflict = RunTurn, "fix", &ConflictDetail{Base: "main", Files: make([]string, maxConflictFiles+1)}
+		},
 		"a bad run id":                 func(r *AutomationRunReport) { r.RunID = "run 1" },
 		"a bad point":                  func(r *AutomationRunReport) { r.Point = "After Push" },
 		"neither a point nor events":   func(r *AutomationRunReport) { r.Point = "" },
@@ -247,5 +269,34 @@ func TestAutomationRunRefusalsAndBounds(t *testing.T) {
 	if err := e.s.db.QueryRow(`SELECT report FROM attempt_automation_runs WHERE run_id = 'run-big'`).Scan(&stored); err != nil ||
 		strings.Count(stored, strings.Repeat("s", maxRunStepText)) != maxRunSteps {
 		t.Fatalf("the record was cut: %d bytes, %v", len(stored), err)
+	}
+
+	// A conflict naming fifty files of 400-byte paths, which the report
+	// accepts, is more than an event holds: the event's file names are
+	// cut and the list halved until it fits, the worker's subject still
+	// carries the conflict with its base and some of its files, the
+	// message says a text was cut, and the record keeps all fifty.
+	wide := runReport(a.ID, "run-wide", RunTurn)
+	wide.Turn, wide.Content = "fix", "Updating work/task-1 from main conflicts."
+	wide.Conflict = &ConflictDetail{Base: "main", Hunks: strings.Repeat("<", 1024)}
+	for i := 0; i < maxConflictFiles; i++ {
+		wide.Conflict.Files = append(wide.Conflict.Files, strings.Repeat("d", 380)+"/"+strings.Repeat("f", 15)+".go"+string(rune('a'+i%26)))
+	}
+	if res, err := e.s.RecordAutomationRunWithToken(ctx, e.indepTk, wide); err != nil || !res.Recorded || res.EventID == "" {
+		t.Fatalf("a wide conflict: %+v, %v", res, err)
+	}
+	settle(t, e.s, e.now)
+	worker := actionItems(t, e.s, e.indepTk, "automation")
+	if len(worker) != 1 || len(worker[0].Action.Subjects) != 1 || !strings.Contains(worker[0].Text, "A text was cut for room") {
+		t.Fatalf("the worker's cut message: %d items: %+v", len(worker), worker)
+	}
+	c := worker[0].Action.Subjects[0].Conflict
+	if c == nil || c.Base != "main" || len(c.Files) == 0 || len(c.Files) > maxConflictFiles || len(c.Files[0]) > 128 ||
+		!strings.HasPrefix(c.Files[0], "dddd") || !strings.Contains(c.Hunks, "<<<") {
+		t.Fatalf("the worker's conflict: %d files, %+v", len(c.Files), c)
+	}
+	if err := e.s.db.QueryRow(`SELECT report FROM attempt_automation_runs WHERE run_id = 'run-wide'`).Scan(&stored); err != nil ||
+		strings.Count(stored, strings.Repeat("d", 380)) != maxConflictFiles {
+		t.Fatalf("the wide record was cut: %d bytes, %v", len(stored), err)
 	}
 }

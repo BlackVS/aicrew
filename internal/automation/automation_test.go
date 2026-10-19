@@ -28,6 +28,14 @@ type fakeHost struct {
 	submitted []string
 	reruns    []string
 	rerunAt   int
+	// update is what update_base() returns; updates counts the calls.
+	update  UpdateBaseResult
+	updates int
+}
+
+func (h *fakeHost) UpdateBase(context.Context) (UpdateBaseResult, error) {
+	h.updates++
+	return h.update, nil
 }
 
 func (h *fakeHost) Label(_ context.Context, add, remove []string) error {
@@ -167,6 +175,52 @@ def main(event):
 	// A turn built and dropped asks nothing.
 	if turn, err = run(t, "def main(event):\n    turn(\"fix\", \"x\")\n    return None\n", &fakeHost{}, Limits{}); err != nil || turn != nil {
 		t.Fatalf("a dropped turn: %+v, %v", turn, err)
+	}
+}
+
+// update_base() hands the launcher's answer to the script as a struct,
+// with the conflict as None or a struct, and turn(kind, content,
+// conflict=) carries that struct out; anything else as the conflict, or
+// an argument to update_base(), fails the script.
+func TestUpdateBaseAndTurnConflict(t *testing.T) {
+	h := &fakeHost{update: UpdateBaseResult{OldHead: "0123456", Conflict: &Conflict{Base: "main", Files: []string{"a.go", "b/c.go"}, Hunks: "<<<<<<< HEAD\n"},
+		Reason: "merging main into feat/x conflicts in a.go, b/c.go"}}
+	src := `
+def main(event):
+    u = update_base()
+    if u.updated or u.old_head != "0123456" or u.new_head != "" or u.identity_changed or "conflicts" not in u.reason:
+        fail("update_base: %s" % u)
+    c = u.conflict
+    if c.base != "main" or c.files != ["a.go", "b/c.go"] or c.hunks != "<<<<<<< HEAD\n":
+        fail("the conflict: %s" % c)
+    return turn("fix", "Updating feat/x from main conflicts", conflict = c)
+`
+	turn, err := run(t, src, h, Limits{})
+	if err != nil || turn == nil || turn.Kind != "fix" || turn.Conflict == nil || turn.Conflict.Base != "main" ||
+		!slices.Equal(turn.Conflict.Files, []string{"a.go", "b/c.go"}) || turn.Conflict.Hunks != "<<<<<<< HEAD\n" || h.updates != 1 {
+		t.Fatalf("the turn: %+v, %v (update calls %d)", turn, err, h.updates)
+	}
+	// A clean update: the conflict is None, which a turn takes as none.
+	h = &fakeHost{update: UpdateBaseResult{Updated: true, OldHead: "0123456", NewHead: "89abcde"}}
+	turn, err = run(t, `
+def main(event):
+    u = update_base()
+    if not u.updated or u.conflict != None or u.new_head != "89abcde":
+        fail("update_base: %s" % u)
+    return turn("fix", "x", conflict = u.conflict)
+`, h, Limits{})
+	if err != nil || turn == nil || turn.Conflict != nil {
+		t.Fatalf("a turn without a conflict: %+v, %v", turn, err)
+	}
+	for name, body := range map[string]string{
+		"an argument":                     `update_base(True)`,
+		"a number as conflict":            `turn("fix", "x", conflict = 1)`,
+		"a struct that is not a conflict": `turn("fix", "x", conflict = pr())`,
+	} {
+		h := &fakeHost{}
+		if _, err := run(t, "def main(event):\n    "+body+"\n", h, Limits{}); !errors.Is(err, ErrScript) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
 

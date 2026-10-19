@@ -371,7 +371,7 @@ func TestAutomationRefusedRun(t *testing.T) {
 		t.Errorf("a call without a live run's token: %+v", ans)
 	}
 	for _, c := range []automationCall{{Call: "label", Add: []string{"review-this"}}, {Call: "ready"},
-		{Call: "submit", URL: "https://git.example.test/crew/project-t/pulls/7"}, {Call: "rerun"}} {
+		{Call: "submit", URL: "https://git.example.test/crew/project-t/pulls/7"}, {Call: "rerun"}, {Call: "update_base"}} {
 		if ans := call("token-y", c); ans.OK || ans.Error.Code != "no_run" {
 			t.Errorf("%s without a live run's token: %+v", c.Call, ans)
 		}

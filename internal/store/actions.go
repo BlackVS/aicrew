@@ -71,8 +71,9 @@ type ActionSubject struct {
 	Passed []PassedCheck   `json:"passed,omitempty"`
 	Board  *BoardDetail    `json:"board,omitempty"`
 	Block  *BlockedSubject `json:"blocked,omitempty"`
-	// Conflict is the base update's conflict, filled from increment 2e;
-	// PrePush the declared check that failed after the push (NeedPrePush).
+	// Conflict is the base update's conflict an automation subject's turn
+	// carries (increment 2e); PrePush the declared check that failed after
+	// the push (NeedPrePush).
 	Conflict *ConflictDetail `json:"conflict,omitempty"`
 	PrePush  *PrePushFailure `json:"pre_push,omitempty"`
 	// Runs are an automation subject's runs (automations.go): those that

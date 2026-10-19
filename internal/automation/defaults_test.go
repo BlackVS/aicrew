@@ -23,10 +23,11 @@ func TestDefaultEntries(t *testing.T) {
 	for _, e := range entries {
 		names = append(names, e.Name+"@"+e.Point)
 	}
-	if !slices.Equal(names, []string{"review-request@after-push", "ci-rerun@ci-failed", "gates-green@gates-green"}) {
+	if !slices.Equal(names, []string{"review-request@after-push", "ci-rerun@ci-failed", "gates-green@gates-green", "base-update@after-ci"}) {
 		t.Fatalf("the defaults: %v", names)
 	}
-	if !slices.Equal(entries[0].Events, []string{events.KindForgeChanged}) || entries[1].Events != nil || entries[2].Events != nil {
+	if !slices.Equal(entries[0].Events, []string{events.KindForgeChanged}) || entries[1].Events != nil || entries[2].Events != nil ||
+		entries[3].Events != nil {
 		t.Fatalf("the defaults' events: %+v", entries)
 	}
 	instance := regexp.MustCompile(`://|[A-Za-z0-9-]+\.(com|dev|io|net|org)\b|github|gitlab|gitea`)
@@ -188,6 +189,58 @@ func defaultScript(t *testing.T, e Entry) []byte {
 		t.Fatal(err)
 	}
 	return src
+}
+
+// base-update calls update_base() for a pull request behind its base
+// unless an external review is in flight, and turns the launcher's answer
+// into the worker's turn: a conflict is a fix turn carrying it, a changed
+// identity a fix turn with the reason; a refused push and a clean update
+// ask for nothing, as does a branch up to date.
+func TestDefaultBaseUpdate(t *testing.T) {
+	src := defaultSource(t, "base-update")
+	conflict := &Conflict{Base: "main", Files: []string{"a.go", "b.go"}, Hunks: "<<<<<<< HEAD\n"}
+	cases := []struct {
+		name    string
+		behind  bool
+		labels  []string
+		update  UpdateBaseResult
+		updates int
+		turn    *Turn
+	}{
+		{"up to date", false, nil, UpdateBaseResult{}, 0, nil},
+		{"a review in progress", true, []string{"hands-reviewing"}, UpdateBaseResult{}, 0, nil},
+		{"a conflict", true, []string{"hands-reviewed"}, UpdateBaseResult{OldHead: "0123456", Conflict: conflict, Reason: "merging main into feat/x conflicts in a.go, b.go"}, 1,
+			&Turn{Kind: "fix", Content: "Updating feat/x from main conflicts in a.go, b.go. Resolve the conflict and push the branch.", Conflict: conflict}},
+		{"a changed identity", true, nil, UpdateBaseResult{OldHead: "0123456", IdentityChanged: true,
+			Reason: "merging main into feat/x changes the patch identity from aaaa to bbbb; update the branch by hand"}, 1,
+			&Turn{Kind: "fix", Content: "Updating feat/x from main would change the patch identity, so the reviews would not stand: " +
+				"merging main into feat/x changes the patch identity from aaaa to bbbb; update the branch by hand"}},
+		{"a refused push", true, nil, UpdateBaseResult{OldHead: "0123456", Reason: "the push of feat/x was refused, the branch moved during the update"}, 1, nil},
+		{"a clean update", true, []string{"hands-reviewed"}, UpdateBaseResult{Updated: true, OldHead: "0123456", NewHead: "89abcde"}, 1, nil},
+	}
+	for _, c := range cases {
+		h := &fakeHost{pr: PR{Number: 7, Head: "0123456", Base: "main", Branch: "feat/x", Behind: c.behind, Labels: c.labels}, update: c.update}
+		turn, err := runDefault(src, h, Event{Kinds: []string{PointAfterCI}})
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if h.updates != c.updates || len(h.labels)+len(h.comments)+len(h.runs) != 0 {
+			t.Errorf("%s: %d update calls (want %d), labels %v, comments %v, runs %v", c.name, h.updates, c.updates, h.labels, h.comments, h.runs)
+		}
+		switch {
+		case (turn == nil) != (c.turn == nil):
+			t.Errorf("%s: turn %+v, want %+v", c.name, turn, c.turn)
+		case turn != nil && (turn.Kind != c.turn.Kind || turn.Content != c.turn.Content):
+			t.Errorf("%s: turn %+v, want %+v", c.name, turn, c.turn)
+		case turn != nil && (turn.Conflict == nil) != (c.turn.Conflict == nil):
+			t.Errorf("%s: the turn's conflict %+v, want %+v", c.name, turn.Conflict, c.turn.Conflict)
+		case turn != nil && turn.Conflict != nil && (turn.Conflict.Base != "main" || !slices.Equal(turn.Conflict.Files, conflict.Files) || turn.Conflict.Hunks != conflict.Hunks):
+			t.Errorf("%s: the turn's conflict %+v", c.name, turn.Conflict)
+		}
+		if c.name == "a review in progress" && !slices.Contains(h.steps, "base_update: an external review is in progress; the update of this head follows its result") {
+			t.Errorf("%s: steps %v", c.name, h.steps)
+		}
+	}
 }
 
 func defaultSource(t *testing.T, name string) []byte {

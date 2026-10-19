@@ -406,7 +406,7 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 			}
 			switch {
 			case added:
-				facts.Reviews = reviewsOf(c)
+				facts.Reviews, facts.Content, facts.Comments = reviewsOf(c), true, c.Comments
 			case err == nil:
 				// The branch moved between the two reads: this content is
 				// another head's. The status goes alone, and the next poll

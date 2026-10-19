@@ -55,6 +55,7 @@ func TestPullContent(t *testing.T) {
 					Inline: []fakeforge.Inline{{Path: "parser.go", Line: 12, Body: "This loops forever."}}})
 				p.CommentAs("hands-bot", "[hands-bot review] reviewed at head "+fakeforge.HeadCommit+"\n\nVERDICT\nREADY\x1b[0m")
 				p.Review(fakeforge.Review{Author: "bob", State: "REQUEST_REVIEW"})
+				p.CommentAs("hands-bot", "⚠️ [hands-bot review] could not run: the runner is down")
 				p.Checks = []fakeforge.Check{
 					{Name: "go-lint", Status: "completed", Conclusion: "success"},
 					{Name: "go-test", Status: "completed", Conclusion: "failure", Log: goTestLog(40)},
@@ -74,6 +75,9 @@ func TestPullContent(t *testing.T) {
 				if cm.Path != "" {
 					line += fmt.Sprintf(" %s:%d", cm.Path, cm.Line)
 				}
+				if cm.Notice != "" {
+					line += " notice=" + cm.Notice
+				}
 				got = append(got, line)
 			}
 			review := "review alice"
@@ -81,7 +85,8 @@ func TestPullContent(t *testing.T) {
 				review = "comment alice" // GitLab keeps a review's body as a note
 			}
 			want := []string{"comment member local@" + fakeforge.HeadCommit[:7] + ":true", "comment hands-bot external@0123456:false",
-				review, "inline alice parser.go:12", "comment hands-bot external@" + fakeforge.HeadCommit[:7] + ":true"}
+				review, "inline alice parser.go:12", "comment hands-bot external@" + fakeforge.HeadCommit[:7] + ":true",
+				"comment hands-bot notice=review-failed"}
 			if strings.Join(got, "\n") != strings.Join(want, "\n") {
 				t.Errorf("comments:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 			}
@@ -258,6 +263,23 @@ func TestReviewHeader(t *testing.T) {
 		}
 		if h == nil || h.Reviewer != c.reviewer || h.Level != c.lvl || h.AtHead != c.atHead {
 			t.Errorf("%q read as %+v", c.body, h)
+		}
+	}
+}
+
+// The external reviewer's failure notice is read as a notice, with or
+// without the mark before it; a review header, a quote of the notice and
+// other comments are none.
+func TestCommentNotice(t *testing.T) {
+	for body, want := range map[string]string{
+		"⚠️ [hands-bot review] could not run: the runner is unavailable": NoticeReviewFailed,
+		"\n[hands-bot review] could not run\nDetails follow.":            NoticeReviewFailed,
+		"[hands-bot review] reviewed at head 0123456\n\nVERDICT\nREADY":  "",
+		"Quoting: [hands-bot review] could not run":                      "",
+		"The review could not run, I think.":                             "",
+	} {
+		if got := commentNotice(body); got != want {
+			t.Errorf("%q: notice %q, want %q", body, got, want)
 		}
 	}
 }

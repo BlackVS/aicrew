@@ -4,9 +4,10 @@
   "automations": [
     {
       "name": "review-request",
-      "description": "After a push that is not a base-only update: clear hands-reviewed and request the external review once with review-this; never while hands-reviewing is present.",
+      "description": "After a push that is not a base-only update: clear hands-reviewed and request the external review once with review-this; never while hands-reviewing is present. After the external review failed to run (its could-not-run comment, or hands-review-failed): request it once more, and not again at the same head.",
       "source": {"release": "review-request.star"},
-      "point": "after-push"
+      "point": "after-push",
+      "events": ["forge.changed"]
     },
     {
       "name": "ci-rerun",

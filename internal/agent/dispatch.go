@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/automation"
+	"github.com/BlackVS/aicrew/internal/events"
 	"github.com/BlackVS/aicrew/internal/forge"
 )
 
@@ -91,7 +92,27 @@ type pullPoints struct {
 	// the branch moved away and came back to it.
 	Reruns []string  `json:"reruns,omitempty"`
 	Seen   time.Time `json:"seen"`
+	// Labels, Checks and Comments are the pull request's labels, checks
+	// conclusion and comment count as last observed, ContentRead says the
+	// comments are known (a content read came, or there was none), and
+	// LastComment is the time of the newest comment one saw: the state the
+	// forge.changed event is computed against (change). No comment body is
+	// kept.
+	Observed    bool      `json:"observed,omitempty"`
+	Labels      []string  `json:"labels,omitempty"`
+	Checks      string    `json:"checks,omitempty"`
+	Comments    int64     `json:"comments,omitempty"`
+	ContentRead bool      `json:"content_read,omitempty"`
+	LastComment time.Time `json:"last_comment,omitzero"`
+	// ReviewFailures are the heads at which an observation carried the
+	// external reviewer's failure (its could-not-run notice, or
+	// hands-review-failed added), one entry per such observation, oldest
+	// first, the last maxReviewFailures kept.
+	ReviewFailures []string `json:"review_failures,omitempty"`
 }
+
+// maxReviewFailures bounds the failures a pull request's state keeps.
+const maxReviewFailures = 32
 
 // pointPrePush is a failed check with the head it failed at.
 type pointPrePush struct {
@@ -199,6 +220,118 @@ func writePoints(home string, d pointsDoc, keep string) error {
 type pullFacts struct {
 	Base    string
 	Reviews map[string]pointReview // nil when no content was read
+	// Content says the content was read with the observation, and
+	// Comments are its comments, oldest first, for the change.
+	Content  bool
+	Comments []forge.PullComment
+	// Replay marks the observation replayPoints makes from the kept state:
+	// no forge read, so it changes nothing.
+	Replay bool
+}
+
+// labelReviewFailed is the external reviewer's failure label, set where a
+// site defines it (the external-review row of docs/DESIGN-TURNS.md 4.2).
+const labelReviewFailed = "hands-review-failed"
+
+// change is what o changes against the state p kept since the observation
+// before, or nil when nothing did, and it keeps the new state, so each
+// change is seen once. The first observation of a pull request (Observed
+// unset: a new pull request, or a record a launcher before this state
+// wrote) sets the state and is no change, and the first content read sets
+// the comment mark and names no comment as new, so history is never acted
+// on; a pull request observed without a comment has its mark already, and
+// each comment that then arrives is new. It runs before edges, which takes
+// the head and the state.
+func (p *pullPoints) change(o PullObservation, f pullFacts) *automation.ForgeChange {
+	if f.Replay {
+		return nil
+	}
+	first := !p.Observed
+	p.Observed = true
+	c := &automation.ForgeChange{HeadMoved: p.Head != "" && o.HeadCommit != "" && o.HeadCommit != p.Head,
+		LabelsAdded: missingIn(o.Labels, p.Labels), LabelsRemoved: missingIn(p.Labels, o.Labels)}
+	if o.State != p.State {
+		c.State = o.State
+	}
+	if o.Checks != p.Checks {
+		c.Checks = o.Checks
+	}
+	more := o.Comments > p.Comments
+	p.Labels, p.Checks, p.Comments = slices.Clone(o.Labels), o.Checks, o.Comments
+	switch {
+	case f.Content:
+		var fresh []forge.PullComment
+		mark := p.LastComment
+		for _, cm := range f.Comments {
+			if cm.At.After(p.LastComment) {
+				p.LastComment = cm.At
+			}
+			if p.ContentRead && cm.At.After(mark) {
+				fresh = append(fresh, cm)
+			}
+		}
+		c.Comments = boundComments(fresh)
+		p.ContentRead = true
+	case o.Comments == 0:
+		// Nothing to read: the comments are known to be none, so the
+		// first read after this names each of them as new.
+		p.ContentRead = true
+	}
+	if first {
+		return nil
+	}
+	if slices.Contains(c.LabelsAdded, labelReviewFailed) ||
+		slices.ContainsFunc(c.Comments, func(cm automation.ChangedComment) bool { return cm.Notice == forge.NoticeReviewFailed }) {
+		p.ReviewFailures = append(p.ReviewFailures, o.HeadCommit)
+		if len(p.ReviewFailures) > maxReviewFailures {
+			p.ReviewFailures = p.ReviewFailures[len(p.ReviewFailures)-maxReviewFailures:]
+		}
+		for _, h := range p.ReviewFailures {
+			if h == o.HeadCommit {
+				c.ReviewFailures++
+			}
+		}
+	}
+	if !c.HeadMoved && c.State == "" && c.Checks == "" && !more &&
+		len(c.LabelsAdded)+len(c.LabelsRemoved)+len(c.Comments) == 0 {
+		return nil
+	}
+	return c
+}
+
+// boundComments is cms as the change carries them: at most
+// automation.MaxChangeComments, in cms's order, the ones with a notice kept
+// before any other, so the bound never drops the external reviewer's
+// notice; each body bounded.
+func boundComments(cms []forge.PullComment) []automation.ChangedComment {
+	n := automation.MaxChangeComments
+	keep := make([]bool, len(cms))
+	for _, withNotice := range []bool{true, false} {
+		for i, cm := range cms {
+			if n > 0 && (cm.Notice != "") == withNotice {
+				keep[i], n = true, n-1
+			}
+		}
+	}
+	var out []automation.ChangedComment
+	for i, cm := range cms {
+		if keep[i] {
+			body, _ := automation.Bound(cm.Body, automation.MaxChangeComment)
+			out = append(out, automation.ChangedComment{Author: cm.Author, Kind: cm.Kind, Body: body, Notice: cm.Notice})
+		}
+	}
+	return out
+}
+
+// missingIn is the names of a that b lacks, in a's order.
+func missingIn(a, b []string) []string {
+	var out []string
+	for _, s := range a {
+		if !slices.Contains(b, s) && !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // reviewsOf is the newest review of each reviewer in c, for the points.
@@ -299,6 +432,7 @@ func (s *StepServer) noticePull(o PullObservation, attempt string, f pullFacts) 
 	if s.points.inflight == nil {
 		s.points.inflight = map[string]bool{}
 	}
+	change := p.change(o, f)
 	points := p.edges(o, f, s.points.inflight, key)
 	for _, pt := range points {
 		s.points.inflight[key+" "+pt] = true
@@ -308,7 +442,7 @@ func (s *StepServer) noticePull(o PullObservation, attempt string, f pullFacts) 
 	if err != nil {
 		s.log.Warn("the points' state was not written", "error", err.Error())
 	}
-	if len(points) == 0 {
+	if len(points) == 0 && change == nil {
 		return
 	}
 	snapshot := *p
@@ -319,6 +453,9 @@ func (s *StepServer) noticePull(o PullObservation, attempt string, f pullFacts) 
 		defer s.points.run.Unlock()
 		for _, pt := range points {
 			s.firePoint(s.ctx, key, &snapshot, pt, o)
+		}
+		if change != nil {
+			s.runEvent(s.ctx, &snapshot, events.KindForgeChanged, change, o)
 		}
 	}()
 }
@@ -336,7 +473,7 @@ func (s *StepServer) replayPoints() {
 	s.points.mu.Unlock()
 	for key, p := range doc.Pulls {
 		if p.pendingMerge() {
-			s.noticePull(p.observation(key), p.Attempt, pullFacts{})
+			s.noticePull(p.observation(key), p.Attempt, pullFacts{Replay: true})
 		}
 	}
 }
@@ -541,20 +678,9 @@ func patchIdentity(ctx context.Context, worktree, base, head string) string {
 // effective set could not be read; a pull request whose attempt is no
 // longer the member's open attempt runs nothing and is no error.
 func (s *StepServer) runPoint(ctx context.Context, p *pullPoints, point string, o PullObservation, baseOnly bool) (failed []checkFailure, prep error) {
-	st, err := s.Status(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("read the session status: %w", err)
-	}
-	if st.Attempt == nil || st.Attempt.ID != p.Attempt {
-		// Not a preparation error: the attempt is gone, nothing is owed at
-		// the point, and the edge is recorded so the old attempt's pull
-		// request does not fire it again.
-		s.log.Info("automations: the pull request's attempt is no longer the member's open attempt", "point", point, "attempt", p.Attempt)
-		return nil, nil
-	}
-	set, err := s.Automations(ctx, attemptSources(st.Attempt, p.Base))
-	if err != nil {
-		return nil, fmt.Errorf("the effective set could not be read: %s", RedactForgeTokens(s.home, err.Error()))
+	set, err := s.effectiveSet(ctx, p, point)
+	if set == nil {
+		return nil, err
 	}
 	head := p.Head
 	event := automation.Event{Kinds: []string{point}, IDs: []string{pullKey(o.Host, o.Repository, o.Number) + "@" + head}, BaseOnly: baseOnly}
@@ -574,21 +700,7 @@ func (s *StepServer) runPoint(ctx context.Context, p *pullPoints, point string, 
 				failed = append(failed, *rep.check)
 			}
 		default:
-			res, err := s.RunAutomation(ctx, AutomationRun{AttemptID: p.Attempt, Pull: o.Number, Name: e.Script, Source: e.Code, Event: event, Point: point})
-			if err != nil {
-				rep.RunID, rep.Outcome, rep.Error = newUUID(), runFailed, redactText(s.home, err.Error())
-				s.recordProblem(rep)
-				break
-			}
-			rep.RunID, rep.Steps = res.RunID, res.Steps
-			switch {
-			case res.Failed != "":
-				rep.Outcome, rep.Error = runFailed, res.Failed
-			case res.Turn != nil:
-				rep.Outcome, rep.Turn, rep.Content = runTurn, res.Turn.Kind, res.Turn.Content
-			default:
-				rep.Outcome = runHandled
-			}
+			s.runScript(ctx, &rep, e, event)
 		}
 		if ctx.Err() != nil {
 			// The launcher is stopping: the run it cut is not a failure
@@ -598,6 +710,83 @@ func (s *StepServer) runPoint(ctx context.Context, p *pullPoints, point string, 
 		s.reportRun(ctx, rep)
 	}
 	return failed, nil
+}
+
+// runEvent runs the effective script entries subscribed to kind for the
+// pull request of p's attempt, with change as the event's, and reports
+// each run to aicrewd with the kind in place of a point. Unlike a point,
+// the change has no edge: the kept state moved on with the observation, so
+// a dispatch the launcher could not prepare, or its exit cut, is logged
+// and not repeated.
+func (s *StepServer) runEvent(ctx context.Context, p *pullPoints, kind string, change *automation.ForgeChange, o PullObservation) {
+	set, err := s.effectiveSet(ctx, p, kind)
+	if set == nil {
+		if err != nil {
+			s.log.Warn("automations: the event was not dispatched", "event", kind, "pull", p.Number, "error", err.Error())
+		}
+		return
+	}
+	event := automation.Event{Kinds: []string{kind}, IDs: []string{pullKey(o.Host, o.Repository, o.Number) + "@" + p.Head}, Change: change}
+	for _, e := range set.Entries {
+		if !slices.Contains(e.Events, kind) || e.Source == automation.SourceDisabled || e.Source == automation.SourceCommand {
+			continue
+		}
+		rep := automationReport{AttemptID: p.Attempt, Events: []string{kind}, Name: e.Name, Source: e.Source, Commit: e.Commit,
+			Script: e.Script, Pull: o.Number, URL: o.URL, Head: p.Head}
+		if e.Problem != "" {
+			rep.RunID, rep.Outcome, rep.Error = newUUID(), runFailed, e.Problem
+			s.recordProblem(rep)
+		} else {
+			s.runScript(ctx, &rep, e, event)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		s.reportRun(ctx, rep)
+	}
+}
+
+// effectiveSet is the effective automations of p's attempt for a dispatch
+// at what (a point or an event kind), or nil: with the preparation error
+// when the session status or the set could not be read, and with none when
+// the attempt is no longer the member's open attempt, so nothing is owed.
+func (s *StepServer) effectiveSet(ctx context.Context, p *pullPoints, what string) (*AutomationSet, error) {
+	st, err := s.Status(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the session status: %w", err)
+	}
+	if st.Attempt == nil || st.Attempt.ID != p.Attempt {
+		// Not a preparation error: the attempt is gone, nothing is owed at
+		// the point, and the edge is recorded so the old attempt's pull
+		// request does not fire it again.
+		s.log.Info("automations: the pull request's attempt is no longer the member's open attempt", "at", what, "attempt", p.Attempt)
+		return nil, nil
+	}
+	set, err := s.Automations(ctx, attemptSources(st.Attempt, p.Base))
+	if err != nil {
+		return nil, fmt.Errorf("the effective set could not be read: %s", RedactForgeTokens(s.home, err.Error()))
+	}
+	return set, nil
+}
+
+// runScript runs the script entry e for event and fills rep with the run:
+// its ID and steps, and how it ended.
+func (s *StepServer) runScript(ctx context.Context, rep *automationReport, e AutomationEntry, event automation.Event) {
+	res, err := s.RunAutomation(ctx, AutomationRun{AttemptID: rep.AttemptID, Pull: rep.Pull, Name: e.Script, Source: e.Code, Event: event, Point: rep.Point})
+	if err != nil {
+		rep.RunID, rep.Outcome, rep.Error = newUUID(), runFailed, redactText(s.home, err.Error())
+		s.recordProblem(*rep)
+		return
+	}
+	rep.RunID, rep.Steps = res.RunID, res.Steps
+	switch {
+	case res.Failed != "":
+		rep.Outcome, rep.Error = runFailed, res.Failed
+	case res.Turn != nil:
+		rep.Outcome, rep.Turn, rep.Content = runTurn, res.Turn.Kind, res.Turn.Content
+	default:
+		rep.Outcome = runHandled
+	}
 }
 
 // How a run ended, as aicrewd names it (store/automations.go).
@@ -613,6 +802,7 @@ type automationReport struct {
 	AttemptID string           `json:"attempt_id"`
 	RunID     string           `json:"run_id"`
 	Point     string           `json:"point"`
+	Events    []string         `json:"events,omitempty"`
 	Name      string           `json:"name"`
 	Source    string           `json:"source"`
 	Commit    string           `json:"commit,omitempty"`

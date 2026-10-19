@@ -78,6 +78,38 @@ func (h *fakeHost) Comment(_ context.Context, body string) error {
 	return nil
 }
 
+// event.change is None at a point, and for forge.changed the change as a
+// struct: the flags, the labels, the comments with their notice, and the
+// count of the reviewer's failures at the head.
+func TestEventChangeValue(t *testing.T) {
+	src := []byte(HeaderPrefix + `{"host_api": 1}
+def main(event):
+    c = event.change
+    if c == None:
+        step("change", "none")
+        return None
+    step("change", "%s %s %s %s %s %d %s" % (c.head_moved, c.state, c.checks, ",".join(c.labels_added), ",".join(c.labels_removed),
+        c.review_failures, ";".join([x.author + ":" + x.kind + ":" + x.notice + ":" + x.body for x in c.comments])))
+    return None
+`)
+	run := func(ev Event) string {
+		h := &fakeHost{}
+		if _, err := Run(context.Background(), Script{Name: "change.star", Source: src, Host: h, Allow: gitOnly}, ev); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(h.steps, "|")
+	}
+	if got := run(Event{Kinds: []string{PointAfterPush}, IDs: []string{"pull@head"}}); got != "change: none" {
+		t.Errorf("at a point: %q", got)
+	}
+	ev := Event{Kinds: []string{"forge.changed"}, IDs: []string{"pull@head"}, Change: &ForgeChange{HeadMoved: true, State: "open", Checks: "failure",
+		LabelsAdded: []string{"a", "b"}, LabelsRemoved: []string{"c"}, ReviewFailures: 2,
+		Comments: []ChangedComment{{Author: "hands-bot", Kind: "comment", Notice: "review-failed", Body: "could not run"}, {Author: "alice", Kind: "review", Body: "fine"}}}}
+	if got := run(ev); got != "change: True open failure a,b c 2 hands-bot:comment:review-failed:could not run;alice:review::fine" {
+		t.Errorf("for a change: %q", got)
+	}
+}
+
 // gitOnly admits git and bash scripts, and denies git's global config, as
 // the managed turn settings do.
 var gitOnly = NewAllowList([]string{"Bash(git *)", "Bash(bash scripts/*.sh *)", "Read(./**)"},

@@ -88,6 +88,13 @@ func TestDefaultsThroughTheLauncher(t *testing.T) {
 	if !slices.Equal(f.labels, []string{"+review-this"}) {
 		t.Fatalf("review-request's labels: %v", f.labels)
 	}
+	// The run's end record carries its event and the facts the script
+	// read, for a replay (increment 2f).
+	if rec := runsAt(recs, automation.PointAfterPush)["review-request.star"]; rec.Event == nil || !slices.Equal(rec.Event.Kinds, []string{automation.PointAfterPush}) ||
+		!slices.Equal(rec.Event.IDs, rec.Events) || rec.Facts == nil || rec.Facts.PR == nil || rec.Facts.PR.Head != head ||
+		rec.Facts.PR.Number != 4 || rec.Facts.Attempt != nil {
+		t.Fatalf("the run's event and facts: %+v", rec)
+	}
 
 	// 2. CI fails on the runner: ci-rerun re-runs the job once.
 	f.mu.Lock()

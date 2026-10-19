@@ -53,27 +53,27 @@ const (
 
 // PR is the pull request as the host's facts hold it (4.1).
 type PR struct {
-	Number    int64
-	URL       string
-	Head      string
-	Base      string
-	Branch    string
-	Behind    bool
-	Draft     bool
-	Mergeable bool
-	Labels    []string
-	Reviews   []Review
-	Checks    []Check
+	Number    int64    `json:"number"`
+	URL       string   `json:"url"`
+	Head      string   `json:"head"`
+	Base      string   `json:"base"`
+	Branch    string   `json:"branch"`
+	Behind    bool     `json:"behind"`
+	Draft     bool     `json:"draft"`
+	Mergeable bool     `json:"mergeable"`
+	Labels    []string `json:"labels"`
+	Reviews   []Review `json:"reviews,omitempty"`
+	Checks    []Check  `json:"checks,omitempty"`
 }
 
 // Review is a review of the pull request: the local or the external one,
 // with its head, verdict, findings and body.
 type Review struct {
-	Reviewer string // local or external
-	Head     string
-	Verdict  string
-	Findings []string
-	Body     string
+	Reviewer string   `json:"reviewer"` // local or external
+	Head     string   `json:"head"`
+	Verdict  string   `json:"verdict"`
+	Findings []string `json:"findings,omitempty"`
+	Body     string   `json:"body"`
 }
 
 // Check is a check at the head, with a failed job's log excerpt, and
@@ -81,21 +81,21 @@ type Review struct {
 // own word, forge.RunnerFailure), so a script decides on a re-run without
 // a list of each forge's words.
 type Check struct {
-	Name          string
-	Conclusion    string
-	Excerpt       string
-	RunnerFailure bool
+	Name          string `json:"name"`
+	Conclusion    string `json:"conclusion"`
+	Excerpt       string `json:"excerpt,omitempty"`
+	RunnerFailure bool   `json:"runner_failure,omitempty"`
 }
 
 // Attempt is the attempt's state.
 type Attempt struct {
-	ID         string
-	Phase      string
-	TaskID     string
-	TaskSize   string
-	BaseCommit string
-	SpentUSD   float64
-	BudgetUSD  float64
+	ID         string  `json:"id"`
+	Phase      string  `json:"phase"`
+	TaskID     string  `json:"task_id"`
+	TaskSize   string  `json:"task_size,omitempty"`
+	BaseCommit string  `json:"base_commit"`
+	SpentUSD   float64 `json:"spent_usd"`
+	BudgetUSD  float64 `json:"budget_usd"`
 }
 
 // RunResult is a command's exit status and its output: what it wrote to
@@ -180,12 +180,12 @@ type Host interface {
 // the one before it: its patch identity against the merge base is
 // unchanged (docs/DESIGN-TURNS.md, 4.1 and 10.4), so the reviews stand.
 type Event struct {
-	Kinds    []string
-	IDs      []string
-	BaseOnly bool
+	Kinds    []string `json:"kinds"`
+	IDs      []string `json:"ids"`
+	BaseOnly bool     `json:"base_only,omitempty"`
 	// Change is what changed at the pull request, for a run on
 	// forge.changed (12.2); nil at a point, where the script sees None.
-	Change *ForgeChange
+	Change *ForgeChange `json:"change,omitempty"`
 }
 
 // ForgeChange is what the launcher's observation of a pull request changed
@@ -194,34 +194,34 @@ type Event struct {
 type ForgeChange struct {
 	// HeadMoved says the head commit is another than at the observation
 	// before.
-	HeadMoved bool
+	HeadMoved bool `json:"head_moved,omitempty"`
 	// State and Checks are the new state and the new checks conclusion
 	// when they changed, "" when they did not.
-	State  string
-	Checks string
+	State  string `json:"state,omitempty"`
+	Checks string `json:"checks,omitempty"`
 	// LabelsAdded and LabelsRemoved are the label names that appeared and
 	// went.
-	LabelsAdded   []string
-	LabelsRemoved []string
+	LabelsAdded   []string `json:"labels_added,omitempty"`
+	LabelsRemoved []string `json:"labels_removed,omitempty"`
 	// Comments are the comments new since the content was last read,
 	// oldest first, at most MaxChangeComments, each body bounded by
 	// MaxChangeComment; none when no content came with the observation.
-	Comments []ChangedComment
+	Comments []ChangedComment `json:"comments,omitempty"`
 	// ReviewFailures counts the observations at this head, this one
 	// included, that carried the external reviewer's failure: its
 	// could-not-run notice or the hands-review-failed label added. 0 when
 	// this observation carried none.
-	ReviewFailures int
+	ReviewFailures int `json:"review_failures,omitempty"`
 }
 
 // ChangedComment is one new comment: its author, kind (comment, review or
 // inline), body and notice (forge.NoticeReviewFailed for the external
 // reviewer's failure notice, "" otherwise).
 type ChangedComment struct {
-	Author string
-	Kind   string
-	Body   string
-	Notice string
+	Author string `json:"author"`
+	Kind   string `json:"kind"`
+	Body   string `json:"body"`
+	Notice string `json:"notice,omitempty"`
 }
 
 // The bounds of a change's comments.

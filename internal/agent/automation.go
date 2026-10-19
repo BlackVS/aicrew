@@ -174,6 +174,29 @@ type liveRun struct {
 	stepsMu sync.Mutex
 	steps   []automationStep
 	submit  string
+	// facts are what pr() and attempt() returned to the script, as the
+	// child saw them, for the run's end record (a replay reads them).
+	factsMu sync.Mutex
+	facts   automation.Facts
+}
+
+// recordFacts keeps the facts a host call answered.
+func (r *liveRun) recordFacts(set func(f *automation.Facts)) {
+	r.factsMu.Lock()
+	set(&r.facts)
+	r.factsMu.Unlock()
+}
+
+// readFacts is the run's facts for its end record: nil when the script
+// called neither pr() nor attempt().
+func (r *liveRun) readFacts() *automation.Facts {
+	r.factsMu.Lock()
+	defer r.factsMu.Unlock()
+	if r.facts.PR == nil && r.facts.Attempt == nil {
+		return nil
+	}
+	f := r.facts
+	return &f
 }
 
 // AutomationForge is what a script's host asks of the forge;
@@ -381,11 +404,17 @@ type automationRecord struct {
 	Point   string   `json:"point,omitempty"`
 	Command []string `json:"command,omitempty"`
 	Exit    *int     `json:"exit,omitempty"`
+	// A run's end carries the event it was for and the facts pr() and
+	// attempt() returned, so `aicrew automation replay` runs a script
+	// against the log (increment 2f, docs/DESIGN-TURNS.md 13.3).
+	Event *automation.Event `json:"event,omitempty"`
+	Facts *automation.Facts `json:"facts,omitempty"`
 }
 
 // recordRun records how a run ended, and a failed run as a step too.
 func (s *StepServer) recordRun(run *liveRun, ev automation.Event, res AutomationResult) {
-	rec := automationRecord{At: time.Now().UTC(), Run: run.id, Attempt: run.attempt, Script: run.script, Point: run.point, Events: ev.IDs, Kinds: ev.Kinds}
+	rec := automationRecord{At: time.Now().UTC(), Run: run.id, Attempt: run.attempt, Script: run.script, Point: run.point, Events: ev.IDs, Kinds: ev.Kinds,
+		Event: &ev, Facts: run.readFacts()}
 	switch {
 	case res.Failed != "":
 		s.recordStep(run, stepAutomationFailed, res.Failed)
@@ -499,12 +528,15 @@ func (s *StepServer) serveAutomation(call StepCall) StepAnswer {
 		if err != nil {
 			return s.hostErr(err)
 		}
-		return done(redactPR(hostRedactor(s.home), p))
+		p = redactPR(hostRedactor(s.home), p)
+		run.recordFacts(func(f *automation.Facts) { f.PR = &p })
+		return done(p)
 	case "attempt":
 		a, err := s.hostAttempt(ctx, run)
 		if err != nil {
 			return s.hostErr(err)
 		}
+		run.recordFacts(func(f *automation.Facts) { f.Attempt = &a })
 		return done(a)
 	case "run":
 		res, err := s.hostRun(ctx, run, in.Cmd, in.Args)

@@ -876,7 +876,11 @@ run`, since the interpreter has no memory limit of its own:
   with the attempt's turn cost and budget; `run()` executes in the
   attempt's worktree with the client's environment, after the launcher
   checks the allow list again; `step()` and the run's outcome go to
-  `logs/automations.jsonl`, redacted; `comment()` posts on the attempt's
+  `logs/automations.jsonl`, redacted, the run's end record carrying the
+  event it was for (its kinds and IDs, `base_only`, and on
+  `forge.changed` the change) and the facts `pr()` and `attempt()`
+  returned to the script, so a replay runs a script against the log
+  (increment 2f, below); `comment()` posts on the attempt's
   pull request. The transitions act with the home's credential too, and
   each is recorded as a step of the run (`host_label`, `host_ready`,
   `host_submit`, `host_rerun`, `host_update_base`): `label()` removes, then adds, labels the
@@ -1135,6 +1139,30 @@ the entry, the point, the pull request and the error, with the run's
 steps, and the coordinator fixes or disables the entry. `aicrew-agent
 check` shows a command entry with the source `command`, the manifest's
 commit and the command's words.
+
+### Replaying a run log: `aicrew automation replay`
+
+`aicrew automation replay --script FILE --events LOG` (increment 2f,
+`docs/DESIGN-TURNS.md` 13.3) runs a workflow script against a member's
+run log, `logs/automations.jsonl` under its home, with a recording host:
+it is the fake host of the automation tests made a command. Each run
+recorded with its event is replayed, in the log's order, with the
+script's `main(event)` under the interpreter's own limits and no child
+process: `pr()` and `attempt()` answer the facts the run recorded (a run
+that recorded none answers an empty value, and the output says so);
+`run`, `step`, `comment`, `label`, `ready`, `submit`, `rerun` and
+`update_base` are printed as what the script would have done and perform
+nothing (`run` answers exit 0 with no output, and every command is
+admitted, since none runs; `rerun` and `update_base` answer the reason
+"not performed in a replay"). The output lists, per event, its kinds and
+IDs, the run and the script that recorded it and how that run ended, the
+actions in order, and how the replay ended: handled, a turn with its kind
+and content, or failed with the error (`fail()`, a limit, a script that
+does not load). A script that fails is reported per event and the replay
+goes on; a line of the log that is not a record is the command's error.
+The script needs the header of 13.3; the command reads no hub and no
+forge, and a step record or a run recorded before the launcher kept
+events is skipped.
 
 ## Teams
 

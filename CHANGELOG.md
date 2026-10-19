@@ -12,6 +12,179 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.6.0] - 2026-10-19
+
+The first two increments of the turn-economics design
+(`docs/DESIGN-TURNS.md`, section 14), merged as 27 pull requests since
+0.5.9. Increment 1 is the event core: one journal on aicrewd, the board,
+the forge, aicrewd itself and timers as its sources, subscriptions as data,
+and the `action.needed` message that carries what a member has to decide,
+so only a change that needs judgement wakes a model (#162 to #165).
+Increment 2 is the workflow automations: Starlark scripts in a limited
+child process with the host API of the design's 10.3, six extension points
+in the launcher, declared commands at a point, the release's default
+automations `base-update`, `gates-green`, `review-request` and `ci-rerun`,
+a process manifest that overrides them by name, and `aicrew automation
+replay` against a member's run log (#166 to #186). The public/instance
+boundary design is recorded (#179), and the CI's race pass runs as jobs
+of its own (#160, #161).
+
+The store moves from schema 32 to schema 36. The hub goes first: an older
+aicrewd refuses the newer store, and going back to 0.5.x means restoring
+the store copy the upgrade made. aimem 0.10.0 or later stays required;
+this release is tested with aimem 0.10.8. The pilot team stays
+paused: nothing in this release resumes it.
+
+### Breaking changes
+
+- **The store schema is 36** (#163 schema 33: `events`, `event_deliveries`,
+  `event_runs`; #164 schema 34: `attempt_blocks`, `timers`; #165 schema
+  35: `messages` rebuilt for the `action.needed` kind, every row kept;
+  #169 schema 36: `attempt_automation_runs`). The hub one-liner migrates
+  it. An older aicrewd refuses a schema-36 store with `store schema is
+  newer than this build`, and a downgrade restores the upgrade's copy
+  (`<store>.backup-<UTC time>`), losing what was written since.
+- **Only a change that needs a decision wakes a member** (#165). A
+  forge change is delivered as an `action.needed` message with its
+  content when the review at the head asks for changes, CI failed, a
+  declared check failed at the head, both gates are green, or the pull
+  request was merged, closed or reopened; progress alone wakes no one.
+  A member reads what to decide in the message, not in the forge.
+- **The gates wake is withheld where the launcher submits itself**
+  (#172). With the `gates-green` default in the effective set, the
+  launcher marks the pull request ready when both reviews and CI are
+  green; the worker is woken for its gates only when that default is
+  disabled by the process manifest.
+- **A blocked report carries its reason** (#164). A worker's blocked
+  report keeps its reason and its time on the attempt and wakes the
+  team's coordinators with them; an attempt blocked before the upgrade
+  has no recorded reason until its next report.
+- **aimem 0.10.8 is the tested release.** 0.10.0 or later stays required;
+  a newer aimem is reported by `aicrew-agent check` as newer than the
+  tested one, as before. The real-aimem e2e harness pins v0.10.8.
+
+### Upgrade steps
+
+All of them use product commands and one-liners. The hub goes first.
+
+1. **aicrewd.** On the hub host, as root, run the hub one-liner:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.6.0/install-aicrewd.sh | bash
+   ```
+
+   As before, it backs up the configuration and the store, swaps the
+   binaries, migrates the store to schema 36, waits for health at 0.6.0,
+   and rolls back if the new release does not come up.
+2. **The operator's machine and each member.** As that user, rerun the
+   member one-liner, which stops the account's registered member services,
+   swaps the binaries and starts them again:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.6.0/boot.sh | bash
+     ```
+
+   - Windows:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.6.0/boot.ps1 | iex"
+     ```
+
+3. **Nothing to configure for the automations.** The defaults are embedded
+   in the release and apply to every attempt. A team whose process
+   manifest should replace or disable one names it in its `automations`
+   list (the schema is `internal/automation/automations.schema.json`);
+   `aicrew-agent check` lists the effective set of a home.
+
+### The event core (increment 1: #162, #163, #164, #165)
+
+- **`aicrew-agent forge pr show` prints the content** of a pull request:
+  the checks with their conclusions, the failed jobs' log excerpts and the
+  comments, besides its state (#162).
+- **One event core on aicrewd** (#163). The journal keeps every event, its
+  deliveries and its handler runs. The board wake and the forge events
+  are its first sources; subscriptions are data with a published schema
+  (`internal/events/subscriptions.schema.json`), and delivery
+  deduplicates and coalesces: a burst of events about one subject wakes
+  once, and a crash replays a run whole or not at all.
+- **The timer and aicrewd sources** (#164). A `timer.due` event fires at
+  its time; an attempt's blocked report is an event that keeps its reason
+  and its time on the attempt (`aicrew team state` shows them) and wakes
+  the coordinators.
+- **`action.needed` with its content** (#165). A member is woken with the
+  decision it has to make and the facts it needs, read from the journal;
+  a change that needs no decision is handled by nobody.
+
+### Workflow automations (increment 2: #166 to #186)
+
+- **The Starlark sandbox** (#166, #167, #173). A script runs under a step
+  limit, a wall clock and an OS memory limit (a job object on Windows, an
+  rlimit elsewhere) in its own process, `aicrew-agent automation run`,
+  with no file, network or environment access. Its host API is the
+  design's 10.3: `pr()`, `attempt()`, `run()` under the turn's allow list,
+  `step()`, `comment()`, `label()`, `ready()`, `submit()`, `rerun()`,
+  `update_base()`, and `turn()` as a return value. The host calls reach
+  the launcher over the step socket; no credential reaches the child.
+- **Sources and precedence** (#168). An automation comes from the process
+  manifest at the attempt's pin, from the repository's `automations/` at
+  the base branch's merged commit, or from the release's embedded
+  defaults; a manifest entry replaces, disables or adds a name. The
+  entries and the script header have published JSON Schemas versioned with
+  the host API. The set reloads on a pin or base change without a
+  restart, and `aicrew-agent check` lists it.
+- **The extension points** (#169, #170, #174, #177, #178). The launcher
+  dispatches at `after-push`, `after-ci`, `ci-failed`, `gates-green`,
+  `before-submit` and `after-merge`, at least once per edge: a point it
+  could not prepare, or a run its own exit cut, fires again. A declared
+  command at a point runs in the attempt's worktree under the allow list
+  and is recorded with its exit status and output; one that fails after a
+  push wakes the worker with the command and its output, and a worker
+  failing the same check head after head is escalated to the coordinators
+  past a bound. A command cannot set a credential helper or an askpass
+  through its arguments (#175). A wake whose queue holds a failed run and
+  a turn is one message per role (#176).
+- **The pull request's transitions as host functions** (#171): `label()`,
+  `ready()`, `submit()` and `rerun()`, performed by the launcher with the
+  member's credential; a forge re-run happens once per head.
+- **The defaults** (#172, #180): `review-request` adds `review-this`
+  after a push and again when the external review fails to run,
+  `ci-rerun` re-runs a failed check once per head, `gates-green` marks
+  the pull request ready when both reviews and CI are green. The launcher
+  also dispatches scripts on `forge.changed`, so a script subscribed to
+  events runs on a change that needs no decision.
+- **The base update as a host function** (#182, #183, #184).
+  `update_base()` merges the base into the attempt's branch, computes the
+  patch identity against the merge base, pushes, and posts the delta
+  note; a conflict comes back to the worker as the content of a `fix`
+  turn. The `base-update` default runs at `after-ci` and when the external
+  review that held it ends, skips a head under review, and completes an
+  update that a launcher's exit cut between its push and its note. Each
+  effect is recorded in the run log, so the recovery reads the record,
+  not the forge alone.
+- **`aicrew automation replay --script FILE --events LOG`** (#186). The
+  launcher's run log, `logs/automations.jsonl`, records on each run's end
+  record the event the run was for and the facts `pr()` and `attempt()`
+  returned, redacted as the script saw them; the operator replays a script
+  against it with a recording host that performs nothing and prints, per
+  event, the actions the script would take and how it ended.
+
+### Design
+
+- **`docs/DESIGN-INSTANCE-BOUNDARY.md`** (#179): the public/instance
+  boundary, hub-served process sets, closed-network installation and the
+  provider endpoint, decisions D1 to D6.
+
+### CI and tests
+
+- The race pass runs as `go-race` jobs of its own, one per package, so the
+  plain test results arrive early (#160); the agent tests' child processes
+  skip the race detector's exit sleep (#161).
+- Flakes fixed: the memory-limit case reads the limit where it acted
+  (#173); the forge wait test reads the log sink after the points ended
+  (#181); the serve-ceiling check test bounds the serve wait on its own
+  (#185).
+
 ## [0.5.9] - 2026-10-15
 
 Three fixes from the pilot of 2026-10-15 and the first increment of the

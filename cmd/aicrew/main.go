@@ -65,6 +65,7 @@ const usage = `usage:
   aicrew escalations list|show|answer ...   (run "aicrew escalations" for its usage)
   aicrew merges [--team TEAM]   (the pull requests waiting for the human merge)
   aicrew status [--team TEAM]   (each team's members: state, open attempt, unread messages)
+  aicrew automation replay --script FILE --events LOG   (a workflow script against a member's run log; nothing is performed)
   aicrew version [--json]
 ` + connUsage
 
@@ -93,6 +94,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) >= 1 && args[0] == "architect" {
 		return runArchitect(ctx, args[1:], stdout, stderr)
+	}
+	if len(args) >= 1 && args[0] == "automation" {
+		return runAutomation(ctx, args[1:], stdout, stderr)
 	}
 	if len(args) >= 1 && args[0] == "operator-token" {
 		return runOperatorToken(args[1:], stdout, stderr)

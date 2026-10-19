@@ -1048,7 +1048,12 @@ escalation answer does.
     `comment` are logged, not performed, and the output lists what the
     script would have done for each event.
   - This is the fake host the tests use (10.4), made a command. Increment 2
-    ships it.
+    ships it. Delivered in increment 2f: the recorded log is the
+    launcher's run log (`logs/automations.jsonl`), whose run records
+    carry the event and the facts `pr()` and `attempt()` returned, since
+    the handler runs at the extension points and on `forge.changed` are
+    the launcher's; the store's journal holds the event rows, not what a
+    run read.
 
 ## 14. The increments, ordered by savings
 

@@ -332,16 +332,18 @@ func TestUpdateBaseCompletesACutUpdate(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// The seam counts every push for the whole test, and cuts the run at
+	// the first one.
 	var pushes atomic.Int32
 	inner := automationGit
 	automationGit = func(ctx context.Context, dir string, env []string, args ...string) (string, error) {
 		out, err := inner(ctx, dir, env, args...)
-		if len(args) > 0 && args[0] == "push" {
-			pushes.Add(1)
+		if len(args) > 0 && args[0] == "push" && pushes.Add(1) == 1 {
 			cancel()
 		}
 		return out, err
 	}
+	t.Cleanup(func() { automationGit = inner })
 	res, err := e.srv.RunAutomation(ctx, AutomationRun{AttemptID: e.id, Source: []byte(updateScript), Name: "test.star", Pull: 7})
 	if err != nil {
 		t.Fatal(err)
@@ -350,7 +352,6 @@ func TestUpdateBaseCompletesACutUpdate(t *testing.T) {
 	// whose git and forge calls fail on the cancelled context, so the
 	// record is read at rest.
 	e.srv.Close()
-	automationGit = inner
 	head := e.remote(t, "refs/heads/work/task-1")
 	if head == old || pushes.Load() != 1 || len(e.forge.comments) != 0 {
 		t.Fatalf("the cut run: %+v, the origin's head %s (was %s), %d pushes, the comments %q", res, head, old, pushes.Load(), e.forge.comments)

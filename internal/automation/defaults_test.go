@@ -27,7 +27,7 @@ func TestDefaultEntries(t *testing.T) {
 		t.Fatalf("the defaults: %v", names)
 	}
 	if !slices.Equal(entries[0].Events, []string{events.KindForgeChanged}) || entries[1].Events != nil || entries[2].Events != nil ||
-		entries[3].Events != nil {
+		!slices.Equal(entries[3].Events, []string{events.KindForgeChanged}) {
 		t.Fatalf("the defaults' events: %+v", entries)
 	}
 	instance := regexp.MustCompile(`://|[A-Za-z0-9-]+\.(com|dev|io|net|org)\b|github|gitlab|gitea`)
@@ -191,41 +191,72 @@ func defaultScript(t *testing.T, e Entry) []byte {
 	return src
 }
 
-// base-update calls update_base() for a pull request behind its base
-// unless an external review is in flight, and turns the launcher's answer
-// into the worker's turn: a conflict is a fix turn carrying it, a changed
-// identity a fix turn with the reason; a refused push and a clean update
-// ask for nothing, as does a branch up to date.
+// base-update calls update_base() at after-ci unless an external review
+// is in flight, without reading pr().behind (the call's own answer is the
+// fresh reading of the base), and turns the launcher's answer into the
+// worker's turn: a conflict is a fix turn carrying it, a changed identity
+// a fix turn with the reason; a refused push, a clean update and a branch
+// up to date ask for nothing. A call that reports an updated branch with
+// a reason (the completion of a cut update, or a note not posted) is
+// followed by one more. On forge.changed it acts only when the change
+// removed hands-reviewing, the label is not back and every check at the
+// head has concluded; otherwise it steps, or does nothing for a change
+// that is not the review's end.
 func TestDefaultBaseUpdate(t *testing.T) {
 	src := defaultSource(t, "base-update")
 	conflict := &Conflict{Base: "main", Files: []string{"a.go", "b.go"}, Hunks: "<<<<<<< HEAD\n"}
+	ended := &ForgeChange{LabelsRemoved: []string{"hands-reviewing"}}
+	green := []Check{{Name: "go-test", Conclusion: "success"}, {Name: "lint", Conclusion: "failure"}}
+	inProgress := "base_update: an external review is in progress; the update of this head follows its result"
 	cases := []struct {
 		name    string
+		event   Event
 		behind  bool
 		labels  []string
+		checks  []Check
 		update  UpdateBaseResult
 		updates int
 		turn    *Turn
+		steps   []string
 	}{
-		{"up to date", false, nil, UpdateBaseResult{}, 0, nil},
-		{"a review in progress", true, []string{"hands-reviewing"}, UpdateBaseResult{}, 0, nil},
-		{"a conflict", true, []string{"hands-reviewed"}, UpdateBaseResult{OldHead: "0123456", Conflict: conflict, Reason: "merging main into feat/x conflicts in a.go, b.go"}, 1,
-			&Turn{Kind: "fix", Content: "Updating feat/x from main conflicts in a.go, b.go. Resolve the conflict and push the branch.", Conflict: conflict}},
-		{"a changed identity", true, nil, UpdateBaseResult{OldHead: "0123456", IdentityChanged: true,
+		{"up to date", Event{Kinds: []string{PointAfterCI}}, false, nil, green, UpdateBaseResult{OldHead: "0123456", Reason: "the branch is up to date with main"}, 1, nil, nil},
+		{"a review in progress", Event{Kinds: []string{PointAfterCI}}, true, []string{"hands-reviewing"}, green, UpdateBaseResult{}, 0, nil, []string{inProgress}},
+		{"a conflict", Event{Kinds: []string{PointAfterCI}}, true, []string{"hands-reviewed"}, green,
+			UpdateBaseResult{OldHead: "0123456", Conflict: conflict, Reason: "merging main into feat/x conflicts in a.go, b.go"}, 1,
+			&Turn{Kind: "fix", Content: "Updating feat/x from main conflicts in a.go, b.go. Resolve the conflict and push the branch.", Conflict: conflict}, nil},
+		{"a changed identity", Event{Kinds: []string{PointAfterCI}}, true, nil, green, UpdateBaseResult{OldHead: "0123456", IdentityChanged: true,
 			Reason: "merging main into feat/x changes the patch identity from aaaa to bbbb; update the branch by hand"}, 1,
 			&Turn{Kind: "fix", Content: "Updating feat/x from main would change the patch identity, so the reviews would not stand: " +
-				"merging main into feat/x changes the patch identity from aaaa to bbbb; update the branch by hand"}},
-		{"a refused push", true, nil, UpdateBaseResult{OldHead: "0123456", Reason: "the push of feat/x was refused, the branch moved during the update"}, 1, nil},
-		{"a clean update", true, []string{"hands-reviewed"}, UpdateBaseResult{Updated: true, OldHead: "0123456", NewHead: "89abcde"}, 1, nil},
+				"merging main into feat/x changes the patch identity from aaaa to bbbb; update the branch by hand"}, nil},
+		{"a refused push", Event{Kinds: []string{PointAfterCI}}, true, nil, green,
+			UpdateBaseResult{OldHead: "0123456", Reason: "the push of feat/x was refused, the branch moved during the update"}, 1, nil, nil},
+		{"a clean update", Event{Kinds: []string{PointAfterCI}}, true, []string{"hands-reviewed"}, green,
+			UpdateBaseResult{Updated: true, OldHead: "0123456", NewHead: "89abcde"}, 1, nil, nil},
+		{"a completed cut update", Event{Kinds: []string{PointAfterCI}}, true, nil, green,
+			UpdateBaseResult{Updated: true, OldHead: "0123456", NewHead: "89abcde", Reason: "completed the update cut after its push"}, 2, nil, nil},
+		{"the review ended, CI concluded", Event{Kinds: []string{events.KindForgeChanged}, Change: ended}, true, []string{"hands-reviewed"}, green,
+			UpdateBaseResult{Updated: true, OldHead: "0123456", NewHead: "89abcde"}, 1, nil, nil},
+		{"the review ended, no check at the head", Event{Kinds: []string{events.KindForgeChanged}, Change: ended}, true, []string{"hands-reviewed"}, nil,
+			UpdateBaseResult{OldHead: "0123456", Reason: "the branch is up to date with main"}, 1, nil, nil},
+		{"the review ended, a check still running", Event{Kinds: []string{events.KindForgeChanged}, Change: ended}, true, []string{"hands-reviewed"},
+			[]Check{{Name: "go-test", Conclusion: "success"}, {Name: "lint", Conclusion: "pending"}}, UpdateBaseResult{}, 0, nil,
+			[]string{"base_update: the external review ended while lint is still running; the update of this head follows CI"}},
+		{"the review ended and began again", Event{Kinds: []string{events.KindForgeChanged}, Change: ended}, true, []string{"hands-reviewing"}, green,
+			UpdateBaseResult{}, 0, nil, []string{inProgress}},
+		{"a change that is not the review's end", Event{Kinds: []string{events.KindForgeChanged}, Change: &ForgeChange{LabelsAdded: []string{"review-this"}}},
+			true, nil, green, UpdateBaseResult{}, 0, nil, nil},
 	}
 	for _, c := range cases {
-		h := &fakeHost{pr: PR{Number: 7, Head: "0123456", Base: "main", Branch: "feat/x", Behind: c.behind, Labels: c.labels}, update: c.update}
-		turn, err := runDefault(src, h, Event{Kinds: []string{PointAfterCI}})
+		h := &fakeHost{pr: PR{Number: 7, Head: "0123456", Base: "main", Branch: "feat/x", Behind: c.behind, Labels: c.labels, Checks: c.checks}, update: c.update}
+		turn, err := runDefault(src, h, c.event)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		if h.updates != c.updates || len(h.labels)+len(h.comments)+len(h.runs) != 0 {
 			t.Errorf("%s: %d update calls (want %d), labels %v, comments %v, runs %v", c.name, h.updates, c.updates, h.labels, h.comments, h.runs)
+		}
+		if !slices.Equal(h.steps, c.steps) {
+			t.Errorf("%s: steps %v, want %v", c.name, h.steps, c.steps)
 		}
 		switch {
 		case (turn == nil) != (c.turn == nil):
@@ -236,9 +267,6 @@ func TestDefaultBaseUpdate(t *testing.T) {
 			t.Errorf("%s: the turn's conflict %+v, want %+v", c.name, turn.Conflict, c.turn.Conflict)
 		case turn != nil && turn.Conflict != nil && (turn.Conflict.Base != "main" || !slices.Equal(turn.Conflict.Files, conflict.Files) || turn.Conflict.Hunks != conflict.Hunks):
 			t.Errorf("%s: the turn's conflict %+v", c.name, turn.Conflict)
-		}
-		if c.name == "a review in progress" && !slices.Contains(h.steps, "base_update: an external review is in progress; the update of this head follows its result") {
-			t.Errorf("%s: steps %v", c.name, h.steps)
 		}
 	}
 }

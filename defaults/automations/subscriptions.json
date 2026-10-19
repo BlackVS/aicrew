@@ -23,9 +23,10 @@
     },
     {
       "name": "base-update",
-      "description": "After CI at a head behind its base, unless an external review is in flight: merge the base and push without force when the patch identity is unchanged, with the delta note (the reviews stand); a conflict or a changed identity is a fix turn for the worker.",
+      "description": "After CI at a head, and when an external review that held the update ends with CI concluded at the head, unless an external review is in flight: merge the base into a branch behind it and push without force when the patch identity is unchanged, with the delta note (the reviews stand); a conflict or a changed identity is a fix turn for the worker; a branch up to date costs one fetch.",
       "source": {"release": "base-update.star"},
-      "point": "after-ci"
+      "point": "after-ci",
+      "events": ["forge.changed"]
     }
   ]
 }

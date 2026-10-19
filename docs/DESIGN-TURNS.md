@@ -291,7 +291,7 @@ and then it is an action needed (section 5).
 | `gates` | the external review has a BLOCKER | `writing`, with the review as action needed | harness |
 | `gates` | CI failed because of the runner: cancelled, lost runner, or setup timeout | `gates`, after re-running the failed jobs once | harness |
 | `gates` | CI failed on the change | `writing`, with the job and its excerpt as action needed | harness |
-| any open state | the branch is behind its base | merge the base into the branch; if clean and the patch identity is unchanged, push and post the delta note: the reviews stand | harness |
+| any open state | the branch is behind its base, read when CI concludes at the head and again when an external review that held the update ends with CI concluded | merge the base into the branch; if clean and the patch identity is unchanged, push and post the delta note: the reviews stand; nothing while `hands-reviewing` is present | harness |
 | any open state | that update conflicts, or changes the patch identity | `writing`, with the conflict as action needed | harness |
 | any state after `writing` | a new head that is not a base-only update | `checking`; clear `hands-reviewed`, restore `WIP:` and draft | harness |
 | `ready` | merged | `delivered`: verify the merge tree equals the reviewed head, wait for post-merge CI, record the delivery evidence | harness |

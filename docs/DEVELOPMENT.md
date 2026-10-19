@@ -868,7 +868,11 @@ run`, since the interpreter has no memory limit of its own:
   calls carrying the run's token, valid only while the run lives, and
   served beside the steps, never under their lock. `pr()` reads the
   attempt's pull request with the home's forge credential (`behind` from
-  the worktree's last fetch of the base); `attempt()` the session status,
+  the worktree's last fetch of the base, the one at `after-push` for the
+  patch identity, so a base that moved since reads as up to date: the
+  fresh reading is `update_base()`'s own answer, at the cost of one
+  fetch, which is why the base-update default calls it without reading
+  `behind`); `attempt()` the session status,
   with the attempt's turn cost and budget; `run()` executes in the
   attempt's worktree with the client's environment, after the launcher
   checks the allow list again; `step()` and the run's outcome go to
@@ -964,11 +968,20 @@ subscribes to, or both. The entries come from three sources:
   check failed on the runner) and `gates-green` at `gates-green`
   (`ready()`, then `submit(pr().url)`, unless the attempt is submitted
   already; the script reads no label, the point's edge does) and
-  `base-update` at `after-ci` (task 2e: for a pull request behind its
-  base, unless `hands-reviewing` is present, `update_base()`; a conflict
-  is a `fix` turn carrying it, a changed identity a `fix` turn with the
-  reason, and a refused push, a clean update and a branch up to date ask
-  for nothing: the reviews stand under the base-only rule).
+  `base-update` at `after-ci` and on `forge.changed` (task 2e and its
+  scheduling follow-up: `update_base()` unless `hands-reviewing` is
+  present, without reading `pr().behind` first, since the call's own
+  up-to-date answer is the fresh reading of the base at the cost of one
+  fetch; on `forge.changed` only when the change removed
+  `hands-reviewing`, the label is not back and every check at the head
+  has concluded, so an update the review held is retried when the
+  review ends, and `after-ci` keeps its meaning for every subscriber; a
+  call that reports an updated branch with a reason, the completion of
+  a cut update or a note not posted, is followed by one call more, so a
+  base that moved on in between is merged; a conflict is a `fix` turn
+  carrying it, a changed identity a `fix` turn with the reason, and a
+  refused push, a clean update and a branch up to date ask for nothing:
+  the reviews stand under the base-only rule).
   Their tests run against the fake host
   (`internal/automation/defaults_test.go`), and one asserts the scripts
   name no host, endpoint or instance: a default is universal release

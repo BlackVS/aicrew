@@ -12,6 +12,7 @@ import (
 
 	"github.com/BlackVS/aicrew/defaults"
 	"github.com/BlackVS/aicrew/internal/automation"
+	"github.com/BlackVS/aicrew/internal/events"
 	"github.com/BlackVS/aicrew/internal/forge"
 	"github.com/BlackVS/aicrew/internal/store"
 )
@@ -302,5 +303,110 @@ func TestRepositorySourceBaseUnreadable(t *testing.T) {
 	}
 	if gatesWakes() != 0 {
 		t.Errorf("the worker was woken for the gates the launcher performed")
+	}
+}
+
+// The base-update default through the launcher on real git (the scheduling
+// follow-up of 2e): CI green at a head behind its base while an external
+// review is in flight runs the default at after-ci, which steps and
+// updates nothing, and the after-ci edge is consumed. The observation
+// that removed hands-reviewing at the same head is a forge.changed the
+// default subscribes to: it runs update_base(), the merge of the base is
+// pushed to the origin with the delta note and the attempt's worktree
+// fast-forwarded, so the update the review held is not left for the next
+// head.
+func TestBaseUpdateFollowsTheReviewThroughTheLauncher(t *testing.T) {
+	ctx := context.Background()
+	a := setupAutomationSources(t)
+	releaseAutomations = func() ([]automation.Entry, error) {
+		raw, err := fs.ReadFile(defaults.Automations, defaults.AutomationsFile)
+		if err != nil {
+			return nil, err
+		}
+		return automation.ParseDefaults(raw)
+	}
+	releaseFS = defaults.Automations
+	pin := a.commit(t, a.process, a.processBare, "main", map[string]string{
+		"process/manifest.json": `{"name": "delivery", "automations": []}`})
+	s := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
+	body := s.claimBody()
+	body["process"] = map[string]string{"repo": testProcessRepo, "commit": pin, "manifest": "process/manifest.json"}
+	r, err := s.run(t, attemptsPath+"/claim", body)
+	if err != nil || r.Outcome != "committed" {
+		t.Fatalf("claim: %+v %v", r, err)
+	}
+	id := r.AttemptID
+	provisionTestForge(t, s.cfg.Home, "git.example.test", "member-forge-token")
+	srv := s.serve(t)
+	wt := filepath.Join(s.cfg.Home, "worktrees", id)
+	os.MkdirAll(filepath.Dir(wt), 0o700)
+	git(t, filepath.Dir(wt), "clone", "-q", "-b", "work/task-1", a.projectBare, wt)
+	git(t, wt, "config", "user.name", "member")
+	git(t, wt, "config", "user.email", "member@example.test")
+	git(t, wt, "remote", "set-url", "origin", testProjectRepo)
+	head := git(t, wt, "rev-parse", "HEAD")
+	// The base moves on after the branch was pushed: the pull request is
+	// behind it, and the launcher's clone does not know.
+	base := a.commit(t, a.project, a.projectBare, "main", map[string]string{"moved.txt": "the base moved\n"})
+	origin := func() string { return git(t, a.projectBare, "rev-parse", "refs/heads/work/task-1") }
+	url := "https://git.example.test/crew/project-t/pulls/4"
+	fake := &fakeStatus{token: "member-forge-token", st: forge.PullStatus{Pull: forge.Pull{Number: 4, URL: url,
+		State: forge.PullOpen, Head: "work/task-1", HeadCommit: head, Base: "main", Labels: []string{"hands-reviewing"}}, Checks: forge.ChecksSuccess}}
+	oldAPI := newPullStatusAPI
+	newPullStatusAPI = func() PullStatusAPI { return fake }
+	t.Cleanup(func() { newPullStatusAPI = oldAPI })
+	f := &automationForge{token: "member-forge-token",
+		pull: forge.Pull{Number: 4, URL: url, State: forge.PullOpen, Draft: true, Title: "WIP: the change", Head: "work/task-1",
+			HeadCommit: head, Base: "main", Labels: []string{"hands-reviewing"}, Mergeable: true},
+		content: forge.PullContent{Checks: []forge.Check{{Name: "go-test", State: forge.ChecksSuccess}}}}
+	oldForge := newAutomationForge
+	newAutomationForge = func() AutomationForge { return f }
+	t.Cleanup(func() { newAutomationForge = oldForge })
+
+	// 1. CI green at the head while the external review is in flight:
+	// after-ci runs the default, which steps and pushes nothing.
+	var answers []byte
+	obs, _ := json.Marshal(observation("git.example.test", "crew/project-t", fake.st))
+	if ans := s.call(t, &answers, StepCall{Op: "watch-pull", Body: obs}); !ans.OK {
+		t.Fatalf("the baseline: %+v", ans)
+	}
+	srv.waitPoints()
+	recs := dispatchRecords(t, s.cfg.Home)
+	if ci := runsAt(recs, automation.PointAfterCI); len(ci) != 1 || ci["base-update.star"].Outcome != "handled" ||
+		lastStep(recs, "base_update") != "an external review is in progress; the update of this head follows its result" ||
+		countKind(recs, events.KindForgeChanged) != 0 || origin() != head {
+		t.Fatalf("after-ci with the review in flight: %+v, step %q, origin %s (head %s)\n%s",
+			ci, lastStep(recs, "base_update"), origin(), head, s.logs.String())
+	}
+
+	// 2. The review ends at the same head: the observation is a
+	// forge.changed (review-request runs on it too and does nothing), the
+	// default runs update_base(), and the origin's branch is the merge of
+	// the base into the head, with the delta note.
+	f.mu.Lock()
+	f.pull.Labels = []string{"hands-reviewed"}
+	f.mu.Unlock()
+	fake.set(func(st *forge.PullStatus) { st.Labels = []string{"hands-reviewed"} })
+	srv.pollPulls(ctx)
+	srv.waitPoints()
+	recs = dispatchRecords(t, s.cfg.Home)
+	var changed []automationRecord
+	for _, rec := range recs {
+		if rec.Outcome != "" && rec.Script == "base-update.star" && slices.Contains(rec.Kinds, events.KindForgeChanged) {
+			changed = append(changed, rec)
+		}
+	}
+	if len(changed) != 1 || changed[0].Outcome != "handled" || len(runsAt(recs, automation.PointAfterCI)) != 1 {
+		t.Fatalf("the review's end: forge.changed runs %+v\n%s", changed, s.logs.String())
+	}
+	updated := origin()
+	if updated == head || git(t, a.projectBare, "rev-parse", updated+"^1") != head || git(t, a.projectBare, "rev-parse", updated+"^2") != base {
+		t.Fatalf("the origin's branch after the review ended: %s (head %s, base %s)\n%s", updated, head, base, s.logs.String())
+	}
+	if len(f.comments) != 1 || !strings.Contains(f.comments[0], head[:12]) || !strings.Contains(f.comments[0], updated[:12]) {
+		t.Errorf("the delta note: %q", f.comments)
+	}
+	if got := git(t, wt, "rev-parse", "HEAD"); got != updated {
+		t.Errorf("the attempt's worktree is at %s, not the update %s", got, updated)
 	}
 }

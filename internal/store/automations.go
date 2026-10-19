@@ -281,8 +281,9 @@ type automationEvent struct {
 }
 
 // fitAutomationEvent cuts ev's texts until its payload fits runBudget: the
-// steps' texts first, then the turn's content, the error, and at last the
-// steps themselves.
+// steps' texts first, then the turn's content, the conflict's hunks and
+// its file names, the error, then the steps themselves and at last the
+// conflict's files, down to one. The record keeps the report whole.
 func fitAutomationEvent(ev *automationEvent) {
 	size := func() int { b, _ := json.Marshal(ev); return len(b) }
 	if size() <= runBudget {
@@ -298,6 +299,10 @@ func fitAutomationEvent(ev *automationEvent) {
 	if size() > runBudget && ev.Run.Conflict != nil {
 		c := *ev.Run.Conflict
 		c.Hunks, _ = fitText(c.Hunks, 2<<10)
+		c.Files = slices.Clone(c.Files)
+		for i := range c.Files {
+			c.Files[i], _ = fitText(c.Files[i], 128)
+		}
 		ev.Run.Conflict = &c
 	}
 	if size() > runBudget {
@@ -305,6 +310,11 @@ func fitAutomationEvent(ev *automationEvent) {
 	}
 	for len(ev.Run.Steps) > 0 && size() > runBudget {
 		ev.Run.Steps = ev.Run.Steps[:len(ev.Run.Steps)/2]
+	}
+	for ev.Run.Conflict != nil && len(ev.Run.Conflict.Files) > 1 && size() > runBudget {
+		c := *ev.Run.Conflict
+		c.Files = c.Files[:len(c.Files)/2]
+		ev.Run.Conflict = &c
 	}
 }
 

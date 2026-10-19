@@ -270,4 +270,33 @@ func TestAutomationRunRefusalsAndBounds(t *testing.T) {
 		strings.Count(stored, strings.Repeat("s", maxRunStepText)) != maxRunSteps {
 		t.Fatalf("the record was cut: %d bytes, %v", len(stored), err)
 	}
+
+	// A conflict naming fifty files of 400-byte paths, which the report
+	// accepts, is more than an event holds: the event's file names are
+	// cut and the list halved until it fits, the worker's subject still
+	// carries the conflict with its base and some of its files, the
+	// message says a text was cut, and the record keeps all fifty.
+	wide := runReport(a.ID, "run-wide", RunTurn)
+	wide.Turn, wide.Content = "fix", "Updating work/task-1 from main conflicts."
+	wide.Conflict = &ConflictDetail{Base: "main", Hunks: strings.Repeat("<", 1024)}
+	for i := 0; i < maxConflictFiles; i++ {
+		wide.Conflict.Files = append(wide.Conflict.Files, strings.Repeat("d", 380)+"/"+strings.Repeat("f", 15)+".go"+string(rune('a'+i%26)))
+	}
+	if res, err := e.s.RecordAutomationRunWithToken(ctx, e.indepTk, wide); err != nil || !res.Recorded || res.EventID == "" {
+		t.Fatalf("a wide conflict: %+v, %v", res, err)
+	}
+	settle(t, e.s, e.now)
+	worker := actionItems(t, e.s, e.indepTk, "automation")
+	if len(worker) != 1 || len(worker[0].Action.Subjects) != 1 || !strings.Contains(worker[0].Text, "A text was cut for room") {
+		t.Fatalf("the worker's cut message: %d items: %+v", len(worker), worker)
+	}
+	c := worker[0].Action.Subjects[0].Conflict
+	if c == nil || c.Base != "main" || len(c.Files) == 0 || len(c.Files) > maxConflictFiles || len(c.Files[0]) > 128 ||
+		!strings.HasPrefix(c.Files[0], "dddd") || !strings.Contains(c.Hunks, "<<<") {
+		t.Fatalf("the worker's conflict: %d files, %+v", len(c.Files), c)
+	}
+	if err := e.s.db.QueryRow(`SELECT report FROM attempt_automation_runs WHERE run_id = 'run-wide'`).Scan(&stored); err != nil ||
+		strings.Count(stored, strings.Repeat("d", 380)) != maxConflictFiles {
+		t.Fatalf("the wide record was cut: %d bytes, %v", len(stored), err)
+	}
 }

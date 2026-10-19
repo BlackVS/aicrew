@@ -87,8 +87,12 @@ type AutomationRunReport struct {
 	Outcome string `json:"outcome"`
 	Turn    string `json:"turn,omitempty"`
 	Content string `json:"content,omitempty"`
-	Error   string `json:"error,omitempty"`
-	Exit    *int   `json:"exit,omitempty"`
+	// Conflict is the base update's conflict a turn carries (increment
+	// 2e): the base, the files and the hunks, bounded; the worker's
+	// action subject takes it.
+	Conflict *ConflictDetail `json:"conflict,omitempty"`
+	Error    string          `json:"error,omitempty"`
+	Exit     *int            `json:"exit,omitempty"`
 	// Steps are the steps the run recorded, each bounded.
 	Steps []AutomationStep `json:"steps,omitempty"`
 }
@@ -154,7 +158,7 @@ func (r AutomationRunReport) validate() error {
 		return bad("failure, which names no error")
 	case r.Outcome == RunTurn && !runKindShape.MatchString(r.Turn):
 		return bad("turn kind")
-	case r.Outcome != RunTurn && (r.Turn != "" || r.Content != ""):
+	case r.Outcome != RunTurn && (r.Turn != "" || r.Content != "" || r.Conflict != nil):
 		return bad("turn, which only a turn outcome has")
 	case len(r.Steps) > maxRunSteps:
 		return bad("steps")
@@ -170,6 +174,11 @@ func (r AutomationRunReport) validate() error {
 	if err := validText(r.Content, maxRunContent, "the run report's turn content", false); err != nil {
 		return err
 	}
+	if r.Conflict != nil {
+		if err := r.Conflict.validate(); err != nil {
+			return err
+		}
+	}
 	for _, st := range r.Steps {
 		if !runKindShape.MatchString(st.Kind) {
 			return bad("step kind")
@@ -179,6 +188,32 @@ func (r AutomationRunReport) validate() error {
 		}
 	}
 	return nil
+}
+
+// The bounds of a conflict a run report carries: the files it names, and
+// each name; the hunks are bounded as a turn's content.
+const (
+	maxConflictFiles = 50
+	maxConflictFile  = 1024
+)
+
+func (c *ConflictDetail) validate() error {
+	bad := func(what string) error { return fmt.Errorf("%w: the run report's conflict %s", ErrInvalid, what) }
+	switch {
+	case c.Base == "" || len(c.Base) > maxRefLen || !utf8.ValidString(c.Base) || strings.ContainsAny(c.Base, " \t\r\n"):
+		return bad("base")
+	case len(c.Files) == 0 || len(c.Files) > maxConflictFiles:
+		return bad(fmt.Sprintf("files, which number 1 to %d", maxConflictFiles))
+	}
+	for _, f := range c.Files {
+		if err := validText(f, maxConflictFile, "the run report's conflict file", true); err != nil {
+			return err
+		}
+		if strings.ContainsAny(f, "\r\n") {
+			return bad("file, which is one line")
+		}
+	}
+	return validText(c.Hunks, maxRunContent, "the run report's conflict hunks", false)
 }
 
 // RecordAutomationRunWithToken records the token's member's report of an
@@ -260,12 +295,28 @@ func fitAutomationEvent(ev *automationEvent) {
 	if size() > runBudget {
 		ev.Run.Content, _ = fitText(ev.Run.Content, 4<<10)
 	}
+	if size() > runBudget && ev.Run.Conflict != nil {
+		c := *ev.Run.Conflict
+		c.Hunks, _ = fitText(c.Hunks, 2<<10)
+		ev.Run.Conflict = &c
+	}
 	if size() > runBudget {
 		ev.Run.Error, _ = fitText(ev.Run.Error, 2<<10)
 	}
 	for len(ev.Run.Steps) > 0 && size() > runBudget {
 		ev.Run.Steps = ev.Run.Steps[:len(ev.Run.Steps)/2]
 	}
+}
+
+// runsConflict is the conflict the first run that carries one reports:
+// the subject's conflict field (actions.go).
+func runsConflict(runs []AutomationRunReport) *ConflictDetail {
+	for _, r := range runs {
+		if r.Conflict != nil {
+			return r.Conflict
+		}
+	}
+	return nil
 }
 
 // wakeAutomation wakes the roles the runs' events name: the coordinators
@@ -341,7 +392,8 @@ func wakeAutomation(ctx context.Context, tx *sql.Tx, evs []queuedEvent) (*wakeOu
 		}
 		task := a.Task
 		out := &wakeOut{recipients: recipients,
-			subject: ActionSubject{Kind: "automation", AttemptID: a.ID, Task: &task, Runs: p.runs, Text: boundedText(text)}}
+			subject: ActionSubject{Kind: "automation", AttemptID: a.ID, Task: &task, Runs: p.runs, Conflict: runsConflict(p.runs),
+				Text: boundedText(text)}}
 		if first == nil {
 			first = out
 		} else {
@@ -381,6 +433,10 @@ func runText(r AutomationRunReport) string {
 	case RunTurn:
 		fmt.Fprintf(&b, "action.needed: the automation %s %s asks for a %s turn:", what, where, r.Turn)
 		indentInto(&b, r.Content)
+		if r.Conflict != nil {
+			fmt.Fprintf(&b, "\n  The update from %s conflicts in %s; the subject's conflict holds the hunks.",
+				r.Conflict.Base, strings.Join(r.Conflict.Files, ", "))
+		}
 	}
 	for _, st := range r.Steps {
 		fmt.Fprintf(&b, "\n  - step %s:", st.Kind)

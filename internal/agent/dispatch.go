@@ -648,6 +648,13 @@ func patchIdentity(ctx context.Context, worktree, base, head string) string {
 			return ""
 		}
 	}
+	return patchIdentityAt(ctx, git, worktree, ref, head)
+}
+
+// patchIdentityAt is the stable patch id of head against its merge base
+// with ref, both present in worktree; "" when it cannot be computed, which
+// an empty diff is too.
+func patchIdentityAt(ctx context.Context, git GitRunner, worktree, ref, head string) string {
 	mb, err := git(ctx, worktree, gitEnv, "merge-base", ref, head)
 	if mb = strings.TrimSpace(mb); err != nil || !baseShape.MatchString(mb) {
 		return ""
@@ -783,7 +790,7 @@ func (s *StepServer) runScript(ctx context.Context, rep *automationReport, e Aut
 	case res.Failed != "":
 		rep.Outcome, rep.Error = runFailed, res.Failed
 	case res.Turn != nil:
-		rep.Outcome, rep.Turn, rep.Content = runTurn, res.Turn.Kind, res.Turn.Content
+		rep.Outcome, rep.Turn, rep.Content, rep.Conflict = runTurn, res.Turn.Kind, res.Turn.Content, res.Turn.Conflict
 	default:
 		rep.Outcome = runHandled
 	}
@@ -799,25 +806,27 @@ const (
 // automationReport is a run as the launcher reports it to aicrewd, in the
 // shape of its route's body.
 type automationReport struct {
-	AttemptID string           `json:"attempt_id"`
-	RunID     string           `json:"run_id"`
-	Point     string           `json:"point"`
-	Events    []string         `json:"events,omitempty"`
-	Name      string           `json:"name"`
-	Source    string           `json:"source"`
-	Commit    string           `json:"commit,omitempty"`
-	Script    string           `json:"script,omitempty"`
-	Command   []string         `json:"command,omitempty"`
-	Pull      int64            `json:"pull"`
-	URL       string           `json:"url"`
-	Head      string           `json:"head"`
-	BaseOnly  bool             `json:"base_only,omitempty"`
-	Outcome   string           `json:"outcome"`
-	Turn      string           `json:"turn,omitempty"`
-	Content   string           `json:"content,omitempty"`
-	Error     string           `json:"error,omitempty"`
-	Exit      *int             `json:"exit,omitempty"`
-	Steps     []automationStep `json:"steps,omitempty"`
+	AttemptID string   `json:"attempt_id"`
+	RunID     string   `json:"run_id"`
+	Point     string   `json:"point"`
+	Events    []string `json:"events,omitempty"`
+	Name      string   `json:"name"`
+	Source    string   `json:"source"`
+	Commit    string   `json:"commit,omitempty"`
+	Script    string   `json:"script,omitempty"`
+	Command   []string `json:"command,omitempty"`
+	Pull      int64    `json:"pull"`
+	URL       string   `json:"url"`
+	Head      string   `json:"head"`
+	BaseOnly  bool     `json:"base_only,omitempty"`
+	Outcome   string   `json:"outcome"`
+	Turn      string   `json:"turn,omitempty"`
+	Content   string   `json:"content,omitempty"`
+	// Conflict is the base update's conflict a turn carries (increment 2e).
+	Conflict *automation.Conflict `json:"conflict,omitempty"`
+	Error    string               `json:"error,omitempty"`
+	Exit     *int                 `json:"exit,omitempty"`
+	Steps    []automationStep     `json:"steps,omitempty"`
 	// check is a declared check at after-push that exited nonzero: the
 	// worker's, through the observation, not part of the report.
 	check *checkFailure

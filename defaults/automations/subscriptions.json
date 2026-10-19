@@ -20,6 +20,12 @@
       "description": "When both reviews are READY and CI passed at the head and no external review is in flight: drop the WIP prefix and the draft, and submit the attempt.",
       "source": {"release": "gates-green.star"},
       "point": "gates-green"
+    },
+    {
+      "name": "base-update",
+      "description": "After CI at a head behind its base, unless an external review is in flight: merge the base and push without force when the patch identity is unchanged, with the delta note (the reviews stand); a conflict or a changed identity is a fix turn for the worker.",
+      "source": {"release": "base-update.star"},
+      "point": "after-ci"
     }
   ]
 }

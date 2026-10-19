@@ -657,7 +657,8 @@ functions, and nothing else.
 | `ready()` | Drops the pull request's draft flag and its `WIP:` prefix. |
 | `submit(url)` | Submits the attempt with `url` as its result. It is the holder's own work step, sent by the launcher once the script ended without failing and after `before-submit` ran, so aicrewd's fences apply unchanged; a run at `before-submit` itself cannot submit. |
 | `rerun()` | Re-runs the failed jobs of the head where the forge has a call for it, once per head (decision Q4), and returns `reran`, `jobs` and `reason`. |
-| `turn(kind, content)` | A value, not an action: returned from `main`, it asks for a model turn of that kind with that content (12.3). It has no side effect. |
+| `update_base()` | Brings the branch up to date with its base (10.4, increment 2e): the launcher fetches, merges the base in a temporary worktree of the clone, pushes without force when the patch identity is unchanged and posts the delta note; it returns `updated`, `old_head`, `new_head`, `identity_changed`, `conflict` (`base`, `files`, `hunks`, bounded, or None) and `reason`. A conflict, a changed identity, a refused push and a branch up to date are results, not errors. |
+| `turn(kind, content, conflict=None)` | A value, not an action: returned from `main`, it asks for a model turn of that kind with that content (12.3), carrying the conflict `update_base()` returned when the script passes it. It has no side effect. |
 
 There is no file access, no network, no clock and no environment. Values
 are frozen between calls.

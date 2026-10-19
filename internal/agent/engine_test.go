@@ -42,12 +42,32 @@ func (testVerifier) Redeem(_ context.Context, req store.RedeemRequest) (store.Ve
 	return store.VerifiedIdentity{HubID: "hub-test", UserID: "user-1", TokenID: "tok-1"}, nil
 }
 
+// lockedBuffer is the test environment's log sink: the launcher logs from
+// its goroutines (a point dispatch, a poll) while a test reads what was
+// logged, so the buffer takes a lock for both.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 type crewEnv struct {
 	store     *store.Store
 	storePath string
 	cfg       Config
 	root      string // the fake aimem's state root
-	logs      *bytes.Buffer
+	logs      *lockedBuffer
 	agentID   string
 	teamID    string
 	operator  store.Caller
@@ -181,7 +201,7 @@ func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
 	}
 	cfg := Config{Home: home, URL: "https://" + ln.Addr().String(), Trust: tlstrust.Binding{Mode: tlstrust.SPKI, Value: pin},
 		AgentID: a.ID, TeamID: tm.ID, AimemCommand: self}
-	return &crewEnv{store: st, storePath: storePath, cfg: cfg, root: root, logs: new(bytes.Buffer), agentID: a.ID, teamID: tm.ID, operator: op}
+	return &crewEnv{store: st, storePath: storePath, cfg: cfg, root: root, logs: new(lockedBuffer), agentID: a.ID, teamID: tm.ID, operator: op}
 }
 
 func writeCert(t *testing.T, dir string) (certFile, keyFile, pin string) {

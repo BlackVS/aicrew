@@ -923,10 +923,20 @@ run`, since the interpreter has no memory limit of its own:
   `base_only` true (the identities match), so `review-request` leaves the
   reviews standing. `turn(kind, content, conflict=u.conflict)` carries
   the conflict to the worker: the run report's `conflict` field, and the
-  action subject's (CREW-CONTRACT, "Event delivery"). Known limit until
-  task 01a1529a-cae3 (2e-2): a launcher that exits between the push and
-  the comment leaves the delta note unposted; the next run finds the
-  branch up to date and posts nothing.
+  action subject's (CREW-CONTRACT, "Event delivery"). A run cut between
+  its push and its delta note is completed at the next call (increment
+  2e-2; `docs/DESIGN-TURNS.md` 12.4): the launcher records the update in
+  progress on the pull request's entry in `state/points.json` (the old and
+  the new head, the base, the identity, and whether the push and the note
+  are done) before the push and after each effect, and clears it after the
+  step once the note is posted; a later `update_base()` whose fetch finds
+  the origin's head at the recorded new head posts the note unless it was
+  posted, fast-forwards the attempt's worktree, records the step and
+  clears the record, with no merge and no push, and the script gets
+  `updated` true with the recorded heads and the reason "completed the
+  update cut after its push"; at any other head the record is stale and
+  goes. A push the origin refused leaves the record for the same reading,
+  since a push the origin applied but did not acknowledge is one.
 - **A failed run** (`fail()`, a limit, a refused command, a host error,
   the process ending) is a result and an `automation_failed` step. The
   launcher never retries it.

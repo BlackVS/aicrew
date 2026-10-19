@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/BlackVS/aicrew/internal/automation"
@@ -192,6 +193,9 @@ func TestUpdateBase(t *testing.T) {
 	if got := lastStep(e.records(t, res.RunID), stepHostUpdateBase); got != old+" -> "+head {
 		t.Errorf("the step: %q", got)
 	}
+	if rec := e.baseUpdate(); rec != nil {
+		t.Errorf("a run that ended left the update in progress: %+v", rec)
+	}
 	gone("after the update")
 	// The script's process was given no credential, and the log holds none.
 	raw, err := os.ReadFile(filepath.Join(filepath.Dir(StepSocket(e.cfg.Home)), childReport))
@@ -238,6 +242,12 @@ func TestUpdateBase(t *testing.T) {
 	if got := lastStep(e.records(t, res.RunID), stepHostUpdateBase); !strings.HasPrefix(got, "not updated: the push of work/task-1 was refused") {
 		t.Errorf("the step: %q", got)
 	}
+	// The record of the refused push stays, for the next call to read the
+	// origin's head against: a push the origin applied but did not
+	// acknowledge is completed, any other is stale.
+	if rec := e.baseUpdate(); rec == nil || rec.Old != head || rec.Pushed || rec.Commented {
+		t.Errorf("the record after the refused push: %+v", rec)
+	}
 	gone("after the refused push")
 
 	// 4. The merge changes the patch identity: the base changed a line in
@@ -255,6 +265,9 @@ func TestUpdateBase(t *testing.T) {
 	if e.remote(t, "refs/heads/work/task-1") != moved || git(t, wt, "rev-parse", "HEAD") != head || len(e.forge.comments) != 1 {
 		t.Errorf("a changed identity pushed, moved the worktree or commented: %s %s %q", e.remote(t, "refs/heads/work/task-1"),
 			git(t, wt, "rev-parse", "HEAD"), e.forge.comments)
+	}
+	if rec := e.baseUpdate(); rec != nil {
+		t.Errorf("the stale record of the refused push was kept: %+v", rec)
 	}
 	gone("after the changed identity")
 
@@ -279,6 +292,106 @@ func TestUpdateBase(t *testing.T) {
 	recs := e.records(t, res.RunID)
 	if len(recs) == 0 || recs[len(recs)-1].Outcome != "turn" || recs[len(recs)-1].Turn != "fix" {
 		t.Errorf("the records: %+v", recs)
+	}
+}
+
+// baseUpdate is the base update the points keep in progress for the pull
+// request, nil when none.
+func (e *baseUpdateEnv) baseUpdate() *pointBaseUpdate {
+	if p := readPoints(e.cfg.Home).Pulls[pullKey("git.example.test", "crew/project-t", 7)]; p != nil {
+		return p.BaseUpdate
+	}
+	return nil
+}
+
+// An update cut between its push and its delta note (DESIGN-TURNS 12.4,
+// increment 2e-2): the launcher records the update before the push and
+// after each effect, so the next call, finding the origin's head at the
+// recorded new head, posts the note, fast-forwards the attempt's
+// worktree, records the step and clears the record, with no merge and no
+// push; a call after that finds the branch up to date and repeats
+// nothing. The cut is the run's context cancelled from the git seam right
+// after the push, with the forge refusing the note on it; the restart is
+// the step server closed and served again, the file being its only
+// memory.
+func TestUpdateBaseCompletesACutUpdate(t *testing.T) {
+	e := setupBaseUpdate(t)
+	wt, old := e.worktree, e.head
+	identity := patchIdentity(context.Background(), wt, "main", old)
+	if identity == "" {
+		t.Fatal("no patch identity of the head")
+	}
+	answer := func(t *testing.T, run string) string {
+		t.Helper()
+		for _, r := range e.records(t, run) {
+			if r.Kind == "u" {
+				return r.Text
+			}
+		}
+		return ""
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The seam counts every push for the whole test, and cuts the run at
+	// the first one.
+	var pushes atomic.Int32
+	inner := automationGit
+	automationGit = func(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+		out, err := inner(ctx, dir, env, args...)
+		if len(args) > 0 && args[0] == "push" && pushes.Add(1) == 1 {
+			cancel()
+		}
+		return out, err
+	}
+	t.Cleanup(func() { automationGit = inner })
+	res, err := e.srv.RunAutomation(ctx, AutomationRun{AttemptID: e.id, Source: []byte(updateScript), Name: "test.star", Pull: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The exit: the server's close waits for the cut call's host side,
+	// whose git and forge calls fail on the cancelled context, so the
+	// record is read at rest.
+	e.srv.Close()
+	head := e.remote(t, "refs/heads/work/task-1")
+	if head == old || pushes.Load() != 1 || len(e.forge.comments) != 0 {
+		t.Fatalf("the cut run: %+v, the origin's head %s (was %s), %d pushes, the comments %q", res, head, old, pushes.Load(), e.forge.comments)
+	}
+	rec := e.baseUpdate()
+	if rec == nil || rec.Old != old || rec.New != head || rec.Base != "main" || rec.Identity != identity || !rec.Pushed || rec.Commented {
+		t.Fatalf("the record after the cut: %+v", rec)
+	}
+
+	// The restart, and the next call: completed, no merge, no push.
+	e.srv = e.serve(t)
+	res = e.run(t, updateScript, AutomationRun{})
+	if res.Failed != "" || res.Turn != nil || answer(t, res.RunID) != "True|"+old+"|"+head+"|False|completed the update cut after its push" {
+		t.Fatalf("the completing run: %+v, the answer %q", res, answer(t, res.RunID))
+	}
+	note := fmt.Sprintf("Base-only update: %s -> %s, merged from main.\nPatch identity unchanged: %s\n", old, head, identity)
+	if len(e.forge.comments) != 1 || !strings.HasPrefix(e.forge.comments[0], note) {
+		t.Errorf("the comments: %q", e.forge.comments)
+	}
+	if got := lastStep(e.records(t, res.RunID), stepHostUpdateBase); got != old+" -> "+head+"; completed the update cut after its push" {
+		t.Errorf("the step: %q", got)
+	}
+	if pushes.Load() != 1 || e.remote(t, "refs/heads/work/task-1") != head {
+		t.Errorf("the completion pushed: %d pushes, the origin's head %s", pushes.Load(), e.remote(t, "refs/heads/work/task-1"))
+	}
+	if got := git(t, wt, "rev-parse", "HEAD"); got != head {
+		t.Errorf("the attempt's worktree is at %s, not fast-forwarded to %s", got, head)
+	}
+	if rec := e.baseUpdate(); rec != nil {
+		t.Errorf("the completed update is still recorded: %+v", rec)
+	}
+
+	// Nothing to repeat.
+	res = e.run(t, updateScript, AutomationRun{})
+	if res.Failed != "" || answer(t, res.RunID) != "False|"+head+"||False|the branch is up to date with main" ||
+		len(e.forge.comments) != 1 || pushes.Load() != 1 {
+		t.Errorf("a call after the completion: %+v, %q, %d pushes, the comments %q", res, answer(t, res.RunID), pushes.Load(), e.forge.comments)
+	}
+	if _, err := os.Stat(wt + ".base-update"); err == nil {
+		t.Error("the temporary worktree is still there")
 	}
 }
 

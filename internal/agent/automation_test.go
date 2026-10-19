@@ -120,9 +120,13 @@ func (f *automationForge) GetPullContent(_ context.Context, host string, k forge
 	return f.pull, f.content, nil
 }
 
-func (f *automationForge) CommentPull(_ context.Context, host string, k forge.Kind, token, path string, n int64, body string) (forge.Comment, error) {
+func (f *automationForge) CommentPull(ctx context.Context, host string, k forge.Kind, token, path string, n int64, body string) (forge.Comment, error) {
 	if token != f.token || host != "git.example.test" || n != f.pull.Number {
 		return forge.Comment{}, forge.ErrNotFound
+	}
+	// As the real client: no call on a context that ended.
+	if err := ctx.Err(); err != nil {
+		return forge.Comment{}, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

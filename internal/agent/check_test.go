@@ -615,8 +615,12 @@ func checkEndsTheInitProbe(t *testing.T, atOnce bool) {
 
 // OpenCode 2's step that reaches its ceiling is reported as such, whether its
 // catalogs are still incomplete (what loaded is reported, as before) or its
-// server keeps failing (the error is kept, as before).
+// server keeps failing (the error is kept, as before). The serve wait's
+// ceiling is the test's own and short; the client commands keep a generous
+// one, so a slow runner cannot stop `opencode --version` at the ceiling
+// before the serve step is reached (the Windows CI flake of task 5fed).
 func TestCheckOpenCodeServeCeilingIsReported(t *testing.T) {
+	const ceiling = time.Second
 	for name, mod := range map[string]func(*fakeTools){
 		"incomplete catalogs": func(f *fakeTools) { f.OpenCodeMCP = "pending" },
 		"server error":        func(f *fakeTools) { f.OpenCodeAPIError = true },
@@ -628,11 +632,11 @@ func TestCheckOpenCodeServeCeilingIsReported(t *testing.T) {
 			e := setupCheck(t, f, "aimem", "opencode")
 			e.installSkills(t, "1.26.1", "oh-code-review")
 			var out bytes.Buffer
-			rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"opencode"}, Timeout: 3 * time.Second, Out: &out})
+			rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"opencode"}, Timeout: 60 * time.Second, serveCeiling: ceiling, Out: &out})
 			if err != nil || rep.Status != JoinBlocked {
 				t.Fatalf("%+v, %v", rep, err)
 			}
-			if !strings.Contains(out.String(), "  opencode serve: stopped at its 3s ceiling\n") {
+			if !strings.Contains(out.String(), fmt.Sprintf("  opencode serve: stopped at its %s ceiling\n", ceiling)) {
 				t.Fatalf("the ceiling is not reported:\n%s", out.String())
 			}
 		})

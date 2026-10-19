@@ -57,9 +57,21 @@ type Discovery struct {
 // set, gets one line per sub-step as it ends: what ran, how long it took and
 // what it found, or that it reached its ceiling.
 type discoveryEnv struct {
-	env      []string
-	timeout  time.Duration
+	env     []string
+	timeout time.Duration
+	// serve, when set, is the ceiling of OpenCode 2's serve wait in place
+	// of timeout, which bounds every other client command.
+	serve    time.Duration
 	progress io.Writer
+}
+
+// forServe is p with the serve wait's own ceiling as its timeout, so the
+// wait and its progress line use the same value.
+func (p discoveryEnv) forServe() discoveryEnv {
+	if p.serve > 0 {
+		p.timeout = p.serve
+	}
+	return p
 }
 
 // ceilingError is a sub-step stopped at its ceiling.
@@ -312,6 +324,7 @@ var ansi = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
 func opencodeDiscover(ctx context.Context, p discoveryEnv, path, home string, major int, skills []string) (Discovery, error) {
 	if major >= 2 {
+		p = p.forServe()
 		var d Discovery
 		var serr error
 		p.step("opencode serve", func() (string, error) {

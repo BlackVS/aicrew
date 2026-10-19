@@ -82,7 +82,7 @@ func TestWaitWakesOnAForgeEvent(t *testing.T) {
 	oldAPI := newPullStatusAPI
 	newPullStatusAPI = func() PullStatusAPI { return fake }
 	t.Cleanup(func() { newPullStatusAPI = oldAPI })
-	s.serve(t)
+	srv := s.serve(t)
 
 	var answers []byte
 	fake.mu.Lock()
@@ -157,6 +157,9 @@ func TestWaitWakesOnAForgeEvent(t *testing.T) {
 	if w := readWatched(s.cfg.Home); len(w) != 0 {
 		t.Fatalf("a refused pull request is watched: %+v", w)
 	}
+	// The points the observations dispatched may still run and log: the
+	// log is read once they ended.
+	srv.waitPoints()
 	if strings.Contains(string(answers), "member-forge-token") || strings.Contains(s.logs.String(), "member-forge-token") {
 		t.Fatal("the forge token reached an answer or the log")
 	}

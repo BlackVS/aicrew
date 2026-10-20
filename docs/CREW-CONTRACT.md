@@ -22,7 +22,9 @@ document is wrong.
 Aicrew's store is the authority for agents and their verified identity links,
 teams, memberships, roles, sessions and generations, execution capacity,
 offers and attempts, process pins recorded on attempts, the team inbox, audit
-and its own request receipts.
+and its own request receipts. It also keeps each attempt's handoff, the
+worker's session doc as the worker's launcher pushed it ("The attempt's
+handoff"): a text aicrewd stores and serves back, and never reads.
 
 Aicrew never stores or decides: task content, task state, dependencies or
 history (aimem task authority); the task reservation (aimem, reservation
@@ -370,6 +372,7 @@ trusts a caller it is given, and a test enforces that.
 | `POST /v1/crew/attempts/{id}/review`, `/confirm-delivery`, `/finalize` | `Authorization: Bearer` session token | Review the latest result, confirm its delivery, or begin finalizing it as `DONE`. |
 | `POST /v1/crew/attempts/{id}/work` | `Authorization: Bearer` session token | Begin, or supersede, the holder's work update: block, submit or resume. |
 | `POST /v1/crew/attempts/{id}/settle` | `Authorization: Bearer` session token | Settle a step through aimem's read scope. |
+| `POST /v1/crew/attempts/{id}/handoff`, JSON `{"handoff"}`; `GET` the same path | `Authorization: Bearer` session token | Replace, or read, the worker's handoff kept on its attempt ("The attempt's handoff"); the attempt's worker only. Reply: `attempt_id`, `updated_at`, and on a read `handoff`. |
 | `GET /v1/crew/inbox?limit=N` | `Authorization: Bearer` session token | Deliver the member's oldest unacknowledged messages, at most N (1 to 100, default 20) and at most 128 KiB of JSON (always at least one), and record the delivery of those returned ("Inbox, receipts and audit"). Reply: `messages`. |
 | `POST /v1/crew/inbox/ack`, JSON `{"ids"}`, with `Idempotency-Key` | `Authorization: Bearer` session token | Acknowledge messages delivered to the member. Reply: `acknowledged`, `already`. A message never delivered to it is `409 message_not_delivered`. |
 | `GET /v1/crew/inbox/pending` | `Authorization: Bearer` session token | The member's unacknowledged visible messages, oldest first and at most a page, by `id`, `seq`, `kind` and `attempt_id`, without their text and without recording a delivery: the launcher's wake-up waits on it, and only the inbox read delivers. While the operator pauses the team or the member, it lists none and names the pause in `paused`, so the wake starts no turn. Reply: `pending`, and `paused` when one is in force. |
@@ -911,6 +914,33 @@ attempt's project (`grant_revoked`), or holds no enabled profile for the team
   of the team's operations, and aicrewd never releases or touches the hold.
   The operator re-grants, or the attempt is closed under the coordination
   contract's rules.
+
+### The attempt's handoff
+
+A fresh turn continues from the worker's session doc, its home's
+`docs/HANDOFF.md` (docs/DESIGN-TURNS.md, section 3). The home is a cache:
+the member's canonical state is on aicrewd. So the attempt keeps the doc
+(store schema 37, one row per attempt, apart from the attempt's own row):
+- `POST /v1/crew/attempts/{id}/handoff` with the member's session token and
+  `{handoff}` replaces the doc. Only the attempt's worker may push, and
+  only while the attempt is running with no stop requested; otherwise the
+  push is refused with `attempt_state`, and the launcher keeps its local
+  copy. The doc is at most 32 KiB of UTF-8 text without NUL, in a body
+  within the server's body bound; the launcher redacts it and keeps it
+  within both before it sends it. The reply is `{attempt_id, updated_at}`.
+  A push is no step: it takes no Idempotency-Key, and a push sent twice
+  leaves the same doc.
+- `GET /v1/crew/attempts/{id}/handoff` returns `{attempt_id, handoff,
+  updated_at}` to the attempt's worker in any state of the attempt, with
+  neither `handoff` nor `updated_at` when it has none. The launcher reads it
+  only when its home has no copy of the doc: a new home of the same member
+  on another host.
+- Any other member, and an attempt that does not exist, is answered
+  `no_attempt`, so a member learns nothing of another's attempts.
+
+aicrewd reads nothing in the doc, journals no event for a push and sends no
+message: the doc is the worker's memory, not a report. The status reply
+does not carry it, so a poll stays small.
 
 ### Ordering across the two stores
 

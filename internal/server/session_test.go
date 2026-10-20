@@ -608,7 +608,7 @@ func TestRouteInventory(t *testing.T) {
 	sort.Strings(got)
 	want := []string{"GET /healthz", "GET /v1/admin/architect-credentials", "GET /v1/admin/escalation", "GET /v1/admin/escalations",
 		"GET /v1/admin/hub-credentials", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations", "GET /v1/admin/merges",
-		"GET /v1/admin/team", "GET /v1/admin/team-states", "GET /v1/admin/team/state", "GET /v1/admin/teams", "GET /v1/crew/attempts", "GET /v1/crew/capabilities", "GET /v1/crew/escalations", "GET /v1/crew/inbox", "GET /v1/crew/inbox/pending",
+		"GET /v1/admin/team", "GET /v1/admin/team-states", "GET /v1/admin/team/state", "GET /v1/admin/teams", "GET /v1/crew/attempts", "GET /v1/crew/attempts/{id}/handoff", "GET /v1/crew/capabilities", "GET /v1/crew/escalations", "GET /v1/crew/inbox", "GET /v1/crew/inbox/pending",
 		"GET /v1/crew/projects", "GET /v1/crew/requirements", "GET /v1/crew/session",
 		"POST /v1/admin/architect-credentials", "POST /v1/admin/architect-credentials/revoke", "POST /v1/admin/escalations/answer",
 		"POST /v1/admin/hub-credentials", "POST /v1/admin/hub-credentials/revoke", "POST /v1/admin/hub-credentials/rotate",
@@ -619,7 +619,7 @@ func TestRouteInventory(t *testing.T) {
 		"POST /v1/admin/team/resume", "POST /v1/admin/team/toolchain", "POST /v1/admin/teams",
 		"POST /v1/crew/attempts", "POST /v1/crew/attempts/claim",
 		"POST /v1/crew/attempts/{id}/accept", "POST /v1/crew/attempts/{id}/confirm-delivery",
-		"POST /v1/crew/attempts/{id}/confirm-stop", "POST /v1/crew/attempts/{id}/decline", "POST /v1/crew/attempts/{id}/finalize",
+		"POST /v1/crew/attempts/{id}/confirm-stop", "POST /v1/crew/attempts/{id}/decline", "POST /v1/crew/attempts/{id}/finalize", "POST /v1/crew/attempts/{id}/handoff",
 		"POST /v1/crew/attempts/{id}/release", "POST /v1/crew/attempts/{id}/review", "POST /v1/crew/attempts/{id}/settle",
 		"POST /v1/crew/attempts/{id}/stop", "POST /v1/crew/attempts/{id}/withdraw", "POST /v1/crew/attempts/{id}/work", "POST /v1/crew/automations",
 		"POST /v1/crew/capabilities", "POST /v1/crew/challenges", "POST /v1/crew/coordination",

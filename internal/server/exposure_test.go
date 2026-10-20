@@ -79,6 +79,8 @@ var (
 		// its session token (forge events), and its launcher's report of an
 		// automation run at one of its extension points (increment 2d-a).
 		"ObservePullWithToken": true, "RecordAutomationRunWithToken": true,
+		// The worker's push and read of its attempt's handoff (increment 3c).
+		"PutHandoffWithToken": true, "HandoffWithToken": true,
 		// The event queues' delivery, as aicrewd's reconciler (increment
 		// 1b); the store refuses every other caller.
 		"DeliverEvents": true,

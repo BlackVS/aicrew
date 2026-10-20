@@ -32,9 +32,10 @@ const (
 	maxReportBody = 48 << 10
 )
 
-// The actions on one attempt, at AttemptsPath/{id}/{action}.
+// The actions on one attempt, at AttemptsPath/{id}/{action}. Every one is a
+// POST, except the handoff, which its worker also reads (handoff.go).
 var attemptActions = []string{"accept", "decline", "withdraw", "settle", "stop", "confirm-stop", "release", "review",
-	"confirm-delivery", "finalize", "work"}
+	"confirm-delivery", "finalize", "work", "handoff"}
 
 var attemptIDShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
@@ -46,10 +47,12 @@ func (s *Server) registerAttempts() {
 	s.handle(http.MethodPost, ClaimPath, s.claim)
 	handlers := map[string]http.HandlerFunc{"accept": s.accept, "decline": s.decline, "withdraw": s.withdraw,
 		"settle": s.settle, "stop": s.requestStop, "confirm-stop": s.confirmStop, "release": s.releaseStopped,
-		"review": s.review, "confirm-delivery": s.confirmDelivery, "finalize": s.finalize, "work": s.work}
+		"review": s.review, "confirm-delivery": s.confirmDelivery, "finalize": s.finalize, "work": s.work,
+		"handoff": s.putHandoff}
 	for _, action := range attemptActions {
 		s.handle(http.MethodPost, attemptRoute(action), handlers[action])
 	}
+	s.handle(http.MethodGet, attemptRoute("handoff"), s.getHandoff)
 }
 
 // openAttempts is GET /v1/crew/attempts: the team's open attempts, for its

@@ -220,6 +220,24 @@ func (s *StepServer) Observed() []PullObservation {
 	return slices.Clone(s.last)
 }
 
+// withLastContent is o for the brief: a status-only observation of a pull
+// request whose content this launcher already observed at the same head,
+// checks and comment count (so the poll read no content again) carries
+// that content on; what is sent to aicrewd is unchanged (hands review of
+// #189).
+func withLastContent(prev []PullObservation, o PullObservation) PullObservation {
+	if o.Content {
+		return o
+	}
+	for _, p := range prev {
+		if p.Content && p.Host == o.Host && p.Repository == o.Repository && p.Number == o.Number &&
+			p.HeadCommit == o.HeadCommit && p.Checks == o.Checks && p.Comments == o.Comments {
+			o.Content, o.Review, o.Failed, o.Passed = true, p.Review, p.Failed, p.Passed
+		}
+	}
+	return o
+}
+
 func (s *StepServer) setObserved(last []PullObservation) {
 	s.seenMu.Lock()
 	defer s.seenMu.Unlock()
@@ -448,7 +466,7 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 			}
 		}
 		body := fitObservation(&o)
-		last = append(last, o)
+		last = append(last, withLastContent(prev, o))
 		if _, err := s.observePull(ctx, body, facts); err != nil {
 			s.log.Warn("forge events: report a pull request", "pull", w.Number, "error", err.Error())
 			continue

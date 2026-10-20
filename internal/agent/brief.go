@@ -170,7 +170,10 @@ func (l *TurnLoop) brief(ctx context.Context, in briefInput) string {
 		"- `aicrew-agent session status`: your session and attempt as aicrewd holds them now.\n" +
 		"- `aicrew-agent forge pr show --pr N`: a pull request with its comments and checks.\n" +
 		"- aimem's `get_task`: the live task on the board; `docs/ROLES.md`, by section: your role's rules.\n")
-	s := b.String()
+	// Every text from outside the launcher passes the redaction once more
+	// as a whole, so a label, a check's name or URL, a review's author or
+	// a command is covered as a body is (hands review of #189).
+	s := tokenShapes.ReplaceAllString(RedactForgeTokens(l.Home, b.String()), "[redacted]")
 	if len(s) > maxBriefBytes {
 		s = cutText(s, maxBriefBytes) + "\n\n(The brief was cut at its bound; `aicrew-agent inbox` has the rest.)\n"
 	}
@@ -265,7 +268,7 @@ func (l *TurnLoop) frozenTask(ctx context.Context, a *memberAttempt) (snap taskS
 		room -= len(*p)
 	}
 	raw, _ := json.MarshalIndent(snap, "", "  ")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
+	if err = os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
 		err = writeAtomic(path, append(raw, '\n'))
 	}
 	if err != nil {

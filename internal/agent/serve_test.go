@@ -724,7 +724,7 @@ func TestTurnLoopBrief(t *testing.T) {
 		Failed: []briefCheck{{Name: "go-test", Conclusion: "failure", URL: "https://forge.example/j/1", Excerpt: "boom"}},
 		Passed: []briefCheck{{Name: "go-lint"}}}}}
 	e.host.observed = []PullObservation{{Number: 7, URL: "https://forge.example/p/repo/pull/7", State: "open", HeadCommit: "abc",
-		Labels: []string{"review-this"}, Checks: "success", Comments: 2,
+		Labels: []string{"review-this", "ghp_0123456789abcdef"}, Checks: "success", Comments: 2,
 		Review: &ObservedReview{Author: "hands", URL: "https://forge.example/c/1", Head: "abc", AtHead: true, Verdict: "READY_FOR_HUMAN_MERGE"}}}
 	e.next = func(TurnSpec, *fakeHost) TurnResult {
 		e.host.pending = nil
@@ -752,7 +752,7 @@ func TestTurnLoopBrief(t *testing.T) {
 			"    - Pull request #7 https://forge.example/p/repo/pull/7: open, head abc, labels [review-this], checks success, 2 comment(s).\n" +
 			"    - Review by hands at the head (https://forge.example/c/1): verdict READY_FOR_HUMAN_MERGE:\n      Fine.\n      No blocker.\n" +
 			"    - Failed check go-test (failure) https://forge.example/j/1:\n      boom\n    - Passed checks: go-lint.\n",
-		"## Pull requests\n\n- Pull request #7 https://forge.example/p/repo/pull/7: open, head abc, labels [review-this], checks success, 2 comment(s).\n" +
+		"## Pull requests\n\n- Pull request #7 https://forge.example/p/repo/pull/7: open, head abc, labels [review-this, [redacted]], checks success, 2 comment(s).\n" +
 			"  - Review by hands at the head (https://forge.example/c/1): verdict READY_FOR_HUMAN_MERGE\n",
 		"## Where to fetch more\n\n- `aicrew-agent inbox`",
 	} {
@@ -761,7 +761,7 @@ func TestTurnLoopBrief(t *testing.T) {
 		}
 	}
 	if strings.Contains(p, "ghp_0123456789abcdef") {
-		t.Error("the brief carries a token")
+		t.Error("the brief carries a token (a message's text or a label)")
 	}
 	order := []string{"## Who and where", "## The task", "## Why this turn", "## Pull requests", "## Where to fetch more"}
 	for i := 1; i < len(order); i++ {
@@ -816,6 +816,24 @@ func TestTurnLoopBrief(t *testing.T) {
 	}
 	if _, err := os.Stat(taskSnapshotPath(e.home, "att-2")); err == nil {
 		t.Error("a snapshot was written without the task")
+	}
+	// A snapshot that cannot be written (a file where its directory goes):
+	// the turn still gets the task, the warning is logged, and the next
+	// turn reads the board again.
+	e = newLoopEnv(t)
+	var logs strings.Builder
+	e.loop.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	e.host.attempt = &memberAttempt{ID: "att-3", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-3"}}
+	e.host.tasks = map[string]TaskDoc{"task-3": {Revision: 2, Fields: map[string]json.RawMessage{"title": json.RawMessage(`"T3"`)}}}
+	os.MkdirAll(filepath.Join(e.home, "state", "attempts"), 0o700)
+	os.WriteFile(filepath.Dir(taskSnapshotPath(e.home, "att-3")), []byte("in the way"), 0o600)
+	e.host.pending = []PendingMessage{msg("m1", "lifecycle")}
+	e.tick(t)
+	e.host.pending = []PendingMessage{msg("m2", "lifecycle")}
+	e.tick(t)
+	if len(e.specs) != 2 || !strings.Contains(e.specs[1].Prompt, "- Title: T3\n") || e.host.taskReads != 2 ||
+		!strings.Contains(logs.String(), "the task snapshot was not written") {
+		t.Fatalf("an unwritable snapshot: %d turns, %d board reads, log %q", len(e.specs), e.host.taskReads, logs.String())
 	}
 	e = newLoopEnv(t)
 	e.host.role = "coordinator"

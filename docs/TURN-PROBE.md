@@ -17,6 +17,10 @@ Measurement only:
 - every run used a disposable directory under the system's temporary
   directory, dummy credential files, and each client's smallest model.
 
+The section "The starting context of a turn" was added on 2026-10-20 for
+task `01a157c9-5ed1`, increment 3a of [DESIGN-TURNS.md](DESIGN-TURNS.md).
+It reads the pilot's records and ran no client.
+
 ## Setup
 
 | | Version | Login | Model |
@@ -232,6 +236,102 @@ The proxy supports D6: a key passed in the environment reaches the client's
 children, and a helper's key does not. A direct check with a real API key
 belongs to A5, which needs one anyway.
 
+### The starting context of a turn (the pilot's records)
+
+The "before" of the stateless turn (DESIGN-TURNS section 3): what a turn
+starts from today, when every turn resumes the conversation. Measured from
+the pilot's records only, with no new client run; the "after" is measured
+by increment 3e on the pilot's resume.
+
+**The records.** The pilot's worker and coordinator homes, members at the
+0.5.7 to 0.5.9 releases of the pilot's second cycle (the record carries no
+version; the turn loop resumed the conversation in all three), Claude Code
+with the model of DESIGN-TURNS section 2 (Claude Opus 5.5, list prices): the
+worker's `logs/turns.jsonl` (12 turns in one conversation, 2026-10-14 and
+15) and the coordinator's (15 turns in three conversations, 2026-10-13 to
+15), read only, and the client's own transcript of each conversation, which
+carries the usage of every model call. A turn record holds the client's
+totals for the turn (the cache reads are summed over all its calls), so the
+starting context is read from the transcript: it is the context of the
+turn's first model call, input plus cache-written plus cache-read tokens.
+The calls of a turn are those between the record's start and end; their
+cache reads and writes sum to the record's own on all 27 turns. The turn's
+own cost is the difference between the record's `cost_usd` and the previous
+record's in the same conversation, since these records predate the fix of
+`01a13f81-7df9`. Times are UTC; the prices are the list prices of
+DESIGN-TURNS section 2.
+
+| | Worker | Coordinator |
+| --- | --- | --- |
+| Turns (conversations) | 12 (1) | 15 (3) |
+| Fresh turns | 1 | 3 |
+| Context at the first model call of a fresh turn | 34,374 | 34,255 to 34,371 |
+| Context after the start reads (`HANDOFF.md`, `START.md`, `ROLES.md`, `session status`, `inbox`), before any work | 55,109 | 59,242 |
+| Resumed turns: context at the first call, median (min to max) | 126,930 (94,871 to 173,108) | 74,065 (61,825 to 101,227) |
+| Written to the cache at the first call of a warm resumed turn | 1,285 to 1,690 | 1,260 to 1,782 |
+| Model calls per turn, median (min to max) | 6 (3 to 25) | 6 (3 to 16) |
+| Cache reads per turn, median (min to max) | 0.72 M (0.34 to 2.83 M) | 0.36 M (0.20 to 1.67 M) |
+| Cost of a resumed turn, median (min to max) | $0.51 ($0.10 to $1.97) | $0.26 ($0.08 to $1.37) |
+| Cost of a fresh turn | $1.20 (it also wrote code) | $0.58 to $0.70 |
+| All turns | $9.22 | $7.23 |
+
+**The hold.** The client's cache lives one hour. A resumed turn that starts
+more than an hour after the previous one writes its whole context to the
+cache again at the first call, at $8 per million:
+
+| Turn (UTC) | Gap before it | Written at the first call | The turn's cost | Of it, the rewrite |
+| --- | --- | --- | --- | --- |
+| Worker 2026-10-15 05:22 | 1 d 1 h 14 | 94,869 | $1.36 | $0.76 |
+| Worker 2026-10-15 07:01 | 1 h 24 | 132,779 | $1.23 | $1.06 |
+| Worker 2026-10-15 10:33 | 3 h 32 | 137,172 | $1.97 | $1.10 |
+| Worker 2026-10-15 12:44 | 2 h 00 | 173,106 | $1.56 | $1.38 |
+| Coordinator 2026-10-15 07:01 | 1 h 24 | 90,792 | $0.82 | $0.73 |
+| Coordinator 2026-10-15 10:33 | 3 h 32 | 94,445 | $0.85 | $0.76 |
+| Coordinator 2026-10-15 12:45 | 2 h 12 | 98,000 | $0.88 | $0.78 |
+| Coordinator 2026-10-15 13:57 | 1 h 12 | 87,061 (14,164 read) | $1.37 | $0.70 |
+
+Eight turns, 908,224 tokens, $7.27: 44 % of the $16.45 the two members
+spent. Every other resumed turn wrote under two thousand tokens at its
+first call.
+
+**What the numbers say.**
+- **The client's floor is about 34 thousand tokens.** The first model call
+  of every fresh turn, in both roles, held 34 thousand tokens, with only
+  the `/crew-turn` prompt as input and before any read: the client's own
+  system prompt and tool schemas, the home's two instruction files (half a
+  kilobyte together) and the command's text. It is paid at every fresh
+  start, and it is not in the design's 25 thousand.
+- **The start reads add 19 to 25 thousand.** `HANDOFF.md` (the worker's was
+  33 KB by the pilot's end), `ROLES.md` (18 KB) and `START.md` (3 KB), then
+  `session status` and `inbox`, brought a fresh turn to 55 to 59 thousand
+  tokens before any work. Section 2.4 point 4 counted 60 to 79 thousand
+  for the fresh turns from their totals; per call, the start is 55 to 59
+  thousand and the rest was those turns' work.
+- **A resumed turn starts where the last one ended**, plus 1.3 to 1.8
+  thousand tokens for the new prompt and the previous answer. The worker's
+  second day started at 95 to 173 thousand; the coordinator's turns at 62
+  to 101 thousand. Section 2.4's "130 to 180 thousand" is the worker's
+  second day; the coordinator sat lower.
+- **Every call reads the whole context.** At a median of six calls, a
+  worker turn read 0.72 million tokens ($0.14) and the twenty-call turn
+  2.83 million ($0.57), for the conversation's size, not the task's.
+- **The hold's rewrite is 44 % of the spend**, as the table shows. Section
+  2.4 point 2 counted four such turns ($3.86, their whole cache writes)
+  from the records as they stood at 10:44 UTC on 2026-10-15: the worker's
+  first turn of that day, after the night, was a rewrite too, and three
+  more followed that day.
+
+**The target, restated against the floor.** DESIGN-TURNS section 3 sets a
+fresh start at about 25 thousand tokens of new context, the brief and the
+role rules for the turn kind, at about $0.20 to write. Those 25 thousand
+sit on top of the client's floor: at today's floor a fresh start is about
+59 thousand tokens, written once at $0.47 ($0.27 the floor, $0.20 the
+brief), and every call of the turn then reads about 59 thousand ($0.012)
+instead of 62 to 173 thousand. Increment 3e records the "after" in this
+table's shape: the context at the first call, the calls, the reads and the
+cost of a routine turn. What the floor consists of is not measured here
+(below).
+
 ## Where the design must change
 
 | Finding | Section to amend | Proposed change |
@@ -244,9 +344,18 @@ belongs to A5, which needs one anyway.
 | Every turn reports the provider's windows and reset time | §3.4; A5 | `limit_reached` takes its reset time from `rate_limit_event`. The scheduler may hold turns when a window's utilization nears its end. |
 | Codex reports tokens but no cost | §3.5; A7a | Codex's cost is computed from a price table or left empty. Its tokens are recorded either way. |
 | Claude Code and Codex wait on an open stdin | §1.4; A3, A7 | The runner starts each turn with stdin closed. |
+| A fresh turn's first model call holds about 34 thousand tokens before any read, in both roles | DESIGN-TURNS §3, the target | The 25 thousand tokens of the target are the brief and the role rules on top of the client's floor: a fresh start writes about 59 thousand at today's floor ($0.47), not 25. The floor's composition is measured by increment 3b when it sizes the brief, with one bare client run; the per-turn tool set is the lever if the tool schemas are its bulk. |
+| The hold's rewrite was eight turns, 908 thousand tokens and $7.27, 44 % of the pilot's spend | DESIGN-TURNS §2.4 point 2 | 2.4 counted four turns and $3.86 from the records of 2026-10-15 up to 10:44 UTC; the overnight gap before the worker's first turn of that day and the day's later turns raise it. The fresh turn (increment 3b) removes it, and its test is a hold longer than an hour followed by a turn that writes no conversation. |
 
 ## Not measured
 
+- What the 34 thousand tokens of a fresh turn's first model call consist
+  of: the client's system prompt, the built-in tool schemas, the list of
+  deferred tools (the pilot's turns loaded an MCP tool's schema on demand
+  through `ToolSearch` before calling it, so the MCP schemas are likely not
+  in the floor), the home's instruction files and the command's text. One
+  bare run with an empty prompt, with and without the MCP configuration,
+  separates them; increment 3b does it when it sizes the brief.
 - A provider's limit in its rejected state, for any client (not provoked).
 - Codex and OpenCode authentication failure; Codex's limit events; Codex's
   sandbox and OpenCode's `permission` rules under a headless turn.
@@ -291,3 +400,17 @@ and dummy credential files holding `DUMMYSECRET4242`.
 **OpenCode:**
 - `opencode run --format json -m opencode/ling-3.1-flash-free PROMPT`, then
   the same with `--session ID`.
+
+**The pilot records (the starting context):** per turn of a home's
+`logs/turns.jsonl`, take `conversation`, `started_at`, `ended_at`, `usage`
+and `cost_usd`. In the client's transcript of that conversation (Claude Code
+writes one JSON-lines file per session under its projects directory), take
+every `assistant` entry that has `message.usage`, one per `message.id` (a
+call with several content blocks is logged as several entries with the same
+id), and keep those whose `timestamp` lies between the turn's start and
+end. The starting context is the first kept call's `input_tokens` plus
+`cache_creation_input_tokens` plus `cache_read_input_tokens`. The
+cross-check: the kept calls' cache reads and writes sum to the record's
+`usage.cache_read_tokens` and `cache_write_tokens`. The turn's own cost is
+`cost_usd` minus the previous record's in the same conversation; a gap is
+the time from the previous turn's end to the turn's start.

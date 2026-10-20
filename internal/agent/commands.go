@@ -39,20 +39,23 @@ var crewCommands = []crewCommand{
 			"Never run `aicrew-agent session start`, `session leave` or `run` here: the launcher holds this " +
 			"home's session, and they are refused inside the client.",
 		Ops: []string{"inbox"}},
-	{Name: "crew-turn", Hint: "<trigger>",
-		Desc: "One headless turn of your aicrew session: read your notes and inbox, act within your role, update your handoff, end",
-		Body: "The turn loop (`aicrew-agent serve`) started this turn. What started it: $ARGUMENTS. Nobody " +
+	{Name: "crew-turn", Hint: "<brief>",
+		Desc: "One headless turn of your aicrew session: read the brief and your notes, act within your role, update your handoff, end",
+		Body: "The turn loop (`aicrew-agent serve`) started this turn, a fresh conversation, with the brief below: " +
+			"your attempt's state on its first line, who and where you are, the frozen task, what started the turn " +
+			"with the messages' content, the pull requests as last observed, and where to fetch more. Nobody " +
 			"answers a question during a turn, and nothing reaches you until it ends.\n\n" +
-			"1. Read `docs/HANDOFF.md`, your own notes.\n" +
-			"2. If you have not read them in this conversation, read `docs/START.md` and `docs/ROLES.md`.\n" +
-			"3. Run `aicrew-agent session status`: your role and your team's projects.\n" +
-			"4. Run `aicrew-agent inbox`: the messages that started the turn.\n" +
-			"5. If you are the coordinator, read the board for the tasks those messages name.\n" +
-			"6. Act within your role, as `docs/ROLES.md` says. A worker with a running attempt goes on with " +
-			"its work: the loop gives it another turn after this one, until it submits or blocks.\n" +
-			"7. Acknowledge what you handled.\n" +
-			"8. Update `docs/HANDOFF.md` with what you did and what comes next.\n" +
-			"9. End the turn. Never wait inside it: no sleep, no polling, no background watch. The next " +
+			"$ARGUMENTS\n\n" +
+			"1. Read `docs/HANDOFF.md`, your own notes, and `docs/START.md` and `docs/ROLES.md`.\n" +
+			"2. Act on the brief within your role, as `docs/ROLES.md` says: it holds your status and the messages, " +
+			"so read `aicrew-agent inbox` only for what it cut, and `aicrew-agent session status` only when it " +
+			"says to. If you are the coordinator, read the board for the tasks the messages name. A worker with " +
+			"a running attempt goes on with its work: the loop gives it another turn after this one, until it " +
+			"submits or blocks.\n" +
+			"3. Acknowledge what you handled.\n" +
+			"4. Update `docs/HANDOFF.md` with what you did and what comes next: the next turn starts from it and " +
+			"a new brief, with nothing of this conversation.\n" +
+			"5. End the turn. Never wait inside it: no sleep, no polling, no background watch. The next " +
 			"message starts the next turn.\n\n" +
 			"A turn runs without prompts, under an allow list: git, `aicrew-agent`, the project's build and test " +
 			"commands, and edits in `worktrees/` and of `docs/HANDOFF.md`. Run each command alone, in one Bash " +

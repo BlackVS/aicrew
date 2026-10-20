@@ -140,6 +140,17 @@ func TestWaitWakesOnAForgeEvent(t *testing.T) {
 	if n := fake.contentReads(); n != 1 {
 		t.Fatalf("the content was read %d times, want once for the one change", n)
 	}
+	// Later polls with the same head, checks and comment count read no
+	// content again, and the last observation the turn brief gets keeps
+	// the review and the checks (hands review of #189).
+	reads := fake.readCount()
+	s.call(t, &answers, StepCall{Op: "wait-inbox", Body: one})
+	kept := srv.Observed()
+	if fake.readCount() <= reads || fake.contentReads() != 1 || len(kept) != 1 || !kept[0].Content || kept[0].Review == nil ||
+		kept[0].Review.Verdict != "READY_FOR_HUMAN_MERGE" || len(kept[0].Passed) != 1 || kept[0].Passed[0].Name != "build" {
+		t.Fatalf("after %d more polls (%d content reads), the last keptervation: %+v", fake.readCount()-reads,
+			fake.contentReads(), kept)
+	}
 
 	// Merged: reported once more, then no longer watched.
 	fake.set(func(st *forge.PullStatus) { st.State = forge.PullMerged })

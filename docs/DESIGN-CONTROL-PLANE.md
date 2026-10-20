@@ -215,6 +215,14 @@ It holds no secret and no transcript.
 
 ### 1.7 Conversations across turns
 
+> **Amended** by `docs/DESIGN-TURNS.md`, section 3 (decision T1), built in
+> increment 3b: no turn resumes a conversation. Every turn of a worker and
+> of a coordinator starts a fresh conversation from the brief the launcher
+> writes into its prompt; the per-attempt conversation and the rotation
+> point below go away, and the conversation ID in `state/turns.json` with
+> them (the turn record keeps the turn's own). What follows is D4 as A3
+> built it; increment 3d rewrites this section.
+
 - **Decision D4.**
   - **A worker** has one conversation per attempt. The first turn of an
     attempt starts a fresh conversation, and every later turn of that
@@ -238,6 +246,13 @@ It holds no secret and no transcript.
   its own environment, so `aicrew-agent step` and `inbox` work unchanged.
 
 ### 1.8 A worker's attempt across turns
+
+> **Amended** by `docs/DESIGN-TURNS.md`, section 3, built in increment 3b:
+> a continuation turn is a fresh conversation whose brief names the
+> attempt, its frozen task and the pull request's last observation; the
+> attempt's memory across turns is the handoff, the hub's state and the
+> repository. The stall rule on the handoff is increment 3c, and increment
+> 3d rewrites this section.
 
 While the worker's attempt is `Working`, a turn that ends without a block
 or a submit earns a continuation turn (1.3 b). Three limits bound this, each

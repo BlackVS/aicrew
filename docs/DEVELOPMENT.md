@@ -2224,10 +2224,10 @@ managed files from it:
   copied deny rules. The commands the client judges read-only run without a
   rule, and a deny rule beats every allow.
 - **`/crew-turn`**, a managed command, is the prompt each turn starts with.
-  It names what started the turn, never a message's text, and teaches the
-  turn's order: the handoff, `session status`, the inbox, the work within
-  the role, the acknowledgement, the handoff, and the end of the turn,
-  without ever waiting inside it.
+  Its argument is the turn brief the launcher writes ("The turn loop"
+  below), and it teaches the turn's order: the handoff and the home
+  guidance, the work within the role from the brief, the acknowledgement,
+  the handoff, and the end of the turn, without ever waiting inside it.
 
 `check` notes a Stop hook left in a `turns` home, and each `turns.allow`
 addition it leaves out.
@@ -2270,23 +2270,58 @@ At most one turn starts per 5 s, so a burst of messages gives one turn.
 Messages that arrive during a turn wait for the next one.
 
 **The turn.**
-- **The command:** `claude -p "/crew-turn TRIGGER" --output-format
-  stream-json --verbose --permission-mode dontAsk --permission-prompts none
-  --settings .claude/turn-settings.json` (the coordinator's file for a
-  coordinator), with `--session-id` or `--resume`,
-  `--model` and `--max-budget-usd`. Standard input is closed, and the turn
-  runs in the home with the environment `run` gives its client. No
-  dangerous flag, permission bypass or fallback model is ever passed.
-- **The trigger** names the messages' kinds and ids, or the continued
-  attempt, never a message's text.
-- **Conversations (D4):**
-  - a worker's attempt has one conversation, started by its first turn and
-    resumed by every later one;
-  - every other turn (a coordinator's, or a worker's without an attempt)
-    resumes the member's conversation until 50 turns, 70 % of the client's
-    context window, or a new UTC day, and then starts fresh from the
-    handoff;
-  - a turn that fails while resuming makes the next one start fresh.
+- **The command:** `claude -p --output-format stream-json --verbose
+  --permission-mode dontAsk --permission-prompts none --settings
+  .claude/turn-settings.json` (the coordinator's file for a coordinator),
+  with `--session-id`, `--model` and `--max-budget-usd`. The prompt,
+  `/crew-turn` followed by the brief, goes on standard input, which is then
+  closed (the brief runs to many lines, beyond a command line's length), and
+  the turn runs in the home with the environment `run` gives its client.
+  No dangerous flag, permission bypass or fallback model is ever passed.
+- **Conversations:** every turn is a fresh conversation
+  (`docs/DESIGN-TURNS.md`, section 3, decision T1, which amends D4). Nothing
+  of one turn's conversation reaches the next but the handoff, the brief
+  and the repository, so a hold between turns rewrites no conversation's
+  cache, and a turn's cost depends on its work, not on the turns before it.
+- **The turn brief** is what the launcher writes into the prompt, in this
+  order, so the model spends no tool calls finding its bearings:
+  1. the first line: the member's attempt as aicrewd's session status gives
+     it (`Attempt ID: state/phase.`), so a turn on a cancelled or stopped
+     attempt knows at once, or `No open attempt.`;
+  2. who and where: role, team, agent, home, the attempt's task, branch,
+     base commit, worktree, repository and process pin;
+  3. the frozen task: title, objective, acceptance criteria and non-goals
+     from the attempt's **task snapshot**, `state/attempts/<attempt>/task.json`,
+     which the launcher writes from the board at the attempt's first turn
+     (through the member's aimem connection) and carries unchanged by every
+     later turn; the snapshot holds the board revision and the read time,
+     and the brief's task header prints them and says whether this is the
+     first read or the snapshot, so a reader can tell it from the live task.
+     The board is read again only when the snapshot is missing. A cancel or
+     a stop reaches the turn through the first line, not through the board.
+     The snapshot is bounded to 8 KiB and is launcher data, kept after the
+     attempt;
+  4. why this turn: the trigger (the messages' kinds and ids, or the
+     continued attempt), then the pending messages read from the inbox,
+     which counts as a delivery: each with its id to acknowledge, kind,
+     sender, attempt, task and text, and the content its kind carries: an
+     `action.needed` message's subjects with their needs, the pull request's
+     facts, the review's verdict and body, the failed checks' excerpts, the
+     passed checks, a block, a conflict, a pre-push failure; a forge
+     subject's pull request; an answered escalation; the operator's note;
+     a board change. At most 10 messages; the rest are counted and left to
+     `aicrew-agent inbox`;
+  5. the pull requests as the launcher's forge watch last observed them:
+     state, head, labels, checks, comments, the review at the head, the
+     failed checks; or that none was observed yet;
+  6. where to fetch more: the inbox, the session status, `forge pr show`,
+     the board and ROLES.md.
+
+  Every text from outside the launcher is redacted of the home's forge
+  tokens and the known token shapes; a message's or a review's text is cut
+  at 1 KiB and the whole brief at 24 KiB, which says so.
+- **The trigger** in the turn's record names the messages' kinds and ids,
+  or the continued attempt, never a message's text.
 - **Outcomes:**
   - `finished`: a normal `result` event;
   - `failed`: an error result, or an exit without a result;
@@ -2345,18 +2380,21 @@ Messages that arrive during a turn wait for the next one.
     `cache_write_1h_tokens`.
   - **The wall time:** `duration_ms`.
 - **A turn's cost is its own, derived from its tokens.** Claude Code's
-  `total_cost_usd` is the running total of the whole conversation, so a
-  resumed turn's figure includes every earlier turn.
+  `total_cost_usd` is the conversation's total, which is the turn's own
+  since every turn is a fresh conversation.
   - **Price list:** when the turn used one model that the price list in
     `internal/agent/pricing.go` prices, `cost_usd` is the turn's tokens at
     those prices. The record then has `cost_source: price_list` and the
     list's version in `price_list`.
-  - **Running-total difference:** otherwise, `cost_usd` is the difference
-    of the running total since the conversation's previous turn, and the
-    record has `cost_source: client_total`.
-  - **Unpriced:** when neither is known, the cost is 0 with
-    `cost_source: unpriced`. That happens to a turn that resumes a
-    conversation started before this version.
+  - **The client's total:** otherwise, `cost_usd` is the client's total
+    for the turn's conversation, and the record has
+    `cost_source: client_total`. In records of releases that resumed
+    conversations (before increment 3b of DESIGN-TURNS) it is the
+    difference of the running total since the conversation's previous
+    turn.
+  - **Unpriced:** records of those releases carry `cost_source: unpriced`
+    with a cost of 0 for a turn that resumed a conversation whose previous
+    total was not kept. No turn is unpriced now.
   - **The client's figure** is kept, never summed, as `client_total_usd`.
   - **The sums:** the attempt's and the day's spend add up the turns' own
     costs.
@@ -2366,8 +2404,10 @@ Messages that arrive during a turn wait for the next one.
 - **The raw stream** of each turn is kept in `logs/turns/<turn id>.jsonl`,
   owner-only. It is the home's own log of the turn and never leaves the
   host (D7).
-- **The loop's state** is `state/turns.json`, nonsecret: the conversations,
-  each attempt's turns, cost and progress, the cost per day, and any hold.
+- **The loop's state** is `state/turns.json`, nonsecret: each attempt's
+  turns, cost and progress, the cost per day, and any hold. The attempt's
+  task snapshot is `state/attempts/<attempt>/task.json` ("The turn brief"
+  above).
 
 **While idle,** the loop also reads the watched pull requests every 60 s
 ("Forge events").
@@ -2376,8 +2416,7 @@ Messages that arrive during a turn wait for the next one.
 `go test -tags realclaude -run TestRealClaudeTurns ./internal/agent`, with
 a logged-in `claude` on PATH. It uses a disposable home and aicrewd in the
 test. A message gives one turn that reads the inbox and acknowledges it; a
-second gives a turn that resumes the same conversation; idle ticks give no
-turn. `AICREW_SMOKE_KEEP=DIR` keeps the turns' logs.
+second gives another turn, a fresh conversation; idle ticks give no turn. `AICREW_SMOKE_KEEP=DIR` keeps the turns' logs.
 
 ### Driving steps: `aicrew-agent step`
 

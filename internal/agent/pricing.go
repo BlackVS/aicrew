@@ -14,11 +14,13 @@ import "math"
 const (
 	// CostPriceList: the turn's own tokens at PriceList's prices.
 	CostPriceList = "price_list"
-	// CostClientTotal: the difference of the client's running total since
-	// the conversation's previous turn.
+	// CostClientTotal: the client's own total for the turn's fresh
+	// conversation (in records before increment 3b, the difference of its
+	// running total since the conversation's previous turn).
 	CostClientTotal = "client_total"
 	// CostUnpriced: neither was available, so the turn's cost is unknown
-	// and counted as 0; its tokens are still recorded.
+	// and counted as 0; its tokens are still recorded. Since increment 3b
+	// no turn is unpriced; records of earlier releases carry it.
 	CostUnpriced = "unpriced"
 )
 

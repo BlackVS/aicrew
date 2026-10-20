@@ -130,7 +130,7 @@ func TestRealClaudeTurns(t *testing.T) {
 	send("smoke-2", "Smoke test two: read and acknowledge this message too, then end your turn.")
 	recs = turnUntil(2)
 	t.Logf("turn 2: %+v", recs[1])
-	if recs[1].Outcome != TurnFinished || !recs[1].Resumed || recs[1].Conversation != recs[0].Conversation || pendingCount() != 0 {
+	if recs[1].Outcome != TurnFinished || recs[1].Resumed || recs[1].Conversation == recs[0].Conversation || pendingCount() != 0 {
 		t.Fatalf("the second turn: %+v, %d pending", recs[1], pendingCount())
 	}
 	for range 3 {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,6 +31,35 @@ type fakeHost struct {
 	steps   int64
 	calls   []StepCall
 	polls   int
+	// The brief's sources: the inbox as the member would read it, the
+	// board's tasks, and the forge watch's last observations.
+	inbox     []inboxMessage
+	inboxErr  error
+	tasks     map[string]TaskDoc
+	taskReads int
+	observed  []PullObservation
+}
+
+func (h *fakeHost) Inbox(context.Context, int) ([]inboxMessage, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]inboxMessage(nil), h.inbox...), h.inboxErr
+}
+
+func (h *fakeHost) ReadTask(_ context.Context, id string) (TaskDoc, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.taskReads++
+	if d, ok := h.tasks[id]; ok {
+		return d, nil
+	}
+	return TaskDoc{}, errors.New("the task is not on the board")
+}
+
+func (h *fakeHost) Observed() []PullObservation {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]PullObservation(nil), h.observed...)
 }
 
 func (h *fakeHost) PendingNow(context.Context) ([]PendingMessage, *PauseNote, error) {
@@ -125,11 +155,11 @@ func (e *loopEnv) records(t *testing.T) []TurnRecord {
 
 func msg(id, kind string) PendingMessage { return PendingMessage{ID: id, Kind: kind} }
 
-// A message gives one turn that starts a conversation; the prompt names
-// the messages' kinds and ids, never their text. Messages that keep
-// arriving within the turn gap coalesce, and nothing pending gives no turn.
-// The next message's turn resumes the member's conversation, which rotates
-// on a new day.
+// A message gives one turn, a fresh conversation whose prompt is the
+// brief; the record's trigger names the messages' kinds and ids, never
+// their text. Messages that keep arriving within the turn gap coalesce, and
+// nothing pending gives no turn. The next message's turn is another fresh
+// conversation.
 func TestTurnLoopMessages(t *testing.T) {
 	e := newLoopEnv(t)
 	e.host.role = "coordinator"
@@ -143,7 +173,8 @@ func TestTurnLoopMessages(t *testing.T) {
 		return TurnResult{Outcome: TurnFinished, CostUSD: 0.5, Summary: "done; the token was ghp_0123456789abcdef"}
 	}
 	e.tick(t)
-	if len(e.specs) != 1 || e.specs[0].Resume || e.specs[0].Prompt != "/crew-turn 2 new message(s) in your inbox (1 lifecycle, 1 message; ids m1, m2)" {
+	if len(e.specs) != 1 || !strings.HasPrefix(e.specs[0].Prompt, "/crew-turn No open attempt.\n") ||
+		!strings.Contains(e.specs[0].Prompt, "\n## Why this turn\n\n2 new message(s) in your inbox (1 lifecycle, 1 message; ids m1, m2).\n") {
 		t.Fatalf("the first turn: %+v", e.specs)
 	}
 	first := e.specs[0].Conversation
@@ -154,17 +185,15 @@ func TestTurnLoopMessages(t *testing.T) {
 		t.Fatal("a second turn within the turn gap")
 	}
 	e.tick(t)
-	if len(e.specs) != 2 || !e.specs[1].Resume || e.specs[1].Conversation != first {
-		t.Fatalf("the second turn did not resume the conversation: %+v", e.specs[1])
+	if len(e.specs) != 2 || e.specs[1].Conversation == first || e.specs[1].Conversation == "" {
+		t.Fatalf("the second turn is not a fresh conversation: %+v", e.specs[1])
 	}
 	e.host.pending = []PendingMessage{msg("m4", "message")}
 	e.clock = e.clock.Add(24 * time.Hour)
 	e.tick(t)
-	if len(e.specs) != 3 || e.specs[2].Resume {
-		t.Fatalf("a new day did not start a fresh conversation: %+v", e.specs[2])
-	}
 	recs := e.records(t)
-	if len(recs) != 3 || recs[0].Outcome != TurnFinished || recs[0].Conversation != first || recs[0].Trigger == "" ||
+	if len(recs) != 3 || recs[0].Outcome != TurnFinished || recs[0].Conversation != first || recs[0].Resumed ||
+		recs[0].Trigger != "2 new message(s) in your inbox (1 lifecycle, 1 message; ids m1, m2)" ||
 		strings.Contains(recs[0].Summary, "ghp_0123456789abcdef") || !strings.Contains(recs[0].Summary, "[redacted]") {
 		t.Fatalf("the records: %+v", recs)
 	}
@@ -190,8 +219,8 @@ func TestTurnLoopPaused(t *testing.T) {
 }
 
 // A worker whose attempt is still in work after its turn gets continuation
-// turns in the attempt's own conversation, up to the limit; a submitted
-// attempt gets none; a new attempt starts a fresh conversation.
+// turns, each a fresh conversation whose brief says so, up to the limit; a
+// submitted attempt gets none.
 func TestTurnLoopContinuation(t *testing.T) {
 	e := newLoopEnv(t)
 	writeAgentDoc(t, e.home, map[string]any{"turns": map[string]any{"max_continuations": 2}})
@@ -212,7 +241,7 @@ func TestTurnLoopContinuation(t *testing.T) {
 	}
 	conv := e.specs[0].Conversation
 	for i, s := range e.specs[1:] {
-		if !s.Resume || s.Conversation != conv || !strings.Contains(s.Prompt, "a continuation of attempt att-1") {
+		if s.Conversation == conv || !strings.Contains(s.Prompt, "\n## Why this turn\n\na continuation of attempt att-1.\nNo new message: go on with the attempt's work") {
 			t.Fatalf("continuation %d: %+v", i, s)
 		}
 	}
@@ -232,7 +261,7 @@ func TestTurnLoopContinuation(t *testing.T) {
 	}
 	e.tick(t)
 	e.tick(t)
-	if len(e.specs) != 5 || e.specs[4].Resume || e.specs[4].Conversation == conv {
+	if len(e.specs) != 5 || e.specs[4].Conversation == conv {
 		t.Fatalf("a new attempt's turn: %+v (%d turns)", e.specs[len(e.specs)-1], len(e.specs))
 	}
 }
@@ -280,8 +309,7 @@ func TestTurnLoopStall(t *testing.T) {
 
 // Each outcome holds the member as 1.6 and 3.4 say: a provider limit until
 // its reset, a login failure for an hour and then longer, a failure for a
-// minute; a finished or stopped turn holds nothing. A failed resume starts
-// the next conversation fresh.
+// minute; a finished or stopped turn holds nothing.
 func TestTurnLoopOutcomes(t *testing.T) {
 	for _, c := range []struct {
 		res  TurnResult
@@ -329,18 +357,6 @@ func TestTurnLoopOutcomes(t *testing.T) {
 	e.tick(t)
 	if st := readTurnState(e.home); st.HoldUntil.Sub(e.clock) != 2*time.Hour || len(e.specs) != 3 {
 		t.Fatalf("a second login failure: held until %s (%d turns)", st.HoldUntil, len(e.specs))
-	}
-	// A failed resume: the next turn starts fresh.
-	e = newLoopEnv(t)
-	e.host.pending = []PendingMessage{msg("m1", "message")}
-	e.tick(t)
-	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFailed, Error: "no conversation"} }
-	e.tick(t)
-	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished} }
-	e.clock = e.clock.Add(time.Minute)
-	e.tick(t)
-	if len(e.specs) != 3 || !e.specs[1].Resume || e.specs[2].Resume {
-		t.Fatalf("after a failed resume: %+v", e.specs)
 	}
 }
 
@@ -417,8 +433,8 @@ func TestReadTurnLimits(t *testing.T) {
 }
 
 // A turn that opens an attempt (a claim, an accepted offer) is the
-// attempt's first turn: its record names the attempt, its cost is the
-// attempt's, and the attempt's continuation resumes its conversation.
+// attempt's first turn: its record names the attempt and its cost is the
+// attempt's.
 func TestTurnLoopAttemptOpenedInATurn(t *testing.T) {
 	e := newLoopEnv(t)
 	writeAgentDoc(t, e.home, map[string]any{"turns": map[string]any{"attempt_budget_usd": 1}})
@@ -433,16 +449,16 @@ func TestTurnLoopAttemptOpenedInATurn(t *testing.T) {
 	e.tick(t)
 	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished, CostUSD: 0.7} }
 	e.tick(t)
-	if len(e.specs) != 2 || !e.specs[1].Resume || e.specs[1].Conversation != e.specs[0].Conversation {
-		t.Fatalf("the continuation did not resume the claiming turn's conversation: %+v", e.specs)
+	if len(e.specs) != 2 || e.specs[1].Conversation == e.specs[0].Conversation {
+		t.Fatalf("the continuation is not a fresh conversation: %+v", e.specs)
 	}
 	recs := e.records(t)
 	if recs[0].AttemptID != "att-9" || recs[0].Task == nil || recs[0].Task.TaskID != "task-9" {
 		t.Fatalf("the claiming turn's record: %+v", recs[0])
 	}
 	st := readTurnState(e.home)
-	if a := st.Attempts["att-9"]; a == nil || a.CostUSD != 1.1 || st.Member.ID != "" {
-		t.Fatalf("the attempt's state: %+v, member %+v", st.Attempts["att-9"], st.Member)
+	if a := st.Attempts["att-9"]; a == nil || a.CostUSD != 1.1 {
+		t.Fatalf("the attempt's state: %+v", st.Attempts["att-9"])
 	}
 	e.tick(t)
 	if len(e.specs) != 2 {
@@ -592,12 +608,10 @@ func TestTurnLoopWorkerToolchain(t *testing.T) {
 	}
 }
 
-// A Claude Code turn's total_cost_usd is the conversation's running total
-// (docs/DESIGN-TURNS.md, 2.1): a resumed turn's record and the attempt's
-// spend take only the turn's own cost, the difference since the previous
-// turn, or the price list's cost when it priced the turn. A resumed
-// conversation whose previous total was not kept leaves the turn unpriced
-// rather than charging the whole total again.
+// A Claude Code turn's total_cost_usd is its conversation's total, which is
+// the turn's own since every turn is a fresh conversation (DESIGN-TURNS,
+// 2.1 and T1): the record and the attempt's spend take it, or the price
+// list's cost when it priced the turn.
 func TestTurnLoopTurnOwnCost(t *testing.T) {
 	e := newLoopEnv(t)
 	writeAgentDoc(t, e.home, map[string]any{"turns": map[string]any{"attempt_budget_usd": 100}})
@@ -605,8 +619,8 @@ func TestTurnLoopTurnOwnCost(t *testing.T) {
 	e.host.pending = []PendingMessage{msg("m1", "message")}
 	results := []TurnResult{
 		{Outcome: TurnFinished, CostSource: CostClientTotal, ClientTotalUSD: 1.2, Models: []string{"m"}},
-		{Outcome: TurnFinished, CostSource: CostClientTotal, ClientTotalUSD: 2.56, Models: []string{"m"}},
-		{Outcome: TurnFinished, CostSource: CostPriceList, CostUSD: 0.13, ClientTotalUSD: 2.69,
+		{Outcome: TurnFinished, CostSource: CostClientTotal, ClientTotalUSD: 1.36, Models: []string{"m"}},
+		{Outcome: TurnFinished, CostSource: CostPriceList, CostUSD: 0.13, ClientTotalUSD: 0.13,
 			Models: []string{"claude-opus-5-5"}},
 	}
 	e.next = func(TurnSpec, *fakeHost) TurnResult {
@@ -619,8 +633,8 @@ func TestTurnLoopTurnOwnCost(t *testing.T) {
 	for range 3 {
 		e.tick(t)
 	}
-	if len(e.specs) != 3 || e.specs[0].Resume || !e.specs[1].Resume || !e.specs[2].Resume {
-		t.Fatalf("three turns of one conversation: %+v", e.specs)
+	if len(e.specs) != 3 {
+		t.Fatalf("three turns: %+v", e.specs)
 	}
 	recs := e.records(t)
 	want := []struct {
@@ -635,7 +649,7 @@ func TestTurnLoopTurnOwnCost(t *testing.T) {
 				r.Model, r.Role, w.cost, w.source)
 		}
 	}
-	if recs[1].ClientTotalUSD != 2.56 || recs[2].PriceList != PriceListVersion || recs[1].PriceList != "" {
+	if recs[1].ClientTotalUSD != 1.36 || recs[2].PriceList != PriceListVersion || recs[1].PriceList != "" {
 		t.Errorf("the running total and the price list are recorded as such: %+v %+v", recs[1], recs[2])
 	}
 	st := readTurnState(e.home)
@@ -645,27 +659,238 @@ func TestTurnLoopTurnOwnCost(t *testing.T) {
 	if day := st.Days[dayOf(e.clock)]; math.Abs(day-2.69) > 1e-9 {
 		t.Fatalf("the day spent %v, want 2.69", day)
 	}
+}
 
-	// A state from before the running total was kept: the resumed turn's
-	// own cost is unknown, and the whole total is not charged again.
-	a := st.Attempts["att-1"]
-	a.Conversation.ClientTotalUSD = nil
-	if err := writeTurnState(e.home, st); err != nil {
-		t.Fatal(err)
-	}
-	e.host.pending = []PendingMessage{msg("m2", "message")}
+// Two turns more than an hour apart are two fresh conversations: no turn
+// resumes, so a hold rewrites no conversation's cache (DESIGN-TURNS, T1);
+// the client gets --session-id with the turn's own ID and never --resume.
+func TestTurnLoopFreshAfterHold(t *testing.T) {
+	e := newLoopEnv(t)
+	e.host.attempt = &memberAttempt{ID: "att-1", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-1"}}
+	e.host.pending = []PendingMessage{msg("m1", "message")}
 	e.next = func(TurnSpec, *fakeHost) TurnResult {
 		e.host.pending = nil
 		e.host.steps++
-		return TurnResult{Outcome: TurnFinished, CostSource: CostClientTotal, ClientTotalUSD: 3.0, Models: []string{"m"}}
+		return TurnResult{Outcome: TurnFinished}
 	}
 	e.tick(t)
-	recs = e.records(t)
-	if last := recs[len(recs)-1]; last.CostUSD != 0 || last.CostSource != CostUnpriced || last.ClientTotalUSD != 3.0 {
-		t.Fatalf("an unknown previous total: %+v", last)
+	e.clock = e.clock.Add(90 * time.Minute)
+	e.host.pending = []PendingMessage{msg("m2", "message")}
+	e.tick(t)
+	if len(e.specs) != 2 || e.specs[0].Conversation == e.specs[1].Conversation {
+		t.Fatalf("two turns, two conversations: %+v", e.specs)
 	}
-	if st := readTurnState(e.home); math.Abs(st.Attempts["att-1"].CostUSD-2.69) > 1e-9 ||
-		*st.Attempts["att-1"].Conversation.ClientTotalUSD != 3.0 {
-		t.Fatalf("after an unpriced turn: %+v", st.Attempts["att-1"])
+	for i, s := range e.specs {
+		args := ClaudeTurnArgs(s)
+		if slices.Contains(args, "--resume") || !slices.Contains(args, "--session-id") || !slices.Contains(args, s.Conversation) {
+			t.Errorf("turn %d: %q", i+1, args)
+		}
+	}
+	for i, r := range e.records(t) {
+		if r.Resumed || r.Conversation != e.specs[i].Conversation {
+			t.Errorf("record %d: %+v", i+1, r)
+		}
+	}
+	if st := readTurnState(e.home); st.Attempts["att-1"] == nil || st.Attempts["att-1"].Continuations != 0 {
+		t.Errorf("the state: %+v", st.Attempts["att-1"])
+	}
+}
+
+// The brief in the prompt, in the design's order (DESIGN-TURNS section 3):
+// the attempt's state as the status gives it on the first line; who and
+// where; the frozen task, snapshotted from the board at the attempt's first
+// turn and the same afterwards, with its revision and read time; what
+// started the turn, with the messages' content redacted and bounded; the
+// pull requests as last observed; where to fetch more.
+func TestTurnLoopBrief(t *testing.T) {
+	e := newLoopEnv(t)
+	e.host.attempt = &memberAttempt{ID: "att-1", State: "running", Phase: "working",
+		Task: TaskRef{HubID: "hub-a", ProjectID: "proj", TaskID: "task-1"}, Branch: "feat/x", BaseCommit: "base123",
+		Process:    &ProcessPin{Repository: "https://forge.example/p/process", Commit: "pin456", Manifest: "process.json"},
+		Repository: &attemptRepository{URL: "https://forge.example/p/repo", DefaultBranch: "main"}}
+	e.host.tasks = map[string]TaskDoc{"task-1": {Revision: 7, Fields: map[string]json.RawMessage{
+		"title": json.RawMessage(`"Fix the widget"`), "objective": json.RawMessage(`"The widget works."`),
+		"acceptance_criteria": json.RawMessage(`"- A test shows it."`), "non_goals": json.RawMessage(`"No gadget."`)}}}
+	e.host.pending = []PendingMessage{msg("m1", "message"), msg("m2", "action.needed")}
+	e.host.inbox = []inboxMessage{
+		{ID: "m1", Seq: 5, Kind: "message", SenderAgentID: "coord-1", Text: "hello; the token is ghp_0123456789abcdef"},
+		{ID: "m2", Seq: 6, Kind: "action.needed", AttemptID: "att-1"},
+	}
+	e.host.inbox[1].Action = &struct {
+		Subjects []actionSubject `json:"subjects"`
+	}{Subjects: []actionSubject{{Kind: "pull", AttemptID: "att-1", Needs: []string{"review"},
+		Pull:   &briefPull{Pull: 7, URL: "https://forge.example/p/repo/pull/7", State: "open", HeadCommit: "abc", Labels: []string{"review-this"}, Checks: "success", Comments: 2},
+		Review: &briefReview{Author: "hands", URL: "https://forge.example/c/1", Head: "abc", AtHead: true, Verdict: "READY_FOR_HUMAN_MERGE", Body: "Fine.\nNo blocker."},
+		Failed: []briefCheck{{Name: "go-test", Conclusion: "failure", URL: "https://forge.example/j/1", Excerpt: "boom"}},
+		Passed: []briefCheck{{Name: "go-lint"}}}}}
+	e.host.observed = []PullObservation{{Number: 7, URL: "https://forge.example/p/repo/pull/7", State: "open", HeadCommit: "abc",
+		Labels: []string{"review-this", "ghp_0123456789abcdef"}, Checks: "success", Comments: 2,
+		Review: &ObservedReview{Author: "hands", URL: "https://forge.example/c/1", Head: "abc", AtHead: true, Verdict: "READY_FOR_HUMAN_MERGE"}}}
+	e.next = func(TurnSpec, *fakeHost) TurnResult {
+		e.host.pending = nil
+		e.host.steps++
+		return TurnResult{Outcome: TurnFinished}
+	}
+	first := e.clock.Add(turnGap + time.Second)
+	e.tick(t)
+	if len(e.specs) != 1 {
+		t.Fatal("no turn")
+	}
+	p := e.specs[0].Prompt
+	if !strings.HasPrefix(p, "/crew-turn Attempt att-1: running/working.\n\n## Who and where\n\n- Role: worker; team team-1; agent agent-1.\n- Home: "+e.home+".\n") {
+		t.Fatalf("the brief's head:\n%s", p)
+	}
+	at := first.UTC().Format(time.RFC3339)
+	for _, want := range []string{
+		"- Attempt att-1 on task task-1 (project proj, hub hub-a).\n- Branch feat/x from base commit base123; worktree `worktrees/att-1`.\n" +
+			"- Repository https://forge.example/p/repo (default branch main).\n- Process pin: https://forge.example/p/process at pin456, manifest process.json.\n",
+		"## The task\n\nTask task-1 as the board holds it now (read at " + at + ", revision 7; this first read is kept as the attempt's snapshot",
+		"- Title: Fix the widget\n- Objective: The widget works.\n- Acceptance criteria: - A test shows it.\n- Non-goals: No gadget.\n",
+		"## Why this turn\n\n2 new message(s) in your inbox (1 action.needed, 1 message; ids m1, m2).\n\n",
+		"- Message m1 (seq 5, message, from coord-1): hello; the token is [redacted]\n",
+		"- Message m2 (seq 6, action.needed, attempt att-1)\n  - Subject pull, attempt att-1; needs: review.\n" +
+			"    - Pull request #7 https://forge.example/p/repo/pull/7: open, head abc, labels [review-this], checks success, 2 comment(s).\n" +
+			"    - Review by hands at the head (https://forge.example/c/1): verdict READY_FOR_HUMAN_MERGE:\n      Fine.\n      No blocker.\n" +
+			"    - Failed check go-test (failure) https://forge.example/j/1:\n      boom\n    - Passed checks: go-lint.\n",
+		"## Pull requests\n\n- Pull request #7 https://forge.example/p/repo/pull/7: open, head abc, labels [review-this, [redacted]], checks success, 2 comment(s).\n" +
+			"  - Review by hands at the head (https://forge.example/c/1): verdict READY_FOR_HUMAN_MERGE\n",
+		"## Where to fetch more\n\n- `aicrew-agent inbox`",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the brief lacks %q:\n%s", want, p)
+		}
+	}
+	if strings.Contains(p, "ghp_0123456789abcdef") {
+		t.Error("the brief carries a token (a message's text or a label)")
+	}
+	order := []string{"## Who and where", "## The task", "## Why this turn", "## Pull requests", "## Where to fetch more"}
+	for i := 1; i < len(order); i++ {
+		if strings.Index(p, order[i-1]) > strings.Index(p, order[i]) {
+			t.Errorf("%s comes before %s", order[i], order[i-1])
+		}
+	}
+	var snap taskSnapshot
+	raw, err := os.ReadFile(taskSnapshotPath(e.home, "att-1"))
+	if err != nil || json.Unmarshal(raw, &snap) != nil || snap.Revision != 7 || snap.Objective != "The widget works." ||
+		!snap.ReadAt.Equal(first) || snap.Task.TaskID != "task-1" {
+		t.Fatalf("the snapshot: %v %s", err, raw)
+	}
+	// The board moved on; the next turn carries the snapshot, unchanged,
+	// and says so, without reading the board.
+	e.host.tasks["task-1"] = TaskDoc{Revision: 8, Fields: map[string]json.RawMessage{"title": json.RawMessage(`"Changed"`)}}
+	e.host.pending = []PendingMessage{msg("m3", "message")}
+	e.host.inbox = []inboxMessage{{ID: "m3", Seq: 7, Kind: "message", Text: "again"}}
+	e.clock = e.clock.Add(2 * time.Hour)
+	e.tick(t)
+	p = e.specs[1].Prompt
+	if !strings.Contains(p, "Task task-1 as the board held it at "+at+", revision 7: the attempt's snapshot, taken at its first turn; the live task may have moved on.\n") ||
+		!strings.Contains(p, "- Title: Fix the widget\n") || strings.Contains(p, "Changed") || e.host.taskReads != 1 {
+		t.Fatalf("the second turn's task (%d board reads):\n%s", e.host.taskReads, p)
+	}
+	if strings.Contains(p, "m1") || !strings.Contains(p, "- Message m3 (seq 7, message): again\n") {
+		t.Errorf("the second turn's messages:\n%s", p)
+	}
+	// A continuation names no message.
+	e.tick(t)
+	if len(e.specs) != 3 || !strings.Contains(e.specs[2].Prompt, "\n## Why this turn\n\na continuation of attempt att-1.\nNo new message: go on with the attempt's work, and submit or block when it is done.\n\n## Pull requests\n") {
+		t.Fatalf("the continuation: %+v", e.specs[len(e.specs)-1])
+	}
+
+	// A task the board cannot give, and no observation yet: the brief says
+	// so and names where to read; a coordinator without an attempt gets
+	// the first line and no task.
+	e = newLoopEnv(t)
+	e.host.attempt = &memberAttempt{ID: "att-2", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-2"}}
+	e.host.pending = []PendingMessage{msg("m1", "lifecycle")}
+	e.host.inboxErr = errors.New("aicrewd is away")
+	e.tick(t)
+	p = e.specs[0].Prompt
+	for _, want := range []string{
+		"## The task\n\nTask task-2 could not be read for the brief (the task is not on the board): read it with aimem's `get_task`.\n",
+		"The messages could not be read for the brief (aicrewd is away): run `aicrew-agent inbox`.\n",
+		"## Pull requests\n\nNone observed yet by the launcher's forge watch.\n",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the brief lacks %q:\n%s", want, p)
+		}
+	}
+	if _, err := os.Stat(taskSnapshotPath(e.home, "att-2")); err == nil {
+		t.Error("a snapshot was written without the task")
+	}
+	// A snapshot that cannot be written (a file where its directory goes):
+	// the turn still gets the task, the warning is logged, and the next
+	// turn reads the board again.
+	e = newLoopEnv(t)
+	var logs strings.Builder
+	e.loop.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	e.host.attempt = &memberAttempt{ID: "att-3", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-3"}}
+	e.host.tasks = map[string]TaskDoc{"task-3": {Revision: 2, Fields: map[string]json.RawMessage{"title": json.RawMessage(`"T3"`)}}}
+	os.MkdirAll(filepath.Join(e.home, "state", "attempts"), 0o700)
+	os.WriteFile(filepath.Dir(taskSnapshotPath(e.home, "att-3")), []byte("in the way"), 0o600)
+	e.host.pending = []PendingMessage{msg("m1", "lifecycle")}
+	e.tick(t)
+	e.host.pending = []PendingMessage{msg("m2", "lifecycle")}
+	e.tick(t)
+	if len(e.specs) != 2 || !strings.Contains(e.specs[1].Prompt, "- Title: T3\n") || e.host.taskReads != 2 ||
+		!strings.Contains(logs.String(), "the task snapshot was not written") {
+		t.Fatalf("an unwritable snapshot: %d turns, %d board reads, log %q", len(e.specs), e.host.taskReads, logs.String())
+	}
+	e = newLoopEnv(t)
+	e.host.role = "coordinator"
+	e.host.pending = []PendingMessage{msg("m1", "lifecycle")}
+	e.host.inbox = []inboxMessage{{ID: "m1", Seq: 1, Kind: "lifecycle", AttemptID: "att-5", Task: &TaskRef{TaskID: "task-5"},
+		Forge: &briefPull{Pull: 3, URL: "https://forge.example/p/repo/pull/3", State: "merged", HeadCommit: "def", Checks: "success", Changes: []string{"state"}}}}
+	e.tick(t)
+	p = e.specs[0].Prompt
+	if !strings.HasPrefix(p, "/crew-turn No open attempt.\n\n## Who and where\n\n- Role: coordinator; team team-1; agent agent-1.\n") ||
+		!strings.Contains(p, "## The task\n\nNo task: no open attempt.\n") ||
+		!strings.Contains(p, "- Message m1 (seq 1, lifecycle, attempt att-5, task task-5)\n  - Pull request #3 https://forge.example/p/repo/pull/3: merged, head def, labels [], checks success, 0 comment(s); changed: state.\n") {
+		t.Fatalf("the coordinator's brief:\n%s", p)
+	}
+	// A closed attempt the status still names is on the first line, with
+	// no task section for it: the loop treats it as none.
+	e.host.attempt = &memberAttempt{ID: "att-6", State: "closed", Phase: "accepted", Task: TaskRef{TaskID: "task-6"}}
+	e.host.pending = []PendingMessage{msg("m2", "lifecycle")}
+	e.tick(t)
+	if p = e.specs[1].Prompt; !strings.HasPrefix(p, "/crew-turn Attempt att-6: closed/accepted.\n") ||
+		!strings.Contains(p, "No task: no open attempt.\n") {
+		t.Fatalf("a closed attempt's brief:\n%s", p)
+	}
+}
+
+// The brief and the snapshot are bounded: a long task is cut to its bound
+// and says so, a long message text to its, and the whole brief to its.
+func TestTurnBriefBounds(t *testing.T) {
+	e := newLoopEnv(t)
+	e.host.attempt = &memberAttempt{ID: "att-1", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-1"}}
+	long := strings.Repeat("x", maxBriefTaskBytes)
+	e.host.tasks = map[string]TaskDoc{"task-1": {Revision: 1, Fields: map[string]json.RawMessage{
+		"title": json.RawMessage(`"T"`), "objective": json.RawMessage(`"` + long + `"`),
+		"acceptance_criteria": json.RawMessage(`"never seen"`)}}}
+	e.host.pending = []PendingMessage{msg("m1", "message")}
+	for i := range 12 {
+		m := inboxMessage{ID: fmt.Sprintf("m%d", i), Seq: int64(i), Kind: "message", Text: strings.Repeat("y", 4*maxBriefText)}
+		m.Action = &struct {
+			Subjects []actionSubject `json:"subjects"`
+		}{}
+		for range 3 {
+			m.Action.Subjects = append(m.Action.Subjects, actionSubject{Kind: "pull",
+				Review: &briefReview{Author: "a", Body: strings.Repeat("z", 2*maxBriefText)}})
+		}
+		e.host.inbox = append(e.host.inbox, m)
+	}
+	e.tick(t)
+	p := e.specs[0].Prompt
+	if len(p) > maxBriefBytes+256 || !strings.Contains(p, "(The brief was cut at its bound; `aicrew-agent inbox` has the rest.)") {
+		t.Fatalf("the brief is %d bytes and ends %q", len(p), p[len(p)-120:])
+	}
+	if !strings.Contains(p, "(The text was cut to the snapshot's bound; aimem's `get_task` has it in full.)") ||
+		strings.Contains(p, "never seen") || strings.Count(p, "y") > maxBriefText*maxBriefMessages+maxBriefMessages {
+		t.Errorf("the bounds:\n%s", p[:200])
+	}
+	var snap taskSnapshot
+	raw, _ := os.ReadFile(taskSnapshotPath(e.home, "att-1"))
+	if json.Unmarshal(raw, &snap) != nil || !snap.Cut || len(snap.Objective) > maxBriefTaskBytes || snap.AcceptanceCriteria != "…" {
+		t.Errorf("the snapshot: %+v", snap)
 	}
 }

@@ -15,9 +15,10 @@ import (
 
 // One headless Claude Code turn (docs/DESIGN-CONTROL-PLANE.md, 1.4 and 1.6;
 // docs/TURN-PROBE.md): `claude -p` with stream-json output, in the home,
-// with standard input closed, `dontAsk` permissions and no prompts, the
-// managed per-turn settings, and the conversation started with --session-id
-// or resumed with --resume. The turn's events give its outcome, usage, cost
+// with the prompt on standard input (the brief runs to many lines, beyond a
+// command line), which is then closed, `dontAsk` permissions and no prompts,
+// the managed per-turn settings, and a fresh conversation started with
+// --session-id. The turn's events give its outcome, usage, cost
 // and permission denials. A login failure ends the turn at the client's
 // first authentication retry, and a time limit ends it as stopped.
 
@@ -30,9 +31,8 @@ type TurnSpec struct {
 	// Settings is the per-turn settings file, relative to the home;
 	// empty means TurnSettingsFile.
 	Settings string
-	// Conversation is the conversation's ID; Resume continues it.
+	// Conversation is the ID of the turn's own, fresh conversation.
 	Conversation string
-	Resume       bool
 	Model        string
 	BudgetUSD    float64
 	Timeout      time.Duration
@@ -71,21 +71,17 @@ type TurnResult struct {
 	Context float64
 }
 
-// ClaudeTurnArgs are the arguments a turn runs Claude Code with. No
-// dangerous flag, permission bypass or fallback model is ever passed.
+// ClaudeTurnArgs are the arguments a turn runs Claude Code with; the prompt
+// goes on standard input. No dangerous flag, permission bypass or fallback
+// model is ever passed.
 func ClaudeTurnArgs(spec TurnSpec) []string {
 	settings := spec.Settings
 	if settings == "" {
 		settings = TurnSettingsFile
 	}
-	args := []string{"-p", spec.Prompt, "--output-format", "stream-json", "--verbose",
+	args := []string{"-p", "--output-format", "stream-json", "--verbose",
 		"--permission-mode", "dontAsk", "--permission-prompts", "none",
-		"--settings", settings}
-	if spec.Resume {
-		args = append(args, "--resume", spec.Conversation)
-	} else {
-		args = append(args, "--session-id", spec.Conversation)
-	}
+		"--settings", settings, "--session-id", spec.Conversation}
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
 	}
@@ -102,7 +98,9 @@ func RunClaudeTurn(ctx context.Context, spec TurnSpec) TurnResult {
 	cmd := exec.Command(spec.Client, ClaudeTurnArgs(spec)...)
 	cmd.Dir = spec.Home
 	cmd.Env = spec.Env
-	cmd.Stdin = nil // closed: a client waits on an open one (TURN-PROBE)
+	// The prompt, and then the end of the input: a client waits on an open
+	// one (TURN-PROBE).
+	cmd.Stdin = strings.NewReader(spec.Prompt)
 	var stderr strings.Builder
 	cmd.Stderr = &limitedWriter{w: &stderr, n: 8 << 10}
 	out, err := cmd.StdoutPipe()

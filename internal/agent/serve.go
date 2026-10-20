@@ -27,8 +27,9 @@ import (
 //   - three turns of an attempt with no step and no new commit stall it: the
 //     loop blocks the attempt through the work step, which tells the
 //     coordinator, and gives it no more continuation turns until a message;
-//   - each turn resumes the attempt's or the member's conversation (D4) and
-//     is recorded in logs/turns.jsonl.
+//   - each turn is a fresh conversation that starts from the brief the
+//     launcher writes into its prompt (brief.go; docs/DESIGN-TURNS.md, T1),
+//     and is recorded in logs/turns.jsonl.
 // While idle it also watches the attempt's pull requests (forge events).
 
 // sessionReadPath is aicrewd's session status, which names the pause and
@@ -91,6 +92,12 @@ type turnHost interface {
 	StepsDone() int64
 	Do(ctx context.Context, call StepCall) StepAnswer
 	PollPulls(ctx context.Context)
+	// Inbox reads the member's oldest unacknowledged messages, ReadTask a
+	// task over its aimem connection, and Observed is what the forge watch
+	// last observed of the watched pull requests: the brief's sources.
+	Inbox(ctx context.Context, limit int) ([]inboxMessage, error)
+	ReadTask(ctx context.Context, taskID string) (TaskDoc, error)
+	Observed() []PullObservation
 }
 
 // TurnLoop is one home's turn loop.
@@ -188,7 +195,7 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 		return
 	}
 	l.lastStart = now
-	l.turn(ctx, &st, status, attempt, trigger, continuation, limits)
+	l.turn(ctx, &st, status, attempt, trigger, pending, continuation, limits)
 }
 
 // settingsFile is the per-turn settings of a member in role. A coordinator's
@@ -251,24 +258,17 @@ func (l *TurnLoop) hold(st *turnState, until time.Time, why string) {
 	}
 }
 
-// turn runs one turn and records it.
+// turn runs one turn and records it. Every turn is a fresh conversation
+// (docs/DESIGN-TURNS.md, T1) whose prompt is the brief written now.
 func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus, attempt *memberAttempt, trigger string,
-	continuation bool, limits TurnLimits) {
+	pending []PendingMessage, continuation bool, limits TurnLimits) {
 	now := l.Now()
-	conv := &st.Member
 	var a *attemptTurns
 	if attempt != nil {
 		a = st.attempt(attempt.ID)
-		conv = &a.Conversation
-	} else if conv.ID != "" && (conv.Turns >= rotateTurns || conv.Context > rotateContext || conv.Day != dayOf(now)) {
-		*conv = conversation{} // rotate: the next turn starts from the handoff
-	}
-	resume := conv.ID != ""
-	if !resume {
-		*conv = conversation{ID: newUUID(), Day: dayOf(now)}
 	}
 	rec := TurnRecord{ID: newUUID(), AgentID: status.Session.AgentID, TeamID: status.Session.TeamID, Trigger: trigger,
-		Role: status.Session.Role, Client: "claude", Model: limits.Model, Conversation: conv.ID, Resumed: resume,
+		Role: status.Session.Role, Client: "claude", Model: limits.Model, Conversation: newUUID(),
 		StartedAt: now, Denials: []string{}}
 	if attempt != nil {
 		task := attempt.Task
@@ -283,11 +283,14 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		head = l.head(ctx, attempt.ID)
 	}
 	before := l.Host.StepsDone()
-	l.Log.Info("turn started", "turn", rec.ID, "trigger", trigger, "conversation", conv.ID, "resumed", resume)
+	brief := l.brief(ctx, briefInput{status: status, attempt: attempt, trigger: trigger, pending: pending,
+		continuation: continuation})
+	l.Log.Info("turn started", "turn", rec.ID, "trigger", trigger, "conversation", rec.Conversation,
+		"brief_bytes", len(brief))
 	transcript, closeTranscript := openTranscript(l.Home, rec.ID)
-	res := l.Run(ctx, TurnSpec{Client: l.Client, Home: l.Home, Env: l.Env, Prompt: "/crew-turn " + trigger,
-		Settings: l.settingsFile(status.Session.Role), Conversation: conv.ID, Resume: resume, Model: limits.Model, BudgetUSD: limits.TurnBudgetUSD,
-		Timeout: limits.TurnTimeout, Transcript: transcript})
+	res := l.Run(ctx, TurnSpec{Client: l.Client, Home: l.Home, Env: l.Env, Prompt: "/crew-turn " + brief,
+		Settings: l.settingsFile(status.Session.Role), Conversation: rec.Conversation, Model: limits.Model,
+		BudgetUSD: limits.TurnBudgetUSD, Timeout: limits.TurnTimeout, Transcript: transcript})
 	closeTranscript()
 	rec.EndedAt = l.Now()
 	rec.DurationMS = rec.EndedAt.Sub(rec.StartedAt).Milliseconds()
@@ -296,7 +299,7 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	if len(res.Models) > 0 {
 		rec.Model = strings.Join(res.Models, ",")
 	}
-	rec.CostUSD, rec.CostSource = l.turnCost(*conv, resume, res)
+	rec.CostUSD, rec.CostSource = l.turnCost(res)
 	if rec.CostSource == CostPriceList {
 		rec.PriceList = PriceListVersion
 	}
@@ -307,15 +310,11 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	after, afterErr := l.Host.Status(ctx)
 	if afterErr == nil && attempt == nil && after.Attempt != nil && after.Attempt.State != "closed" {
 		// The turn opened an attempt (an accepted offer, a claim): the
-		// turn is the attempt's first, and its conversation the attempt's
-		// (D4), with its cost charged to it.
+		// turn is the attempt's first, with its cost charged to it.
 		attempt = after.Attempt
 		task := attempt.Task
 		rec.AttemptID, rec.Task = attempt.ID, &task
 		a = st.attempt(attempt.ID)
-		a.Conversation = *conv
-		st.Member = conversation{}
-		conv = &a.Conversation
 	}
 	if err := appendTurnRecord(l.Home, rec); err != nil {
 		l.Log.Warn("record the turn", "error", err.Error())
@@ -327,17 +326,6 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	attemptID := ""
 	if attempt != nil {
 		attemptID = attempt.ID
-	}
-	conv.Turns++
-	if res.Context > 0 {
-		conv.Context = res.Context
-	}
-	if res.ClientTotalUSD > 0 {
-		total := res.ClientTotalUSD
-		conv.ClientTotalUSD = &total
-	}
-	if res.Outcome == TurnFailed && resume {
-		*conv = conversation{} // a conversation the client cannot resume starts fresh
 	}
 	st.spend(dayOf(now), attemptID, rec.CostUSD)
 	l.afterOutcome(st, res)
@@ -539,6 +527,28 @@ func (s *StepServer) Do(ctx context.Context, call StepCall) StepAnswer {
 // PollPulls reads and reports the watched pull requests (forgewatch.go).
 func (s *StepServer) PollPulls(ctx context.Context) { s.pollPulls(ctx) }
 
+// Inbox reads the member's oldest unacknowledged messages for the brief;
+// aicrewd records them as delivered, as it does for the inbox command.
+func (s *StepServer) Inbox(ctx context.Context, limit int) ([]inboxMessage, error) {
+	raw, err := s.local.Inbox(ctx, s.driver.Session.stepToken(), limit)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Messages []inboxMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("the inbox is not the expected JSON: %w", err)
+	}
+	return out.Messages, nil
+}
+
+// ReadTask reads a task over the member's aimem connection, for the
+// attempt's task snapshot.
+func (s *StepServer) ReadTask(ctx context.Context, taskID string) (TaskDoc, error) {
+	return s.driver.Aimem.GetTask(ctx, s.driver.Session.stepAimemFile(), taskID)
+}
+
 // ErrNotTurnsHome refuses serve on a home whose wake mode is not turns.
 var ErrNotTurnsHome = errors.New("this home is not in turns mode")
 
@@ -593,31 +603,22 @@ func ServeHome(ctx context.Context, e *Engine, client string, signals <-chan os.
 	}
 }
 
-// turnCost is a turn's own cost and its source (pricing.go). A turn the
-// price list priced keeps that cost, and a client's running total, when the
-// conversation's previous total is known, checks it. A turn it did not
-// price costs the difference of the running total since the conversation's
-// previous turn: the whole total for a fresh conversation, and unknown for
-// a resumed one whose previous total was not kept. Another client's
-// adapter reports its turn's own cost.
-func (l *TurnLoop) turnCost(conv conversation, resume bool, res TurnResult) (float64, string) {
-	if res.CostSource != CostPriceList && res.CostSource != CostClientTotal {
-		return res.CostUSD, res.CostSource
-	}
-	prev, known := 0.0, !resume
-	if resume && conv.ClientTotalUSD != nil {
-		prev, known = *conv.ClientTotalUSD, true
-	}
-	delta, deltaOK := math.Round((res.ClientTotalUSD-prev)*1e6)/1e6, known && res.ClientTotalUSD >= prev
-	if res.CostSource == CostPriceList {
-		if deltaOK && math.Abs(delta-res.CostUSD) > 0.01 {
-			l.Log.Warn("the price list and the client's running total disagree on a turn's cost",
-				"price_list_usd", res.CostUSD, "client_total_delta_usd", delta, "price_list", PriceListVersion)
+// turnCost is a turn's own cost and its source (pricing.go). Every turn is
+// a fresh conversation, so the client's total for it is the turn's own: a
+// turn the price list priced keeps that cost, checked against the total,
+// and a turn it did not price costs the total. Another client's adapter
+// reports its turn's own cost.
+func (l *TurnLoop) turnCost(res TurnResult) (float64, string) {
+	total := math.Round(res.ClientTotalUSD*1e6) / 1e6
+	switch res.CostSource {
+	case CostPriceList:
+		if math.Abs(total-res.CostUSD) > 0.01 {
+			l.Log.Warn("the price list and the client's total disagree on a turn's cost",
+				"price_list_usd", res.CostUSD, "client_total_usd", total, "price_list", PriceListVersion)
 		}
 		return res.CostUSD, CostPriceList
+	case CostClientTotal:
+		return total, CostClientTotal
 	}
-	if !deltaOK {
-		return 0, CostUnpriced
-	}
-	return delta, CostClientTotal
+	return res.CostUSD, res.CostSource
 }

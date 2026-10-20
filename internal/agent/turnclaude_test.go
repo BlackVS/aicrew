@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -13,7 +14,7 @@ import (
 )
 
 // fakeTurnEnv makes the test binary a fake Claude Code turn: it records its
-// arguments, working directory and standard input in the file the variable
+// arguments, working directory and whole standard input in the file the variable
 // names, prints the file named by fakeTurnStreamEnv as its stream, and then
 // sleeps for fakeTurnSleepEnv and exits with fakeTurnExitEnv.
 const (
@@ -25,9 +26,8 @@ const (
 
 func fakeTurnMain() int {
 	wd, _ := os.Getwd()
-	in := make([]byte, 16)
-	n, _ := os.Stdin.Read(in)
-	rec, _ := json.Marshal(map[string]any{"args": os.Args[1:], "dir": wd, "stdin": n})
+	in, _ := io.ReadAll(os.Stdin)
+	rec, _ := json.Marshal(map[string]any{"args": os.Args[1:], "dir": wd, "stdin": string(in)})
 	_ = os.WriteFile(os.Getenv(fakeTurnEnv), rec, 0o600)
 	if b, err := os.ReadFile(os.Getenv(fakeTurnStreamEnv)); err == nil {
 		os.Stdout.Write(b)
@@ -96,10 +96,10 @@ func TestReadTurnStream(t *testing.T) {
 	}
 }
 
-// A turn runs Claude Code headless in the home: -p with the prompt,
-// stream-json, dontAsk without prompts, the managed per-turn settings, the
-// conversation started or resumed, the model and the turn budget; standard
-// input closed; never a dangerous flag. Its time limit stops it, and a
+// A turn runs Claude Code headless in the home: -p with the prompt on
+// standard input, then closed, stream-json, dontAsk without prompts, the
+// managed per-turn settings, a fresh conversation, the model and the turn
+// budget; never a dangerous flag or a resume. Its time limit stops it, and a
 // client that exits without a result fails.
 func TestRunClaudeTurn(t *testing.T) {
 	home := t.TempDir()
@@ -108,7 +108,8 @@ func TestRunClaudeTurn(t *testing.T) {
 	os.WriteFile(streamf, []byte(stream(streamInit, streamCall, streamSuccess)), 0o600)
 	self, _ := os.Executable()
 	env := append(os.Environ(), fakeTurnEnv+"="+logf, fakeTurnStreamEnv+"="+streamf)
-	spec := TurnSpec{Client: self, Home: home, Env: env, Prompt: "/crew-turn 1 new message(s)",
+	prompt := "/crew-turn Attempt att-1: running/working.\n\n## Who and where\n\n- Role: worker.\n"
+	spec := TurnSpec{Client: self, Home: home, Env: env, Prompt: prompt,
 		Conversation: "11111111-2222-4333-8444-555555555555", Model: "haiku", BudgetUSD: 2, Timeout: time.Minute}
 	var transcript strings.Builder
 	spec.Transcript = &transcript
@@ -120,27 +121,23 @@ func TestRunClaudeTurn(t *testing.T) {
 	var got struct {
 		Args  []string `json:"args"`
 		Dir   string   `json:"dir"`
-		Stdin int      `json:"stdin"`
+		Stdin string   `json:"stdin"`
 	}
 	raw, _ := os.ReadFile(logf)
 	if err := json.Unmarshal(raw, &got); err != nil || res.Outcome != TurnFinished {
 		t.Fatalf("the turn: %+v %s", res, raw)
 	}
-	want := []string{"-p", "/crew-turn 1 new message(s)", "--output-format", "stream-json", "--verbose", "--permission-mode",
+	want := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode",
 		"dontAsk", "--permission-prompts", "none", "--settings", TurnSettingsFile, "--session-id", spec.Conversation,
 		"--model", "haiku", "--max-budget-usd", "2.00"}
-	if !slices.Equal(got.Args, want) || got.Stdin != 0 {
-		t.Fatalf("args %q, stdin %d bytes", got.Args, got.Stdin)
+	if !slices.Equal(got.Args, want) || got.Stdin != prompt {
+		t.Fatalf("args %q, stdin %q", got.Args, got.Stdin)
 	}
 	if a, _ := filepath.EvalSymlinks(got.Dir); a != mustEval(t, home) {
 		t.Errorf("the turn ran in %s, not the home", got.Dir)
 	}
-	spec.Resume = true
-	if args := ClaudeTurnArgs(spec); !slices.Contains(args, "--resume") || slices.Contains(args, "--session-id") {
-		t.Errorf("a resume: %q", args)
-	}
 	for _, a := range ClaudeTurnArgs(spec) {
-		if strings.Contains(a, "dangerously") || strings.Contains(a, "bypass") || a == "--fallback-model" {
+		if strings.Contains(a, "dangerously") || strings.Contains(a, "bypass") || a == "--fallback-model" || a == "--resume" {
 			t.Errorf("a dangerous argument: %s", a)
 		}
 	}

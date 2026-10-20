@@ -49,11 +49,6 @@ const (
 	// stallTurns is how many consecutive turns of an attempt with no step
 	// and no new commit stall it.
 	stallTurns = 3
-	// rotateTurns and rotateContext rotate a conversation that is not an
-	// attempt's: after this many turns, or above this share of the
-	// client's context window, or on a new day, the next turn starts fresh.
-	rotateTurns   = 50
-	rotateContext = 0.7
 )
 
 // ReadTurnLimits reads agent.json's "turns" object, with the defaults for
@@ -104,24 +99,11 @@ var modelShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,99}$`)
 // TurnStateFile is the loop's state, relative to the home.
 const TurnStateFile = "state/turns.json"
 
-// conversation is a client conversation the loop resumes.
-type conversation struct {
-	ID    string `json:"id"`
-	Turns int    `json:"turns"`
-	// Day is the UTC day it started; Context the share of the client's
-	// context window its last turn used.
-	Day     string  `json:"day,omitempty"`
-	Context float64 `json:"context,omitempty"`
-	// ClientTotalUSD is the client's running total of the conversation
-	// after its last turn, from which an unpriced turn's own cost is the
-	// difference. It is nil in a state written before it was kept.
-	ClientTotalUSD *float64 `json:"client_total_usd,omitempty"`
-}
-
-// attemptTurns is what the loop keeps of one attempt's turns.
+// attemptTurns is what the loop keeps of one attempt's turns. A state
+// written before every turn started fresh (increment 3b) also names the
+// attempt's conversation, which is read over and left out.
 type attemptTurns struct {
-	Conversation  conversation `json:"conversation"`
-	Continuations int          `json:"continuations"`
+	Continuations int `json:"continuations"`
 	// NoProgress counts the attempt's consecutive turns with no step and no
 	// new commit on its branch; Head is the branch's last commit seen.
 	NoProgress int     `json:"no_progress"`
@@ -133,9 +115,6 @@ type attemptTurns struct {
 
 // turnState is TurnStateFile.
 type turnState struct {
-	// Member is the conversation of every turn that is not an attempt's: a
-	// coordinator's, or a worker's without an attempt (D4).
-	Member   conversation             `json:"member"`
 	Attempts map[string]*attemptTurns `json:"attempts"`
 	// Days is the cost per UTC day, the last few days.
 	Days map[string]float64 `json:"days"`
@@ -245,7 +224,10 @@ type TurnRecord struct {
 	Client string `json:"client"`
 	// Model is the model the turn used, or the configured one when the
 	// client did not say; several are joined with commas.
-	Model        string    `json:"model,omitempty"`
+	Model string `json:"model,omitempty"`
+	// Conversation is the turn's own, fresh conversation (docs/DESIGN-TURNS.md,
+	// T1). Resumed is false since increment 3b; records of earlier releases
+	// carry true for a turn that resumed the previous one's conversation.
 	Conversation string    `json:"conversation"`
 	Resumed      bool      `json:"resumed"`
 	StartedAt    time.Time `json:"started_at"`
@@ -268,8 +250,8 @@ type TurnRecord struct {
 	PriceList  string  `json:"price_list,omitempty"`
 	// CostBasis is "list" for a subscription's notional list price.
 	CostBasis string `json:"cost_basis,omitempty"`
-	// ClientTotalUSD is the client's own running total of the
-	// conversation, kept as reported and never summed.
+	// ClientTotalUSD is the client's own total for the turn's conversation,
+	// kept as reported.
 	ClientTotalUSD float64  `json:"client_total_usd,omitempty"`
 	Denials        []string `json:"permission_denials"`
 	Steps          int      `json:"steps"`

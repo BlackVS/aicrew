@@ -212,6 +212,20 @@ func (s *StepServer) wantsContent(key string, st forge.PullStatus) bool {
 	return s.seen[key] != pullSeen{head: st.HeadCommit, checks: st.Checks, comments: st.Comments}
 }
 
+// Observed is what the forge watch last observed of each watched pull
+// request, in the watch's order; nil before the first poll.
+func (s *StepServer) Observed() []PullObservation {
+	s.seenMu.Lock()
+	defer s.seenMu.Unlock()
+	return slices.Clone(s.last)
+}
+
+func (s *StepServer) setObserved(last []PullObservation) {
+	s.seenMu.Lock()
+	defer s.seenMu.Unlock()
+	s.last = last
+}
+
 func (s *StepServer) markSeen(key string, st forge.PullStatus) {
 	s.seenMu.Lock()
 	defer s.seenMu.Unlock()
@@ -364,6 +378,7 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 	s.replayPoints()
 	watched := readWatched(s.home)
 	if len(watched) == 0 {
+		s.setObserved(nil)
 		return
 	}
 	doc, _, err := readAgentDoc(s.home)
@@ -380,16 +395,30 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 		names = s.AutomationNames(ctx, attemptSources(st.Attempt, ""))
 	}
 	api := newPullStatusAPI()
+	// last is what this poll observed, for the turn brief; a pull request
+	// this poll could not read keeps its previous observation.
+	prev := s.Observed()
+	var last []PullObservation
+	keep := func(w watchedPull) {
+		for _, o := range prev {
+			if o.Host == w.Host && o.Repository == w.Repository && o.Number == w.Number {
+				last = append(last, o)
+			}
+		}
+	}
+	defer func() { s.setObserved(last) }()
 	for _, w := range watched {
 		e, tok, err := forgeTokenFor(s.home, doc, w.Host)
 		if err != nil || !forge.Kind(e.Kind).Valid() {
 			s.log.Warn("forge events: no credential for the pull request's host", "host", w.Host)
+			keep(w)
 			continue
 		}
 		st, err := api.GetPullStatus(ctx, w.Host, forge.Kind(e.Kind), tok, w.Repository, w.Number)
 		if err != nil {
 			s.log.Warn("forge events: read a pull request", "host", w.Host, "repository", w.Repository, "pull", w.Number,
 				"error", RedactForgeTokens(s.home, err.Error()))
+			keep(w)
 			continue
 		}
 		o := observation(w.Host, w.Repository, st)
@@ -419,6 +448,7 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 			}
 		}
 		body := fitObservation(&o)
+		last = append(last, o)
 		if _, err := s.observePull(ctx, body, facts); err != nil {
 			s.log.Warn("forge events: report a pull request", "pull", w.Number, "error", err.Error())
 			continue

@@ -133,9 +133,11 @@ type StepServer struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	// seen is what the forge poll last reported with its content, by pull
-	// request (forgewatch.go).
+	// request, and last what it last observed of each watched pull request,
+	// for the turn brief (forgewatch.go).
 	seenMu sync.Mutex
 	seen   map[string]pullSeen
+	last   []PullObservation
 	// runs are the live script runs by their token (automation.go), and
 	// env the environment their run() commands get: the client's.
 	runsMu sync.Mutex

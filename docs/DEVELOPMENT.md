@@ -787,7 +787,9 @@ event is data; the bus is core.
   `messages` to admit the `action.needed` kind (SQLite cannot change a
   CHECK in place), every row kept, and adds `attempt_pull_facts`. Schema
   36 adds `attempt_automation_runs`, one row per automation run reported
-  at an extension point.
+  at an extension point. Schema 37 adds `attempt_handoffs`, each running
+  attempt's handoff as its worker's launcher pushed it (CREW-CONTRACT.md,
+  "The attempt's handoff"); every attempt is kept, with none.
   An older aicrewd refuses a schema-33 store, as for every schema change.
   Going back means restoring the store copy the upgrade made
   (`<store>.backup-<UTC time>`), which loses what was written since: the

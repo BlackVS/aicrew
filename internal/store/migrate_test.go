@@ -109,7 +109,7 @@ func downgradeToV10(t *testing.T, path string) {
 	}
 	stmts = append(stmts,
 		// Tables added after v10 that reference attempts go first.
-		`DROP TABLE attempt_automation_runs`, `DROP TABLE attempt_pull_facts`, `DROP TABLE attempt_blocks`, `DROP TABLE timers`, `DROP TABLE event_runs`, `DROP TABLE event_deliveries`, `DROP TABLE events`,
+		`DROP TABLE attempt_handoffs`, `DROP TABLE attempt_automation_runs`, `DROP TABLE attempt_pull_facts`, `DROP TABLE attempt_blocks`, `DROP TABLE timers`, `DROP TABLE event_runs`, `DROP TABLE event_deliveries`, `DROP TABLE events`,
 		`DROP TABLE scan_finals`, `DROP TABLE coordination_proofs`, `DROP TABLE superseded_updates`,
 		`DROP TABLE attempt_pulls`, `ALTER TABLE messages DROP COLUMN forge`,
 		`INSERT INTO attempts_v10 (`+attemptsV10Columns+`) SELECT `+attemptsV10Columns+` FROM attempts`,
@@ -501,9 +501,18 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 		PRIMARY KEY (team_id, hub_id, project_id)
 	)`
 
+// dropHandoffs takes a store back to v36.
+func dropHandoffs(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	if _, err := raw.Exec(`DROP TABLE attempt_handoffs`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // dropAutomations takes a store back to v35.
 func dropAutomations(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropHandoffs(t, raw)
 	if _, err := raw.Exec(`DROP TABLE attempt_automation_runs`); err != nil {
 		t.Fatal(err)
 	}
@@ -1270,5 +1279,34 @@ func TestMigrationV18AddsSupersededUpdates(t *testing.T) {
 	}
 	if after != before || keys != 0 {
 		t.Fatalf("after v18: %d attempts (was %d), %d superseded keys", after, before, keys)
+	}
+}
+
+// Schema v37 adds the attempts' handoffs to a populated v36 store: every
+// attempt is kept, and none has a handoff.
+func TestMigrationV37AddsHandoffs(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM attempts`).Scan(&before); err != nil || before == 0 {
+		t.Fatalf("the populated store's attempts: %d, %v", before, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropHandoffs(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 36`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v36 store: %v", err)
+	}
+	defer s2.Close()
+	var after, handoffs int
+	if err := s2.db.QueryRow(`SELECT (SELECT COUNT(*) FROM attempts), (SELECT COUNT(*) FROM attempt_handoffs)`).Scan(&after, &handoffs); err != nil ||
+		after != before || handoffs != 0 {
+		t.Fatalf("after v37: %d attempts (were %d), %d handoffs, %v", after, before, handoffs, err)
 	}
 }

@@ -203,8 +203,10 @@ This is an aicrew agent home: your configuration, guidance and workspaces.
 Repository instructions live in each repository, not here.
 
 1. **Which instructions win.** An explicit operator instruction first; then
-   the repository's own AGENTS.md or CLAUDE.md for work in that repository;
-   then the project process selected in aimem; then this guidance.
+   this home's docs and the project process selected in aimem; then the
+   repository's own AGENTS.md or CLAUDE.md, for work in that repository.
+   Where a repository's instruction files differ from this home's docs or
+   the process, the home's docs and the process come first.
 2. **Credentials.** ` + "`creds/`" + ` holds credential material only, and secrets never
    leave it or your client's own storage: not in files, arguments, logs,
    worktrees or chat. A missing or refused credential stops the operation;
@@ -236,7 +238,9 @@ Repository instructions live in each repository, not here.
    inbox, so they are refused there. To restart the session, exit the client
    and start it again with the same command.
 7. **Your role.** ` + "`docs/ROLES.md`" + ` teaches your role's steps, the inbox rule and
-   how to write for others. Read it at the start of every session.
+   how to write for others, by section per turn kind. Read it at the start
+   of an interactive session; in a home the turn loop runs, each turn's
+   brief names the sections for that turn, and you read only those.
 8. **Your team's projects.** ` + "`aicrew-agent session status`" + ` prints your role and
    your team's projects (hub, project and repository), as the launcher read
    them from aicrewd when the session started. A coordinator lists a

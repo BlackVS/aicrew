@@ -47,8 +47,10 @@ var crewCommands = []crewCommand{
 			"ledger, and where to fetch more. Nobody answers a question during a turn, and nothing reaches you " +
 			"until it ends.\n\n" +
 			"$ARGUMENTS\n\n" +
-			"1. Read `docs/HANDOFF.md`, your own notes, and `docs/START.md` and `docs/ROLES.md`.\n" +
-			"2. Act on the brief within your role, as `docs/ROLES.md` says: it holds your status and the messages, " +
+			"1. Read `docs/HANDOFF.md` and your own notes. Read no managed doc in full: the brief names the " +
+			"sections of `docs/ROLES.md` for this turn's kind; read those when the brief does not settle what " +
+			"to do.\n" +
+			"2. Act on the brief within your role, as those sections say: it holds your status and the messages, " +
 			"so read `aicrew-agent inbox` only for what it cut, and `aicrew-agent session status` only when it " +
 			"says to. If you are the coordinator, read the board for the tasks the messages name. A worker with " +
 			"a running attempt goes on with its work: the loop gives it another turn after this one, until it " +
@@ -61,6 +63,9 @@ var crewCommands = []crewCommand{
 			"the Archive are the turn loop's.\n" +
 			"5. End the turn. Never wait inside it: no sleep, no polling, no background watch. The next " +
 			"message starts the next turn.\n\n" +
+			"A procedure you work out again is not automated in the turn: propose it as `docs/ROLES.md` says " +
+			"under \"" + sectionEveryMember + "\" (a worker under Open questions in its handoff and in its pull " +
+			"request's body, a coordinator in an `[automate]` task comment), and go on by hand.\n\n" +
 			"A turn runs without prompts, under an allow list: git, `aicrew-agent`, the project's build and test " +
 			"commands, and edits in `worktrees/` and of `docs/HANDOFF.md`. Run each command alone, in one Bash " +
 			"call, from the home: no `cd`, `&&`, `;`, pipe or redirection, since a compound command is judged as " +

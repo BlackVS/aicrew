@@ -789,7 +789,9 @@ event is data; the bus is core.
   36 adds `attempt_automation_runs`, one row per automation run reported
   at an extension point. Schema 37 adds `attempt_handoffs`, each running
   attempt's handoff as its worker's launcher pushed it (CREW-CONTRACT.md,
-  "The attempt's handoff"); every attempt is kept, with none.
+  "The attempt's handoff"); every attempt is kept, with none. Schema 38
+  adds `turn_reports`, each turn's cost as its member's launcher reported
+  it (CREW-CONTRACT.md, "The turns' costs"); no turn is reported yet.
   An older aicrewd refuses a schema-33 store, as for every schema change.
   Going back means restoring the store copy the upgrade made
   (`<store>.backup-<UTC time>`), which loses what was written since: the
@@ -2455,7 +2457,12 @@ aicrewd.
   owner-only. It is the home's own log of the turn and never leaves the
   host (D7).
 - **The loop's state** is `state/turns.json`, nonsecret: each attempt's
-  turns, cost and progress, the cost per day, and any hold. The attempt's
+  turns, cost and progress, the cost per day, and any hold. The costs are
+  a cache of the totals aicrewd keeps: each turn's cost is reported to
+  aicrewd after the turn, a report that does not reach it is kept (the
+  last 50) and sent again before the next turn, and a home with no figure
+  for the day or the attempt reads aicrewd's totals before the budgets are
+  checked (CREW-CONTRACT.md, "The turns' costs"). The attempt's
   task snapshot is `state/attempts/<attempt>/task.json` ("The turn brief"
   above).
 

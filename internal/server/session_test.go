@@ -609,7 +609,7 @@ func TestRouteInventory(t *testing.T) {
 	want := []string{"GET /healthz", "GET /v1/admin/architect-credentials", "GET /v1/admin/escalation", "GET /v1/admin/escalations",
 		"GET /v1/admin/hub-credentials", "GET /v1/admin/introspection-credentials", "GET /v1/admin/invitations", "GET /v1/admin/merges",
 		"GET /v1/admin/team", "GET /v1/admin/team-states", "GET /v1/admin/team/state", "GET /v1/admin/teams", "GET /v1/crew/attempts", "GET /v1/crew/attempts/{id}/handoff", "GET /v1/crew/capabilities", "GET /v1/crew/escalations", "GET /v1/crew/inbox", "GET /v1/crew/inbox/pending",
-		"GET /v1/crew/projects", "GET /v1/crew/requirements", "GET /v1/crew/session",
+		"GET /v1/crew/projects", "GET /v1/crew/requirements", "GET /v1/crew/session", "GET /v1/crew/turns/totals",
 		"POST /v1/admin/architect-credentials", "POST /v1/admin/architect-credentials/revoke", "POST /v1/admin/escalations/answer",
 		"POST /v1/admin/hub-credentials", "POST /v1/admin/hub-credentials/revoke", "POST /v1/admin/hub-credentials/rotate",
 		"POST /v1/admin/introspection-credentials", "POST /v1/admin/introspection-credentials/revoke",
@@ -624,7 +624,7 @@ func TestRouteInventory(t *testing.T) {
 		"POST /v1/crew/attempts/{id}/stop", "POST /v1/crew/attempts/{id}/withdraw", "POST /v1/crew/attempts/{id}/work", "POST /v1/crew/automations",
 		"POST /v1/crew/capabilities", "POST /v1/crew/challenges", "POST /v1/crew/coordination",
 		"POST /v1/crew/escalations", "POST /v1/crew/inbox/ack", "POST /v1/crew/introspect", "POST /v1/crew/invitations/begin", "POST /v1/crew/invitations/complete", "POST /v1/crew/pulls",
-		"POST /v1/crew/session/leave", "POST /v1/crew/token"}
+		"POST /v1/crew/session/leave", "POST /v1/crew/token", "POST /v1/crew/turns"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("routes = %v, want %v", got, want)
 	}

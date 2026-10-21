@@ -520,7 +520,12 @@ It stays in the client's own storage, which WORKSPACE exempts from
   spent is `limit_reached` with `kind: budget`:
   - **Turn budget:** passed to Claude Code as `--max-budget-usd`.
   - **Attempt and daily budgets:** applied by the scheduler before a turn
-    starts.
+    starts. Their totals live on aicrewd: the launcher reports each turn's
+    cost after the turn, and its home's `state/turns.json` is a cache of
+    them. A home with no figure for the day or the attempt (a new home of
+    the member) reads aicrewd's totals first, so the budgets hold across
+    hosts. The day is aicrewd's UTC date when a turn's report first
+    arrives, per member (CREW-CONTRACT, "The turns' costs").
   - **Lifting it:** the member waits until the operator raises the budget,
     or the day turns.
 - **Who learns about it:** the coordinator gets a lifecycle message when a

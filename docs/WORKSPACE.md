@@ -53,7 +53,8 @@ is also independent of the model and client, both of which may change.
   creds/             credential material only
   docs/              agent guidance and handoff
   state/             nonsecret recovery data; owner-only, holds the step socket,
-                     the team's projects (team.json), the turn loop's state (turns.json)
+                     the team's projects (team.json), the turn loop's state (turns.json,
+                     whose costs are a cache of the totals aicrewd keeps)
                      and a worker's per-turn settings with its toolchain
                      (turn-settings-worker.json); serve.lock, held by the running serve,
                      and serve.pid, its process ID

@@ -962,9 +962,13 @@ func TestTurnBriefBounds(t *testing.T) {
 		e.host.inbox = append(e.host.inbox, m)
 	}
 	e.tick(t)
-	p := e.specs[0].Prompt
-	if len(p) > maxBriefBytes+256 || !strings.Contains(p, "(The brief was cut at its bound; `aicrew-agent inbox` has the rest.)") {
+	p := strings.TrimPrefix(e.specs[0].Prompt, "/crew-turn ")
+	if len(p) > maxBriefBytes || !strings.Contains(p, "(The brief was cut at its bound; `aicrew-agent inbox` has the rest.)") {
 		t.Fatalf("the brief is %d bytes and ends %q", len(p), p[len(p)-120:])
+	}
+	// The cut takes the body, never the last part with the sections.
+	if !strings.HasSuffix(p, briefFetch("worker", kindWorkerReview)) {
+		t.Fatalf("the cut brief lost its last part; it ends %q", p[len(p)-300:])
 	}
 	if !strings.Contains(p, "(The text was cut to the snapshot's bound; aimem's `get_task` has it in full.)") ||
 		strings.Contains(p, "never seen") || strings.Count(p, "y") > maxBriefText*maxBriefMessages+maxBriefMessages {

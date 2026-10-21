@@ -2318,7 +2318,9 @@ Messages that arrive during a turn wait for the next one.
      a board change. At most 10 messages; the rest are counted and left to
      `aicrew-agent inbox`;
   5. a coordinator's team state: the team's open attempts as aicrewd lists
-     them now (`GET /v1/crew/attempts`), each with its next action;
+     them now (`GET /v1/crew/attempts`), each with its next action, at
+     most 8 KiB of them, with a line counting those left out and naming
+     `aicrew-agent attempts`;
   6. the pull requests as the launcher's forge watch last observed them:
      state, head, labels, checks, comments, the review at the head, the
      failed checks; or that none was observed yet;
@@ -2346,7 +2348,9 @@ Messages that arrive during a turn wait for the next one.
   tokens and the known token shapes; a message's or a review's text is cut
   at 1 KiB and the whole brief at 24 KiB, which says so. The handoff and
   the ledger take the room the other parts leave, so the bound cuts them
-  first: the ledger's oldest lines, then the section, each cut logged.
+  first: the ledger's oldest lines, then the section, each cut logged. The
+  last resort cuts the body before the last part, which always stays
+  whole, since it names the turn's ROLES.md sections.
 - **The trigger** in the turn's record names the messages' kinds and ids,
   or the continued attempt, never a message's text.
 - **Outcomes:**

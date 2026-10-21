@@ -159,6 +159,34 @@ func TestCoordinatorBrief(t *testing.T) {
 		strings.Contains(p, "(The brief was cut at its bound") {
 		t.Fatalf("the crowded brief (%d bytes):\n%s", len(p), p)
 	}
+
+	// More open attempts than the team part's bound (aicrewd lists them
+	// without a limit): the part stops at its bound and counts the rest,
+	// the handoff keeps room, and the brief keeps its last part without
+	// the last-resort cut (hands review of #193).
+	e.host.open.Attempts = nil
+	for i := range 200 {
+		e.host.open.Attempts = append(e.host.open.Attempts, OpenAttempt{
+			ID: fmt.Sprintf("01a157ca-48c9-7000-8d7b-%012d", i), State: "running", Phase: "working",
+			Task:        TaskRef{HubID: "hub-0123456789", ProjectID: "project-0123456789", TaskID: fmt.Sprintf("01a157ca-0000-7000-0000-%012d", i)},
+			WorkerLabel: "worker-1", NextAction: "Follow the running attempt."})
+	}
+	e.host.pending = []PendingMessage{msg("m4", "message")}
+	e.host.inbox = []inboxMessage{{ID: "m4", Kind: "message"}}
+	e.tick(t)
+	p = strings.TrimPrefix(e.specs[3].Prompt, "/crew-turn ")
+	from, to := strings.Index(p, "## The team"), strings.Index(p, "## Pull requests")
+	if from < 0 || to < from {
+		t.Fatalf("the brief with 200 open attempts has no team part before the pull requests:\n%s", p)
+	}
+	team := p[from:to]
+	if len(p) > maxBriefBytes || len(team) > maxBriefTeam+512 ||
+		!strings.Contains(team, "more open attempt(s) were left out at the brief's bound: `aicrew-agent attempts` lists them all.") ||
+		!strings.Contains(p, "# Handoff\n\na line of the coordinator's notes\n") ||
+		!strings.HasSuffix(p, briefFetch("coordinator", kindCoordinator)) ||
+		strings.Contains(p, "(The brief was cut at its bound") {
+		t.Fatalf("the brief with 200 open attempts (%d bytes, team part %d):\n%s", len(p), len(team), p)
+	}
 }
 
 // /crew-turn reads no managed doc in full, and it and ROLES.md carry the

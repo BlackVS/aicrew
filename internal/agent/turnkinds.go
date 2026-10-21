@@ -35,8 +35,13 @@ const (
 )
 
 // maxCoordinatorHandoff bounds what a coordinator's brief carries of its
-// docs/HANDOFF.md, as maxHandoffSection bounds a worker's section.
-const maxCoordinatorHandoff = maxHandoffSection
+// docs/HANDOFF.md, as maxHandoffSection bounds a worker's section, and
+// maxBriefTeam its team's open attempts, which aicrewd lists without a
+// limit.
+const (
+	maxCoordinatorHandoff = maxHandoffSection
+	maxBriefTeam          = 8 << 10
+)
 
 // turnKindOf is the turn's kind: a coordinator's; a member's without a
 // running attempt (an offer for a worker, a claim for an independent
@@ -106,7 +111,8 @@ func briefFetch(role, kind string) string {
 }
 
 // briefTeam is a coordinator's team state: the team's open attempts as
-// aicrewd lists them now.
+// aicrewd lists them now, at most maxBriefTeam bytes of them; a line
+// counts the rest.
 func (l *TurnLoop) briefTeam(ctx context.Context, b *strings.Builder) {
 	b.WriteString("\n## The team\n\n")
 	o, err := l.Host.OpenAttempts(ctx)
@@ -118,8 +124,15 @@ func (l *TurnLoop) briefTeam(ctx context.Context, b *strings.Builder) {
 		b.WriteString("The team has no open attempts.\n")
 	default:
 		b.WriteString("The team's open attempts as aicrewd lists them now:\n\n")
-		for _, a := range o.Attempts {
-			b.WriteString(redactBrief(l.Home, a.Line(), maxBriefText) + "\n")
+		size := 0
+		for i, a := range o.Attempts {
+			line := redactBrief(l.Home, a.Line(), maxBriefText) + "\n"
+			if size += len(line); size > maxBriefTeam {
+				fmt.Fprintf(b, "\n%d more open attempt(s) were left out at the brief's bound: `aicrew-agent attempts` "+
+					"lists them all.\n", len(o.Attempts)-i)
+				return
+			}
+			b.WriteString(line)
 		}
 	}
 }
@@ -152,7 +165,11 @@ func (l *TurnLoop) coordinatorHandoff(redact func(string) string, room int) stri
 	if len(doc) <= bound {
 		return head + doc + "\n"
 	}
-	cut := cutText(doc, max(bound, 0))
+	if bound <= 0 {
+		l.Log.Warn("the brief had no room for the coordinator's handoff", "bytes", len(doc))
+		return head + "(No room was left for `docs/HANDOFF.md` in this brief: read it in the home.)\n"
+	}
+	cut := cutText(doc, bound)
 	l.Log.Warn("the brief cut the coordinator's handoff at its bound", "bytes", len(doc), "bound", bound)
 	return head + cut + fmt.Sprintf(cutLine, len(doc)-(len(cut)-len("…")))
 }

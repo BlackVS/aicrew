@@ -186,12 +186,15 @@ func (l *TurnLoop) brief(ctx context.Context, in briefInput) string {
 	}
 	// Every text from outside the launcher passes the redaction once more
 	// as a whole, so a label, a check's name or URL, a review's author or
-	// a command is covered as a body is (hands review of #189).
-	s := redact(rest + memory + fetch)
-	if len(s) > maxBriefBytes {
-		s = cutText(s, maxBriefBytes) + "\n\n(The brief was cut at its bound; `aicrew-agent inbox` has the rest.)\n"
+	// a command is covered as a body is (hands review of #189). The last
+	// resort cuts the body, never the last part, which names the turn's
+	// ROLES.md sections (hands review of #193).
+	body, fetch := redact(rest+memory), redact(fetch)
+	if len(body)+len(fetch) > maxBriefBytes {
+		const note = "\n\n(The brief was cut at its bound; `aicrew-agent inbox` has the rest.)\n"
+		body = cutText(body, max(maxBriefBytes-len(fetch)-len(note), 0)) + note
 	}
-	return s
+	return body + fetch
 }
 
 // briefHead is the first line, the attempt's state as aicrewd's status

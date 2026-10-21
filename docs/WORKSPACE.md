@@ -195,6 +195,11 @@ survey, the options and the decision (D-STORE) are recorded in
   mode. It has the same identity but no team session and no aicrew steps,
   and aimem refuses claims on the team's held tasks. Memory tools are
   unavailable there, because a home runs no local aimem service.
+- **The place of launch sets the mode.** A client started from the home is
+  the member; a session in an operator's checkout is standalone. A
+  repository's own instruction files (AGENTS.md, CLAUDE.md) never set the
+  mode, and where they differ from the home's docs and the process set, the
+  home's `docs/START.md` says which come first.
 - **Identity never lives in a project checkout.** A repository file that
   could name a state root would let a cloned repository redirect hooks and
   tokens, so the home and its launcher make the binding.

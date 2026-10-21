@@ -1,8 +1,11 @@
 # Start aicrew development
 
-Assigned session: **Opus 5.5**, standalone. Another session (GPT-6 Sol)
-implements aimem prerequisites. The review/monitor session does not implement
-either backlog. Do not join the old Pilot team or launch workers.
+This page is for a standalone development session in the operator's
+checkout. A team member working in a worktree of this repository follows its
+home's docs and the project's process set where they differ from this page.
+The board's assignee decides who implements a task; aimem prerequisites are
+implemented in the aimem project. A standalone session does not join a team
+or launch workers.
 
 1. Read AGENTS.md, this file, the local SESSION-STATE.md, BACKLOG-MAP.md and
    the AIForge design with its context and reservation contracts, pinned to

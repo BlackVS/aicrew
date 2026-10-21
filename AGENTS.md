@@ -1,25 +1,33 @@
 # Aicrew agent instructions
 
+## Mode
+
+The place of launch sets the mode and the identity, never this file. A
+session started in the operator's checkout is standalone. A team member is
+started from its agent home and works in a worktree of this repository;
+where its home's docs and the project's process set differ from this file,
+they decide.
+
 ## Start here
 
 Read `docs/START-HERE.md`, `docs/SESSION-STATE.md` if present, and the
 pinned AIForge design linked from START-HERE at session start and after
 compaction. Verify Git and live task evidence rather than trusting the
-handoff. Use the aimem project `aicrew`; this is a standalone implementation
-session, not a Pilot member.
+handoff. Use the aimem project `aicrew`.
 
 The task board is authoritative for live task state. `docs/BACKLOG-MAP.md`
 contains IDs and ownership, not a second status list. Read the selected process
-and required skills. Do not join/resume a team or claim work on the aimem board.
-Cross-project dependencies must be checked by ID; unknown is not DONE.
+and required skills. A standalone session never joins or resumes a team; a
+team member acts on tasks only through its launcher, as its home's ROLES.md
+says. Cross-project dependencies must be checked by ID; unknown is not DONE.
 
 ## Ownership and boundaries
 
-The assigned implementation session owns aicrew changes. The separate aimem
-session owns aimem prerequisites. The monitoring session reviews and watches
-integration; it is not another implementation worker. Human merges remain
-human merges. Parallel work across the two repositories is allowed; within
-this repository use one work PR at a time, targeting `main`.
+The task's assignee owns its aicrew changes; aimem prerequisites belong to
+the aimem project and its assignees. Reviewing and watching integration is
+not implementation. Human merges remain human merges. Parallel work across
+the two repositories is allowed; within this repository use one work PR at a
+time, targeting `main`.
 
 Aimem owns knowledge, tasks, actors and access profiles. Aicrew owns teams,
 membership, roles, attempts and delivery. Use direct aimem interfaces, not a
@@ -49,10 +57,12 @@ The future product's agent-home layout is a design requirement, not something
 to install over this development checkout. `repos/`, `worktrees/`, credential
 naming and managed initial docs are defined in `docs/WORKSPACE.md`.
 
-`docs/SESSION-STATE.md` is a local, gitignored single-writer handoff, at most
-50 lines: owner/date, objective, verified milestones, next, one-line pickup.
-Read it after compaction. Take ownership explicitly when starting as the
-assigned implementer; do not overwrite another active session's handoff.
+In a standalone session, `docs/SESSION-STATE.md` is a local, gitignored
+single-writer handoff, at most 50 lines: owner/date, objective, verified
+milestones, next, one-line pickup.
+Read it after compaction. Take ownership explicitly when starting a task's
+work; do not overwrite another active session's handoff. A team member's
+handoff is its home's `docs/HANDOFF.md`.
 Before stopping, verify first and then record commands/results, limitations
 and exact next steps. Keep shared design decisions in reviewed docs and task
 comments, not only this host-local file.

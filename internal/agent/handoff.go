@@ -269,6 +269,11 @@ func (l *TurnLoop) prepareHandoff(ctx context.Context, st *turnState, attempt *m
 			l.Log.Info("the home had no handoff: it was taken from the attempt on aicrewd", "attempt", attempt.ID)
 		default:
 			d.Section, d.HasSection = hub.Section, true
+			// A home without its own archive keeps the attempt's, such as
+			// one joined with an older placeholder than handoffMD.
+			if len(d.Archive) == 0 {
+				d.Archive = hub.Archive
+			}
 			l.Log.Info("the home's handoff had no section for the attempt: it was taken from aicrewd",
 				"attempt", attempt.ID)
 		}

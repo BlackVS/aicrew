@@ -227,9 +227,10 @@ func TestHandoffSectionIdentity(t *testing.T) {
 // a copy there, the launcher opens a new section.
 func TestHandoffPullWhenMissing(t *testing.T) {
 	hub := "# Handoff\n\nThe old home's notes.\n\n## CURRENT ATTEMPT\n\nAttempt `att-1`, task `task-1`.\n\n" +
-		"### Next\n\nRebase on the new base.\n"
+		"### Next\n\nRebase on the new base.\n\n## Archive\n\n### Attempt att-0 (archived 2026-10-01T00:00:00Z)\n\nThe first attempt.\n"
 	for name, local := range map[string]string{"no file": "", "join's placeholder": handoffMD,
-		"a header of its own": "# Handoff\n\nThis home's notes.\n"} {
+		"an older join's placeholder": "# Handoff\n\nThis file belongs to the agent. `aicrew-agent join` created it once and never\nchanges it.\n",
+		"a header of its own":         "# Handoff\n\nThis home's notes.\n"} {
 		t.Run(name, func(t *testing.T) {
 			e := newLoopEnv(t)
 			if local != "" {
@@ -245,11 +246,15 @@ func TestHandoffPullWhenMissing(t *testing.T) {
 			}
 			pushed := e.host.handoffs["att-1"]
 			wantHeader := "The old home's notes."
-			if name == "a header of its own" {
+			switch name {
+			case "a header of its own":
 				wantHeader = "This home's notes."
+			case "an older join's placeholder":
+				wantHeader = "created it once"
 			}
 			if e.host.pushes != 1 || !strings.Contains(pushed, "Rebase on the new base.") ||
-				!strings.Contains(pushed, "- turn 1") || !strings.Contains(pushed, wantHeader) {
+				!strings.Contains(pushed, "- turn 1") || !strings.Contains(pushed, wantHeader) ||
+				!strings.Contains(pushed, "### Attempt att-0 (archived 2026-10-01T00:00:00Z)\n\nThe first attempt.") {
 				t.Fatalf("the push after the turn (%d): %q", e.host.pushes, pushed)
 			}
 		})
@@ -300,6 +305,47 @@ func TestHandoffWriteDiagnostics(t *testing.T) {
 	e.loop.prepareHandoff(context.Background(), &turnState{}, a)
 	if !strings.Contains(logs.String(), "the handoff was not written") || !strings.Contains(logs.String(), "mkdir") {
 		t.Fatalf("a failed write: log %q", logs.String())
+	}
+}
+
+// A launcher stopped during the first turn of a new attempt leaves the
+// section's attempt saved with the doc: the next start keeps the open
+// attempt's section and its Next, and archives only the earlier attempt's.
+func TestHandoffOwnerSurvivesInterruptedTurn(t *testing.T) {
+	e := newLoopEnv(t)
+	st := readTurnState(e.home)
+	st.Handoff = "att-A"
+	if err := writeTurnState(e.home, st); err != nil {
+		t.Fatal(err)
+	}
+	d := parseHandoff(handoffMD)
+	d.Section, d.HasSection = newSection(&memberAttempt{ID: "att-A", Task: TaskRef{TaskID: "task-A"}}), true
+	os.MkdirAll(filepath.Dir(handoffPath(e.home)), 0o700)
+	os.WriteFile(handoffPath(e.home), []byte(d.render()), 0o600)
+
+	e.host.attempt = &memberAttempt{ID: "att-B", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-B"}}
+	e.host.pending = []PendingMessage{msg("offer", "lifecycle")}
+	e.staleHandoff = true
+	var onDisk []byte
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult {
+		h.pending = nil
+		touchHandoff(e.home, "Finish B.")
+		onDisk, _ = os.ReadFile(turnStatePath(e.home)) // what a launcher stopped now leaves
+		return TurnResult{Outcome: TurnStopped}
+	}
+	e.tick(t)
+	os.WriteFile(turnStatePath(e.home), onDisk, 0o600)
+
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult {
+		h.pending = nil
+		return TurnResult{Outcome: TurnFinished}
+	}
+	e.host.pending = []PendingMessage{msg("m2", "message")}
+	e.tick(t)
+	d, _, _ = readHandoff(e.home)
+	if p := e.specs[1].Prompt; !strings.Contains(p, "### Next\n\n- Finish B.\n") || d.sectionAttempt() != "att-B" ||
+		!strings.Contains(d.Section, "- Finish B.") || len(d.Archive) != 1 || !strings.HasPrefix(d.Archive[0], "### Attempt att-A ") {
+		t.Fatalf("after the restart: section %q, archive %q, brief:\n%s", d.Section, d.Archive, p)
 	}
 }
 

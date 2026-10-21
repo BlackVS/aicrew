@@ -297,6 +297,12 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		if d, ok := l.prepareHandoff(ctx, st, attempt); ok {
 			doc = &d
 		}
+		// The section's attempt is saved with the doc it describes, so a
+		// launcher stopped during the turn does not archive the open
+		// attempt's section on its next start.
+		if err := writeTurnState(l.Home, *st); err != nil {
+			l.Log.Warn("record the turn state", "error", err.Error())
+		}
 	}
 	sectionBefore := ""
 	if doc != nil {

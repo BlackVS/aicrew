@@ -2386,7 +2386,8 @@ aicrewd.
   that names the attempt and the task and the four parts Done, Decisions,
   Next and Open questions, which the model keeps current. A section the
   model rewrote without that first line is still the open attempt's: the
-  launcher records the section's attempt in `state/turns.json`, puts a
+  launcher records the section's attempt in `state/turns.json` before the
+  turn runs (so a launcher stopped during it keeps the record), puts a
   missing line back, and logs a line that names another attempt. A
   section of an
   attempt that is no longer open moves to the `## Archive`, newest first,
@@ -2406,7 +2407,8 @@ aicrewd.
   attempt (a new home, whose doc is join's placeholder, or none) reads the
   attempt's copy before the turn and takes it: the whole doc over the
   placeholder or a missing file, only its section under a header of the
-  home's own. When that read fails, the turn runs without the doc and
+  home's own, with the attempt's archive when the home's doc has none (an
+  older join's placeholder is such a header). When that read fails, the turn runs without the doc and
   neither counts towards the stall nor pushes, so a new section never
   replaces the attempt's copy.
 - **Retention.** A new attempt's directory under `state/attempts/` (its

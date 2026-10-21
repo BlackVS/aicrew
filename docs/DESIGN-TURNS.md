@@ -168,7 +168,8 @@ The rest of this section uses the real per-turn figures.
 
 **Decision.** Every turn starts from a fresh context, with no conversation
 resume between turns. The memory is:
-- the attempt's handoff;
+- the member's session doc, `docs/HANDOFF.md`, with its CURRENT ATTEMPT
+  section (below);
 - the attempt's state on the hub;
 - the repository: the branch, its commits and the pull request.
 
@@ -193,7 +194,8 @@ The brief holds:
   question.
 - **The pull request:** number, head, labels, draft state, and the review
   verdicts and CI conclusion at the head, from the launcher's last read.
-- **The handoff:** the attempt handoff (below), in full.
+- **The handoff:** the CURRENT ATTEMPT section of the session doc (below),
+  at most 8 KiB.
 - **The ledger:** one line per earlier turn of the attempt (below).
 - **Where to fetch more:**
   - `aicrew-agent inbox`;
@@ -205,24 +207,50 @@ START.md and ROLES.md are no longer read in full at every start. The brief
 names the role's rules that apply to this turn kind (section 6), and the
 model reads more when it needs to (principle 5).
 
-**The attempt handoff.** This is `state/attempts/<attempt>/HANDOFF.md`, one
-file per attempt. It is distinct from the member's own `docs/HANDOFF.md`.
-- **The model writes** these sections, and the turn's last action updates
-  them:
-  - **Done:** what was done, by commit.
-  - **Decisions:** decisions and their reasons, including any the reviews
-    settled.
-  - **Next:** the next step, concrete enough for a fresh session to take it.
-  - **Open questions:** those still open, and who owns each.
-- **The launcher appends** one ledger line after each turn: turn ID, start,
-  outcome, real cost, head commit before and after, the steps taken, and the
-  first sentence of the summary.
-  - The ledger is the only part of the file the launcher writes.
-  - A turn that ends without updating the model's sections gets a ledger
-    line marked `handoff not updated`. Two such turns in a row count as a
-    stall (1.8).
-- **The file is bounded:** at most 8 KiB for the model's part and 50 ledger
-  lines.
+**The session doc** (increment 3c). A worker's memory between turns is
+its own `docs/HANDOFF.md`, one file per member, not a file per attempt.
+The design first had `state/attempts/<attempt>/HANDOFF.md` beside the
+member's own doc; the operator revised it on 2026-10-20, because the
+member already keeps that file, a turn may already edit it under the allow
+list, and a second file would split one memory in two. The home is a
+cache: the member's canonical copy is on aicrewd.
+- **The structure.** The agent owns the file; the launcher owns two of its
+  sections:
+  - **CURRENT ATTEMPT**, which the launcher opens at the attempt's first
+    turn, with a first line naming the attempt and the task. The model
+    keeps its four parts current, and the turn's last action updates them:
+    - **Done:** what was done, by commit.
+    - **Decisions:** decisions and their reasons, including any the reviews
+      settled.
+    - **Next:** the next step, concrete enough for a fresh session to take
+      it.
+    - **Open questions:** those still open, and who owns each.
+  - **Archive**, where the launcher moves the section of an attempt that is
+    no longer open, newest first, and keeps the last 10 attempts, at most
+    16 KiB. The full history is on the board and in the pull requests.
+  - Everything before the two sections is the agent's own header.
+- **The bound.** The brief carries at most 8 KiB of the section; a longer
+  section is logged and cut there.
+- **The ledger** is launcher data, `state/attempts/<attempt>/ledger.jsonl`:
+  one line per turn of the attempt with the turn ID, start, outcome, real
+  cost, head commit before and after, the steps taken, and the first
+  sentence of the summary, at most 50 lines. The brief carries it after the
+  section.
+- **The stall rule.** A finished turn that leaves the section unchanged
+  gets a ledger line marked `handoff not updated`. Two such turns in a row
+  that make no step stall the attempt through the existing stall (1.8); a
+  change of the section or a step resets the count. The rule of three turns
+  with no step and no commit stays.
+- **The sync**, only with aicrewd and only under the member. After a
+  worker's turn the launcher pushes the doc, redacted and bounded, to the
+  attempt's handoff on aicrewd (CREW-CONTRACT.md, "The attempt's handoff");
+  before a turn it takes the local copy, and only when the home has none
+  (a new home of the member on another host) the attempt's. aicrewd refuses
+  the push once a stop is requested or the attempt is no longer running;
+  the home keeps its copy, and the refusal is logged. No aimem docsync runs
+  in a home.
+- **Retention.** A new attempt's directory under `state/attempts/` removes
+  those of other attempts beyond the newest 20, never the open one's.
 
 **The coordinator** starts every turn fresh in the same way. Its brief
 carries the team state, the action-needed content and its own

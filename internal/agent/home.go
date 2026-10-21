@@ -214,7 +214,10 @@ Repository instructions live in each repository, not here.
    attempt. The clones under ` + "`repos/`" + ` stay clean.
    ` + "`aicrew-agent clone --repository URL --attempt ID --base COMMIT --branch NAME`" + `
    makes both with your own forge credential and commit identity.
-4. **Handoff.** ` + "`docs/HANDOFF.md`" + ` is yours. It is never managed or overwritten.
+4. **Handoff.** ` + "`docs/HANDOFF.md`" + ` is yours, and never overwritten. In a home the
+   turn loop runs, it keeps two parts of a worker's: the ` + "`## CURRENT ATTEMPT`" + `
+   section, which it opens for each attempt and you keep current, and the
+   ` + "`## Archive`" + ` of closed attempts, which it trims.
 5. **Readiness.** Before work, run ` + "`aicrew-agent check --home <this directory>`" + `:
    it checks the versions of ` + "`aimem`" + `, ai-skills and your client, and that
    your client sees aimem's MCP server and the required skills. When
@@ -254,7 +257,9 @@ Repository instructions live in each repository, not here.
 
 const handoffMD = "# Handoff\n\n" +
 	"This file belongs to the agent. `aicrew-agent join` created it once and never\n" +
-	"changes it.\n"
+	"changes it. In a home the turn loop runs, the loop keeps two parts of a\n" +
+	"worker's: the CURRENT ATTEMPT section, which it opens for each attempt and the\n" +
+	"agent keeps current, and the Archive of closed attempts. The rest is the agent's.\n"
 
 // HomeLabel is the home's label as join recorded it, or else its
 // directory's name: what names the home's service.

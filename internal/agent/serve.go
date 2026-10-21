@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,6 +99,11 @@ type turnHost interface {
 	Inbox(ctx context.Context, limit int) ([]inboxMessage, error)
 	ReadTask(ctx context.Context, taskID string) (TaskDoc, error)
 	Observed() []PullObservation
+	// PushHandoff replaces the attempt's handoff on aicrewd with doc, and
+	// ReadHandoff reads it, "" when it has none: the session doc's sync
+	// (handoff.go).
+	PushHandoff(ctx context.Context, attemptID, doc string) error
+	ReadHandoff(ctx context.Context, attemptID string) (string, error)
 }
 
 // TurnLoop is one home's turn loop.
@@ -283,8 +289,21 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		head = l.head(ctx, attempt.ID)
 	}
 	before := l.Host.StepsDone()
+	// A worker's session doc: readied before the brief, which carries its
+	// CURRENT ATTEMPT section, and compared after the turn.
+	worker, opened := status.Session.Role == "worker", attempt != nil
+	var doc *handoffDoc
+	if worker {
+		if d, ok := l.prepareHandoff(ctx, attempt); ok {
+			doc = &d
+		}
+	}
+	sectionBefore := ""
+	if doc != nil {
+		sectionBefore = sectionHash(*doc)
+	}
 	brief := l.brief(ctx, briefInput{status: status, attempt: attempt, trigger: trigger, pending: pending,
-		continuation: continuation})
+		continuation: continuation, handoff: doc})
 	l.Log.Info("turn started", "turn", rec.ID, "trigger", trigger, "conversation", rec.Conversation,
 		"brief_bytes", len(brief))
 	transcript, closeTranscript := openTranscript(l.Home, rec.ID)
@@ -341,14 +360,26 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		} else if res.Outcome == TurnFinished {
 			a.NoProgress++
 		}
+		if worker {
+			// A turn that started without its doc is only recorded.
+			l.handoffAfterTurn(ctx, attempt.ID, a, rec, sectionBefore, head, newHead, opened && doc != nil)
+		}
 		a.Head = newHead
 	}
 	st.Continue = ""
 	if afterErr == nil && after.Attempt.inWork() {
 		st.Continue = after.Attempt.ID
-		if a != nil && after.Attempt.ID == attemptID && a.NoProgress >= stallTurns && !a.Stalled {
-			l.stall(ctx, after.Attempt, a)
-			st.Continue = ""
+		if a != nil && after.Attempt.ID == attemptID && !a.Stalled {
+			switch {
+			case a.NoProgress >= stallTurns:
+				l.stall(ctx, after.Attempt, a, fmt.Sprintf(
+					"The turn loop stalled this attempt: %d turns in a row made no step and no new commit.", stallTurns))
+				st.Continue = ""
+			case a.Unchanged >= handoffStallTurns:
+				l.stall(ctx, after.Attempt, a, fmt.Sprintf("The turn loop stalled this attempt: %d turns in a row made "+
+					"no step and left the CURRENT ATTEMPT section of docs/HANDOFF.md unchanged.", handoffStallTurns))
+				st.Continue = ""
+			}
 		}
 	}
 	if err := writeTurnState(l.Home, *st); err != nil {
@@ -386,13 +417,13 @@ func nextBackoff(cur, base, ceiling time.Duration) time.Duration {
 	return min(cur*2, ceiling)
 }
 
-// stall blocks the attempt through the work step: three turns made no step
-// and no commit. The block's lifecycle message tells the coordinator, which
-// decides what the stall means, as it decides any block.
-func (l *TurnLoop) stall(ctx context.Context, attempt *memberAttempt, a *attemptTurns) {
+// stall blocks the attempt through the work step, with detail as the
+// blocker: three turns made no step and no commit, or two made no step and
+// left the handoff unchanged. The block's lifecycle message tells the
+// coordinator, which decides what the stall means, as it decides any block.
+func (l *TurnLoop) stall(ctx context.Context, attempt *memberAttempt, a *attemptTurns, detail string) {
 	a.Stalled = true
-	body, _ := json.Marshal(map[string]string{"intent": "block", "detail": fmt.Sprintf(
-		"The turn loop stalled this attempt: %d turns in a row made no step and no new commit.", stallTurns)})
+	body, _ := json.Marshal(map[string]string{"intent": "block", "detail": detail})
 	ans := l.Host.Do(ctx, StepCall{Op: "work", AttemptID: attempt.ID, TaskID: attempt.Task.TaskID, Body: body})
 	if !ans.OK {
 		msg := ""
@@ -547,6 +578,38 @@ func (s *StepServer) Inbox(ctx context.Context, limit int) ([]inboxMessage, erro
 // attempt's task snapshot.
 func (s *StepServer) ReadTask(ctx context.Context, taskID string) (TaskDoc, error) {
 	return s.driver.Aimem.GetTask(ctx, s.driver.Session.stepAimemFile(), taskID)
+}
+
+// handoffRoute is the attempt's handoff on aicrewd (CREW-CONTRACT.md, "The
+// attempt's handoff").
+func handoffRoute(attemptID string) string {
+	return attemptsPath + "/" + url.PathEscape(attemptID) + "/handoff"
+}
+
+// PushHandoff replaces the attempt's handoff on aicrewd, as the launcher's
+// session.
+func (s *StepServer) PushHandoff(ctx context.Context, attemptID, doc string) error {
+	body, err := json.Marshal(map[string]string{"handoff": doc})
+	if err != nil {
+		return err
+	}
+	_, err = s.local.LocalStep(ctx, newKey("handoff"), s.driver.Session.stepToken(), handoffRoute(attemptID), body)
+	return err
+}
+
+// ReadHandoff reads the attempt's handoff from aicrewd, "" when it has none.
+func (s *StepServer) ReadHandoff(ctx context.Context, attemptID string) (string, error) {
+	raw, err := s.local.Read(ctx, s.driver.Session.stepToken(), handoffRoute(attemptID))
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		Handoff string `json:"handoff"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", fmt.Errorf("the handoff is not the expected JSON: %w", err)
+	}
+	return out.Handoff, nil
 }
 
 // ErrNotTurnsHome refuses serve on a home whose wake mode is not turns.

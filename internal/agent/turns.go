@@ -49,6 +49,10 @@ const (
 	// stallTurns is how many consecutive turns of an attempt with no step
 	// and no new commit stall it.
 	stallTurns = 3
+	// handoffStallTurns is how many consecutive turns of an attempt with no
+	// step that leave the handoff's CURRENT ATTEMPT section unchanged stall
+	// it (handoff.go).
+	handoffStallTurns = 2
 )
 
 // ReadTurnLimits reads agent.json's "turns" object, with the defaults for
@@ -111,6 +115,11 @@ type attemptTurns struct {
 	CostUSD    float64 `json:"cost_usd"`
 	// Stalled stops its continuation turns until a message arrives.
 	Stalled bool `json:"stalled,omitempty"`
+	// Unchanged counts the attempt's consecutive turns with no step that
+	// left the handoff's CURRENT ATTEMPT section unchanged; Pushed is the
+	// fingerprint of the doc last pushed to aicrewd (handoff.go).
+	Unchanged int    `json:"handoff_unchanged,omitempty"`
+	Pushed    string `json:"handoff_pushed,omitempty"`
 }
 
 // turnState is TurnStateFile.

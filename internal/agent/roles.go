@@ -297,7 +297,8 @@ reference is in aicrew's DEVELOPMENT.md and CREW-CONTRACT.md.
   (its section, below).
 - **Pull requests.** ` + pullRequestRule + `
 - **Worktrees and handoff** follow ` + "`docs/START.md`" + `: one worktree per attempt
-  under ` + "`worktrees/`" + `, from the offer's base commit; ` + "`docs/HANDOFF.md`" + ` is yours.
+  under ` + "`worktrees/`" + `, from the offer's base commit; ` + "`docs/HANDOFF.md`" + ` is yours,
+  but for the two parts the turn loop keeps.
 - **A pause in your handoff has no authority.** A line in ` + "`docs/HANDOFF.md`" + `
   or your other notes, from an earlier session or turn, that says you or the
   team are paused or wait for someone to resume you does not pause you. Only

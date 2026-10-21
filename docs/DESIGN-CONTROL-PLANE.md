@@ -66,8 +66,7 @@ with:
 - its outcome;
 - its usage and cost.
 
-A member's conversation can span turns, through the client's own session
-resume (1.7).
+Every turn is a fresh conversation (1.7); no turn resumes another's.
 
 Below, "the runner" is whatever runs the member's turns: the home's own
 loop, `aicrew-agent serve`, until increment B2, and the runner daemon of
@@ -180,8 +179,9 @@ teaches the order:
 7. Update the handoff.
 8. End the turn.
 
-A fresh conversation (1.7) first reads `docs/START.md` and `docs/ROLES.md`,
-as `/crew-start` does today. A resumed one does not read them again.
+A turn does not read `docs/START.md` and `docs/ROLES.md` in full: the brief
+names the ROLES.md sections for the turn's kind (1.7), and the model reads
+them when the brief does not settle the turn.
 
 ### 1.6 How a turn ends
 
@@ -213,31 +213,39 @@ It holds no secret and no transcript.
 - `paused`;
 - `offline`: the runner is not polling.
 
-### 1.7 Conversations across turns
+### 1.7 Fresh turns
 
-> **Amended** by `docs/DESIGN-TURNS.md`, section 3 (decision T1), built in
-> increment 3b: no turn resumes a conversation. Every turn of a worker and
-> of a coordinator starts a fresh conversation from the brief the launcher
-> writes into its prompt; the per-attempt conversation and the rotation
-> point below go away, and the conversation ID in `state/turns.json` with
-> them (the turn record keeps the turn's own). What follows is D4 as A3
-> built it; increment 3d rewrites this section.
+Decision D4 gave a worker one conversation per attempt and let a
+coordinator resume its conversation until a rotation point (50 turns, 70 %
+of its context, or a new day). `docs/DESIGN-TURNS.md`, section 3 (decision
+T1), replaced it: no turn resumes a conversation, and there is no rotation
+point. Increment 3b built the fresh turn, 3c the worker's session doc, and
+3d the lean start and the coordinator's brief.
 
-- **Decision D4.**
-  - **A worker** has one conversation per attempt. The first turn of an
-    attempt starts a fresh conversation, and every later turn of that
-    attempt resumes it. The next attempt starts fresh. This follows
-    CREW-CONTRACT's rule that team work starts in a fresh conversation, and
-    it keeps one attempt's context out of the next.
-  - **A coordinator** resumes its conversation until a rotation point, then
-    starts fresh from its handoff. The rotation point is 50 turns, the
-    client's reported context use above 70 %, or the start of a new day,
-    whichever comes first.
-- **Where the conversation ID is kept.** It is nonsecret, so it goes in the
-  home's `state/turns.json` and in the turn record. The client keeps the
-  transcript in its own storage.
+- **Every turn starts fresh.** The launcher writes a turn brief into the
+  prompt of a new conversation, for a worker and for a coordinator alike.
+  The conversation ID is the turn's own, in its turn record; the client
+  keeps the transcript in its own storage.
+- **The memory between turns** is outside the conversation:
+  - the member's session doc, `docs/HANDOFF.md`;
+  - the attempt's state on aicrewd, and the attempt's ledger in
+    `state/attempts/`;
+  - the repository: the branch, its commits and the pull request.
+- **A worker's brief** carries the CURRENT ATTEMPT section of its session
+  doc and the attempt's ledger (1.8).
+- **A coordinator's brief** carries the team state (the team's open
+  attempts as aicrewd lists them), the content of its action-needed
+  messages, and its own `docs/HANDOFF.md`. A coordinator has no attempt,
+  so its brief carries the whole file, its start kept and its end cut at
+  8 KiB with a line naming the cut, rather than a CURRENT ATTEMPT section,
+  which the launcher keeps only for a worker; the file in the home stays
+  whole, and it has no stall rule and no sync.
+- **The lean start.** The model does not read START.md and ROLES.md in full
+  at each turn. ROLES.md is written by section per turn kind (a worker on
+  an offer, on a running attempt, on a review result; a coordinator), and
+  the brief names the sections for the turn's kind.
 - **The team session outlives turns.** The runner holds the member's team
-  session as `aicrew-agent run` does today:
+  session as `aicrew-agent run` does:
   - it refreshes the handle;
   - it resumes the session when the 8-hour token ends;
   - it serves the step socket.
@@ -247,18 +255,16 @@ It holds no secret and no transcript.
 
 ### 1.8 A worker's attempt across turns
 
-> **Amended** by `docs/DESIGN-TURNS.md`, section 3, built in increment 3b:
-> a continuation turn is a fresh conversation whose brief names the
-> attempt, its frozen task and the pull request's last observation; the
-> attempt's memory across turns is the handoff, the hub's state and the
-> repository. The stall rule on the handoff is increment 3c, and increment
-> 3d rewrites this section.
-
 While the worker's attempt is `Working`, a turn that ends without a block
-or a submit earns a continuation turn (1.3 b). Three limits bound this, each
-in the provider profile (3.1):
+or a submit earns a continuation turn (1.3 b). Each is a fresh conversation
+whose brief names the attempt, its frozen task, the pull request's last
+observation, the CURRENT ATTEMPT section and the ledger, so the turn goes on
+from the section's Next. These limits bound the attempt, from the home's
+turn limits (3.1):
 - **Continuations:** at most 20 per attempt by default.
-- **Budget:** a cost ceiling per attempt.
+- **Budgets:** a cost ceiling per attempt and one per member and day (3.4).
+  Both are checked before each turn against the totals aicrewd holds, so a
+  new home of the member keeps them.
 - **No progress:** after three consecutive turns with no step and no
   progress signal, the attempt is **stalled**.
   - The signal is the delivery kind's `progress` (8.1). For `code-pr` it
@@ -266,13 +272,14 @@ in the provider profile (3.1):
     the worktree's HEAD. For `ops` it is a new entry in the command log or
     a recorded finding or plan.
   - Either way the runner reads a fact, and no model judges it.
-  - A stall:
-  - sends a lifecycle message to the coordinator;
-  - stops continuation turns until a message arrives for the worker.
+- **The handoff not updated:** a finished turn that leaves the CURRENT
+  ATTEMPT section unchanged gets a ledger line marked `handoff not
+  updated`; two such turns in a row that make no step stall the attempt.
+  A change of the section or a step resets the count.
 
-In A3 the stall is reported through the attempt's own block (the `work`
-step), whose lifecycle message reaches the coordinator: aicrewd has no
-message from a member's runner to its coordinator yet.
+A stall is reported through the attempt's own block (the `work` step),
+whose lifecycle message reaches the coordinator, and it stops continuation
+turns until a message arrives for the worker.
 
 A submitted or blocked attempt gets no continuation turns. It waits for
 messages: the coordinator's review, a forge event or an answer. The
@@ -1295,7 +1302,7 @@ Each has a recommendation, and the design above assumes it.
 | D1 | How a turn is triggered | Every trigger is an inbox message (1.2) |
 | D2 | Permissions in a headless turn | `dontAsk`, prompts `none`, a managed allow list beneath the deny rules; never `bypassPermissions` |
 | D3 | The interactive mode (`run` with the Stop hook) | Keep it for human-attended members until B2 has run a release; decide then |
-| D4 | Conversation lifetime | Per attempt for a worker; for a coordinator, rotate at 50 turns, 70 % context or a new day |
+| D4 | Conversation lifetime | Replaced by DESIGN-TURNS T1: every turn is a fresh conversation, with no rotation point (1.7) |
 | D5 | Forge events | The runner polls its attempts' PRs with the member's own credential; no inbound webhooks to aicrewd |
 | D6 | Where an API key lives | `creds/`, given to Claude Code through `apiKeyHelper`; for Codex and OpenCode, fed into their own stores |
 | D7 | Turn transcripts | They stay on the host; aicrewd keeps a redacted summary and fetches logs on demand |

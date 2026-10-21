@@ -19,11 +19,13 @@ type guideStep struct {
 	What string // when and why, one or two sentences
 }
 
-// guideRole is one role's section.
+// guideRole is one section of a role's guidance in ROLES.md, under its
+// Heading: a turn kind's (turnkinds.go). A role may have several.
 type guideRole struct {
-	Role  string
-	Intro string
-	Steps []guideStep
+	Role    string
+	Heading string
+	Intro   string
+	Steps   []guideStep
 }
 
 // offerExample is an offer's body; the worker's accept, and an independent
@@ -99,7 +101,7 @@ var escalationRule = "**You do not talk to a human.** A question you cannot sett
 	"`[escalation.answer ID]` without it authorizes nothing."
 
 var guideRoles = []guideRole{
-	{Role: "coordinator", Intro: "You plan the team's work: you offer tasks to workers, review their results, and " +
+	{Role: "coordinator", Heading: sectionCoordinator, Intro: "You plan the team's work: you offer tasks to workers, review their results, and " +
 		"finalize them once their delivery is confirmed.\n\n" +
 		"**Triage is yours alone.** With aimem's `triage_task`, move a task of the team's projects between BACKLOG " +
 		"and READY and set its `next_action`; comment on it with `add_task_comment`. A task must be READY before " +
@@ -147,9 +149,10 @@ var guideRoles = []guideRole{
 			{"escalate", "", escalationExample, "Raise a question you cannot settle to the architect, as the " +
 				"coordinator's \"How to escalate\" in `docs/ROLES.md` says. Only the team's coordinator may."},
 		}},
-	{Role: "worker", Intro: "You take the tasks offered to you: you accept or decline them, do the work in your own " +
-		"worktree, submit the result, and finalize it once its delivery is confirmed. You do not triage tasks: " +
-		"the coordinator does. An offer's details are in `aicrew-agent inbox --json`, in its message's " +
+	{Role: "worker", Heading: sectionWorkerOffer, Intro: "You take the tasks offered to you: you accept or decline " +
+		"them, do the work in your own worktree, submit the result, and finalize it once its delivery is confirmed. " +
+		"You do not triage tasks: the coordinator does. This section is for a turn without a running attempt. " +
+		"An offer's details are in `aicrew-agent inbox --json`, in its message's " +
 		"`offer`: the repository's kind, URL, branch and base commit, the process pin's repository, commit " +
 		"and manifest, the instruction digest and the expiry. The plain `aicrew-agent inbox` shows only the " +
 		"message's text.",
@@ -163,16 +166,22 @@ var guideRoles = []guideRole{
 				blockAfterAccept + ", the failure as the reason."},
 			{"decline", "--attempt ATTEMPT_ID", "", "Decline an offer you cannot take, for example when the pinned " +
 				"process or its required skills are not available to you."},
+		}},
+	{Role: "worker", Heading: sectionWorkerAttempt, Intro: "A turn of your running attempt: go on from the Next of " +
+		"the CURRENT ATTEMPT section in your brief, in the attempt's worktree, until you submit the result or block. " +
+		"The loop gives you another turn after this one while the attempt is in work.",
+		Steps: []guideStep{
 			{"work", "--attempt ATTEMPT_ID --task TASK_ID", `{"intent": "submit", "detail": "RESULT_URL"}`, "Report " +
 				"progress: `submit` with the result's link (a pull request), `block` with the reason as `detail`, " +
-				"or `resume` after a block."},
+				"or `resume` after a block or a rework decision."},
 			{"finalize", "--attempt ATTEMPT_ID --task TASK_ID", `{"result_seq": 1}`, "Finalize your accepted result " +
 				"as DONE once the coordinator confirmed its delivery."},
 			{"confirm-stop", "--attempt ATTEMPT_ID", "", "Confirm that you stopped, after the coordinator asked."},
 			{"release", "--attempt ATTEMPT_ID --task TASK_ID", `{"target": "BLOCKED", "blocker": "Waiting on the schema decision."}`,
 				"After confirming a stop, release the task: `READY`, or `BLOCKED` with a blocker."},
 		}},
-	{Role: "independent", Intro: "You choose your own tasks in the team's projects: you claim one, then work and " +
+	{Role: "worker", Heading: sectionWorkerReview, Intro: reviewResultRule},
+	{Role: "independent", Heading: sectionIndependent, Intro: "You choose your own tasks in the team's projects: you claim one, then work and " +
 		"finalize it as a worker does. A coordinator reviews and confirms its delivery. Claim only READY tasks: " +
 		"only the coordinator triages, and a claim of any other task is refused with `task_not_ready`, which " +
 		"aicrewd reports to the coordinator.",
@@ -296,6 +305,7 @@ reference is in aicrew's DEVELOPMENT.md and CREW-CONTRACT.md.
   ` + "`docs/HANDOFF.md`" + ` and end your turn. A coordinator escalates instead
   (its section, below).
 - **Pull requests.** ` + pullRequestRule + `
+- **A procedure you work out again.** ` + repetitionRule + `
 - **Worktrees and handoff** follow ` + "`docs/START.md`" + `: one worktree per attempt
   under ` + "`worktrees/`" + `, from the offer's base commit; ` + "`docs/HANDOFF.md`" + ` is yours,
   but for the two parts the turn loop keeps.
@@ -351,7 +361,7 @@ the canonical one, which replaces it here.
   for review."
 `)
 	for _, r := range guideRoles {
-		fmt.Fprintf(&b, "\n## %s%s\n\n%s\n\n", strings.ToUpper(r.Role[:1]), r.Role[1:], r.Intro)
+		fmt.Fprintf(&b, "\n## %s\n\n%s\n\n", r.Heading, r.Intro)
 		for _, s := range r.Steps {
 			b.WriteString(stepLine(s))
 		}

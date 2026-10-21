@@ -160,30 +160,34 @@ type briefInput struct {
 	handoff *handoffDoc
 }
 
-// briefFetch is the brief's last part.
-const briefFetch = "\n## Where to fetch more\n\n" +
-	"- `aicrew-agent inbox` (`--json` for every field): the messages in full; `aicrew-agent inbox --ack ID,ID` " +
-	"acknowledges what you handled.\n" +
-	"- `aicrew-agent session status`: your session and attempt as aicrewd holds them now.\n" +
-	"- `aicrew-agent forge pr show --pr N`: a pull request with its comments and checks.\n" +
-	"- aimem's `get_task`: the live task on the board; `docs/ROLES.md`, by section: your role's rules.\n"
-
 // brief writes the turn's brief.
 func (l *TurnLoop) brief(ctx context.Context, in briefInput) string {
 	var b strings.Builder
 	l.briefHead(&b, in)
 	l.briefTask(ctx, &b, in.attempt)
-	l.briefTrigger(ctx, &b, in)
+	msgs := l.briefTrigger(ctx, &b, in)
+	role := in.status.Session.Role
+	kind := turnKindOf(role, in.attempt, msgs)
+	if kind == kindCoordinator {
+		l.briefTeam(ctx, &b)
+	}
 	l.briefPulls(&b)
 	redact := func(s string) string { return tokenShapes.ReplaceAllString(RedactForgeTokens(l.Home, s), "[redacted]") }
 	rest := redact(b.String())
+	fetch := briefFetch(role, kind)
 	// The handoff and the ledger take the room the other parts leave, so
 	// they are what the bound cuts first.
-	memory := l.briefMemory(in, maxBriefBytes-len(rest)-len(briefFetch), redact)
+	room := maxBriefBytes - len(rest) - len(fetch)
+	var memory string
+	if kind == kindCoordinator {
+		memory = l.coordinatorHandoff(redact, room)
+	} else {
+		memory = l.briefMemory(in, room, redact)
+	}
 	// Every text from outside the launcher passes the redaction once more
 	// as a whole, so a label, a check's name or URL, a review's author or
 	// a command is covered as a body is (hands review of #189).
-	s := redact(rest + memory + briefFetch)
+	s := redact(rest + memory + fetch)
 	if len(s) > maxBriefBytes {
 		s = cutText(s, maxBriefBytes) + "\n\n(The brief was cut at its bound; `aicrew-agent inbox` has the rest.)\n"
 	}
@@ -288,18 +292,18 @@ func (l *TurnLoop) frozenTask(ctx context.Context, a *memberAttempt) (snap taskS
 }
 
 // briefTrigger is what started the turn: the pending messages with their
-// content, or the continuation.
-func (l *TurnLoop) briefTrigger(ctx context.Context, b *strings.Builder, in briefInput) {
+// content, or the continuation. It returns the messages it read.
+func (l *TurnLoop) briefTrigger(ctx context.Context, b *strings.Builder, in briefInput) []inboxMessage {
 	fmt.Fprintf(b, "\n## Why this turn\n\n%s.\n", in.trigger)
 	if in.continuation {
 		b.WriteString("No new message: go on with the attempt's work, and submit or block when it is done.\n")
-		return
+		return nil
 	}
 	msgs, err := l.Host.Inbox(ctx, maxBriefMessages)
 	if err != nil {
 		fmt.Fprintf(b, "The messages could not be read for the brief (%s): run `aicrew-agent inbox`.\n",
 			redactBrief(l.Home, err.Error(), maxBriefText))
-		return
+		return nil
 	}
 	b.WriteString("\n")
 	for _, m := range msgs {
@@ -308,6 +312,7 @@ func (l *TurnLoop) briefTrigger(ctx context.Context, b *strings.Builder, in brie
 	if more := len(in.pending) - len(msgs); more > 0 {
 		fmt.Fprintf(b, "\n%d more message(s) are pending: `aicrew-agent inbox`.\n", more)
 	}
+	return msgs
 }
 
 // briefMessage writes one message: its id to acknowledge, its kind, sender,

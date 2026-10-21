@@ -2229,9 +2229,11 @@ managed files from it:
   rule, and a deny rule beats every allow.
 - **`/crew-turn`**, a managed command, is the prompt each turn starts with.
   Its argument is the turn brief the launcher writes ("The turn loop"
-  below), and it teaches the turn's order: the handoff and the home
-  guidance, the work within the role from the brief, the acknowledgement,
-  the handoff, and the end of the turn, without ever waiting inside it.
+  below), and it teaches the turn's order: the handoff, the work within the
+  role from the brief and the ROLES.md sections it names (no managed doc is
+  read in full), the acknowledgement, the handoff, and the end of the turn,
+  without ever waiting inside it. It also carries the repetition rule: a
+  procedure worked out again is proposed, never automated in the turn.
 
 `check` notes a Stop hook left in a `turns` home, and each `turns.allow`
 addition it leaves out.
@@ -2315,14 +2317,30 @@ Messages that arrive during a turn wait for the next one.
      subject's pull request; an answered escalation; the operator's note;
      a board change. At most 10 messages; the rest are counted and left to
      `aicrew-agent inbox`;
-  5. the pull requests as the launcher's forge watch last observed them:
+  5. a coordinator's team state: the team's open attempts as aicrewd lists
+     them now (`GET /v1/crew/attempts`), each with its next action;
+  6. the pull requests as the launcher's forge watch last observed them:
      state, head, labels, checks, comments, the review at the head, the
      failed checks; or that none was observed yet;
-  6. a worker's handoff: the CURRENT ATTEMPT section of its session doc
-     (below), at most 8 KiB;
-  7. the attempt's ledger (below), oldest first;
+  7. a worker's handoff: the CURRENT ATTEMPT section of its session doc
+     (below), at most 8 KiB, and the attempt's ledger (below), oldest
+     first; a coordinator's handoff: its whole `docs/HANDOFF.md`, at most
+     8 KiB of it, the start kept and the end cut with a line naming how
+     many bytes were cut (a coordinator has no attempt, so the launcher
+     keeps no section of its file, which stays whole in the home);
   8. where to fetch more: the inbox, the session status, `forge pr show`,
-     the board and ROLES.md.
+     the board, and the ROLES.md sections for the turn's kind.
+
+  **The turn's kind** decides the ROLES.md sections the brief names, so a
+  turn reads only those, never the whole file (the lean start, increment
+  3d): `coordinator`; `worker-offer`, a worker without a running attempt;
+  `worker-review`, a running attempt whose messages carry a review of its
+  pull request in an `action.needed` subject, or whose phase is `rework`
+  after the coordinator's decision; `worker-attempt`, any other turn of a
+  running attempt, a continuation among them; `independent`, an
+  independent member without an attempt, which takes the worker's kinds
+  with one. Every kind names "Every member" and "Writing that others read";
+  an independent member's kinds also name its own section.
 
   Every text from outside the launcher is redacted of the home's forge
   tokens and the known token shapes; a message's or a review's text is cut

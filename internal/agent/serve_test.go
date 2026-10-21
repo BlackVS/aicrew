@@ -51,6 +51,15 @@ type fakeHost struct {
 	totals      turnTotals
 	totalsErr   error
 	totalsReads int
+	// The team's open attempts a coordinator's brief reads.
+	open    OpenAttempts
+	openErr error
+}
+
+func (h *fakeHost) OpenAttempts(context.Context) (OpenAttempts, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.open, h.openErr
 }
 
 func (h *fakeHost) ReportTurn(_ context.Context, r turnReport) error {

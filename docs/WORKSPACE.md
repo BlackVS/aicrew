@@ -346,9 +346,11 @@ toolchain rules from it (DEVELOPMENT, "Wake modes"). A grant the hub adds or rem
 with no `join` rerun. aicrewd stays the authority; the record is only as
 fresh as its read time.
 
-`docs/ROLES.md` holds the guidance every member follows and one section per
-role (coordinator, worker, independent), since a member's role can change
-and a refresh does not ask aicrewd. It teaches:
+`docs/ROLES.md` holds the guidance every member follows and the roles'
+sections, one per turn kind (a coordinator; a worker on an offer, on a
+running attempt and on a review result; an independent member), since a
+member's role can change and a refresh does not ask aicrewd. A turn reads
+only the sections its brief names. It teaches:
 - each transition as an `aicrew-agent step` command with an example body;
 - the inbox rule: read at session start and after each step, act only on
   what the inbox or one's own step answers show, and acknowledge what was
@@ -358,7 +360,10 @@ and a refresh does not ask aicrewd. It teaches:
 - the instruction digest's definition (`docs/CREW-CONTRACT.md`, "Process
   pins");
 - an interim rule for human-readable persisted text, which aimem task
-  01a0d996-616b's canonical rule will replace.
+  01a0d996-616b's canonical rule will replace;
+- the repetition rule (`docs/DESIGN-TURNS.md`, section 11): a procedure
+  worked out again is proposed as an "automate X" task, never automated
+  inside the turn.
 
 Its operations are tested to be exactly the launcher's, and each example
 body to decode into aicrewd's body for its route.

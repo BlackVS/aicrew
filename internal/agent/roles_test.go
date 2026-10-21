@@ -264,7 +264,7 @@ func TestGuidanceSafetyAckAndOfferTexts(t *testing.T) {
 
 	var worker guideRole
 	for _, r := range guideRoles {
-		if r.Role == "worker" {
+		if r.Heading == sectionWorkerOffer {
 			worker = r
 		}
 	}

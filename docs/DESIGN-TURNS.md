@@ -260,7 +260,10 @@ cache: the member's canonical copy is on aicrewd.
 
 **The coordinator** starts every turn fresh in the same way. Its brief
 carries the team state, the action-needed content and its own
-`docs/HANDOFF.md`. The rotation point of D4 goes away.
+`docs/HANDOFF.md`: the whole file, its start kept and its end cut at 8 KiB,
+since a coordinator has no attempt and so no CURRENT ATTEMPT section
+(increment 3d; DESIGN-CONTROL-PLANE 1.7). The rotation point of D4 goes
+away.
 
 **The target.** A routine turn costs under one dollar at list prices.
 - A fresh start at about 25 thousand tokens of new context (the brief and
@@ -821,10 +824,15 @@ next such procedure gets found without an operator reading the logs.
   (principle 6).
 
 **Who files it, and how.**
-- A worker or the coordinator files the task with the board tools the role
-  already has.
-- The coordinator triages it like any other task. A harness feature goes to
-  the architect, because it is product.
+- No turn may create a task: a turn's allow list has aimem's reads, and a
+  coordinator's adds only `add_task_comment` and `triage_task`. So a worker
+  writes the proposal under Open questions in its handoff and in an
+  "Automate" part of its pull request's body; the coordinator posts it, and
+  its own, with `add_task_comment` on the task where the repetition
+  happened, headed `[automate]`, with the evidence and the level; the
+  architect files the task (increment 3d).
+- The coordinator triages the filed task like any other. A harness feature
+  goes to the architect, because it is product.
 - The guidance goes in ROLES.md and `/crew-turn`. The turn brief's ledger
   (section 3) is where an agent sees the same steps across its turns.
 

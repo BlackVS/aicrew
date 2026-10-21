@@ -108,6 +108,9 @@ type turnHost interface {
 	// member's totals there: the day's and the attempt's (turncosts.go).
 	ReportTurn(ctx context.Context, r turnReport) error
 	TurnTotals(ctx context.Context, attemptID string) (turnTotals, error)
+	// OpenAttempts reads the team's open attempts, for a coordinator's
+	// brief (turnkinds.go).
+	OpenAttempts(ctx context.Context) (OpenAttempts, error)
 }
 
 // TurnLoop is one home's turn loop.

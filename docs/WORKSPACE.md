@@ -323,7 +323,10 @@ Onboarding writes `docs/START.md` (managed). It tells the agent:
 3. That every change happens in a worktree created from an explicitly chosen
    base commit, one per attempt.
 4. Where the handoff lives: `docs/HANDOFF.md` belongs to the agent and is
-   never managed.
+   never managed. In a home the turn loop runs, the launcher owns two of a
+   worker's sections: CURRENT ATTEMPT, which it opens for each attempt and
+   the agent keeps current, and the Archive of closed attempts; the agent
+   owns the rest.
 5. How to verify readiness (versions, client, MCP and skills) and when to
    stop and ask instead of improvising.
 6. That `docs/ROLES.md` (managed) teaches its role.
@@ -370,7 +373,7 @@ outside the home (`docs/DEVELOPMENT.md`, "Running aicrew-agent").
 | Class | Files | Setup may |
 | --- | --- | --- |
 | Managed | `AGENTS.md`, `CLAUDE.md`, `docs/START.md`, `docs/ROLES.md`, `.claude/settings.json`, `.claude/turn-settings.json`, `.claude/turn-settings-coordinator.json`, `.claude/commands/crew-*.md` (unless one would shadow the member's own command or skill, then reported and not written), each client's `aimem` MCP entry, managed keys in `agent.json` | create; update only if unchanged since its last write |
-| Agent-owned | `docs/HANDOFF.md`, other `docs/` notes | create once if missing; never change |
+| Agent-owned | `docs/HANDOFF.md`, other `docs/` notes | create once if missing; never change (the turn loop, not setup, keeps a worker's CURRENT ATTEMPT section and Archive in `docs/HANDOFF.md`) |
 | Protected | `creds/`, `aimem/` (its contents), `repos/`, `worktrees/`, `state/`, `logs/`, provider logins, unknown files | never change, move or delete |
 
 Reruns are non-destructive and repeatable:

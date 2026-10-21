@@ -38,6 +38,32 @@ type fakeHost struct {
 	tasks     map[string]TaskDoc
 	taskReads int
 	observed  []PullObservation
+	// The attempts' handoffs as aicrewd keeps them, the pushes made, and
+	// the refusal a push gets.
+	handoffs map[string]string
+	pushes   int
+	pushErr  error
+	readErr  error
+}
+
+func (h *fakeHost) PushHandoff(_ context.Context, attemptID, doc string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pushes++
+	if h.pushErr != nil {
+		return h.pushErr
+	}
+	if h.handoffs == nil {
+		h.handoffs = map[string]string{}
+	}
+	h.handoffs[attemptID] = doc
+	return nil
+}
+
+func (h *fakeHost) ReadHandoff(_ context.Context, attemptID string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.handoffs[attemptID], h.readErr
 }
 
 func (h *fakeHost) Inbox(context.Context, int) ([]inboxMessage, error) {
@@ -109,6 +135,21 @@ type loopEnv struct {
 	// change to the host (the member's work).
 	next func(spec TurnSpec, h *fakeHost) TurnResult
 	head string
+	// staleHandoff makes the fake member leave its handoff's CURRENT
+	// ATTEMPT section as it found it; by default each turn adds a line to
+	// its Next, as the member is asked to.
+	staleHandoff bool
+}
+
+// touchHandoff is the member keeping its handoff: a line added to the
+// CURRENT ATTEMPT section's Next.
+func touchHandoff(home, line string) {
+	d, _, ok := readHandoff(home)
+	if !ok || !d.HasSection {
+		return
+	}
+	d.Section = strings.Replace(d.Section, "### Next\n", "### Next\n\n- "+line+"\n", 1)
+	os.WriteFile(handoffPath(home), []byte(d.render()), 0o600)
 }
 
 func newLoopEnv(t *testing.T) *loopEnv {
@@ -122,7 +163,11 @@ func newLoopEnv(t *testing.T) *loopEnv {
 		Head: func(context.Context, string) string { return e.head },
 		Run: func(_ context.Context, spec TurnSpec) TurnResult {
 			e.specs = append(e.specs, spec)
-			return e.next(spec, e.host)
+			res := e.next(spec, e.host)
+			if !e.staleHandoff {
+				touchHandoff(e.home, fmt.Sprintf("turn %d", len(e.specs)))
+			}
+			return res
 		}}
 	return e
 }

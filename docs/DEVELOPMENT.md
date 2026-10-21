@@ -2316,12 +2316,17 @@ Messages that arrive during a turn wait for the next one.
   5. the pull requests as the launcher's forge watch last observed them:
      state, head, labels, checks, comments, the review at the head, the
      failed checks; or that none was observed yet;
-  6. where to fetch more: the inbox, the session status, `forge pr show`,
+  6. a worker's handoff: the CURRENT ATTEMPT section of its session doc
+     (below), at most 8 KiB;
+  7. the attempt's ledger (below), oldest first;
+  8. where to fetch more: the inbox, the session status, `forge pr show`,
      the board and ROLES.md.
 
   Every text from outside the launcher is redacted of the home's forge
   tokens and the known token shapes; a message's or a review's text is cut
-  at 1 KiB and the whole brief at 24 KiB, which says so.
+  at 1 KiB and the whole brief at 24 KiB, which says so. The handoff and
+  the ledger take the room the other parts leave, so the bound cuts them
+  first: the ledger's oldest lines, then the section, each cut logged.
 - **The trigger** in the turn's record names the messages' kinds and ids,
   or the continued attempt, never a message's text.
 - **Outcomes:**
@@ -2366,6 +2371,49 @@ Messages that arrive during a turn wait for the next one.
   attempt through the `work` step. The block's message tells the
   coordinator, which decides what the stall means, as it decides any block.
   The attempt gets no continuation turns until a message arrives.
+- **The handoff's stall:** two finished turns of an attempt in a row that
+  make no step and leave the CURRENT ATTEMPT section of `docs/HANDOFF.md`
+  unchanged stall it the same way, even when they commit. A step or a
+  change of the section resets the count.
+
+**The session doc** (`docs/DESIGN-TURNS.md`, section 3, increment 3c). A
+worker's `docs/HANDOFF.md` is the memory a fresh turn continues from; the
+home is a cache, and the member's canonical copy is on its attempt in
+aicrewd.
+- **Its parts.** Everything before the two launcher sections is the
+  agent's header. Before a worker's turn the launcher opens a
+  `## CURRENT ATTEMPT` section for the open attempt, with a first line
+  that names the attempt and the task and the four parts Done, Decisions,
+  Next and Open questions, which the model keeps current. A section the
+  model rewrote without that first line is still the open attempt's: the
+  launcher records the section's attempt in `state/turns.json` before the
+  turn runs (so a launcher stopped during it keeps the record), puts a
+  missing line back, and logs a line that names another attempt. A
+  section of an
+  attempt that is no longer open moves to the `## Archive`, newest first,
+  its headings a level down; the archive keeps the last 10 attempts, at
+  most 16 KiB. A section over 8 KiB is logged and cut in the brief.
+- **The ledger**, `state/attempts/<attempt>/ledger.jsonl`, is launcher
+  data: one JSON line per turn of the attempt with the turn ID, start,
+  outcome, cost, head before and after, steps, the summary's first
+  sentence (redacted) and the `handoff not updated` mark, at most 50 lines.
+- **The sync.** After a worker's turn of an open attempt the launcher
+  pushes the doc to the attempt's handoff route (CREW-CONTRACT.md, "The
+  attempt's handoff") when it changed since the last push: redacted, and
+  cut to aicrewd's 32 KiB doc bound and, JSON-encoded, within the server's
+  64 KiB body bound, the archive's oldest entries first. A refused push (a
+  stop requested, the attempt no longer running) leaves the home's copy as
+  it is and is logged. A home whose doc has no section for the open
+  attempt (a new home, whose doc is join's placeholder, or none) reads the
+  attempt's copy before the turn and takes it: the whole doc over the
+  placeholder or a missing file, only its section under a header of the
+  home's own, with the attempt's archive when the home's doc has none (an
+  older join's placeholder is such a header). When that read fails, the turn runs without the doc and
+  neither counts towards the stall nor pushes, so a new section never
+  replaces the attempt's copy.
+- **Retention.** A new attempt's directory under `state/attempts/` (its
+  task snapshot and ledger) removes those of other attempts beyond the
+  newest 20, by modification time; the open attempt's is never removed.
 
 **Records.**
 - **Each turn** is one line of `logs/turns.jsonl`: its trigger, client,

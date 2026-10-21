@@ -155,7 +155,18 @@ type briefInput struct {
 	trigger      string
 	pending      []PendingMessage
 	continuation bool
+	// handoff is a worker's session doc as the turn starts (handoff.go),
+	// nil for any other member or when it could not be read.
+	handoff *handoffDoc
 }
+
+// briefFetch is the brief's last part.
+const briefFetch = "\n## Where to fetch more\n\n" +
+	"- `aicrew-agent inbox` (`--json` for every field): the messages in full; `aicrew-agent inbox --ack ID,ID` " +
+	"acknowledges what you handled.\n" +
+	"- `aicrew-agent session status`: your session and attempt as aicrewd holds them now.\n" +
+	"- `aicrew-agent forge pr show --pr N`: a pull request with its comments and checks.\n" +
+	"- aimem's `get_task`: the live task on the board; `docs/ROLES.md`, by section: your role's rules.\n"
 
 // brief writes the turn's brief.
 func (l *TurnLoop) brief(ctx context.Context, in briefInput) string {
@@ -164,16 +175,15 @@ func (l *TurnLoop) brief(ctx context.Context, in briefInput) string {
 	l.briefTask(ctx, &b, in.attempt)
 	l.briefTrigger(ctx, &b, in)
 	l.briefPulls(&b)
-	b.WriteString("\n## Where to fetch more\n\n" +
-		"- `aicrew-agent inbox` (`--json` for every field): the messages in full; `aicrew-agent inbox --ack ID,ID` " +
-		"acknowledges what you handled.\n" +
-		"- `aicrew-agent session status`: your session and attempt as aicrewd holds them now.\n" +
-		"- `aicrew-agent forge pr show --pr N`: a pull request with its comments and checks.\n" +
-		"- aimem's `get_task`: the live task on the board; `docs/ROLES.md`, by section: your role's rules.\n")
+	redact := func(s string) string { return tokenShapes.ReplaceAllString(RedactForgeTokens(l.Home, s), "[redacted]") }
+	rest := redact(b.String())
+	// The handoff and the ledger take the room the other parts leave, so
+	// they are what the bound cuts first.
+	memory := l.briefMemory(in, maxBriefBytes-len(rest)-len(briefFetch), redact)
 	// Every text from outside the launcher passes the redaction once more
 	// as a whole, so a label, a check's name or URL, a review's author or
 	// a command is covered as a body is (hands review of #189).
-	s := tokenShapes.ReplaceAllString(RedactForgeTokens(l.Home, b.String()), "[redacted]")
+	s := redact(rest + memory + briefFetch)
 	if len(s) > maxBriefBytes {
 		s = cutText(s, maxBriefBytes) + "\n\n(The brief was cut at its bound; `aicrew-agent inbox` has the rest.)\n"
 	}
@@ -239,7 +249,7 @@ func (l *TurnLoop) briefTask(ctx context.Context, b *strings.Builder, a *memberA
 // is none, the board's text now, which becomes the copy. fresh says the
 // board was read.
 func (l *TurnLoop) frozenTask(ctx context.Context, a *memberAttempt) (snap taskSnapshot, fresh bool, err error) {
-	if a.ID == "" || a.ID == "." || a.ID == ".." || strings.ContainsAny(a.ID, `/\`) {
+	if !attemptFileName(a.ID) {
 		return snap, false, errors.New("the attempt's ID is not a file name")
 	}
 	path := taskSnapshotPath(l.Home, a.ID)
@@ -268,7 +278,7 @@ func (l *TurnLoop) frozenTask(ctx context.Context, a *memberAttempt) (snap taskS
 		room -= len(*p)
 	}
 	raw, _ := json.MarshalIndent(snap, "", "  ")
-	if err = os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
+	if err = l.attemptDir(a.ID); err == nil {
 		err = writeAtomic(path, append(raw, '\n'))
 	}
 	if err != nil {
@@ -414,6 +424,60 @@ func (l *TurnLoop) briefPulls(b *strings.Builder) {
 			fmt.Fprintf(b, "  - Pre-push check failed at this head (exit %d): %s\n", p.Exit, p.Command)
 		}
 	}
+}
+
+// briefMemory is a worker's handoff and ledger within room bytes: the
+// CURRENT ATTEMPT section, at most maxHandoffSection, and the attempt's
+// ledger. When they do not fit, the ledger's oldest lines go first, then
+// the section is cut; each cut is logged.
+func (l *TurnLoop) briefMemory(in briefInput, room int, redact func(string) string) string {
+	if in.handoff == nil || in.attempt == nil || !in.handoff.HasSection {
+		return ""
+	}
+	section := redact(in.handoff.Section)
+	if len(section) > maxHandoffSection {
+		section = cutText(section, maxHandoffSection)
+	}
+	var lines []string
+	for _, e := range readLedger(l.Home, in.attempt.ID) {
+		lines = append(lines, redact(ledgerLine(e))+"\n")
+	}
+	const sectionHead = "\n## The handoff\n\nThe CURRENT ATTEMPT section of `docs/HANDOFF.md` as this turn starts: " +
+		"continue from its Next, and keep its four parts current before the turn ends.\n\n"
+	ledgerHead := fmt.Sprintf("\n\n## The ledger\n\nThe attempt's earlier turns, oldest first (`%s`):\n\n",
+		filepath.ToSlash(strings.Replace(LedgerFile, "*", in.attempt.ID, 1)))
+	const ledgerCut = "(Older turns were left out at the brief's bound; the ledger has them.)\n"
+	size := func() int {
+		n := len(sectionHead) + len(section) + len(ledgerHead) + len(ledgerCut)
+		for _, ln := range lines {
+			n += len(ln)
+		}
+		return n
+	}
+	dropped := 0
+	for len(lines) > 0 && size() > room {
+		lines, dropped = lines[1:], dropped+1
+	}
+	if dropped > 0 {
+		l.Log.Warn("the brief left out the ledger's oldest turns at its bound", "lines", dropped)
+	}
+	if over := size() - room; over > 0 {
+		l.Log.Warn("the brief cut the handoff's CURRENT ATTEMPT section at its bound", "bytes", len(section),
+			"cut_to", max(len(section)-over, 0))
+		section = cutText(section, max(len(section)-over, 0))
+	}
+	var b strings.Builder
+	b.WriteString(sectionHead + section + ledgerHead)
+	switch {
+	case dropped > 0:
+		b.WriteString(ledgerCut)
+	case len(lines) == 0:
+		b.WriteString("None yet.\n")
+	}
+	for _, ln := range lines {
+		b.WriteString(ln)
+	}
+	return b.String()
 }
 
 func pullLine(p *briefPull) string {

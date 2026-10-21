@@ -43,8 +43,9 @@ var crewCommands = []crewCommand{
 		Desc: "One headless turn of your aicrew session: read the brief and your notes, act within your role, update your handoff, end",
 		Body: "The turn loop (`aicrew-agent serve`) started this turn, a fresh conversation, with the brief below: " +
 			"your attempt's state on its first line, who and where you are, the frozen task, what started the turn " +
-			"with the messages' content, the pull requests as last observed, and where to fetch more. Nobody " +
-			"answers a question during a turn, and nothing reaches you until it ends.\n\n" +
+			"with the messages' content, the pull requests as last observed, a worker's handoff and the attempt's " +
+			"ledger, and where to fetch more. Nobody answers a question during a turn, and nothing reaches you " +
+			"until it ends.\n\n" +
 			"$ARGUMENTS\n\n" +
 			"1. Read `docs/HANDOFF.md`, your own notes, and `docs/START.md` and `docs/ROLES.md`.\n" +
 			"2. Act on the brief within your role, as `docs/ROLES.md` says: it holds your status and the messages, " +
@@ -54,7 +55,10 @@ var crewCommands = []crewCommand{
 			"submits or blocks.\n" +
 			"3. Acknowledge what you handled.\n" +
 			"4. Update `docs/HANDOFF.md` with what you did and what comes next: the next turn starts from it and " +
-			"a new brief, with nothing of this conversation.\n" +
+			"a new brief, with nothing of this conversation. A worker with an attempt keeps the four parts of its " +
+			"CURRENT ATTEMPT section current (Done, Decisions, Next, Open questions); two turns in a row that " +
+			"make no step and leave them unchanged stall the attempt. The section's heading and first line and " +
+			"the Archive are the turn loop's.\n" +
 			"5. End the turn. Never wait inside it: no sleep, no polling, no background watch. The next " +
 			"message starts the next turn.\n\n" +
 			"A turn runs without prompts, under an allow list: git, `aicrew-agent`, the project's build and test " +

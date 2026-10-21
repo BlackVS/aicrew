@@ -62,3 +62,21 @@ leaves a partial `aicrew-agent.exe` that blocks the rename back
 (`boot.ps1`, the `catch` after `Copy-Item`) is REJECTED-RUNTIME. Do not add
 a removal of the destination before the rename for it. A finding about
 another failure kind must bring its own probe.
+
+### Invalid UTF-8 in a JSON body becomes U+FFFD (observed 2026-10-20, PR #190)
+
+aicrewd decodes every session route's body with Go's `encoding/json`, which
+replaces each invalid UTF-8 byte in a string with U+FFFD and reports no
+error. A store method's text check (`validText` in `internal/store`)
+therefore never sees invalid UTF-8 from the HTTP boundary, on any route.
+
+Probe (on the PR's test server, no credential beyond the test's own
+member): the worker pushed the handoff body `{"handoff":"a\xffb"}`, with the
+raw byte. The push answered 200, and the stored doc read back as
+`a�b`. A `\u0000` escape decodes to a NUL byte, which reaches
+`validText` and is refused (400 `invalid_request`).
+
+Consequence for review: a finding that a route stores invalid UTF-8 because
+the server does not check it is REJECTED-RUNTIME. `validText` guards the
+store API, for callers other than the HTTP server, and NUL. The handoff's
+only client is the member's own launcher, which sends its own text.

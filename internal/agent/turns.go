@@ -138,6 +138,9 @@ type turnState struct {
 	// Continue names the attempt whose last turn ended in work, without a
 	// block or a submit: it is due a continuation turn.
 	Continue string `json:"continue,omitempty"`
+	// Handoff is the attempt whose CURRENT ATTEMPT section the launcher
+	// last kept in docs/HANDOFF.md (handoff.go).
+	Handoff string `json:"handoff_attempt,omitempty"`
 }
 
 func turnStatePath(home string) string { return filepath.Join(home, filepath.FromSlash(TurnStateFile)) }

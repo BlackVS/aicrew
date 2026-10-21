@@ -71,8 +71,9 @@ func ledgerPath(home, attemptID string) string {
 
 func handoffPath(home string) string { return filepath.Join(home, filepath.FromSlash(HandoffFile)) }
 
-// sectionMark is the section's first line, which names its attempt.
-var sectionMark = regexp.MustCompile("^Attempt `([^`]+)`")
+// sectionMark is the line the launcher opens the section with, which names
+// its attempt: found wherever the model left it in the section.
+var sectionMark = regexp.MustCompile("(?m)^Attempt `([^`]+)`.*(?:\n|$)")
 
 // handoffDoc is the session doc split into the agent's header, the
 // CURRENT ATTEMPT section's body and the archive's entries, newest first.
@@ -155,23 +156,27 @@ func (d handoffDoc) sectionAttempt() string {
 // newSection is the CURRENT ATTEMPT section the launcher opens for an
 // attempt.
 func newSection(a *memberAttempt) string {
+	return sectionMarkLine(a) + "\n\n### Done\n\n### Decisions\n\n### Next\n\n### Open questions"
+}
+
+// sectionMarkLine is the section's first line, which names its attempt.
+func sectionMarkLine(a *memberAttempt) string {
 	return fmt.Sprintf("Attempt `%s`, task `%s`. The launcher keeps this section's place and moves it to the "+
 		"Archive when the attempt is no longer open. Keep its four parts current before every turn ends: the next "+
-		"turn starts from them, and two turns in a row that leave them unchanged stall the attempt.\n\n"+
-		"### Done\n\n### Decisions\n\n### Next\n\n### Open questions", a.ID, a.Task.TaskID)
+		"turn starts from them, and two turns in a row that leave them unchanged stall the attempt.", a.ID, a.Task.TaskID)
 }
 
 // archive moves the section into the archive as its newest entry, its
 // headings one level down, and trims the archive to its bounds.
-func (d *handoffDoc) archive(now time.Time) {
+// id is the section's attempt, as the launcher recorded it.
+func (d *handoffDoc) archive(now time.Time, id string) {
 	if d.HasSection && strings.TrimSpace(d.Section) != "" {
-		id := d.sectionAttempt()
 		if id == "" {
 			id = "(unnamed)"
 		}
 		body := d.Section
-		if sectionMark.MatchString(body) {
-			_, body, _ = strings.Cut(body, "\n")
+		if loc := sectionMark.FindStringIndex(body); loc != nil {
+			body = body[:loc[0]] + body[loc[1]:]
 		}
 		body = strings.ReplaceAll("\n"+strings.Trim(body, "\n"), "\n### ", "\n#### ")
 		entry := fmt.Sprintf("### Attempt %s (archived %s)\n%s", id, now.UTC().Format(time.RFC3339), body)
@@ -215,48 +220,78 @@ func docHash(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// prepareHandoff readies a worker's session doc before a turn: a home
-// without the file takes the attempt's from aicrewd; a section of an
-// attempt that is no longer open goes to the archive; an open attempt
-// without a section gets one. It returns the doc as it now stands, and
-// whether it could be read, from the home or, without a file, from aicrewd.
-func (l *TurnLoop) prepareHandoff(ctx context.Context, attempt *memberAttempt) (handoffDoc, bool) {
+// prepareHandoff readies a worker's session doc before a turn. The
+// section's attempt is the one the launcher recorded in the turn state
+// (st.Handoff), or, in a home without that record, the one its first line
+// names. A section of an attempt that is no longer open goes to the
+// archive; on the open attempt a section that lost its first line gets it
+// back. An open attempt without a section takes the attempt's from
+// aicrewd, which only a home that held the section can have pushed: the
+// whole doc over a missing file or join's untouched placeholder, else the
+// section under the home's own header and archive. Without one there, the
+// launcher opens a new section. It returns the doc as it now stands, and
+// whether it could be read; when aicrewd cannot be read the turn runs
+// without the doc, since a new section's push would replace the attempt's
+// copy.
+func (l *TurnLoop) prepareHandoff(ctx context.Context, st *turnState, attempt *memberAttempt) (handoffDoc, bool) {
 	path := handoffPath(l.Home)
-	raw, err := os.ReadFile(path)
-	local := raw // what the file holds, nil when there is none
-	if errors.Is(err, os.ErrNotExist) && attempt != nil {
-		body, herr := l.Host.ReadHandoff(ctx, attempt.ID)
-		if herr != nil {
-			// Not a new doc: its push would replace the attempt's copy.
-			// The turn runs without one, and the next turn reads again.
-			l.Log.Warn("the handoff was not read from aicrewd: this turn runs without it", "error", herr.Error())
-			return handoffDoc{}, false
-		}
-		if body != "" {
-			raw, err = []byte(body), nil
-			l.Log.Info("the home had no handoff: it was taken from the attempt on aicrewd", "attempt", attempt.ID)
-		}
-	}
+	local, err := os.ReadFile(path) // nil when there is no file
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		raw = []byte(handoffMD)
+		local = nil
 	case err != nil:
 		l.Log.Warn("the handoff was not read", "error", err.Error())
 		return handoffDoc{}, false
 	}
-	d := parseHandoff(string(raw))
-	if d.HasSection && (attempt == nil || d.sectionAttempt() != attempt.ID) {
-		d.archive(l.Now())
+	untouched := local == nil || string(local) == handoffMD
+	d := parseHandoff(handoffMD)
+	if local != nil {
+		d = parseHandoff(string(local))
+	}
+	owner := st.Handoff
+	if owner == "" {
+		owner = d.sectionAttempt()
+	}
+	if d.HasSection && (attempt == nil || owner != attempt.ID) {
+		d.archive(l.Now(), owner)
 	}
 	if attempt != nil && !d.HasSection {
-		d.Section, d.HasSection = newSection(attempt), true
+		body, herr := l.Host.ReadHandoff(ctx, attempt.ID)
+		if herr != nil {
+			l.Log.Warn("the handoff was not read from aicrewd: this turn runs without it", "error", herr.Error())
+			return handoffDoc{}, false
+		}
+		switch hub := parseHandoff(body); {
+		case !hub.HasSection:
+			d.Section, d.HasSection = newSection(attempt), true
+		case untouched:
+			d = hub
+			l.Log.Info("the home had no handoff: it was taken from the attempt on aicrewd", "attempt", attempt.ID)
+		default:
+			d.Section, d.HasSection = hub.Section, true
+			l.Log.Info("the home's handoff had no section for the attempt: it was taken from aicrewd",
+				"attempt", attempt.ID)
+		}
+	}
+	if attempt != nil {
+		if named := d.sectionAttempt(); named != attempt.ID {
+			if named != "" {
+				l.Log.Warn("the handoff's section names another attempt than the open one: the launcher's line is put first",
+					"attempt", attempt.ID, "named", named)
+			}
+			d.Section = sectionMarkLine(attempt) + "\n\n" + d.Section
+		}
+		st.Handoff = attempt.ID
+	} else {
+		st.Handoff = ""
 	}
 	if after := d.render(); local == nil || !bytes.Equal(local, []byte(after)) {
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
-			err = writeAtomic(path, []byte(after))
+		werr := os.MkdirAll(filepath.Dir(path), 0o700)
+		if werr == nil {
+			werr = writeAtomic(path, []byte(after))
 		}
-		if err != nil {
-			l.Log.Warn("the handoff was not written", "error", err.Error())
+		if werr != nil {
+			l.Log.Warn("the handoff was not written", "error", werr.Error())
 		}
 	}
 	if len(d.Section) > maxHandoffSection {

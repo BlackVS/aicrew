@@ -294,7 +294,7 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	worker, opened := status.Session.Role == "worker", attempt != nil
 	var doc *handoffDoc
 	if worker {
-		if d, ok := l.prepareHandoff(ctx, attempt); ok {
+		if d, ok := l.prepareHandoff(ctx, st, attempt); ok {
 			doc = &d
 		}
 	}

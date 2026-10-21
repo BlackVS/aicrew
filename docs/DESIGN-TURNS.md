@@ -244,11 +244,17 @@ cache: the member's canonical copy is on aicrewd.
 - **The sync**, only with aicrewd and only under the member. After a
   worker's turn the launcher pushes the doc, redacted and bounded, to the
   attempt's handoff on aicrewd (CREW-CONTRACT.md, "The attempt's handoff");
-  before a turn it takes the local copy, and only when the home has none
-  (a new home of the member on another host) the attempt's. aicrewd refuses
-  the push once a stop is requested or the attempt is no longer running;
-  the home keeps its copy, and the refusal is logged. No aimem docsync runs
-  in a home.
+  before a turn it takes the local copy, and the attempt's only when the
+  home's doc has no section for the open attempt (a new home of the member
+  on another host, whose doc is join's placeholder). aicrewd refuses the
+  push once a stop is requested or the attempt is no longer running; the
+  home keeps its copy, and the refusal is logged. So the final section of
+  an attempt, written in the turn that submits it, reaches aicrewd only
+  inside the next attempt's archive. No aimem docsync runs in a home.
+- **The section's attempt** is the one the launcher recorded when it kept
+  the section, not only what the section's first line says: a section the
+  model rewrote without that line stays the open attempt's and gets the
+  line back, rather than being archived.
 - **Retention.** A new attempt's directory under `state/attempts/` removes
   those of other attempts beyond the newest 20, never the open one's.
 

@@ -137,17 +137,18 @@ func TestHandoffStall(t *testing.T) {
 // attempts and 16 KiB; the agent's header stays as it wrote it.
 func TestHandoffArchive(t *testing.T) {
 	e := newLoopEnv(t)
+	st := &turnState{}
 	header := "# Handoff\n\nMy own notes.\n"
 	os.MkdirAll(filepath.Dir(handoffPath(e.home)), 0o700)
 	os.WriteFile(handoffPath(e.home), []byte(header), 0o600)
 	for i := range 12 {
 		a := &memberAttempt{ID: fmt.Sprintf("att-%d", i), Task: TaskRef{TaskID: "task"}}
-		if _, ok := e.loop.prepareHandoff(context.Background(), a); !ok {
+		if _, ok := e.loop.prepareHandoff(context.Background(), st, a); !ok {
 			t.Fatal("not prepared")
 		}
 		touchHandoff(e.home, fmt.Sprintf("work of %d", i))
 	}
-	d, ok := e.loop.prepareHandoff(context.Background(), nil) // no open attempt
+	d, ok := e.loop.prepareHandoff(context.Background(), st, nil) // no open attempt
 	if !ok || d.HasSection || len(d.Archive) != maxArchiveAttempts {
 		t.Fatalf("the doc after 12 attempts: section %v, %d archived", d.HasSection, len(d.Archive))
 	}
@@ -163,10 +164,10 @@ func TestHandoffArchive(t *testing.T) {
 	// Large sections: the archive keeps what fits in its bytes.
 	for i := range 4 {
 		a := &memberAttempt{ID: fmt.Sprintf("big-%d", i), Task: TaskRef{TaskID: "task"}}
-		e.loop.prepareHandoff(context.Background(), a)
+		e.loop.prepareHandoff(context.Background(), st, a)
 		touchHandoff(e.home, strings.Repeat("w", 6<<10))
 	}
-	d, _ = e.loop.prepareHandoff(context.Background(), nil)
+	d, _ = e.loop.prepareHandoff(context.Background(), st, nil)
 	size := 0
 	for _, a := range d.Archive {
 		size += len(a) + 2
@@ -176,39 +177,129 @@ func TestHandoffArchive(t *testing.T) {
 	}
 }
 
-// A home without the doc takes the attempt's from aicrewd, and the turn
-// starts from it; without one there either, the launcher opens a new one.
-func TestHandoffPullWhenMissing(t *testing.T) {
-	e := newLoopEnv(t)
-	e.host.attempt = &memberAttempt{ID: "att-1", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-1"}}
-	e.host.handoffs = map[string]string{"att-1": "# Handoff\n\n## CURRENT ATTEMPT\n\nAttempt `att-1`, task `task-1`.\n\n" +
-		"### Next\n\nRebase on the new base.\n"}
-	e.host.pending = []PendingMessage{msg("m1", "message")}
-	e.tick(t)
-	if p := e.specs[0].Prompt; !strings.Contains(p, "### Next\n\nRebase on the new base.\n") {
-		t.Fatalf("the brief does not carry the hub's copy:\n%s", p)
+// The section's attempt is the one the launcher recorded, not only what
+// its first line says: a section the model rewrote without that line, or
+// with text before it, stays the open attempt's, gets the line back where
+// it is missing, and is not archived, so the next turn continues from its
+// Next. A first line naming another attempt is logged, and the launcher's
+// line is put first.
+func TestHandoffSectionIdentity(t *testing.T) {
+	for name, rewrite := range map[string]string{
+		"without its first line": "### Done\n\nThe parser.\n\n### Next\n\nWrite its test.\n",
+		"with text before it":    "Note to self.\nAttempt `att-1`, task `task-1`.\n\n### Next\n\nWrite its test.\n",
+		"naming another attempt": "Attempt `att-0`, task `task-0`.\n\n### Next\n\nWrite its test.\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newLoopEnv(t)
+			var logs strings.Builder
+			e.loop.Log = slog.New(slog.NewTextHandler(&logs, nil))
+			e.host.attempt = &memberAttempt{ID: "att-1", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-1"}}
+			e.host.pending = []PendingMessage{msg("offer", "lifecycle")}
+			e.staleHandoff = true
+			e.next = func(_ TurnSpec, h *fakeHost) TurnResult {
+				h.pending = nil
+				if len(e.specs) == 1 {
+					d, _, _ := readHandoff(e.home)
+					d.Section = rewrite
+					os.WriteFile(handoffPath(e.home), []byte(d.render()), 0o600)
+				}
+				return TurnResult{Outcome: TurnFinished}
+			}
+			e.tick(t)
+			e.tick(t)
+			d, _, _ := readHandoff(e.home)
+			p := e.specs[1].Prompt
+			if !strings.Contains(p, "### Next\n\nWrite its test.\n") || len(d.Archive) != 0 || d.sectionAttempt() != "att-1" ||
+				strings.Count(d.Section, "Attempt `att-1`") != 1 {
+				t.Fatalf("the doc %+v, the brief:\n%s", d, p)
+			}
+			if mismatch := strings.Contains(logs.String(), "names another attempt"); mismatch != (name == "naming another attempt") {
+				t.Errorf("the mismatch log: %v, %q", mismatch, logs.String())
+			}
+		})
 	}
-	raw, err := os.ReadFile(handoffPath(e.home))
-	if err != nil || !strings.Contains(string(raw), "Rebase on the new base.") {
-		t.Fatalf("the home's copy: %v %q", err, raw)
+}
+
+// A new home takes the attempt's doc from aicrewd when it has no section
+// for the attempt, and the turn starts from it: over join's untouched
+// placeholder (or no file) the whole doc, under a header of the home's own
+// only the section. The push after the turn keeps what was taken. Without
+// a copy there, the launcher opens a new section.
+func TestHandoffPullWhenMissing(t *testing.T) {
+	hub := "# Handoff\n\nThe old home's notes.\n\n## CURRENT ATTEMPT\n\nAttempt `att-1`, task `task-1`.\n\n" +
+		"### Next\n\nRebase on the new base.\n"
+	for name, local := range map[string]string{"no file": "", "join's placeholder": handoffMD,
+		"a header of its own": "# Handoff\n\nThis home's notes.\n"} {
+		t.Run(name, func(t *testing.T) {
+			e := newLoopEnv(t)
+			if local != "" {
+				os.MkdirAll(filepath.Dir(handoffPath(e.home)), 0o700)
+				os.WriteFile(handoffPath(e.home), []byte(local), 0o600)
+			}
+			e.host.attempt = &memberAttempt{ID: "att-1", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-1"}}
+			e.host.handoffs = map[string]string{"att-1": hub}
+			e.host.pending = []PendingMessage{msg("m1", "message")}
+			e.tick(t)
+			if p := e.specs[0].Prompt; !strings.Contains(p, "### Next\n\nRebase on the new base.\n") {
+				t.Fatalf("the brief does not carry the hub's copy:\n%s", p)
+			}
+			pushed := e.host.handoffs["att-1"]
+			wantHeader := "The old home's notes."
+			if name == "a header of its own" {
+				wantHeader = "This home's notes."
+			}
+			if e.host.pushes != 1 || !strings.Contains(pushed, "Rebase on the new base.") ||
+				!strings.Contains(pushed, "- turn 1") || !strings.Contains(pushed, wantHeader) {
+				t.Fatalf("the push after the turn (%d): %q", e.host.pushes, pushed)
+			}
+		})
 	}
 
 	// A read that fails gives no new doc, whose push would replace the
 	// attempt's copy: the turn runs without one, and is only recorded.
-	e2 := newLoopEnv(t)
-	e2.host.attempt = e.host.attempt
-	hub := e.host.handoffs["att-1"]
-	e2.host.handoffs = map[string]string{"att-1": hub}
-	e2.host.readErr = errors.New("aicrewd is away")
-	e2.host.pending = []PendingMessage{msg("m1", "message")}
-	e2.tick(t)
-	ledger := readLedger(e2.home, "att-1")
-	if p := e2.specs[0].Prompt; strings.Contains(p, "## The handoff") || e2.host.pushes != 0 ||
-		e2.host.handoffs["att-1"] != hub || len(ledger) != 1 || ledger[0].HandoffNotUpdated {
-		t.Fatalf("a failed read: %d pushes, ledger %+v, brief:\n%s", e2.host.pushes, ledger, p)
+	e := newLoopEnv(t)
+	os.MkdirAll(filepath.Dir(handoffPath(e.home)), 0o700)
+	os.WriteFile(handoffPath(e.home), []byte(handoffMD), 0o600)
+	e.host.attempt = &memberAttempt{ID: "att-1", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-1"}}
+	e.host.handoffs = map[string]string{"att-1": hub}
+	e.host.readErr = errors.New("aicrewd is away")
+	e.host.pending = []PendingMessage{msg("m1", "message")}
+	e.tick(t)
+	ledger := readLedger(e.home, "att-1")
+	if p := e.specs[0].Prompt; strings.Contains(p, "## The handoff") || e.host.pushes != 0 ||
+		e.host.handoffs["att-1"] != hub || len(ledger) != 1 || ledger[0].HandoffNotUpdated {
+		t.Fatalf("a failed read: %d pushes, ledger %+v, brief:\n%s", e.host.pushes, ledger, p)
 	}
-	if _, err := os.Stat(handoffPath(e2.home)); err == nil {
-		t.Error("a failed read wrote a new doc")
+	if raw, _ := os.ReadFile(handoffPath(e.home)); string(raw) != handoffMD {
+		t.Errorf("a failed read changed the placeholder: %q", raw)
+	}
+}
+
+// The write of the doc reports its own outcome: a doc created where there
+// was none logs no failure, and a write that fails logs its error.
+func TestHandoffWriteDiagnostics(t *testing.T) {
+	e := newLoopEnv(t)
+	var logs strings.Builder
+	e.loop.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	a := &memberAttempt{ID: "att-1", Task: TaskRef{TaskID: "task-1"}}
+	if _, ok := e.loop.prepareHandoff(context.Background(), &turnState{}, a); !ok || strings.Contains(logs.String(), "not written") {
+		t.Fatalf("a created doc: %v, log %q", ok, logs.String())
+	}
+	if _, err := os.Stat(handoffPath(e.home)); err != nil {
+		t.Fatalf("no doc was created: %v", err)
+	}
+
+	// docs/ is a link to nowhere: the file reads as missing, and making
+	// its directory fails.
+	e = newLoopEnv(t)
+	logs.Reset()
+	e.loop.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	if err := os.Symlink(filepath.Join(e.home, "nowhere"), filepath.Join(e.home, "docs")); err != nil {
+		t.Skipf("no symbolic link here: %v", err)
+	}
+	e.loop.prepareHandoff(context.Background(), &turnState{}, a)
+	if !strings.Contains(logs.String(), "the handoff was not written") || !strings.Contains(logs.String(), "mkdir") {
+		t.Fatalf("a failed write: log %q", logs.String())
 	}
 }
 

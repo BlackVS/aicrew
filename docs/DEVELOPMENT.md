@@ -2384,7 +2384,11 @@ aicrewd.
   agent's header. Before a worker's turn the launcher opens a
   `## CURRENT ATTEMPT` section for the open attempt, with a first line
   that names the attempt and the task and the four parts Done, Decisions,
-  Next and Open questions, which the model keeps current. A section of an
+  Next and Open questions, which the model keeps current. A section the
+  model rewrote without that first line is still the open attempt's: the
+  launcher records the section's attempt in `state/turns.json`, puts a
+  missing line back, and logs a line that names another attempt. A
+  section of an
   attempt that is no longer open moves to the `## Archive`, newest first,
   its headings a level down; the archive keeps the last 10 attempts, at
   most 16 KiB. A section over 8 KiB is logged and cut in the brief.
@@ -2398,9 +2402,12 @@ aicrewd.
   cut to aicrewd's 32 KiB doc bound and, JSON-encoded, within the server's
   64 KiB body bound, the archive's oldest entries first. A refused push (a
   stop requested, the attempt no longer running) leaves the home's copy as
-  it is and is logged. Only a home without the file reads the attempt's
-  copy before a turn; when that read fails, the turn runs without the doc
-  and neither counts towards the stall nor pushes, so a new doc never
+  it is and is logged. A home whose doc has no section for the open
+  attempt (a new home, whose doc is join's placeholder, or none) reads the
+  attempt's copy before the turn and takes it: the whole doc over the
+  placeholder or a missing file, only its section under a header of the
+  home's own. When that read fails, the turn runs without the doc and
+  neither counts towards the stall nor pushes, so a new section never
   replaces the attempt's copy.
 - **Retention.** A new attempt's directory under `state/attempts/` (its
   task snapshot and ledger) removes those of other attempts beyond the

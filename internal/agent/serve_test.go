@@ -44,6 +44,34 @@ type fakeHost struct {
 	pushes   int
 	pushErr  error
 	readErr  error
+	// The turns' costs: the reports aicrewd recorded, the error a report
+	// gets, the totals it answers and how often it was asked.
+	reports     []turnReport
+	reportErr   error
+	totals      turnTotals
+	totalsErr   error
+	totalsReads int
+}
+
+func (h *fakeHost) ReportTurn(_ context.Context, r turnReport) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.reportErr != nil {
+		return h.reportErr
+	}
+	h.reports = append(h.reports, r)
+	return nil
+}
+
+func (h *fakeHost) TurnTotals(_ context.Context, attemptID string) (turnTotals, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.totalsReads++
+	t := h.totals
+	if attemptID == "" {
+		t.AttemptUSD = 0
+	}
+	return t, h.totalsErr
 }
 
 func (h *fakeHost) PushHandoff(_ context.Context, attemptID, doc string) error {

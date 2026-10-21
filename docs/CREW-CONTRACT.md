@@ -942,6 +942,41 @@ aicrewd reads nothing in the doc, journals no event for a push and sends no
 message: the doc is the worker's memory, not a report. The status reply
 does not carry it, so a poll stays small.
 
+### The turns' costs
+
+The turn loop checks the attempt's and the day's budgets before a turn
+(DESIGN-CONTROL-PLANE.md, section 3.4). Their totals are on aicrewd, so a
+member that moves to a new home keeps its spend (store schema 38, one row
+per turn). This is the first part of the turn report of increment A4,
+with the fields the budgets need.
+- `POST /v1/crew/turns` with the member's session token and `{id,
+  attempt_id, cost_usd, cost_source}` records the turn, named as the turn
+  record in `logs/turns.jsonl` names it. `attempt_id` is left out for a
+  turn outside an attempt, and must otherwise name an attempt the member
+  is the worker of, in any state; any other is answered `no_attempt`.
+  `cost_usd` is from 0 to 10000, and `cost_source` a short lower-case
+  word such as `price_list`. The reply is the turn as recorded. A report
+  is idempotent by the turn's id: a report of a turn already recorded for
+  the member is answered with the recorded turn and counts nothing; one
+  recorded for another member is refused with `invalid_request`. A report
+  takes no Idempotency-Key.
+- A turn counts on aicrewd's UTC date when its report first arrives, for
+  the member that sent it, and on its attempt.
+- `GET /v1/crew/turns/totals[?attempt_id=ID]` returns `{day, day_usd,
+  attempt_id, attempt_usd}`: the member's total on aicrewd's date now and,
+  when the read names an attempt of which the member is the worker, that
+  attempt's total. The launcher reads it only when its home's state has no
+  figure for the day or for the attempt.
+
+The launcher reports a turn after it ends. A report that does not reach
+aicrewd stays in the home's `state/turns.json` and is sent again before
+the next turn; the home keeps the last 50 such reports and drops older
+ones with a log line. A report refused with `invalid_request` or
+`no_attempt` is dropped with a log line; any other refusal keeps it. An
+aicrewd older than these routes answers both `not_found`: the launcher
+then checks the budgets against its home's own figures and keeps the
+reports for an upgraded aicrewd.
+
 ### Ordering across the two stores
 
 The two services share no transaction, so every step that touches the

@@ -104,6 +104,10 @@ type turnHost interface {
 	// (handoff.go).
 	PushHandoff(ctx context.Context, attemptID, doc string) error
 	ReadHandoff(ctx context.Context, attemptID string) (string, error)
+	// ReportTurn reports a turn's cost to aicrewd, and TurnTotals reads the
+	// member's totals there: the day's and the attempt's (turncosts.go).
+	ReportTurn(ctx context.Context, r turnReport) error
+	TurnTotals(ctx context.Context, attemptID string) (turnTotals, error)
 }
 
 // TurnLoop is one home's turn loop.
@@ -173,6 +177,8 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	if attempt != nil && attempt.State == "closed" {
 		attempt = nil
 	}
+	// Whether the state knew the attempt before this tick touched it.
+	knownAttempt := attempt != nil && st.Attempts[attempt.ID] != nil
 	limits := ReadTurnLimits(l.Home)
 	var trigger string
 	continuation := false
@@ -192,6 +198,11 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 		return
 	}
 	day := dayOf(now)
+	l.reportTurns(ctx, &st)
+	if !l.pullTotals(ctx, &st, day, attempt, knownAttempt) {
+		l.hold(&st, now.Add(time.Minute), "the budgets' totals were not read from aicrewd")
+		return
+	}
 	if st.Days[day] >= limits.DailyBudgetUSD {
 		l.hold(&st, nextDay(now), "the daily budget is spent")
 		return
@@ -353,6 +364,8 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		attemptID = attempt.ID
 	}
 	st.spend(dayOf(now), attemptID, rec.CostUSD)
+	l.queueReport(st, rec)
+	l.reportTurns(ctx, st)
 	l.afterOutcome(st, res)
 	if a != nil {
 		if !continuation {

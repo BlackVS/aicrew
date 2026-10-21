@@ -125,8 +125,11 @@ type attemptTurns struct {
 // turnState is TurnStateFile.
 type turnState struct {
 	Attempts map[string]*attemptTurns `json:"attempts"`
-	// Days is the cost per UTC day, the last few days.
-	Days map[string]float64 `json:"days"`
+	// Days is the cost per UTC day, the last few days. It and the
+	// attempts' costs are a cache of the totals aicrewd keeps
+	// (turncosts.go); Unreported is the turns' costs not yet reported to it.
+	Days       map[string]float64 `json:"days"`
+	Unreported []turnReport       `json:"unreported,omitempty"`
 	// Running is the turn in progress, so a restart records it as
 	// interrupted.
 	Running *TurnRecord `json:"running,omitempty"`

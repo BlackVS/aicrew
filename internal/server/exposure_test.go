@@ -81,6 +81,8 @@ var (
 		"ObservePullWithToken": true, "RecordAutomationRunWithToken": true,
 		// The worker's push and read of its attempt's handoff (increment 3c).
 		"PutHandoffWithToken": true, "HandoffWithToken": true,
+		// The member's report of its turns' costs and its read of their totals.
+		"ReportTurnWithToken": true, "TurnTotalsWithToken": true,
 		// The event queues' delivery, as aicrewd's reconciler (increment
 		// 1b); the store refuses every other caller.
 		"DeliverEvents": true,

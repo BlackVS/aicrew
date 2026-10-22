@@ -61,8 +61,20 @@ type discoveryEnv struct {
 	timeout time.Duration
 	// serve, when set, is the ceiling of OpenCode 2's serve wait in place
 	// of timeout, which bounds every other client command.
-	serve    time.Duration
+	serve time.Duration
+	// probe, when set, is the ceiling of Claude Code's init probe in place
+	// of timeout.
+	probe    time.Duration
 	progress io.Writer
+}
+
+// forProbe is p with the init probe's own ceiling as its timeout, so the
+// probe and its progress line use the same value.
+func (p discoveryEnv) forProbe() discoveryEnv {
+	if p.probe > 0 {
+		p.timeout = p.probe
+	}
+	return p
 }
 
 // forServe is p with the serve wait's own ceiling as its timeout, so the
@@ -179,9 +191,10 @@ func tail(s string, n int) string {
 
 func claudeDiscover(ctx context.Context, p discoveryEnv, path, home string) (Discovery, error) {
 	var d Discovery
-	err := p.step("claude init probe", func() (string, error) {
+	pp := p.forProbe()
+	err := pp.step("claude init probe", func() (string, error) {
 		var err error
-		d, err = claudeInit(ctx, p, path, home)
+		d, err = claudeInit(ctx, pp, path, home)
 		if err != nil {
 			return "", err
 		}

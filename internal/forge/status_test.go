@@ -36,9 +36,26 @@ func TestPullStatus(t *testing.T) {
 			}
 			for _, ci := range []string{ChecksPending, ChecksFailure, ChecksSuccess} {
 				f.SetPull(1, func(p *fakeforge.Pull) { p.CI = ci })
-				if got := read().Checks; got != ci {
-					t.Errorf("CI %s read as %s", ci, got)
+				if got := read(); got.Checks != ci || got.Running != (ci == ChecksPending) {
+					t.Errorf("CI %s read as %s, running %v", ci, got.Checks, got.Running)
 				}
+			}
+			// One check failed while another still runs: the conclusion is
+			// failure and the head is still running; then the other
+			// concludes. GitLab's pipeline reports neither apart.
+			if k != GitLab {
+				failed := fakeforge.Check{Name: "go-test", Status: "completed", Conclusion: "failure"}
+				f.SetPull(1, func(p *fakeforge.Pull) { p.Checks = []fakeforge.Check{failed, {Name: "lint", Status: "in_progress"}} })
+				if got := read(); got.Checks != ChecksFailure || !got.Running {
+					t.Errorf("a failure with a check running: %s, running %v", got.Checks, got.Running)
+				}
+				f.SetPull(1, func(p *fakeforge.Pull) {
+					p.Checks = []fakeforge.Check{failed, {Name: "lint", Status: "completed", Conclusion: "success"}}
+				})
+				if got := read(); got.Checks != ChecksFailure || got.Running {
+					t.Errorf("the last check concluded: %s, running %v", got.Checks, got.Running)
+				}
+				f.SetPull(1, func(p *fakeforge.Pull) { p.Checks = nil })
 			}
 			f.SetPull(1, func(p *fakeforge.Pull) { p.AddLabel("hands-reviewed"); p.Comment("READY"); p.Comment("ok") })
 			if st = read(); st.Comments != 2 || !slices.Equal(st.Labels, []string{"hands-reviewed"}) {

@@ -212,6 +212,11 @@ type ForgeChange struct {
 	// could-not-run notice or the hands-review-failed label added. 0 when
 	// this observation carried none.
 	ReviewFailures int `json:"review_failures,omitempty"`
+	// ChecksSettled says the last check still running at the head has
+	// concluded since the observation before, at the same head. Under a
+	// failure the conclusion stays failure, so Checks does not show it; a
+	// re-run that runs and concludes again settles again.
+	ChecksSettled bool `json:"checks_settled,omitempty"`
 }
 
 // ChangedComment is one new comment: its author, kind (comment, review or
@@ -754,6 +759,7 @@ func changeValue(c *ForgeChange) starlark.Value {
 		"labels_removed":  stringList(c.LabelsRemoved),
 		"comments":        frozenList(comments),
 		"review_failures": starlark.MakeInt(c.ReviewFailures),
+		"checks_settled":  starlark.Bool(c.ChecksSettled),
 	})
 }
 

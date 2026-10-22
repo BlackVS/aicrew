@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"net/url"
+	"slices"
 )
 
 // A pull request's status for forge events (docs/CREW-CONTRACT.md, "Forge
@@ -25,6 +26,10 @@ type PullStatus struct {
 	Pull
 	Checks   string `json:"checks"`
 	Comments int64  `json:"comments"`
+	// Running says a check or status at the head has not concluded. It
+	// differs from Checks being pending once one failed: the conclusion is
+	// then failure while another still runs (01a1540d-38c3).
+	Running bool `json:"running,omitempty"`
 }
 
 // wireStatus is the counts and pipeline a pull request's answer carries.
@@ -38,10 +43,15 @@ type wireStatus struct {
 	} `json:"head_pipeline"`
 }
 
-// combinedStatus is GitHub's and Gitea's combined commit status.
+// combinedStatus is GitHub's and Gitea's combined commit status, with each
+// status's own state (Gitea names it status).
 type combinedStatus struct {
 	State      string `json:"state"`
 	TotalCount int64  `json:"total_count"`
+	Statuses   []struct {
+		State  string `json:"state"`
+		Status string `json:"status"`
+	} `json:"statuses"`
 }
 
 // GetPullStatus reads pull request n of the repository at path, with its
@@ -64,6 +74,7 @@ func (c *Client) GetPullStatus(ctx context.Context, host string, k Kind, token, 
 		st.Comments = raw.UserNotes
 		if raw.HeadPipeline != nil {
 			st.Checks = pipelineChecks(raw.HeadPipeline.Status)
+			st.Running = st.Checks == ChecksPending
 		}
 		return st, nil
 	case GitHub:
@@ -82,6 +93,11 @@ func (c *Client) GetPullStatus(ctx context.Context, host string, k Kind, token, 
 	var conclusions []string
 	if cs.TotalCount > 0 {
 		conclusions = append(conclusions, statusChecks(cs.State))
+		// The combined state hides a pending status under a failure;
+		// each status's own state shows it.
+		for _, s := range cs.Statuses {
+			conclusions = append(conclusions, statusChecks(first(s.State, s.Status)))
+		}
 	}
 	if k == GitHub {
 		runs, err := c.checkRuns(ctx, host, token, commit)
@@ -93,6 +109,7 @@ func (c *Client) GetPullStatus(ctx context.Context, host string, k Kind, token, 
 		}
 	}
 	st.Checks = combine(conclusions)
+	st.Running = slices.Contains(conclusions, ChecksPending)
 	return st, nil
 }
 

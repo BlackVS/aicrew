@@ -673,6 +673,59 @@ func TestForgeChangeState(t *testing.T) {
 	}
 }
 
+// The last check still running concluding at the same head is a change of
+// its own (01a1540d-38c3): under a failure the conclusion stays failure.
+// It is read only from the poll's status: an observation that read none (a
+// member's own report) neither settles nor forgets the running check, and
+// a running check that ends with a new head is no settle.
+func TestForgeChangeChecksSettled(t *testing.T) {
+	p := &pullPoints{}
+	obs := func(head string) PullObservation {
+		return PullObservation{Host: "git.example.test", Repository: "crew/project-t", Number: 4, State: forge.PullOpen,
+			HeadCommit: head, Checks: forge.ChecksFailure}
+	}
+	read := func(running bool) pullFacts { return pullFacts{Running: &running} }
+	step := func(o PullObservation, f pullFacts) *automation.ForgeChange {
+		c := p.change(o, f)
+		p.edges(o, f, map[string]bool{}, "k")
+		return c
+	}
+	if c := step(obs("h1"), read(true)); c != nil || !p.Running {
+		t.Fatalf("the first observation: %+v, running %v", c, p.Running)
+	}
+	if c := step(obs("h1"), read(true)); c != nil {
+		t.Fatalf("still running: %+v", c)
+	}
+	if c := step(obs("h1"), pullFacts{}); c != nil || !p.Running {
+		t.Fatalf("a member's report: %+v, running %v", c, p.Running)
+	}
+	c := step(obs("h1"), read(false))
+	if c == nil || !c.ChecksSettled || c.Checks != "" || c.HeadMoved || p.Running {
+		t.Fatalf("the last check concluded: %+v, running %v", c, p.Running)
+	}
+	if c := step(obs("h1"), read(false)); c != nil {
+		t.Fatalf("settled again without a run: %+v", c)
+	}
+	// A re-run runs and settles again.
+	if c := step(obs("h1"), read(true)); c != nil || !p.Running {
+		t.Fatalf("the re-run: %+v", c)
+	}
+	if c := step(obs("h1"), read(false)); c == nil || !c.ChecksSettled {
+		t.Fatalf("the re-run's settle: %+v", c)
+	}
+	// Running at h1, concluded at h2: the head moved, nothing settled.
+	step(obs("h1"), read(true))
+	if c := step(obs("h2"), read(false)); c == nil || !c.HeadMoved || c.ChecksSettled {
+		t.Fatalf("a new head: %+v", c)
+	}
+	p.Running = true
+	raw, _ := json.Marshal(p)
+	var back pullPoints
+	if json.Unmarshal(raw, &back) != nil || !back.Running {
+		t.Fatalf("the kept state: %s", raw)
+	}
+}
+
 // The launcher dispatches forge.changed once per observation that changed
 // the pull request against its kept state: the first observation runs
 // nothing for it, a label added runs the entries subscribed to it with the

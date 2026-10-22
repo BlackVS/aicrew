@@ -193,10 +193,12 @@ func addContent(o PullObservation, st forge.PullStatus, p forge.Pull, c forge.Pu
 }
 
 // pullSeen is what the launcher last reported of a watched pull request, to
-// read its content only when that changed.
+// read its content only when that changed. running is part of it, so the
+// last check concluding under a failure reads the content again.
 type pullSeen struct {
 	head, checks string
 	comments     int64
+	running      bool
 }
 
 // wantsContent reports whether a pull request's status calls for its
@@ -209,7 +211,7 @@ func (s *StepServer) wantsContent(key string, st forge.PullStatus) bool {
 	}
 	s.seenMu.Lock()
 	defer s.seenMu.Unlock()
-	return s.seen[key] != pullSeen{head: st.HeadCommit, checks: st.Checks, comments: st.Comments}
+	return s.seen[key] != pullSeen{head: st.HeadCommit, checks: st.Checks, comments: st.Comments, running: st.Running}
 }
 
 // Observed is what the forge watch last observed of each watched pull
@@ -250,7 +252,7 @@ func (s *StepServer) markSeen(key string, st forge.PullStatus) {
 	if s.seen == nil {
 		s.seen = map[string]pullSeen{}
 	}
-	s.seen[key] = pullSeen{head: st.HeadCommit, checks: st.Checks, comments: st.Comments}
+	s.seen[key] = pullSeen{head: st.HeadCommit, checks: st.Checks, comments: st.Comments, running: st.Running}
 }
 
 // maxObservationEncoded bounds an observation as encoded, under aicrewd's
@@ -442,7 +444,8 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 		o := observation(w.Host, w.Repository, st)
 		o.Automations = names
 		key := pullKey(w.Host, w.Repository, w.Number)
-		facts := pullFacts{Base: st.Base}
+		running := st.Running
+		facts := pullFacts{Base: st.Base, Running: &running}
 		if s.wantsContent(key, st) {
 			// The content tells aicrewd whether a decision is needed; a read
 			// that fails sends the status alone, and the next poll tries again.

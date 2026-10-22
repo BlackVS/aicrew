@@ -14,8 +14,14 @@
 #
 # When: at after-ci, and on forge.changed when the change removed
 # hands-reviewing, the label is not back and every check at the head has
-# concluded (with a check still running, the coming after-ci does it);
-# any other change is answered before the pull request is read.
+# concluded (with a check still running, the coming after-ci does it), or
+# when the last check still running concluded (checks_settled) under a
+# failure: after-ci fired when the first check failed, and the
+# conclusion stays failure, so no after-ci comes. A settle into success
+# is after-ci's own. A re-run after a failure runs and settles again, and
+# that settle runs the update once more: intended, at the cost of one
+# fetch when the branch is up to date. Any other change is answered
+# before the pull request is read.
 # update_base() is called without reading pr().behind first: its own
 # answer is the fresh reading of the base (one fetch, no worktree when
 # the branch is up to date), while pr().behind is the base as the
@@ -27,13 +33,20 @@
 # credential: the launcher does.
 
 def main(event):
-    if "forge.changed" in event.kinds and "hands-reviewing" not in event.change.labels_removed:
+    changed = "forge.changed" in event.kinds
+    ended = changed and "hands-reviewing" in event.change.labels_removed
+    if changed and not ended and not event.change.checks_settled:
         return None
     p = pr()
-    if "forge.changed" in event.kinds:
+    if changed and not ended and not [c for c in p.checks if c.conclusion == "failure"]:
+        return None
+    if changed:
         for c in p.checks:
             if c.conclusion != "success" and c.conclusion != "failure":
-                step("base_update", "the external review ended while %s is still running; the update of this head follows CI" % c.name)
+                # After a settle, a re-run that started since: its own
+                # settle runs the update.
+                if ended:
+                    step("base_update", "the external review ended while %s is still running; the update of this head follows CI" % c.name)
                 return None
     if "hands-reviewing" in p.labels:
         step("base_update", "an external review is in progress; the update of this head follows its result")

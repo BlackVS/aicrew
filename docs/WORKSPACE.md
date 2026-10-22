@@ -267,7 +267,13 @@ This layout does not isolate agents that run as the same OS user: any process
 of that user can read the home, including another member's `aimem/` and its
 credential. On Windows, owner-only means the one account's SID, so homes under
 one account do not protect each other. Use separate OS users where isolation
-is required.
+is required. When a Claude Code home runs under an OS user whose own
+configuration reaches its turns (skills other than the required set, a
+`settings.json` with permissions or hooks, or a `CLAUDE.md` in that user's
+Claude Code directory), `aicrew-agent check` names what it found in a notice
+and `serve` logs the same warning at its start; neither fails on it, since on
+a development station that shares the operator's account this is the
+operator's responsibility.
 
 ## Repositories and worktrees
 

@@ -646,6 +646,7 @@ func ServeHome(ctx context.Context, e *Engine, client string, signals <-chan os.
 		return fmt.Errorf("%w: run `aicrew-agent join --home %s --wake turns` first, so that its managed settings "+
 			"have no Stop hook; an interactive member keeps `aicrew-agent run`", ErrNotTurnsHome, quoteArg(e.Cfg.Home))
 	}
+	warnUserScope(e.Log)
 	if err := start(ctx, e, signals); err != nil {
 		return err
 	}

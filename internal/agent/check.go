@@ -277,6 +277,11 @@ func runCheck(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) 
 	doc.set(doc.top, "managed", rec)
 	c.checkInstallation(sel)
 	c.checkSkills(sel)
+	if slices.Contains(sel, "claude") {
+		if w := userScopeWarning(c.set.RequiredSkills); w != "" {
+			c.notice(w)
+		}
+	}
 	c.checkForgeCreds(ctx)
 
 	c.rep.Instructions = c.blockers

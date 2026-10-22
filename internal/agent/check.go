@@ -41,6 +41,9 @@ type CheckOptions struct {
 	// serveCeiling bounds OpenCode 2's serve wait on its own, for the
 	// tests; zero means Timeout, the ceiling of every client command.
 	serveCeiling time.Duration
+	// probeCeiling bounds Claude Code's init probe on its own, for the
+	// tests; zero means Timeout.
+	probeCeiling time.Duration
 	// Forge verifies the recorded forge credentials; nil means the real
 	// forges.
 	Forge ForgeAPI
@@ -257,7 +260,7 @@ func runCheck(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) 
 		return CheckReport{}, err
 	}
 	defer closeSink()
-	c.disc = discoveryEnv{env: checkProbeEnv(clientEnv(os.Environ(), sink), o.Home), timeout: o.Timeout, serve: o.serveCeiling, progress: o.Out}
+	c.disc = discoveryEnv{env: checkProbeEnv(clientEnv(os.Environ(), sink), o.Home), timeout: o.Timeout, serve: o.serveCeiling, probe: o.probeCeiling, progress: o.Out}
 
 	c.checkAimem(ctx)
 	c.checkOperatorCLI(ctx)

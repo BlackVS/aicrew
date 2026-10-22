@@ -676,19 +676,30 @@ func TestCheckReportsTheOperatorCLI(t *testing.T) {
 	}
 }
 
-// A client that never answers is stopped at the bound and reported.
+// A client that never answers is stopped at the bound and reported. The
+// probe has its own short ceiling, so a slow `claude --version` under load
+// stays within the generous command ceiling (01a15474-abdb). The proof that
+// the probe stopped at its own ceiling is the reason, the detail and the
+// progress line, each built from the configured value. The wall-clock
+// bound only guards against a hang of the whole command ceiling: do not
+// tighten it to a fixed figure, a loaded Windows run takes over 20 s.
 func TestCheckClientHangIsBounded(t *testing.T) {
 	f := readyTools
 	f.ClaudeHang = true
 	e := setupCheck(t, f, "aimem", "claude")
 	e.installSkills(t, "1.26.1", "oh-code-review")
+	const ceiling, timeout = 2 * time.Second, 60 * time.Second
 	start := time.Now()
 	var out bytes.Buffer
-	rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"claude"}, Timeout: 2 * time.Second, Out: &out})
-	if err != nil || rep.Status != JoinBlocked || rep.Reason != "claude_discovery" || time.Since(start) > 20*time.Second {
+	rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"claude"}, Timeout: timeout,
+		probeCeiling: ceiling, Out: &out})
+	if err != nil || rep.Status != JoinBlocked || rep.Reason != "claude_discovery" || time.Since(start) >= timeout {
 		t.Fatalf("%+v, %v, %s", rep, err, time.Since(start))
 	}
-	if !strings.Contains(out.String(), "  claude init probe: stopped at its 2s ceiling\n") {
+	if want := fmt.Sprintf("claude gave no init event within %s", ceiling); component(rep, "claude").Detail != want {
+		t.Fatalf("detail %q, want %q", component(rep, "claude").Detail, want)
+	}
+	if !strings.Contains(out.String(), fmt.Sprintf("  claude init probe: stopped at its %s ceiling\n", ceiling)) {
 		t.Fatalf("the ceiling is not reported:\n%s", out.String())
 	}
 }

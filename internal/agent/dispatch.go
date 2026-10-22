@@ -112,6 +112,9 @@ type pullPoints struct {
 	Comments    int64     `json:"comments,omitempty"`
 	ContentRead bool      `json:"content_read,omitempty"`
 	LastComment time.Time `json:"last_comment,omitzero"`
+	// Running is whether a check at Head was still running at the last
+	// poll that read the status.
+	Running bool `json:"running,omitempty"`
 	// ReviewFailures are the heads at which an observation carried the
 	// external reviewer's failure (its could-not-run notice, or
 	// hands-review-failed added), one entry per such observation, oldest
@@ -247,6 +250,10 @@ type pullFacts struct {
 	// Replay marks the observation replayPoints makes from the kept state:
 	// no forge read, so it changes nothing.
 	Replay bool
+	// Running is whether a check at the head was still running, as the
+	// poll read it; nil when no status was read (a member's own report).
+	// It stays with the launcher: aicrewd decodes an observation strictly.
+	Running *bool
 }
 
 // labelReviewFailed is the external reviewer's failure label, set where a
@@ -270,6 +277,17 @@ func (p *pullPoints) change(o PullObservation, f pullFacts) *automation.ForgeCha
 	p.Observed = true
 	c := &automation.ForgeChange{HeadMoved: p.Head != "" && o.HeadCommit != "" && o.HeadCommit != p.Head,
 		LabelsAdded: missingIn(o.Labels, p.Labels), LabelsRemoved: missingIn(p.Labels, o.Labels)}
+	if f.Running != nil {
+		// The last running check concluding at the same head: under a
+		// failure the conclusion does not change, so this is its only
+		// sign (01a1540d-38c3).
+		c.ChecksSettled = p.Running && !*f.Running && !c.HeadMoved
+		p.Running = *f.Running
+	} else if c.HeadMoved {
+		// A member's report of a new head: a check running at the old head
+		// says nothing of this one, so the next poll cannot settle it.
+		p.Running = false
+	}
 	if o.State != p.State {
 		c.State = o.State
 	}
@@ -312,7 +330,7 @@ func (p *pullPoints) change(o PullObservation, f pullFacts) *automation.ForgeCha
 			}
 		}
 	}
-	if !c.HeadMoved && c.State == "" && c.Checks == "" && !more &&
+	if !c.HeadMoved && c.State == "" && c.Checks == "" && !c.ChecksSettled && !more &&
 		len(c.LabelsAdded)+len(c.LabelsRemoved)+len(c.Comments) == 0 {
 		return nil
 	}

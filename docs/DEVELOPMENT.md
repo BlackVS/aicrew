@@ -672,7 +672,8 @@ home's own forge credential:
   status, and on GitHub its check runs, every page of them. A read ends with
   the wait, so a slow forge cannot hold a short wait past its end.
 - **The content:** when CI concluded or the comments changed since the
-  launcher last reported the pull request, it also reads the content (the
+  launcher last reported the pull request, or the last check still
+  running under a failure concluded, it also reads the content (the
   newest external review at the head with its verdict, the failed checks
   with their excerpts, the passed checks) and reports it. An observation
   also carries the declared check that failed at the head's `after-push`
@@ -984,7 +985,13 @@ subscribes to, or both. The entries come from three sources:
   fetch; on `forge.changed` only when the change removed
   `hands-reviewing`, the label is not back and every check at the head
   has concluded, so an update the review held is retried when the
-  review ends, and `after-ci` keeps its meaning for every subscriber; a
+  review ends, or when the change carries `checks_settled` with a check
+  at the head failed: the last check that still ran when the first one
+  failed has concluded, so the update `after-ci` could not make while a
+  check ran is made then (task 01a1540d-38c3; a settle into success is
+  `after-ci`'s own, and a re-run after a failure settles again and runs
+  the update once more, at the cost of one fetch when the branch is up
+  to date); `after-ci` keeps its meaning for every subscriber; a
   call that reports an updated branch with a reason, the completion of
   a cut update or a note not posted, is followed by one call more, so a
   base that moved on in between is merged; a conflict is a `fix` turn
@@ -1049,10 +1056,12 @@ point first.
 points, the launcher runs the script entries whose `events` name
 `forge.changed` once per accepted observation that changed the pull
 request against the state it keeps per pull request in
-`state/points.json`: the labels, the checks conclusion, the comment count
-and the time of the newest comment its last content read saw (no comment
-body is kept). A change is the head moved, the state or the checks
-conclusion changed, labels added or removed, or the comment count risen;
+`state/points.json`: the labels, the checks conclusion, whether a check
+was still running, the comment count and the time of the newest comment
+its last content read saw (no comment body is kept). A change is the head
+moved, the state or the checks conclusion changed, the last running check
+concluded at the same head, labels added or removed, or the comment count
+risen;
 the first observation of a pull request sets the state and is no change,
 and the first content read sets the comment mark and names no comment as
 new, so history is never acted on (a pull request observed without a
@@ -1063,10 +1072,22 @@ in the script; `None` at a point, so host API 1 stands) carries
 `head_moved`, `state` and `checks` (the new value when it changed),
 `labels_added`, `labels_removed`, `comments` (the new ones since the mark,
 oldest first, each with `author`, `kind`, `body` and `notice`, at most ten
-of 4 KiB) and `review_failures`, the count of observations at this head,
+of 4 KiB), `review_failures`, the count of observations at this head,
 this one included, that carried the external reviewer's failure: a new
 comment the forge layer read as `review-failed` (`[hands-bot review] could
-not run`) or `hands-review-failed` added. The entries run after the
+not run`) or `hands-review-failed` added, and `checks_settled`: the last
+check still running at the head concluded since the poll before. Under a
+failure the conclusion stays `failure` while another check runs and when
+it ends, so `checks` does not show that end and no `after-ci` edge comes;
+a re-run that runs and concludes again settles again. Whether a check
+runs is read from each check run and commit status (the combined state
+hides a pending status under a failure; GitLab's pipeline reports it
+running until it ends) by the launcher's poll only: a member's own
+report carries none and changes nothing of it at the same head, while
+its report of a new head forgets a check running at the old one, so the
+new head's first poll settles nothing. It stays with the
+launcher: the observation aicrewd receives is unchanged, since aicrewd
+decodes it strictly and would refuse a field it does not know. The entries run after the
 observation's points, under the same run lock, and each run is reported
 with `events` in place of a point. A declared command never runs for an
 event. Unlike a point, the change has no edge: the kept state moves on

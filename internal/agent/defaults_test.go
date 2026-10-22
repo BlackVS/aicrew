@@ -417,3 +417,142 @@ func TestBaseUpdateFollowsTheReviewThroughTheLauncher(t *testing.T) {
 		t.Errorf("the attempt's worktree is at %s, not the update %s", got, updated)
 	}
 }
+
+// The base-update default when the last check concludes under a failure
+// (01a1540d-38c3), through the launcher on real git. At one head go-test
+// failed while lint still runs and an external review is in flight:
+// after-ci fires at the failure and the default steps. The review ends
+// with lint still running: the default steps again. lint concludes: the
+// conclusion stays failure, so no after-ci comes and only the launcher's
+// own reading of the running check shows it; the poll's forge.changed
+// carries checks_settled and the default calls update_base(), the branch
+// up to date. The base then moves and a re-run of lint runs and concludes
+// again: that second settle updates the branch, with the delta note.
+// Nothing of it reaches aicrewd's observation.
+func TestBaseUpdateFollowsTheLastCheckThroughTheLauncher(t *testing.T) {
+	ctx := context.Background()
+	a := setupAutomationSources(t)
+	releaseAutomations = func() ([]automation.Entry, error) {
+		raw, err := fs.ReadFile(defaults.Automations, defaults.AutomationsFile)
+		if err != nil {
+			return nil, err
+		}
+		return automation.ParseDefaults(raw)
+	}
+	releaseFS = defaults.Automations
+	pin := a.commit(t, a.process, a.processBare, "main", map[string]string{
+		"process/manifest.json": `{"name": "delivery", "automations": []}`})
+	s := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
+	body := s.claimBody()
+	body["process"] = map[string]string{"repo": testProcessRepo, "commit": pin, "manifest": "process/manifest.json"}
+	r, err := s.run(t, attemptsPath+"/claim", body)
+	if err != nil || r.Outcome != "committed" {
+		t.Fatalf("claim: %+v %v", r, err)
+	}
+	id := r.AttemptID
+	provisionTestForge(t, s.cfg.Home, "git.example.test", "member-forge-token")
+	srv := s.serve(t)
+	wt := filepath.Join(s.cfg.Home, "worktrees", id)
+	os.MkdirAll(filepath.Dir(wt), 0o700)
+	git(t, filepath.Dir(wt), "clone", "-q", "-b", "work/task-1", a.projectBare, wt)
+	git(t, wt, "config", "user.name", "member")
+	git(t, wt, "config", "user.email", "member@example.test")
+	git(t, wt, "remote", "set-url", "origin", testProjectRepo)
+	head := git(t, wt, "rev-parse", "HEAD")
+	origin := func() string { return git(t, a.projectBare, "rev-parse", "refs/heads/work/task-1") }
+	url := "https://git.example.test/crew/project-t/pulls/4"
+	failed := forge.Check{Name: "go-test", State: forge.ChecksFailure}
+	lint := func(state string) []forge.Check { return []forge.Check{failed, {Name: "lint", State: state}} }
+	fake := &fakeStatus{token: "member-forge-token", st: forge.PullStatus{Pull: forge.Pull{Number: 4, URL: url,
+		State: forge.PullOpen, Head: "work/task-1", HeadCommit: head, Base: "main", Labels: []string{"hands-reviewing"}},
+		Checks: forge.ChecksFailure, Running: true}}
+	oldAPI := newPullStatusAPI
+	newPullStatusAPI = func() PullStatusAPI { return fake }
+	t.Cleanup(func() { newPullStatusAPI = oldAPI })
+	f := &automationForge{token: "member-forge-token",
+		pull: forge.Pull{Number: 4, URL: url, State: forge.PullOpen, Draft: true, Title: "WIP: the change", Head: "work/task-1",
+			HeadCommit: head, Base: "main", Labels: []string{"hands-reviewing"}, Mergeable: true},
+		content: forge.PullContent{Checks: lint(forge.ChecksPending)}}
+	oldForge := newAutomationForge
+	newAutomationForge = func() AutomationForge { return f }
+	t.Cleanup(func() { newAutomationForge = oldForge })
+	// checks sets the head's checks: lint's state as the forge reports it,
+	// and as the watch reads it.
+	checks := func(state string) {
+		f.mu.Lock()
+		f.content.Checks = lint(state)
+		f.mu.Unlock()
+		fake.set(func(st *forge.PullStatus) { st.Running = state == forge.ChecksPending })
+	}
+	updates := func(recs []automationRecord) []string {
+		var out []string
+		for _, rec := range recs {
+			if rec.Kind == stepHostUpdateBase {
+				out = append(out, rec.Text)
+			}
+		}
+		return out
+	}
+	poll := func() []automationRecord {
+		srv.pollPulls(ctx)
+		srv.waitPoints()
+		return dispatchRecords(t, s.cfg.Home)
+	}
+
+	// 1. go-test failed with lint running and the review in flight:
+	// after-ci runs the default, which steps.
+	var answers []byte
+	obs, _ := json.Marshal(observation("git.example.test", "crew/project-t", fake.st))
+	if strings.Contains(string(obs), "running") {
+		t.Fatalf("the observation for aicrewd carries the running state: %s", obs)
+	}
+	if ans := s.call(t, &answers, StepCall{Op: "watch-pull", Body: obs}); !ans.OK {
+		t.Fatalf("the baseline: %+v", ans)
+	}
+	srv.waitPoints()
+	recs := poll()
+	if ci := runsAt(recs, automation.PointAfterCI); len(ci) != 1 || ci["base-update.star"].Outcome != "handled" ||
+		lastStep(recs, "base_update") != "an external review is in progress; the update of this head follows its result" {
+		t.Fatalf("after-ci at the failure: %+v, step %q\n%s", ci, lastStep(recs, "base_update"), s.logs.String())
+	}
+
+	// 2. The review ends with lint still running: forge.changed, and the
+	// default steps.
+	f.mu.Lock()
+	f.pull.Labels = []string{"hands-reviewed"}
+	f.mu.Unlock()
+	fake.set(func(st *forge.PullStatus) { st.Labels = []string{"hands-reviewed"} })
+	recs = poll()
+	if got := lastStep(recs, "base_update"); got != "the external review ended while lint is still running; the update of this head follows CI" ||
+		len(updates(recs)) != 0 {
+		t.Fatalf("the review's end with lint running: step %q, updates %q\n%s", got, updates(recs), s.logs.String())
+	}
+
+	// 3. lint concludes: the conclusion stays failure and nothing else
+	// changes, yet the poll's forge.changed settles the checks and the
+	// default calls update_base(); the branch is up to date.
+	checks(forge.ChecksSuccess)
+	recs = poll()
+	if u := updates(recs); len(u) != 1 || !strings.Contains(u[0], "up to date") || origin() != head ||
+		len(runsAt(recs, automation.PointAfterCI)) != 1 {
+		t.Fatalf("the last check concluded: updates %q, origin %s (head %s)\n%s", u, origin(), head, s.logs.String())
+	}
+
+	// 4. The base moves on and lint is re-run: while it runs nothing is
+	// called; its second settle merges the base and pushes the update.
+	base := a.commit(t, a.project, a.projectBare, "main", map[string]string{"moved.txt": "the base moved\n"})
+	checks(forge.ChecksPending)
+	if u := updates(poll()); len(u) != 1 {
+		t.Fatalf("the re-run running: updates %q\n%s", u, s.logs.String())
+	}
+	checks(forge.ChecksSuccess)
+	recs = poll()
+	updated := origin()
+	if u := updates(recs); len(u) != 2 || updated == head ||
+		git(t, a.projectBare, "rev-parse", updated+"^1") != head || git(t, a.projectBare, "rev-parse", updated+"^2") != base {
+		t.Fatalf("the re-run's settle: updates %q, origin %s (head %s, base %s)\n%s", u, updated, head, base, s.logs.String())
+	}
+	if len(f.comments) != 1 || !strings.Contains(f.comments[0], head[:12]) || !strings.Contains(f.comments[0], updated[:12]) {
+		t.Errorf("the delta note: %q", f.comments)
+	}
+}

@@ -200,13 +200,16 @@ func defaultScript(t *testing.T, e Entry) []byte {
 // a reason (the completion of a cut update, or a note not posted) is
 // followed by one more. On forge.changed it acts only when the change
 // removed hands-reviewing, the label is not back and every check at the
-// head has concluded; otherwise it steps, or does nothing for a change
-// that is not the review's end.
+// head has concluded, or when the last running check settled under a
+// failure (01a1540d-38c3); otherwise it steps, or does nothing for a
+// change that is neither.
 func TestDefaultBaseUpdate(t *testing.T) {
 	src := defaultSource(t, "base-update")
 	conflict := &Conflict{Base: "main", Files: []string{"a.go", "b.go"}, Hunks: "<<<<<<< HEAD\n"}
 	ended := &ForgeChange{LabelsRemoved: []string{"hands-reviewing"}}
 	green := []Check{{Name: "go-test", Conclusion: "success"}, {Name: "lint", Conclusion: "failure"}}
+	settled := &ForgeChange{ChecksSettled: true}
+	passed := []Check{{Name: "go-test", Conclusion: "success"}, {Name: "lint", Conclusion: "success"}}
 	inProgress := "base_update: an external review is in progress; the update of this head follows its result"
 	cases := []struct {
 		name    string
@@ -245,6 +248,14 @@ func TestDefaultBaseUpdate(t *testing.T) {
 			UpdateBaseResult{}, 0, nil, []string{inProgress}},
 		{"a change that is not the review's end", Event{Kinds: []string{events.KindForgeChanged}, Change: &ForgeChange{LabelsAdded: []string{"review-this"}}},
 			true, nil, green, UpdateBaseResult{}, 0, nil, nil},
+		{"the last check settled under a failure", Event{Kinds: []string{events.KindForgeChanged}, Change: settled}, true, []string{"hands-reviewed"}, green,
+			UpdateBaseResult{Updated: true, OldHead: "0123456", NewHead: "89abcde"}, 1, nil, nil},
+		{"the checks settled into success: after-ci's", Event{Kinds: []string{events.KindForgeChanged}, Change: settled}, true, nil, passed,
+			UpdateBaseResult{}, 0, nil, nil},
+		{"the checks settled under a review in flight", Event{Kinds: []string{events.KindForgeChanged}, Change: settled}, true, []string{"hands-reviewing"}, green,
+			UpdateBaseResult{}, 0, nil, []string{inProgress}},
+		{"settled, and a re-run started since", Event{Kinds: []string{events.KindForgeChanged}, Change: settled}, true, nil,
+			[]Check{{Name: "go-test", Conclusion: "failure"}, {Name: "lint", Conclusion: "pending"}}, UpdateBaseResult{}, 0, nil, nil},
 	}
 	for _, c := range cases {
 		h := &fakeHost{pr: PR{Number: 7, Head: "0123456", Base: "main", Branch: "feat/x", Behind: c.behind, Labels: c.labels, Checks: c.checks}, update: c.update}

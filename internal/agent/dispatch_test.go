@@ -718,6 +718,15 @@ func TestForgeChangeChecksSettled(t *testing.T) {
 	if c := step(obs("h2"), read(false)); c == nil || !c.HeadMoved || c.ChecksSettled {
 		t.Fatalf("a new head: %+v", c)
 	}
+	// Running at h2, a member's report of h3, which reads no status, then
+	// h3's first poll with nothing running: h2's run never settles at h3.
+	step(obs("h2"), read(true))
+	if c := step(obs("h3"), pullFacts{}); c == nil || !c.HeadMoved || p.Running {
+		t.Fatalf("a member's report of a new head: %+v, running %v", c, p.Running)
+	}
+	if c := step(obs("h3"), read(false)); c != nil {
+		t.Fatalf("the new head's first poll: %+v", c)
+	}
 	p.Running = true
 	raw, _ := json.Marshal(p)
 	var back pullPoints

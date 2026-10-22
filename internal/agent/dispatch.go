@@ -283,6 +283,10 @@ func (p *pullPoints) change(o PullObservation, f pullFacts) *automation.ForgeCha
 		// sign (01a1540d-38c3).
 		c.ChecksSettled = p.Running && !*f.Running && !c.HeadMoved
 		p.Running = *f.Running
+	} else if c.HeadMoved {
+		// A member's report of a new head: a check running at the old head
+		// says nothing of this one, so the next poll cannot settle it.
+		p.Running = false
 	}
 	if o.State != p.State {
 		c.State = o.State

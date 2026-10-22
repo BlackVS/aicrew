@@ -1083,7 +1083,9 @@ a re-run that runs and concludes again settles again. Whether a check
 runs is read from each check run and commit status (the combined state
 hides a pending status under a failure; GitLab's pipeline reports it
 running until it ends) by the launcher's poll only: a member's own
-report carries none and changes nothing of it. It stays with the
+report carries none and changes nothing of it at the same head, while
+its report of a new head forgets a check running at the old one, so the
+new head's first poll settles nothing. It stays with the
 launcher: the observation aicrewd receives is unchanged, since aicrewd
 decodes it strictly and would refuse a field it does not know. The entries run after the
 observation's points, under the same run lock, and each run is reported

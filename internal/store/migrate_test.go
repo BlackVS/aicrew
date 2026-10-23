@@ -109,7 +109,7 @@ func downgradeToV10(t *testing.T, path string) {
 	}
 	stmts = append(stmts,
 		// Tables added after v10 that reference attempts go first.
-		`DROP TABLE member_holds`, `DROP TABLE turn_reports`, `DROP TABLE attempt_handoffs`, `DROP TABLE attempt_automation_runs`, `DROP TABLE attempt_pull_facts`, `DROP TABLE attempt_blocks`, `DROP TABLE timers`, `DROP TABLE event_runs`, `DROP TABLE event_deliveries`, `DROP TABLE events`,
+		`DROP TABLE member_hold_announcements`, `DROP TABLE member_holds`, `DROP TABLE turn_reports`, `DROP TABLE attempt_handoffs`, `DROP TABLE attempt_automation_runs`, `DROP TABLE attempt_pull_facts`, `DROP TABLE attempt_blocks`, `DROP TABLE timers`, `DROP TABLE event_runs`, `DROP TABLE event_deliveries`, `DROP TABLE events`,
 		`DROP TABLE scan_finals`, `DROP TABLE coordination_proofs`, `DROP TABLE superseded_updates`,
 		`DROP TABLE attempt_pulls`, `ALTER TABLE messages DROP COLUMN forge`,
 		`INSERT INTO attempts_v10 (`+attemptsV10Columns+`) SELECT `+attemptsV10Columns+` FROM attempts`,
@@ -504,8 +504,10 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 // dropMemberHolds takes a store back to v38.
 func dropMemberHolds(t *testing.T, raw *sql.DB) {
 	t.Helper()
-	if _, err := raw.Exec(`DROP TABLE member_holds`); err != nil {
-		t.Fatal(err)
+	for _, table := range []string{"member_hold_announcements", "member_holds"} {
+		if _, err := raw.Exec(`DROP TABLE ` + table); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

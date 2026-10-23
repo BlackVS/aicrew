@@ -42,8 +42,8 @@ func TestStatusShowsHold(t *testing.T) {
 	next := time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC)
 	const layout = "2006-01-02T15:04:05.000000000Z07:00" // the store's
 	if _, err := db.Exec(`INSERT INTO member_holds (team_id, agent_id, kind, attempt_id, spent_usd, limit_usd, next_check,
-		reset_at, command, identity, announced, since, updated_at)
-		VALUES (?, ?, 'daily_budget', '', 26.5, 25, ?, '', '', 'daily_budget/2026-10-23', 'daily_budget/2026-10-23', ?, ?)`,
+		reset_at, command, identity, since, updated_at)
+		VALUES (?, ?, 'daily_budget', '', 26.5, 25, ?, '', '', 'daily_budget/2026-10-23', ?, ?)`,
 		team.ID, a.ID, next.Format(layout), next.Add(-time.Hour).Format(layout),
 		next.Add(-time.Hour).Format(layout)); err != nil {
 		t.Fatal(err)

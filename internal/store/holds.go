@@ -16,8 +16,9 @@ import (
 // a budget is spent, the provider's limit is reached or the client's login
 // is missing, and reports each hold here, and clears it when it admits a
 // turn again. aicrewd keeps the member's current hold for the team state
-// and tells the team's coordinators once per hold: a report of the hold it
-// already announced refreshes the row and sends nothing. A spent budget is
+// and tells the team's coordinators once per hold: a report of a hold it
+// told before, even with a clear or another hold in between, refreshes the
+// row and sends nothing. A spent budget is
 // also journaled as budget.spent, which no default subscription handles.
 
 // The holds' kinds.
@@ -31,8 +32,18 @@ const (
 // maxHoldCommand bounds a needs_login hold's command.
 const maxHoldCommand = 512
 
-// schemaV39 keeps each member's current hold. A cleared hold keeps its row,
-// with an empty kind, so the hold it announced last is not announced again.
+// The announced holds a member keeps: at most maxAnnounced, none last
+// reported more than announcedFor ago. A hold's identity carries its
+// attempt or its day, so an older one does not recur unless it is
+// reported all along, which keeps it.
+const (
+	maxAnnounced = 100
+	announcedFor = 7 * 24 * time.Hour
+)
+
+// schemaV39 keeps each member's current hold, and the holds told to the
+// coordinators, so a hold reported again, after a clear or another hold
+// in between, is not told twice.
 var schemaV39 = []string{
 	`CREATE TABLE member_holds (
 		team_id    TEXT NOT NULL,
@@ -45,10 +56,16 @@ var schemaV39 = []string{
 		reset_at   TEXT NOT NULL,
 		command    TEXT NOT NULL,
 		identity   TEXT NOT NULL,
-		announced  TEXT NOT NULL,
 		since      TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
 		PRIMARY KEY (team_id, agent_id)
+	)`,
+	`CREATE TABLE member_hold_announcements (
+		team_id     TEXT NOT NULL,
+		agent_id    TEXT NOT NULL,
+		identity    TEXT NOT NULL,
+		reported_at TEXT NOT NULL,
+		PRIMARY KEY (team_id, agent_id, identity)
 	)`,
 }
 
@@ -147,23 +164,18 @@ func (s *Store) ReportHoldWithToken(ctx context.Context, token string, r HoldRep
 	if err != nil {
 		return HoldResult{}, err
 	}
-	var kind, identity, announced, since string
-	err = tx.QueryRowContext(ctx, `SELECT kind, identity, announced, since FROM member_holds WHERE team_id = ? AND agent_id = ?`,
-		b.TeamID, b.AgentID).Scan(&kind, &identity, &announced, &since)
-	exists := err == nil
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return HoldResult{}, fmt.Errorf("read the hold: %w", err)
-	}
 	if r.Kind == "" {
-		if exists {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE member_holds SET kind = '', attempt_id = '', spent_usd = 0, limit_usd = 0, next_check = '', reset_at = '',
-				 command = '', identity = '', since = '', updated_at = ? WHERE team_id = ? AND agent_id = ?`,
-				formatTime(now), b.TeamID, b.AgentID); err != nil {
-				return HoldResult{}, fmt.Errorf("clear the hold: %w", err)
-			}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM member_holds WHERE team_id = ? AND agent_id = ?`,
+			b.TeamID, b.AgentID); err != nil {
+			return HoldResult{}, fmt.Errorf("clear the hold: %w", err)
 		}
 		return HoldResult{}, tx.Commit()
+	}
+	var identity, since string
+	err = tx.QueryRowContext(ctx, `SELECT identity, since FROM member_holds WHERE team_id = ? AND agent_id = ?`,
+		b.TeamID, b.AgentID).Scan(&identity, &since)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return HoldResult{}, fmt.Errorf("read the hold: %w", err)
 	}
 	var task *TaskRef
 	if r.AttemptID != "" {
@@ -175,25 +187,25 @@ func (s *Store) ReportHoldWithToken(ctx context.Context, token string, r HoldRep
 	}
 	ident := holdIdentity(r, now)
 	start := now
-	if kind != "" && identity == ident {
+	if identity == ident {
 		if start, err = parseTime(since); err != nil {
 			return HoldResult{}, fmt.Errorf("read the hold's start: %w", err)
 		}
 	}
-	announce := ident != announced
-	if announce {
-		announced = ident
+	announce, err := noteAnnounced(ctx, tx, b, ident, now)
+	if err != nil {
+		return HoldResult{}, err
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO member_holds (team_id, agent_id, kind, attempt_id, spent_usd, limit_usd, next_check, reset_at, command,
-		   identity, announced, since, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   identity, since, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (team_id, agent_id) DO UPDATE SET kind = excluded.kind, attempt_id = excluded.attempt_id,
 		   spent_usd = excluded.spent_usd, limit_usd = excluded.limit_usd, next_check = excluded.next_check,
 		   reset_at = excluded.reset_at, command = excluded.command, identity = excluded.identity,
-		   announced = excluded.announced, since = excluded.since, updated_at = excluded.updated_at`,
+		   since = excluded.since, updated_at = excluded.updated_at`,
 		b.TeamID, b.AgentID, r.Kind, r.AttemptID, r.SpentUSD, r.LimitUSD, formatTime(r.NextCheck), optionalTime(r.ResetAt),
-		r.Command, ident, announced, formatTime(start), formatTime(now)); err != nil {
+		r.Command, ident, formatTime(start), formatTime(now)); err != nil {
 		return HoldResult{}, fmt.Errorf("record the hold: %w", err)
 	}
 	out := HoldResult{Hold: &MemberHold{HoldReport: r, Since: start}, Announced: announce}
@@ -206,6 +218,33 @@ func (s *Store) ReportHoldWithToken(ctx context.Context, token string, r HoldRep
 		return HoldResult{}, fmt.Errorf("commit: %w", err)
 	}
 	return out, nil
+}
+
+// noteAnnounced records that the member reported the hold ident now, and
+// reports whether it is the first report of ident the member keeps, which
+// announces it. It then drops the announcements beyond maxAnnounced and
+// those not reported for announcedFor.
+func noteAnnounced(ctx context.Context, tx *sql.Tx, b TokenBinding, ident string, now time.Time) (bool, error) {
+	var known bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM member_hold_announcements WHERE team_id = ? AND agent_id = ? AND identity = ?)`,
+		b.TeamID, b.AgentID, ident).Scan(&known); err != nil {
+		return false, fmt.Errorf("read the holds' announcements: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO member_hold_announcements (team_id, agent_id, identity, reported_at) VALUES (?, ?, ?, ?)
+		 ON CONFLICT (team_id, agent_id, identity) DO UPDATE SET reported_at = excluded.reported_at`,
+		b.TeamID, b.AgentID, ident, formatTime(now)); err != nil {
+		return false, fmt.Errorf("record the hold's announcement: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM member_hold_announcements WHERE team_id = ? AND agent_id = ? AND (reported_at < ? OR identity NOT IN (
+		   SELECT identity FROM member_hold_announcements WHERE team_id = ? AND agent_id = ?
+		   ORDER BY reported_at DESC, identity LIMIT ?))`,
+		b.TeamID, b.AgentID, formatTime(now.Add(-announcedFor)), b.TeamID, b.AgentID, maxAnnounced); err != nil {
+		return false, fmt.Errorf("prune the holds' announcements: %w", err)
+	}
+	return !known, nil
 }
 
 // budgetEvent is a budget.spent event's payload: the member and its hold.
@@ -278,7 +317,7 @@ func memberHold(ctx context.Context, q querier, teamID, agentID string) (*Member
 	var next, reset, since string
 	err := q.QueryRowContext(ctx,
 		`SELECT kind, attempt_id, spent_usd, limit_usd, next_check, reset_at, command, since FROM member_holds
-		 WHERE team_id = ? AND agent_id = ? AND kind != ''`, teamID, agentID).
+		 WHERE team_id = ? AND agent_id = ?`, teamID, agentID).
 		Scan(&h.Kind, &h.AttemptID, &h.SpentUSD, &h.LimitUSD, &next, &reset, &h.Command, &since)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

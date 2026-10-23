@@ -983,8 +983,8 @@ The launcher holds its member, giving it no turn, while the attempt's or
 the day's budget is spent, the provider's limit is reached, or the
 client's login is missing or expired (DESIGN-CONTROL-PLANE.md, 3.3 and
 3.4). It reports each such hold to aicrewd, which keeps the member's
-current hold (store schema 39, one row per member), shows it in the team
-state and tells the team's coordinators.
+current hold (store schema 39, one row per member, and the holds it
+told), shows it in the team state and tells the team's coordinators.
 - `POST /v1/crew/holds` with the member's session token and `{kind,
   attempt_id, spent_usd, limit_usd, next_check, reset_at, command}`
   records the hold. `kind` is one of:
@@ -1005,10 +1005,12 @@ state and tells the team's coordinators.
 - **Once per hold.** A hold's identity is its kind with the attempt for an
   attempt's budget, aicrewd's UTC date for the daily budget, and for the
   provider's limit or a missing login the attempt with the reset time, or
-  with the date when there is none. A report of the identity aicrewd last
-  told refreshes the row (the amounts and the next check) and sends
-  nothing; so does the same hold raised again after a clear, as a probe
-  turn that hits the provider's limit again. A new identity writes one
+  with the date when there is none. aicrewd keeps the identities it told
+  per member: at most 100, none last reported more than 7 days ago, since
+  an identity carries its attempt or its day. A report of a told identity
+  refreshes the row (the amounts and the next check) and sends nothing,
+  also when the hold was cleared or another hold came in between, as a
+  probe turn that hits the provider's limit again. A new identity writes one
   lifecycle message to the team's active coordinators, the member itself
   aside, naming the member, the amount and the limit or the reset or the
   command, and the next check. A coordinator's own hold is kept and tells

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +131,17 @@ func TestMemberHolds(t *testing.T) {
 		t.Fatalf("the hold raised again: %+v, told %d", got, told(e.lead))
 	}
 
+	// Another hold in between does not make the first one new: login,
+	// clear, the provider's limit, clear, login again tells only the limit.
+	report(e.indepTk, HoldReport{})
+	if got := report(e.indepTk, HoldReport{Kind: HoldProviderLimit, AttemptID: a.ID, NextCheck: next}); got.Announced {
+		t.Fatalf("the day's provider limit again: %+v", got)
+	}
+	report(e.indepTk, HoldReport{})
+	if got := report(e.indepTk, steps[len(steps)-1].r); got.Announced || told(e.lead) != 5 {
+		t.Fatalf("the login after another hold: %+v, told %d", got, told(e.lead))
+	}
+
 	// The coordinator's own hold is kept and tells no one.
 	if got := report(e.leadTok, HoldReport{Kind: HoldDailyBudget, SpentUSD: 5, LimitUSD: 5, NextCheck: next}); !got.Announced ||
 		told(e.lead) != 5 || hold(e.lead) == nil {
@@ -151,6 +163,93 @@ func TestMemberHolds(t *testing.T) {
 		if _, err := e.s.ReportHoldWithToken(ctx, e.indepTk, r); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// A hold reported again after another one in between is not told again:
+// a login, a clear, the provider's limit, a clear and the login again tell
+// the coordinator twice.
+func TestHoldToldOnceAcrossAnotherHold(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	next := e.now.Add(time.Hour)
+	login := HoldReport{Kind: HoldNeedsLogin, AttemptID: a.ID, NextCheck: next, Command: "log in"}
+	limit := HoldReport{Kind: HoldProviderLimit, AttemptID: a.ID, NextCheck: next}
+	for _, r := range []HoldReport{login, {}, limit, {}, login} {
+		if _, err := e.s.ReportHoldWithToken(ctx, e.indepTk, r); err != nil {
+			t.Fatalf("report %+v: %v", r, err)
+		}
+		*e.now = e.now.Add(time.Minute)
+	}
+	var n int
+	if err := e.s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM message_recipients r JOIN messages m ON m.id = r.message_id
+		WHERE r.agent_id = ? AND m.text LIKE '%is held%'`, e.lead).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("the coordinator was told %d times, want 2 (%v)", n, err)
+	}
+}
+
+// A member keeps at most maxAnnounced announced holds, none last reported
+// more than announcedFor ago; one reported all along is kept.
+func TestHoldAnnouncementsPruned(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	member := func() int {
+		var n int
+		if err := e.s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM member_hold_announcements WHERE agent_id = ?`,
+			e.indep).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	b, err := e.s.AuthenticateSessionToken(ctx, e.indepTk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := e.s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	now := *e.now
+	// An old identity, then more than the bound of new ones.
+	if first, err := noteAnnounced(ctx, tx, b, "old", now.Add(-announcedFor-time.Minute)); err != nil || !first {
+		t.Fatalf("the old identity: %v %v", first, err)
+	}
+	for i := range maxAnnounced + 5 {
+		if _, err := noteAnnounced(ctx, tx, b, fmt.Sprintf("id-%03d", i), now.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if n := member(); n != maxAnnounced {
+		t.Fatalf("%d announcements kept, want %d", n, maxAnnounced)
+	}
+	var oldest string
+	if err := e.s.db.QueryRowContext(ctx, `SELECT MIN(identity) FROM member_hold_announcements WHERE agent_id = ?`,
+		e.indep).Scan(&oldest); err != nil || oldest != "id-005" {
+		t.Fatalf("the oldest kept: %q %v", oldest, err)
+	}
+	// An identity reported again is known, and moves to the newest.
+	tx, err = e.s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first, err := noteAnnounced(ctx, tx, b, "id-005", now.Add(time.Hour)); err != nil || first {
+		t.Fatalf("a known identity: %v %v", first, err)
+	}
+	if first, err := noteAnnounced(ctx, tx, b, "id-new", now.Add(time.Hour+time.Second)); err != nil || !first {
+		t.Fatalf("a new identity: %v %v", first, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var kept int
+	if err := e.s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM member_hold_announcements WHERE agent_id = ? AND identity IN ('id-005', 'id-006')`,
+		e.indep).Scan(&kept); err != nil || kept != 1 {
+		t.Fatalf("the reported identity is kept and the oldest dropped: %d %v", kept, err)
 	}
 }
 

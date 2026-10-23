@@ -799,8 +799,9 @@ event is data; the bus is core.
   adds `turn_reports`, each turn's cost as its member's launcher reported
   it (CREW-CONTRACT.md, "The turns' costs"); no turn is reported yet.
   Schema 39 adds `member_holds`, each member's current hold as its
-  launcher reported it (CREW-CONTRACT.md, "A member's hold"); no member
-  is held yet.
+  launcher reported it, and `member_hold_announcements`, the holds told to
+  the coordinators (CREW-CONTRACT.md, "A member's hold"); no member is
+  held yet.
   An older aicrewd refuses a schema-33 store, as for every schema change.
   Going back means restoring the store copy the upgrade made
   (`<store>.backup-<UTC time>`), which loses what was written since: the

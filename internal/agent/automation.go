@@ -174,8 +174,8 @@ type liveRun struct {
 	stepsMu sync.Mutex
 	steps   []automationStep
 	submit  string
-	// facts are what pr() and attempt() returned to the script, as the
-	// child saw them, for the run's end record (a replay reads them).
+	// facts are what pr() and attempt() returned to the script, in order,
+	// as the child saw them, for the run's end record (a replay reads them).
 	factsMu sync.Mutex
 	facts   automation.Facts
 }
@@ -192,7 +192,7 @@ func (r *liveRun) recordFacts(set func(f *automation.Facts)) {
 func (r *liveRun) readFacts() *automation.Facts {
 	r.factsMu.Lock()
 	defer r.factsMu.Unlock()
-	if r.facts.PR == nil && r.facts.Attempt == nil {
+	if len(r.facts.PRs) == 0 && len(r.facts.Attempts) == 0 {
 		return nil
 	}
 	f := r.facts
@@ -532,14 +532,14 @@ func (s *StepServer) serveAutomation(call StepCall) StepAnswer {
 			return s.hostErr(err)
 		}
 		p = redactPR(hostRedactor(s.home), p)
-		run.recordFacts(func(f *automation.Facts) { f.PR = &p })
+		run.recordFacts(func(f *automation.Facts) { f.AddPR(p) })
 		return done(p)
 	case "attempt":
 		a, err := s.hostAttempt(ctx, run)
 		if err != nil {
 			return s.hostErr(err)
 		}
-		run.recordFacts(func(f *automation.Facts) { f.Attempt = &a })
+		run.recordFacts(func(f *automation.Facts) { f.AddAttempt(a) })
 		return done(a)
 	case "run":
 		res, err := s.hostRun(ctx, run, in.Cmd, in.Args)

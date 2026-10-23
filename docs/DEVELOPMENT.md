@@ -885,8 +885,15 @@ run`, since the interpreter has no memory limit of its own:
   event it was for (its kinds and IDs, `base_only`, and on
   `forge.changed` the change, its texts redacted as `pr()`'s are, before
   the script's process sees it) and the facts `pr()` and `attempt()`
-  returned to the script, so a replay runs a script against the log
-  (increment 2f, below); `comment()` posts on the attempt's
+  returned to the script, every read in the order the script made it
+  (`prs` and `attempts`, at most 16 reads each, since a replay reads a
+  record as one line of at most 4 MiB and a pull request's answer carries
+  its comments; the reads past that are counted in `prs_dropped` and
+  `attempts_dropped`, absent when none were), so a replay runs a script
+  against the log (increment 2f, below). The single `pr` and `attempt`
+  of a record written before the reads were kept in order are read and
+  never written: the replay is the log's only reader, and it still reads
+  them; `comment()` posts on the attempt's
   pull request. The transitions act with the home's credential too, and
   each is recorded as a step of the run (`host_label`, `host_ready`,
   `host_submit`, `host_rerun`, `host_update_base`): `label()` removes, then adds, labels the
@@ -1174,8 +1181,17 @@ run log, `logs/automations.jsonl` under its home, with a recording host:
 it is the fake host of the automation tests made a command. Each run
 recorded with its event is replayed, in the log's order, with the
 script's `main(event)` under the interpreter's own limits and no child
-process: `pr()` and `attempt()` answer the facts the run recorded (a run
-that recorded none answers an empty value, and the output says so);
+process: `pr()` and `attempt()` answer the facts the run recorded, the
+Nth read with the run's Nth read, so a script that reads the pull
+request, labels it and reads it again does what the run did. A read past
+the recorded ones answers the last again, and the output says so with
+the count the run recorded (or kept, when it dropped reads past its
+bound): a replay exists to explore a script that reads differently from
+the run, so it goes on and says where the reads diverged. Recorded reads
+the replay did not make are listed after the script ends. A run that
+recorded none answers an empty value, and the output says so; a record
+written before the reads were kept in order answers its one answer to
+every read, as it did then;
 `run`, `step`, `comment`, `label`, `ready`, `submit`, `rerun` and
 `update_base` are printed as what the script would have done and perform
 nothing (`run` answers exit 0 with no output, and every command is

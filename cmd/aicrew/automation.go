@@ -15,18 +15,21 @@ import (
 // workflow script run against the events of a member's run log
 // (logs/automations.jsonl under the member's home) with a recording host.
 // The launcher keeps, on each run's end record, the event the run was for
-// and the facts pr() and attempt() returned; the replay answers those
-// calls from the record and logs every other call as what the script
-// would have done, performing nothing. It reads no hub and no forge.
+// and the facts pr() and attempt() returned, in order; the replay answers
+// those calls from the record in that order and logs every other call as
+// what the script would have done, performing nothing. It reads no hub
+// and no forge.
 
 const automationUsage = `usage:
   aicrew automation replay --script FILE --events LOG
 
   FILE is a workflow script; LOG is a member's run log (logs/automations.jsonl
   under its home). Each run recorded with its event is replayed: pr() and
-  attempt() answer the recorded facts; run, step, comment, label, ready,
-  submit, rerun and update_base are printed, not performed (run answers
-  exit 0 with no output, and every command is admitted).
+  attempt() answer the recorded facts in the order the run read them (a
+  read past them answers the last again, and says so); run, step,
+  comment, label, ready, submit, rerun and update_base are printed, not
+  performed (run answers exit 0 with no output, and every command is
+  admitted).
 `
 
 // runAutomation is aicrew automation: 0 on success, 1 on a failure, 2 on a

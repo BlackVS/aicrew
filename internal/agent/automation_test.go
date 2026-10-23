@@ -655,6 +655,51 @@ def main(event):
 	}
 }
 
+// A run records each pr() answer in order (01a1548f-301b): a script that
+// reads the pull request, labels it and reads it again keeps both reads on
+// its end record, and the replay of the home's log against the script does
+// what the run did, the first read's label included.
+func TestAutomationReplaysReadsInOrder(t *testing.T) {
+	a := setupAutomation(t)
+	a.forge.pull.Labels = []string{"hands-reviewed"}
+	src := `# aicrew-automation: {"host_api": 1}
+def main(event):
+    p = pr()
+    if "hands-reviewed" in p.labels:
+        label(add=["review-this"], remove=["hands-reviewed"])
+    p = pr()
+    step("after", ",".join(p.labels))
+    return None
+`
+	res := a.run(t, src, AutomationRun{Point: automation.PointAfterPush})
+	if res.Failed != "" || !slices.Equal(a.forge.labels, []string{"-hands-reviewed", "+review-this"}) {
+		t.Fatalf("the run: %+v, labels %v\n%s", res, a.forge.labels, a.logs.String())
+	}
+	var end *automationRecord
+	for _, r := range a.records(t, res.RunID) {
+		if r.Outcome != "" {
+			end = &r
+		}
+	}
+	if end == nil || end.Facts == nil || len(end.Facts.PRs) != 2 || !slices.Equal(end.Facts.PRs[0].Labels, []string{"hands-reviewed"}) ||
+		!slices.Equal(end.Facts.PRs[1].Labels, []string{"review-this"}) || end.Facts.PR != nil {
+		t.Fatalf("the end record: %+v", end)
+	}
+	log, err := os.Open(filepath.Join(a.cfg.Home, filepath.FromSlash(AutomationLogFile)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	var out strings.Builder
+	if n, err := automation.Replay(context.Background(), "test.star", []byte(src), log, &out); err != nil || n != 1 {
+		t.Fatalf("replayed %d, %v\n%s", n, err, out.String())
+	}
+	want := []string{"  label: add [review-this], remove [hands-reviewed]", "  step after: review-this", "  -> handled"}
+	if got := strings.Split(strings.TrimSpace(out.String()), "\n")[1:]; !slices.Equal(got, want) {
+		t.Fatalf("the replay:\n%s", out.String())
+	}
+}
+
 // A script that fails after submit() submits nothing: the submit is sent
 // once the script ended without failing, so the attempt stays working.
 func TestAutomationSubmitNeedsAHandledRun(t *testing.T) {

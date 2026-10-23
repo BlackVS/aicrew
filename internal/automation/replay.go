@@ -18,12 +18,39 @@ import (
 // answering pr() and attempt() again, and every other host call logged
 // as what the script would have done, performed by nothing.
 
-// Facts are what a run's pr() and attempt() returned to the script, kept
-// on the run's end record for a replay; a nil field is a call the script
-// did not make.
+// Facts are what a run's pr() and attempt() returned to the script, in the
+// order it read them, kept on the run's end record for a replay; an empty
+// list is a call the script did not make.
 type Facts struct {
+	PRs      []PR      `json:"prs,omitempty"`
+	Attempts []Attempt `json:"attempts,omitempty"`
+	// The reads past maxFactReads, counted and not kept.
+	PRsDropped      int `json:"prs_dropped,omitempty"`
+	AttemptsDropped int `json:"attempts_dropped,omitempty"`
+	// PR and Attempt are the one answer each a run recorded before the
+	// reads were kept in order (increment 2f): read for a replay, never
+	// written, the replay being the run log's only reader.
 	PR      *PR      `json:"pr,omitempty"`
 	Attempt *Attempt `json:"attempt,omitempty"`
+}
+
+// maxFactReads bounds the reads of each kind a run's end record keeps: a
+// replay reads a record as one line of at most maxReplayLine, and a pull
+// request's answer carries its comments.
+const maxFactReads = 16
+
+// AddPR keeps a pr() answer after those before it.
+func (f *Facts) AddPR(p PR) { f.PRs = keepRead(f.PRs, &f.PRsDropped, p) }
+
+// AddAttempt keeps an attempt() answer after those before it.
+func (f *Facts) AddAttempt(a Attempt) { f.Attempts = keepRead(f.Attempts, &f.AttemptsDropped, a) }
+
+func keepRead[T any](reads []T, dropped *int, v T) []T {
+	if len(reads) >= maxFactReads {
+		*dropped++
+		return reads
+	}
+	return append(reads, v)
 }
 
 // replayRecord is the part of a run's record a replay reads: a step record
@@ -72,8 +99,10 @@ func Replay(ctx context.Context, name string, source []byte, log io.Reader, out 
 		if rec.Event.BaseOnly {
 			fmt.Fprintln(out, "  a base-only update")
 		}
-		h := &recordingHost{facts: rec.Facts, out: out}
+		h := newRecordingHost(rec.Facts, out)
 		turn, err := Run(ctx, Script{Name: name, Source: source, Host: h, Allow: replayAllow}, *rec.Event)
+		h.prs.unused(out)
+		h.attempts.unused(out)
 		switch {
 		case err != nil:
 			fmt.Fprintf(out, "  -> failed: %s\n", oneLine(err.Error()))
@@ -89,25 +118,71 @@ func Replay(ctx context.Context, name string, source []byte, log io.Reader, out 
 // recordingHost answers pr() and attempt() from the recorded facts and
 // logs every other call to out without performing it.
 type recordingHost struct {
-	facts *Facts
-	out   io.Writer
+	prs      replayReads[PR]
+	attempts replayReads[Attempt]
+	out      io.Writer
 }
 
-func (h *recordingHost) PR(context.Context) (PR, error) {
-	if h.facts == nil || h.facts.PR == nil {
-		fmt.Fprintln(h.out, "  pr(): the run recorded no pull request; an empty one")
-		return PR{}, nil
+func newRecordingHost(f *Facts, out io.Writer) *recordingHost {
+	h := &recordingHost{out: out,
+		prs:      replayReads[PR]{call: "pr()", what: "pull request"},
+		attempts: replayReads[Attempt]{call: "attempt()", what: "attempt"}}
+	if f == nil {
+		return h
 	}
-	return *h.facts.PR, nil
+	h.prs.recorded, h.prs.dropped = f.PRs, f.PRsDropped
+	h.attempts.recorded, h.attempts.dropped = f.Attempts, f.AttemptsDropped
+	// A record from before the reads were kept in order answers its one
+	// answer to every read, as it did then.
+	if f.PRs == nil && f.PR != nil {
+		h.prs.recorded, h.prs.single = []PR{*f.PR}, true
+	}
+	if f.Attempts == nil && f.Attempt != nil {
+		h.attempts.recorded, h.attempts.single = []Attempt{*f.Attempt}, true
+	}
+	return h
 }
 
-func (h *recordingHost) Attempt(context.Context) (Attempt, error) {
-	if h.facts == nil || h.facts.Attempt == nil {
-		fmt.Fprintln(h.out, "  attempt(): the run recorded no attempt; an empty one")
-		return Attempt{}, nil
-	}
-	return *h.facts.Attempt, nil
+// replayReads answers one kind of read in the order the run recorded it.
+// A read past the recorded ones answers the last again and says so, since
+// a replay exists to explore a script that reads differently from the run.
+type replayReads[T any] struct {
+	call, what string
+	recorded   []T
+	dropped    int
+	single     bool
+	n          int
 }
+
+func (r *replayReads[T]) next(out io.Writer) T {
+	r.n++
+	switch {
+	case len(r.recorded) == 0:
+		fmt.Fprintf(out, "  %s: the run recorded no %s; an empty one\n", r.call, r.what)
+		var zero T
+		return zero
+	case r.n <= len(r.recorded):
+		return r.recorded[r.n-1]
+	case r.single:
+		return r.recorded[0]
+	case r.dropped > 0:
+		fmt.Fprintf(out, "  %s: read %d, the run kept %d of %d; the last again\n", r.call, r.n, len(r.recorded), len(r.recorded)+r.dropped)
+	default:
+		fmt.Fprintf(out, "  %s: read %d, the run recorded %d; the last again\n", r.call, r.n, len(r.recorded))
+	}
+	return r.recorded[len(r.recorded)-1]
+}
+
+// unused says how many recorded reads the replayed script did not make.
+func (r *replayReads[T]) unused(out io.Writer) {
+	if left := len(r.recorded) + r.dropped - r.n; !r.single && left > 0 {
+		fmt.Fprintf(out, "  %s: %d of the run's %d reads not made\n", r.call, left, len(r.recorded)+r.dropped)
+	}
+}
+
+func (h *recordingHost) PR(context.Context) (PR, error) { return h.prs.next(h.out), nil }
+
+func (h *recordingHost) Attempt(context.Context) (Attempt, error) { return h.attempts.next(h.out), nil }
 
 func (h *recordingHost) Run(_ context.Context, cmd string, args []string) (RunResult, error) {
 	fmt.Fprintf(h.out, "  run: %s\n", CommandLine(cmd, args))

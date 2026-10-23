@@ -770,6 +770,9 @@ event is data; the bus is core.
   - `timer.due`: a deadline stored in aicrewd (schema 34) passed. The
     delivery loop journals it once, on its first tick after the deadline,
     and a restart keeps it. Increment 2's review pickup is its first user.
+  - `budget.spent`: a member's attempt or daily budget is spent, as its
+    launcher reported the hold (CREW-CONTRACT.md, "A member's hold"), once
+    per hold. Its payload is the member and the hold.
 
   The default `blocked-wake` subscription wakes the team's coordinators on
   a blocked report. Its message names the reason and the attempt's last
@@ -777,7 +780,9 @@ event is data; the bus is core.
   count), so the coordinator can answer or escalate without reading the
   forge. The report's broadcast to the team then leaves the coordinators
   out, so they are woken once for it. No default subscription takes the
-  other attempt changes, member changes or timers yet.
+  other attempt changes, member changes, timers or spent budgets yet; a
+  member's hold reaches the coordinators as aicrewd's own lifecycle
+  message.
 - **Failures.** A handler that fails three times in a row parks the
   queue's events and sends the team's coordinators one message naming the
   subscription, the subject and the last error. Parked events are kept;
@@ -793,6 +798,9 @@ event is data; the bus is core.
   "The attempt's handoff"); every attempt is kept, with none. Schema 38
   adds `turn_reports`, each turn's cost as its member's launcher reported
   it (CREW-CONTRACT.md, "The turns' costs"); no turn is reported yet.
+  Schema 39 adds `member_holds`, each member's current hold as its
+  launcher reported it (CREW-CONTRACT.md, "A member's hold"); no member
+  is held yet.
   An older aicrewd refuses a schema-33 store, as for every schema change.
   Going back means restoring the store copy the upgrade made
   (`<store>.backup-<UTC time>`), which loses what was written since: the

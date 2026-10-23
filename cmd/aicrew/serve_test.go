@@ -30,6 +30,7 @@ import (
 // service holds.
 type svc struct {
 	store     *store.Store
+	dbPath    string
 	tokenFile string
 	url       string
 	pin       string
@@ -84,7 +85,7 @@ func serve(t *testing.T, opts ...server.Option) *svc {
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(ctx, ln) }()
 	t.Cleanup(func() { cancel(); <-done })
-	s := &svc{store: st, tokenFile: tokenFile, url: "https://" + ln.Addr().String(),
+	s := &svc{store: st, dbPath: filepath.Join(dir, "aicrew.db"), tokenFile: tokenFile, url: "https://" + ln.Addr().String(),
 		pin: "sha256-" + base64.StdEncoding.EncodeToString(sum[:])}
 	t.Setenv("AICREW_URL", s.url)
 	t.Setenv("AICREW_TLS_TRUST_MODE", "spki_sha256")

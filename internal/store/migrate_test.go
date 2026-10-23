@@ -109,7 +109,7 @@ func downgradeToV10(t *testing.T, path string) {
 	}
 	stmts = append(stmts,
 		// Tables added after v10 that reference attempts go first.
-		`DROP TABLE turn_reports`, `DROP TABLE attempt_handoffs`, `DROP TABLE attempt_automation_runs`, `DROP TABLE attempt_pull_facts`, `DROP TABLE attempt_blocks`, `DROP TABLE timers`, `DROP TABLE event_runs`, `DROP TABLE event_deliveries`, `DROP TABLE events`,
+		`DROP TABLE member_holds`, `DROP TABLE turn_reports`, `DROP TABLE attempt_handoffs`, `DROP TABLE attempt_automation_runs`, `DROP TABLE attempt_pull_facts`, `DROP TABLE attempt_blocks`, `DROP TABLE timers`, `DROP TABLE event_runs`, `DROP TABLE event_deliveries`, `DROP TABLE events`,
 		`DROP TABLE scan_finals`, `DROP TABLE coordination_proofs`, `DROP TABLE superseded_updates`,
 		`DROP TABLE attempt_pulls`, `ALTER TABLE messages DROP COLUMN forge`,
 		`INSERT INTO attempts_v10 (`+attemptsV10Columns+`) SELECT `+attemptsV10Columns+` FROM attempts`,
@@ -501,9 +501,18 @@ const teamProjectsV1 = `CREATE TABLE team_projects (
 		PRIMARY KEY (team_id, hub_id, project_id)
 	)`
 
+// dropMemberHolds takes a store back to v38.
+func dropMemberHolds(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	if _, err := raw.Exec(`DROP TABLE member_holds`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // dropTurnReports takes a store back to v37.
 func dropTurnReports(t *testing.T, raw *sql.DB) {
 	t.Helper()
+	dropMemberHolds(t, raw)
 	if _, err := raw.Exec(`DROP TABLE turn_reports`); err != nil {
 		t.Fatal(err)
 	}
@@ -1346,5 +1355,34 @@ func TestMigrationV38AddsTurnReports(t *testing.T) {
 	if err := s2.db.QueryRow(`SELECT (SELECT COUNT(*) FROM attempts), (SELECT COUNT(*) FROM turn_reports)`).Scan(&after, &turns); err != nil ||
 		after != before || turns != 0 {
 		t.Fatalf("after v38: %d attempts (were %d), %d turns, %v", after, before, turns, err)
+	}
+}
+
+// Schema v39 adds the members' holds to a populated v38 store: every
+// attempt is kept, and no member is held.
+func TestMigrationV39AddsMemberHolds(t *testing.T) {
+	ctx := context.Background()
+	s, path := populatedStore(t)
+	var before int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM attempts`).Scan(&before); err != nil || before == 0 {
+		t.Fatalf("the populated store's attempts: %d, %v", before, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawDB(t, path)
+	dropMemberHolds(t, raw)
+	if _, err := raw.Exec(`UPDATE schema_version SET version = 38`); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open the v38 store: %v", err)
+	}
+	defer s2.Close()
+	var after, holds int
+	if err := s2.db.QueryRow(`SELECT (SELECT COUNT(*) FROM attempts), (SELECT COUNT(*) FROM member_holds)`).Scan(&after, &holds); err != nil ||
+		after != before || holds != 0 {
+		t.Fatalf("after v39: %d attempts (were %d), %d holds, %v", after, before, holds, err)
 	}
 }

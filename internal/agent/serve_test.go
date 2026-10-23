@@ -54,6 +54,19 @@ type fakeHost struct {
 	// The team's open attempts a coordinator's brief reads.
 	open    OpenAttempts
 	openErr error
+	// The holds reported to aicrewd, and the error a report gets.
+	holds   []holdReport
+	holdErr error
+}
+
+func (h *fakeHost) ReportHold(_ context.Context, r holdReport) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.holdErr != nil {
+		return h.holdErr
+	}
+	h.holds = append(h.holds, r)
+	return nil
 }
 
 func (h *fakeHost) OpenAttempts(context.Context) (OpenAttempts, error) {

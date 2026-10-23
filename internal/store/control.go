@@ -199,6 +199,8 @@ type MemberState struct {
 	// Unacknowledged counts the messages waiting in the member's inbox,
 	// delivered or not.
 	Unacknowledged int `json:"unacknowledged"`
+	// Hold is the hold the member's launcher last reported, if any.
+	Hold *MemberHold `json:"hold,omitempty"`
 }
 
 // MemberAttempt is a member's open attempt in the team state.
@@ -336,6 +338,9 @@ func teamStateIn(ctx context.Context, q querier, teamID string) (TeamState, erro
 			        WHERE g.team_id = m.team_id AND g.hub_id = m.project_hub_id AND g.project_id = m.project_id))`,
 			m.AgentID, teamID).Scan(&ms.Unacknowledged); err != nil {
 			return TeamState{}, fmt.Errorf("count unacknowledged messages: %w", err)
+		}
+		if ms.Hold, err = memberHold(ctx, q, teamID, m.AgentID); err != nil {
+			return TeamState{}, err
 		}
 		out.Members = append(out.Members, ms)
 	}

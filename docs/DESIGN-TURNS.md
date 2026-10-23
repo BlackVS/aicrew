@@ -1035,7 +1035,7 @@ a script instead of core code under this split.
 | --- | --- |
 | `01a13ef0-1547`, forge pr show returns the content | **core:** the forge source reads comments, check runs and failed-job excerpts, and `pr()` exposes them. Which excerpt goes into which message is behaviour (a script). |
 | `01a13ef0-155e`, the coordinator acts on a blocked report | **script:** a default subscription (the coordinator to blocked reports) and a handler that attaches the facts, then returns `turn("decide", ...)` only when the block needs a decision. |
-| `01a13ef0-1572`, a spent budget is announced | **mostly script:** the core emits `budget.spent` (it owns the accounting) and shows it in `aicrew status`. Who is told, and how, is a default subscription and handler. |
+| `01a13ef0-1572`, a spent budget is announced | **mostly script:** the core emits `budget.spent` (it owns the accounting) and shows it in `aicrew status`. Who is told, and how, is a default subscription and handler. Until increment 6 brings that handler, aicrewd's own lifecycle message tells the coordinators once per hold. |
 | `01a13ef0-157d`, the cost of a resumed turn | **core:** stateless turns, the brief and the attempt handoff are the turn loop. |
 | `01a13ef0-158a`, blocked_reason and blocked_since | **core:** two facts on the attempt, in aicrewd's store and `aicrew team state`. |
 | `01a13ef0-1594`, the race pass as its own CI job | **neither:** the repository's CI workflow, under the repository's gates. |
@@ -1113,7 +1113,7 @@ increment is larger than M (principle 6).
 | 3 | **Stateless turns:** the turn brief, the attempt handoff and its ledger, no resume, the lean starting context measured in TURN-PROBE, and the repetition rule of 11 in ROLES.md and `/crew-turn`. | M | T1, T9 | `01a13ef0-157d` | about $4.50 | 1 |
 | 4 | **Model tiers:** the rule of section 6, `needs_strong`, and the two model names in the turn settings. | S | T4 | none; it relates to `01a13613-709c` (model availability) | about $3.50 | 1 |
 | 5 | **The coordinator's policy:** the `offer` default automation, the harness's acceptance after the digest check, and delivery after the merge. | S | T6 | `01a12e9c-0c95` | about $3 | 1 |
-| 6 | **Cost as a figure:** status and the delivery evidence, budgets per size, and the `budget.spent` event with its default handler. | S | T5 | `01a13ef0-1572`, half of `01a13098-79d5`, `01a11f23-2af8`; the cost half of A4 (`01a11eee-3cba`) | about $3 | 1 |
+| 6 | **Cost as a figure:** status and the delivery evidence, budgets per size, and the `budget.spent` event's default handler. Delivered ahead of it by `01a13ef0-1572`: the hold route, the hold in `aicrew status`, the coordinators' message once per hold (the limit half of `01a13098-79d5`), and the `budget.spent` event itself, journaled with no default subscription. | S | T5 | `01a11f23-2af8`; the cost half of A4 (`01a11eee-3cba`) | about $3 | 1 |
 
 How the estimates are made:
 - **0:** the same turns. The two holds and the budget raise go away, which

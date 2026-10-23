@@ -977,6 +977,60 @@ aicrewd older than these routes answers both `not_found`: the launcher
 then checks the budgets against its home's own figures and keeps the
 reports for an upgraded aicrewd.
 
+### A member's hold
+
+The launcher holds its member, giving it no turn, while the attempt's or
+the day's budget is spent, the provider's limit is reached, or the
+client's login is missing or expired (DESIGN-CONTROL-PLANE.md, 3.3 and
+3.4). It reports each such hold to aicrewd, which keeps the member's
+current hold (store schema 39, one row per member), shows it in the team
+state and tells the team's coordinators.
+- `POST /v1/crew/holds` with the member's session token and `{kind,
+  attempt_id, spent_usd, limit_usd, next_check, reset_at, command}`
+  records the hold. `kind` is one of:
+  - `attempt_budget`: `attempt_id` names the attempt, which must be one
+    the member is the worker of (any other is answered `no_attempt`);
+  - `daily_budget`;
+  - `provider_limit`, with `reset_at` when the provider gave one;
+  - `needs_login`, with `command`, how the client logs in again (at most
+    512 bytes).
+
+  Only the budgets carry `spent_usd` and `limit_usd` (from 0 to 1000000).
+  `next_check` is when the launcher looks again: the next UTC day for the
+  daily budget, an hour later for an attempt's, the reset time or the
+  backoff's end otherwise. A body of `{"kind": ""}` alone clears the hold.
+  The reply is `{hold, announced}`: the member's hold now (none after a
+  clear), and whether this report told the coordinators. A report takes
+  no Idempotency-Key.
+- **Once per hold.** A hold's identity is its kind with the attempt for an
+  attempt's budget, aicrewd's UTC date for the daily budget, and for the
+  provider's limit or a missing login the attempt with the reset time, or
+  with the date when there is none. A report of the identity aicrewd last
+  told refreshes the row (the amounts and the next check) and sends
+  nothing; so does the same hold raised again after a clear, as a probe
+  turn that hits the provider's limit again. A new identity writes one
+  lifecycle message to the team's active coordinators, the member itself
+  aside, naming the member, the amount and the limit or the reset or the
+  command, and the next check. A coordinator's own hold is kept and tells
+  no one.
+- **The event.** A spent budget, an attempt's or the day's, is also
+  journaled as a `budget.spent` event about the member, with the member
+  and the hold as its payload. No default subscription handles it; a
+  release's subscription file may name it.
+- **The team state** (`GET /v1/admin/team-states`, `aicrew status`) shows
+  a member's current hold as `hold: {kind, attempt_id, spent_usd,
+  limit_usd, next_check, reset_at, command, since}`; a cleared hold is
+  not shown.
+
+The launcher reports a hold when it changes, and clears it when it admits
+a turn again. A hold that is only the launcher's own, the backoff after a
+failed turn or a check of the budgets whose totals aicrewd did not answer,
+is not reported. A report that does not reach aicrewd stays in the home's
+`state/turns.json` and is sent again at the next tick; one refused with
+`invalid_request` or `no_attempt` is dropped with a log line. An aicrewd
+older than the route answers `not_found`: the launcher says once that the
+coordinators are not told, and the hold stays its own.
+
 ### Ordering across the two stores
 
 The two services share no transaction, so every step that touches the

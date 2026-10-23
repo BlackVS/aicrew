@@ -147,6 +147,10 @@ func (s *Server) teamStateOf(st store.TeamState, now time.Time) opapi.TeamState 
 		}
 		v.State = store.DeriveState(st.Paused != nil || m.Paused != nil, m.Session != nil, seen.seen, seen.waited, now)
 		v.Stalled = store.LooksStalled(v.State, phase, changed, now)
+		if h := m.Hold; h != nil {
+			v.Hold = &opapi.MemberHold{Kind: h.Kind, AttemptID: h.AttemptID, SpentUSD: h.SpentUSD, LimitUSD: h.LimitUSD,
+				NextCheck: h.NextCheck, ResetAt: h.ResetAt, Command: h.Command, Since: h.Since}
+		}
 		out.Members = append(out.Members, v)
 	}
 	return out

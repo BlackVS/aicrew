@@ -108,6 +108,9 @@ type turnHost interface {
 	// member's totals there: the day's and the attempt's (turncosts.go).
 	ReportTurn(ctx context.Context, r turnReport) error
 	TurnTotals(ctx context.Context, attemptID string) (turnTotals, error)
+	// ReportHold reports the member's hold to aicrewd, or clears it
+	// (holds.go).
+	ReportHold(ctx context.Context, r holdReport) error
 	// OpenAttempts reads the team's open attempts, for a coordinator's
 	// brief (turnkinds.go).
 	OpenAttempts(ctx context.Context) (OpenAttempts, error)
@@ -127,6 +130,9 @@ type TurnLoop struct {
 
 	lastStart time.Time
 	nextPoll  time.Time
+	// holdsUnsupported records that aicrewd answered the holds' route
+	// not_found, so the launcher says it once.
+	holdsUnsupported bool
 }
 
 // Loop runs ticks every wakePoll until ctx ends. A turn left running by an
@@ -165,6 +171,7 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 		l.nextPoll = l.Now().Add(forgePoll)
 	}
 	st := readTurnState(l.Home)
+	l.syncHold(ctx, &st)
 	if now.Before(st.HoldUntil) {
 		return
 	}
@@ -207,13 +214,22 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 		return
 	}
 	if st.Days[day] >= limits.DailyBudgetUSD {
+		setHold(&st, &holdReport{Kind: holdDailyBudget, SpentUSD: st.Days[day], LimitUSD: limits.DailyBudgetUSD,
+			NextCheck: nextDay(now)})
 		l.hold(&st, nextDay(now), "the daily budget is spent")
+		l.syncHold(ctx, &st)
 		return
 	}
 	if attempt != nil && st.attempt(attempt.ID).CostUSD >= limits.AttemptBudgetUSD {
+		setHold(&st, &holdReport{Kind: holdAttemptBudget, AttemptID: attempt.ID, SpentUSD: st.attempt(attempt.ID).CostUSD,
+			LimitUSD: limits.AttemptBudgetUSD, NextCheck: now.Add(time.Hour)})
 		l.hold(&st, now.Add(time.Hour), "attempt "+attempt.ID+"'s budget is spent")
+		l.syncHold(ctx, &st)
 		return
 	}
+	// The admitted turn ends the hold aicrewd shows.
+	setHold(&st, nil)
+	l.syncHold(ctx, &st)
 	l.lastStart = now
 	l.turn(ctx, &st, status, attempt, trigger, pending, continuation, limits)
 }
@@ -370,6 +386,8 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	l.queueReport(st, rec)
 	l.reportTurns(ctx, st)
 	l.afterOutcome(st, res)
+	setHold(st, outcomeHold(*st, res, attemptID))
+	l.syncHold(ctx, st)
 	if a != nil {
 		if !continuation {
 			a.Stalled = false

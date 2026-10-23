@@ -275,6 +275,18 @@ type TurnRecord struct {
 	Denials        []string `json:"permission_denials"`
 	Steps          int      `json:"steps"`
 	Summary        string   `json:"summary,omitempty"`
+	// BriefMessages are the ids of the messages the brief carried, which
+	// aicrewd counted delivered when the brief read them; BriefUnacted says
+	// the turn did not finish, so it carried them without acting.
+	BriefMessages []string `json:"brief_messages,omitempty"`
+	BriefUnacted  bool     `json:"brief_messages_unacted,omitempty"`
+}
+
+// end sets the turn's outcome, and whether it carried the brief's messages
+// without acting on them.
+func (r *TurnRecord) end(outcome string) {
+	r.Outcome = outcome
+	r.BriefUnacted = len(r.BriefMessages) > 0 && outcome != TurnFinished
 }
 
 // TurnLogFile is the turn records, relative to the home.

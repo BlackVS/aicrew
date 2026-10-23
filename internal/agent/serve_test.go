@@ -507,6 +507,63 @@ func TestTurnLoopInterrupted(t *testing.T) {
 	}
 }
 
+// The turn record names the messages the brief carried, which aicrewd
+// counted delivered, and marks a turn that did not finish as having carried
+// them without acting: before the brief is handed over, so a turn found
+// running at a restart names them too. A continuation carries none.
+func TestTurnLoopBriefMessages(t *testing.T) {
+	for _, outcome := range []string{TurnFinished, TurnFailed, TurnNeedsLogin, TurnLimitReached, TurnStopped} {
+		e := newLoopEnv(t)
+		e.host.pending = []PendingMessage{msg("m1", "message"), msg("m2", "lifecycle")}
+		e.host.inbox = []inboxMessage{{ID: "m1", Seq: 1, Kind: "message"}, {ID: "m2", Seq: 2, Kind: "lifecycle"}}
+		var running []string
+		e.next = func(TurnSpec, *fakeHost) TurnResult {
+			if r := readTurnState(e.home).Running; r != nil {
+				running = r.BriefMessages
+			}
+			return TurnResult{Outcome: outcome, Denials: []string{}}
+		}
+		e.tick(t)
+		recs := e.records(t)
+		if len(recs) != 1 || !slices.Equal(recs[0].BriefMessages, []string{"m1", "m2"}) ||
+			recs[0].BriefUnacted != (outcome != TurnFinished) || !slices.Equal(running, []string{"m1", "m2"}) {
+			t.Fatalf("%s: records %+v, running turn's messages %v", outcome, recs, running)
+		}
+	}
+
+	e := newLoopEnv(t)
+	st := readTurnState(e.home)
+	st.Running = &TurnRecord{ID: "turn-1", Trigger: "1 new message(s)", StartedAt: e.clock, Denials: []string{},
+		BriefMessages: []string{"m1"}}
+	if err := writeTurnState(e.home, st); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = e.loop.Loop(ctx)
+	if recs := e.records(t); len(recs) != 1 || recs[0].Outcome != TurnInterrupted || !recs[0].BriefUnacted ||
+		!slices.Equal(recs[0].BriefMessages, []string{"m1"}) {
+		t.Fatalf("the interrupted turn: %+v", recs)
+	}
+
+	// A continuation does not read the inbox, though messages wait there.
+	e = newLoopEnv(t)
+	e.host.attempt = &memberAttempt{ID: "att-1", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-1"}}
+	e.host.pending = []PendingMessage{msg("m1", "lifecycle")}
+	e.host.inbox = []inboxMessage{{ID: "m1", Seq: 1, Kind: "lifecycle"}}
+	e.next = func(TurnSpec, *fakeHost) TurnResult {
+		e.host.pending = nil
+		e.head += "a"
+		return TurnResult{Outcome: TurnFinished, Denials: []string{}}
+	}
+	e.tick(t)
+	e.tick(t)
+	recs := e.records(t)
+	if len(recs) != 2 || recs[0].Trigger == recs[1].Trigger || recs[1].BriefMessages != nil || recs[1].BriefUnacted {
+		t.Fatalf("a continuation's record: %+v", recs)
+	}
+}
+
 // The limits come from agent.json's turns object, with the design's
 // defaults for what it leaves out or names out of range.
 func TestReadTurnLimits(t *testing.T) {

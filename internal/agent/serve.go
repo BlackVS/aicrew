@@ -141,7 +141,8 @@ func (l *TurnLoop) Loop(ctx context.Context) error {
 	st := readTurnState(l.Home)
 	if st.Running != nil {
 		r := *st.Running
-		r.EndedAt, r.Outcome, r.Error = l.Now(), TurnInterrupted, "the turn loop restarted while the turn ran"
+		r.EndedAt, r.Error = l.Now(), "the turn loop restarted while the turn ran"
+		r.end(TurnInterrupted)
 		if err := appendTurnRecord(l.Home, r); err != nil {
 			l.Log.Warn("record the interrupted turn", "error", err.Error())
 		}
@@ -338,8 +339,15 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	if doc != nil {
 		sectionBefore = sectionHash(*doc)
 	}
-	brief := l.brief(ctx, briefInput{status: status, attempt: attempt, trigger: trigger, pending: pending,
+	brief, carried := l.brief(ctx, briefInput{status: status, attempt: attempt, trigger: trigger, pending: pending,
 		continuation: continuation, handoff: doc})
+	// The running turn names the brief's messages before the brief is
+	// handed over, so a turn found running at a restart names them too.
+	if rec.BriefMessages = carried; len(carried) > 0 {
+		if err := writeTurnState(l.Home, *st); err != nil {
+			l.Log.Warn("record the turn state", "error", err.Error())
+		}
+	}
 	l.Log.Info("turn started", "turn", rec.ID, "trigger", trigger, "conversation", rec.Conversation,
 		"brief_bytes", len(brief))
 	transcript, closeTranscript := openTranscript(l.Home, rec.ID)
@@ -349,7 +357,8 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	closeTranscript()
 	rec.EndedAt = l.Now()
 	rec.DurationMS = rec.EndedAt.Sub(rec.StartedAt).Milliseconds()
-	rec.Outcome, rec.Error, rec.LimitKind, rec.ResetAt = res.Outcome, res.Error, res.LimitKind, res.ResetAt
+	rec.Error, rec.LimitKind, rec.ResetAt = res.Error, res.LimitKind, res.ResetAt
+	rec.end(res.Outcome)
 	rec.Usage, rec.CostBasis, rec.Summary, rec.ClientTotalUSD = res.Usage, res.CostBasis, res.Summary, res.ClientTotalUSD
 	if len(res.Models) > 0 {
 		rec.Model = strings.Join(res.Models, ",")

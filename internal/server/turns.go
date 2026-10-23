@@ -17,12 +17,34 @@ const (
 	TurnTotalsPath = "/v1/crew/turns/totals"
 )
 
+// HoldsPath is a member's hold (docs/CREW-CONTRACT.md, "A member's hold";
+// store/holds.go): its launcher reports the hold, or clears it. A report is
+// idempotent, as the hold is the member's current one, and needs no
+// Idempotency-Key.
+const HoldsPath = "/v1/crew/holds"
+
 // maxTurnReportBody bounds a turn's report.
 const maxTurnReportBody = 4 << 10
 
 func (s *Server) registerTurns() {
 	s.handle(http.MethodPost, TurnsPath, s.reportTurn)
 	s.handle(http.MethodGet, TurnTotalsPath, s.turnTotals)
+	s.handle(http.MethodPost, HoldsPath, s.reportHold)
+}
+
+// reportHold is POST HoldsPath with a store.HoldReport.
+func (s *Server) reportHold(w http.ResponseWriter, r *http.Request) {
+	var in store.HoldReport
+	token, _, ok := s.stepRequestMax(w, r, false, &in, maxTurnReportBody)
+	if !ok {
+		return
+	}
+	out, err := s.store.ReportHoldWithToken(r.Context(), token, in)
+	if err != nil {
+		s.refuseSession(w, r, turnRefusal(err), false, 0)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // reportTurn is POST TurnsPath with a store.TurnReport.

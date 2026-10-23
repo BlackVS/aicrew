@@ -535,8 +535,14 @@ It stays in the client's own storage, which WORKSPACE exempts from
     arrives, per member (CREW-CONTRACT, "The turns' costs").
   - **Lifting it:** the member waits until the operator raises the budget,
     or the day turns.
-- **Who learns about it:** the coordinator gets a lifecycle message when a
-  worker with an open attempt reaches a limit, so it can plan around it.
+- **Who learns about it:** the launcher reports each hold to aicrewd: a
+  spent attempt or daily budget with the amount and the limit, the
+  provider's limit with its reset time, and a missing login (3.3) with the
+  command that logs in. The team's coordinators get one lifecycle message
+  per hold, not one per check, so they can plan around it, and the team
+  state (`aicrew status`) shows the hold with its next check
+  (CREW-CONTRACT, "A member's hold"). A spent budget is also the
+  `budget.spent` event, for a subscription to handle.
 
 ### 3.5 Token and cost accounting
 

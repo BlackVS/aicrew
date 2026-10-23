@@ -42,6 +42,9 @@ const (
 	// handled the point, asked for a model turn, or failed
 	// (docs/DESIGN-TURNS.md, 9.1 and 10.3).
 	KindAutomationRun = "automation.run"
+	// KindBudgetSpent is a member's budget spent, an attempt's or the
+	// day's, as its launcher reported the hold (store/holds.go).
+	KindBudgetSpent = "budget.spent"
 )
 
 // The roles a subscription wakes.
@@ -92,7 +95,7 @@ const (
 const HandlerWake = "wake"
 
 var (
-	kinds      = []string{KindBoardChanged, KindForgeChanged, KindAttemptChanged, KindMemberChanged, KindTimerDue, KindAutomationRun}
+	kinds      = []string{KindBoardChanged, KindForgeChanged, KindAttemptChanged, KindMemberChanged, KindTimerDue, KindAutomationRun, KindBudgetSpent}
 	roles      = []string{RoleWorker, RoleCoordinator}
 	conditions = []string{WhenAlways, WhenNotOwnChange, WhenReadyOrTeamAttempt, WhenSubmitOrSubmitted, WhenBlocked, WhenAction,
 		WhenFailed, WhenTurn, WhenCheckStreak}

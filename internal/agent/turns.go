@@ -138,6 +138,10 @@ type turnState struct {
 	HoldUntil time.Time     `json:"hold_until,omitzero"`
 	Hold      string        `json:"hold,omitempty"`
 	Backoff   time.Duration `json:"backoff,omitempty"`
+	// HoldReport is the hold aicrewd is to have, nil for none, and
+	// HoldPending says it does not have it yet (holds.go).
+	HoldReport  *holdReport `json:"hold_report,omitempty"`
+	HoldPending bool        `json:"hold_pending,omitempty"`
 	// Continue names the attempt whose last turn ended in work, without a
 	// block or a submit: it is due a continuation turn.
 	Continue string `json:"continue,omitempty"`

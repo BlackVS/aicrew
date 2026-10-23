@@ -623,7 +623,7 @@ func TestRouteInventory(t *testing.T) {
 		"POST /v1/crew/attempts/{id}/release", "POST /v1/crew/attempts/{id}/review", "POST /v1/crew/attempts/{id}/settle",
 		"POST /v1/crew/attempts/{id}/stop", "POST /v1/crew/attempts/{id}/withdraw", "POST /v1/crew/attempts/{id}/work", "POST /v1/crew/automations",
 		"POST /v1/crew/capabilities", "POST /v1/crew/challenges", "POST /v1/crew/coordination",
-		"POST /v1/crew/escalations", "POST /v1/crew/inbox/ack", "POST /v1/crew/introspect", "POST /v1/crew/invitations/begin", "POST /v1/crew/invitations/complete", "POST /v1/crew/pulls",
+		"POST /v1/crew/escalations", "POST /v1/crew/holds", "POST /v1/crew/inbox/ack", "POST /v1/crew/introspect", "POST /v1/crew/invitations/begin", "POST /v1/crew/invitations/complete", "POST /v1/crew/pulls",
 		"POST /v1/crew/session/leave", "POST /v1/crew/token", "POST /v1/crew/turns"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("routes = %v, want %v", got, want)

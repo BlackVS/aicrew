@@ -429,6 +429,23 @@ type MemberState struct {
 	// window (store.StallWindow) and does not wait for the human merge or
 	// an escalation's answer (store.LooksStalled).
 	Stalled bool `json:"stalled,omitempty"`
+	// Hold is the hold the member's launcher last reported: no turn
+	// before NextCheck, because a budget is spent (with the amount spent
+	// and the limit), the provider's limit is reached or the client's
+	// login is missing (with the command that logs in).
+	Hold *MemberHold `json:"hold,omitempty"`
+}
+
+// MemberHold is a member's hold in the team state.
+type MemberHold struct {
+	Kind      string    `json:"kind"`
+	AttemptID string    `json:"attempt_id,omitempty"`
+	SpentUSD  float64   `json:"spent_usd,omitempty"`
+	LimitUSD  float64   `json:"limit_usd,omitempty"`
+	NextCheck time.Time `json:"next_check"`
+	ResetAt   time.Time `json:"reset_at,omitzero"`
+	Command   string    `json:"command,omitempty"`
+	Since     time.Time `json:"since"`
 }
 
 // MemberProfile is the client and model the member's agent last reported.

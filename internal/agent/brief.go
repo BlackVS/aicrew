@@ -160,8 +160,9 @@ type briefInput struct {
 	handoff *handoffDoc
 }
 
-// brief writes the turn's brief.
-func (l *TurnLoop) brief(ctx context.Context, in briefInput) string {
+// brief writes the turn's brief, and returns the ids of the messages it
+// carried.
+func (l *TurnLoop) brief(ctx context.Context, in briefInput) (string, []string) {
 	var b strings.Builder
 	l.briefHead(&b, in)
 	l.briefTask(ctx, &b, in.attempt)
@@ -194,7 +195,11 @@ func (l *TurnLoop) brief(ctx context.Context, in briefInput) string {
 		const note = "\n\n(The brief was cut at its bound; `aicrew-agent inbox` has the rest.)\n"
 		body = cutText(body, max(maxBriefBytes-len(fetch)-len(note), 0)) + note
 	}
-	return body + fetch
+	ids := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		ids = append(ids, m.ID)
+	}
+	return body + fetch, ids
 }
 
 // briefHead is the first line, the attempt's state as aicrewd's status
@@ -296,6 +301,14 @@ func (l *TurnLoop) frozenTask(ctx context.Context, a *memberAttempt) (snap taskS
 
 // briefTrigger is what started the turn: the pending messages with their
 // content, or the continuation. It returns the messages it read.
+//
+// The read is the inbox's, so aicrewd counts each message delivered once
+// more. A turn that then fails, is stopped, hits a limit or is interrupted
+// never acts on them: they stay unacknowledged and reach the next turn, but
+// their count says delivered. The turn record names them and marks such a
+// turn unacted; that is a fact about the turn, not an audit of what the
+// member did with each message, which the inbox shows by what is still
+// unacknowledged.
 func (l *TurnLoop) briefTrigger(ctx context.Context, b *strings.Builder, in briefInput) []inboxMessage {
 	fmt.Fprintf(b, "\n## Why this turn\n\n%s.\n", in.trigger)
 	if in.continuation {

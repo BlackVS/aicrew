@@ -2355,7 +2355,7 @@ Messages that arrive during a turn wait for the next one.
      attempt;
   4. why this turn: the trigger (the messages' kinds and ids, or the
      continued attempt), then the pending messages read from the inbox,
-     which counts as a delivery: each with its id to acknowledge, kind,
+     which counts as a delivery (below): each with its id to acknowledge, kind,
      sender, attempt, task and text, and the content its kind carries: an
      `action.needed` message's subjects with their needs, the pull request's
      facts, the review's verdict and body, the failed checks' excerpts, the
@@ -2399,6 +2399,19 @@ Messages that arrive during a turn wait for the next one.
   whole, since it names the turn's ROLES.md sections.
 - **The trigger** in the turn's record names the messages' kinds and ids,
   or the continued attempt, never a message's text.
+- **The brief's messages and the delivery count.** The brief's inbox read
+  is the member's own read, so aicrewd counts each message it carries
+  delivered once more. A message's delivery count therefore means "handed
+  to a turn's brief or read by the member", not "acted on": a turn that
+  fails, is stopped, hits a limit or is interrupted after the brief never
+  acts on its messages, which stay unacknowledged and reach the next turn.
+  The turn's record is the place to see what a turn was given:
+  `brief_messages` names the ids the brief carried (a continuation carries
+  none), and `brief_messages_unacted` is true when the turn's outcome is
+  not `finished`. The running turn names them before the brief is handed
+  over, so a turn found running at a restart names them too. The record
+  states a fact about the turn, not an audit of each message: a message a
+  finished turn left unacknowledged is still pending in the inbox.
 - **Outcomes:**
   - `finished`: a normal `result` event;
   - `failed`: an error result, or an exit without a result;

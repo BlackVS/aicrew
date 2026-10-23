@@ -143,6 +143,14 @@ func (s *StepServer) OpenAttempts(ctx context.Context) (OpenAttempts, error) {
 	return ReadOpenAttempts(ctx, s.local, s.driver.Session.stepToken())
 }
 
+// The coordinator's handoff in its brief: the heading, and the line that
+// names how much of the file a cut left out.
+const (
+	coordinatorHandoffHead = "\n## The handoff\n\nYour `docs/HANDOFF.md` as this turn starts; keep it current before the turn ends.\n\n"
+	coordinatorHandoffCut  = "\n\n(The last %d bytes of `docs/HANDOFF.md` were cut at the brief's bound; the file in the home " +
+		"has them.)\n"
+)
+
 // coordinatorHandoff is what a coordinator's brief carries of its
 // docs/HANDOFF.md within room bytes: the file's start, at most
 // maxCoordinatorHandoff bytes once redacted, with a line naming what was
@@ -157,9 +165,7 @@ func (l *TurnLoop) coordinatorHandoff(redact func(string) string, room int) stri
 		return ""
 	}
 	doc := redact(string(raw))
-	const head = "\n## The handoff\n\nYour `docs/HANDOFF.md` as this turn starts; keep it current before the turn ends.\n\n"
-	const cutLine = "\n\n(The last %d bytes of `docs/HANDOFF.md` were cut at the brief's bound; the file in the home " +
-		"has them.)\n"
+	head, cutLine := coordinatorHandoffHead, coordinatorHandoffCut
 	// The cut line's number takes at most 10 digits.
 	bound := min(maxCoordinatorHandoff, room-len(head)-len(cutLine)-10)
 	if len(doc) <= bound {
@@ -171,7 +177,7 @@ func (l *TurnLoop) coordinatorHandoff(redact func(string) string, room int) stri
 	}
 	cut := cutText(doc, bound)
 	l.Log.Warn("the brief cut the coordinator's handoff at its bound", "bytes", len(doc), "bound", bound)
-	return head + cut + fmt.Sprintf(cutLine, len(doc)-(len(cut)-len("…")))
+	return head + cut + fmt.Sprintf(cutLine, len(doc)-len(strings.TrimSuffix(cut, "…")))
 }
 
 // reviewResultRule is the worker's section for a turn on a review result.

@@ -224,3 +224,27 @@ func TestLeanStartGuidance(t *testing.T) {
 		t.Fatalf("START.md lacks the precedence sentence:\n%s", startMD)
 	}
 }
+
+// The coordinator's handoff cut at any bound names exactly the bytes it
+// left out, also when the bound cannot hold the ellipsis.
+func TestCoordinatorHandoffCutCount(t *testing.T) {
+	e := newLoopEnv(t)
+	doc := strings.Repeat("h", 100)
+	path := filepath.Join(e.home, filepath.FromSlash(HandoffFile))
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	same := func(s string) string { return s }
+	fixed := len(coordinatorHandoffHead) + len(coordinatorHandoffCut) + 10
+	for bound := 1; bound <= 10; bound++ {
+		got := e.loop.coordinatorHandoff(same, fixed+bound)
+		kept := strings.TrimSuffix(strings.TrimPrefix(got[:strings.Index(got, "\n\n(The last")], coordinatorHandoffHead), "…")
+		want := fmt.Sprintf("(The last %d bytes", len(doc)-len(kept))
+		if !strings.Contains(got, want) || len(kept) > bound {
+			t.Errorf("bound %d: kept %d bytes, %q", bound, len(kept), got[len(coordinatorHandoffHead):])
+		}
+	}
+}

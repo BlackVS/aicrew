@@ -989,7 +989,42 @@ func TestTurnBriefBounds(t *testing.T) {
 	}
 	var snap taskSnapshot
 	raw, _ := os.ReadFile(taskSnapshotPath(e.home, "att-1"))
-	if json.Unmarshal(raw, &snap) != nil || !snap.Cut || len(snap.Objective) > maxBriefTaskBytes || snap.AcceptanceCriteria != "…" {
-		t.Errorf("the snapshot: %+v", snap)
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		t.Fatal(err)
+	}
+	// The objective takes the room the title leaves; the criteria, with
+	// none left, are empty rather than an ellipsis the bound did not hold.
+	fields := len(snap.Title) + len(snap.Objective) + len(snap.AcceptanceCriteria) + len(snap.NonGoals)
+	if !snap.Cut || fields > maxBriefTaskBytes || snap.AcceptanceCriteria != "" {
+		t.Errorf("the snapshot: %d bytes, cut %v, criteria %q", fields, snap.Cut, snap.AcceptanceCriteria)
+	}
+}
+
+// cutText keeps a text within its bound: whole when it fits, cut on a rune
+// boundary with an ellipsis when it does not, and empty when the bound
+// cannot hold the ellipsis.
+func TestCutText(t *testing.T) {
+	for _, c := range []struct {
+		s    string
+		n    int
+		want string
+	}{
+		{"abcdef", 6, "abcdef"},
+		{"abcdef", 5, "ab…"},
+		{"abcdef", 4, "a…"},
+		{"abcdef", 3, "…"},
+		{"abcdef", 2, ""},
+		{"abcdef", 1, ""},
+		{"abcdef", 0, ""},
+		{"", 0, ""},
+		{"ab", 2, "ab"},
+		{"aéb", 4, "aéb"},
+		{"aéééb", 5, "a…"}, // the cut would split é: the rune is dropped
+		{"ab   cdef", 7, "ab…"},
+	} {
+		got := cutText(c.s, c.n)
+		if got != c.want || len(got) > c.n {
+			t.Errorf("cutText(%q, %d) = %q, want %q", c.s, c.n, got, c.want)
+		}
 	}
 }

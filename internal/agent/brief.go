@@ -522,11 +522,14 @@ func redactBrief(home, s string, n int) string {
 }
 
 // cutText is s cut to at most n bytes on a rune boundary, ending in an
-// ellipsis when it was cut.
+// ellipsis when it was cut; "" when n cannot hold the ellipsis.
 func cutText(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
 	const ellipsis = "…"
-	return strings.TrimRight(strings.ToValidUTF8(s[:max(n-len(ellipsis), 0)], ""), " \t\n") + ellipsis
+	if n < len(ellipsis) {
+		return ""
+	}
+	return strings.TrimRight(strings.ToValidUTF8(s[:n-len(ellipsis)], ""), " \t\n") + ellipsis
 }

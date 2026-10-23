@@ -12,6 +12,190 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.7.0] - 2026-10-23
+
+Increment 3 of the turn-economics design (`docs/DESIGN-TURNS.md`), merged
+as 11 pull requests since 0.6.0. Every turn now starts fresh from a brief
+the launcher writes, and no conversation is resumed (#189). A worker's
+`docs/HANDOFF.md` carries the attempt from turn to turn, and aicrewd keeps
+a copy of it (#190, #191). Each turn's cost is reported to aicrewd, so the
+budgets hold in a new home (#192). A turn reads only the rules for its
+kind, and the coordinator gets a brief of its own (#193). Beside these
+come a check warning about the OS user's own Claude Code configuration
+(#195), two fixes to the workflow automations (#197, #198), a probe of the
+turns' starting context (#188), mode-neutral repository instructions
+(#194) and a hang test that holds under load (#196).
+
+The store moves from schema 36 to schema 38. The hub goes first: an older
+aicrewd refuses the newer store, and going back to 0.6.0 means restoring
+the store copy the upgrade made. aimem 0.10.0 or later stays required;
+this release is tested with aimem 0.10.13. The pilot team stays paused:
+nothing in this release resumes it.
+
+### Breaking changes
+
+- **The store schema is 38** (#190 schema 37: `attempt_handoffs`; #192
+  schema 38: `turn_reports`). The hub one-liner migrates it. An older
+  aicrewd refuses a schema-38 store with `store schema is newer than this
+  build`, and a downgrade restores the upgrade's copy
+  (`<store>.backup-<UTC time>`), losing what was written since.
+- **No turn resumes a conversation** (#189). The per-attempt and
+  per-member conversations, their rotation (50 turns, 70 % context, a new
+  day) and the failed-resume reset are gone. Each turn gets its own
+  session ID and starts from the brief the launcher writes: the attempt's
+  state, who and where, the task as it was frozen at the attempt's first
+  turn (`state/attempts/<attempt>/task.json`), why this turn with the
+  pending messages' content, and the pull requests as the forge watch last
+  saw them. A turn's cost is the client's total for its own conversation.
+  An attempt that is open across the upgrade continues from the brief and
+  its handoff section; what its earlier conversation knew is not carried.
+- **The worker's `docs/HANDOFF.md` is the attempt's memory** (#191). The
+  launcher opens a CURRENT ATTEMPT section for the open attempt and moves
+  the section of a closed attempt into an Archive (the last 10 attempts,
+  16 KiB). It keeps a ledger of one line per turn in
+  `state/attempts/<attempt>/ledger.jsonl` (the last 50). The brief carries
+  the section and the ledger. Two finished turns in a row that make no
+  step and leave the section unchanged block the attempt (the stall rule);
+  the three-turn rule stays. The rest of the file stays the agent's.
+- **aicrewd keeps the attempt's handoff** (#190, #191). After a worker's
+  turn the launcher pushes the doc when it changed, redacted and at most
+  32 KiB, to `POST /v1/crew/attempts/{id}/handoff`. A home without the
+  attempt's section takes aicrewd's copy, so a new home continues the
+  attempt.
+- **The budgets are checked against aicrewd's totals** (#192). The
+  launcher reports each turn's cost to `POST /v1/crew/turns`, and keeps
+  the reports that did not arrive (at most 50) to send again before the
+  next turn. A home with no figure for the day or the attempt reads
+  `GET /v1/crew/turns/totals` and keeps the larger of each. The thresholds
+  and `--max-budget-usd` are unchanged.
+- **A turn reads only the rules for its kind** (#193). `docs/ROLES.md` is
+  written by section per turn kind (the coordinator; a worker's offer,
+  running attempt and review result; an independent member), the brief
+  names the sections for the turn's kind, and `/crew-turn` reads no
+  managed doc in full. `START.md` puts the operator's instruction first,
+  then the home's docs and the process, then a repository's `AGENTS.md`
+  or `CLAUDE.md`. A `join` rerun brings these files to a home; see the
+  upgrade steps.
+- **The run log keeps every `pr()` and `attempt()` read in order** (#198).
+  A run's end record in `logs/automations.jsonl` carries `prs` and
+  `attempts` (at most 16 each, with `prs_dropped` and `attempts_dropped`
+  when more were read) in place of the single `pr` and `attempt`. A log
+  written by 0.6.0 still replays as before; replay a 0.7.0 log with the
+  0.7.0 `aicrew`.
+- **aimem 0.10.13 is the tested release.** 0.10.0 or later stays
+  required; a newer aimem is reported by `aicrew-agent check` as newer
+  than the tested one, as before. The real-aimem e2e harness pins
+  v0.10.13.
+
+### Upgrade steps
+
+All of them use product commands and one-liners. The hub goes first.
+
+1. **aicrewd.** On the hub host, as root, run the hub one-liner:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.7.0/install-aicrewd.sh | bash
+   ```
+
+   As before, it backs up the configuration and the store, swaps the
+   binaries, migrates the store to schema 38, waits for health at 0.7.0,
+   and rolls back if the new release does not come up. The handoff and
+   turn-cost routes come with it.
+2. **The operator's machine and each member.** As that user, rerun the
+   member one-liner, which stops the account's registered member services,
+   swaps the binaries and starts them again:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.7.0/boot.sh | bash
+     ```
+
+   - Windows:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.7.0/boot.ps1 | iex"
+     ```
+
+3. **Each home.** Rerun `aicrew-agent join --home HOME`. The rerun
+   refreshes `docs/ROLES.md` (now by turn kind), `docs/START.md` (the
+   instructions' precedence) and the crew commands (the new
+   `/crew-turn`). An edited file is kept, with the new version written
+   beside it with the suffix `.aicrew-new`. A worker's existing
+   `docs/HANDOFF.md` is kept: the launcher adds its sections, and a home
+   joined before this release keeps the attempt's archive from aicrewd.
+4. **Check each home.** `aicrew-agent check --home HOME` now warns when
+   the OS user's own Claude Code configuration reaches the member's turns
+   (skills beyond the required set, a `settings.json` with permissions or
+   hooks, a `CLAUDE.md`). The status is unchanged. The rule stays one
+   agent home per OS user; on a development station that shares the
+   operator's account, what reaches the turns is the operator's
+   responsibility.
+
+### Fresh turns (increment 3: #189 to #193)
+
+- **The turn brief** (#189). The prompt is `/crew-turn` followed by the
+  brief on the client's standard input. The brief is redacted as a whole,
+  at most 24 KiB, and keeps a pull request's observed review and checks
+  across polls that read no content.
+- **The attempt's handoff on aicrewd** (#190). Store schema 37 adds
+  `attempt_handoffs`. `POST /v1/crew/attempts/{id}/handoff` replaces the
+  doc of the member's running attempt (at most 32 KiB of UTF-8; refused
+  with `attempt_state` once a stop is requested or the attempt is not
+  running), and `GET` returns it to the attempt's worker in any state.
+  `CREW-CONTRACT.md` describes both ("The attempt's handoff").
+- **The session doc, the ledger and the stall rule** (#191), as above.
+  A new attempt's directory under `state/attempts/` removes other
+  attempts' beyond the newest 20, never the open one's.
+- **The turns' costs on aicrewd** (#192). Store schema 38 adds
+  `turn_reports`, one row per turn, idempotent by the turn's ID; the day
+  is aicrewd's UTC date at the first receipt. `GET
+  /v1/crew/turns/totals[?attempt_id=]` returns the member's total today
+  and the attempt's. A launcher talking to an older aicrewd, which answers
+  `not_found`, keeps its home's own figures. `CREW-CONTRACT.md` describes
+  the routes ("The turns' costs").
+- **The lean start by turn kind** (#193). The coordinator's brief carries
+  the team's open attempts and its own `docs/HANDOFF.md`, cut at 8 KiB.
+  `ROLES.md` and `/crew-turn` carry the repetition rule: a worker proposes
+  "automate X" in its handoff and its pull request, and the coordinator
+  posts it as an `[automate]` task comment. The interactive mode (`run`,
+  `/crew-start`) reads `START.md` and `ROLES.md` as before.
+
+### Workflow automations
+
+- **A held base update runs when the last running check ends** (#197).
+  When a check fails while another still runs, the aggregate conclusion is
+  already `failure`, so no `after-ci` came when the last one ended and the
+  update the external review held waited for the next head. A
+  `forge.changed` event now carries `checks_settled` when the last running
+  check concluded at the same head, and the `base-update` default acts on
+  it when a check failed. `after-ci` keeps its meaning. The running state
+  is read from each check run and commit status by the launcher's poll and
+  stays inside the launcher.
+- **`aicrew automation replay` answers the reads in order** (#198). The
+  Nth `pr()` or `attempt()` read gets the run's Nth answer, so a script
+  that reads the pull request, labels it and reads it again does what the
+  run did. A read past the recorded ones answers the last again, and the
+  output says so; recorded reads the replay did not make are listed.
+
+### Check
+
+- **The OS user's own Claude Code configuration** (#195), as in the
+  upgrade steps. `aicrew-agent serve` logs the same warning at start.
+
+### Docs
+
+- **`docs/TURN-PROBE.md`** gains "The starting context of a turn" (#188):
+  the starting context and cost of the resumed turns of 0.6.0, from the
+  pilot's records, as the baseline for the fresh turns.
+- **The repository's `AGENTS.md` and `CLAUDE.md` are mode-neutral**
+  (#194): the place of launch sets the mode and the identity, and a team
+  member follows its home's docs and the process where they differ.
+
+### CI and tests
+
+- The client-hang check test gives Claude Code's init probe its own
+  ceiling, so the test holds on a loaded runner (#196).
+
 ## [0.6.0] - 2026-10-19
 
 The first two increments of the turn-economics design

@@ -2094,6 +2094,25 @@ member's user-level skills under it. It reports:
   workspace-trust dialog. A project server Claude Code has not yet approved
   for interactive use is reported as a notice: the first interactive start
   in the home asks to trust the folder and to approve it.
+- **The turn model,** in a `turns` home whose client is Claude Code. The
+  home's model (`turns.model`, an alias such as `haiku` or a full ID, or
+  the client's default when empty) resolves through the member's own Claude
+  Code configuration and its provider or gateway, so only a call shows
+  that it is served. After discovery, check makes one minimal model call:
+  `claude -p "Reply with OK."` with the same text as its system prompt, no
+  tool (`--tools ""`), no MCP server (`--strict-mcp-config`), one turn, no
+  session kept, `--max-budget-usd 0.05` and its own 60 s ceiling. Unlike
+  discovery, it runs in the member's own environment, since it is a real
+  call; a served model costs about $0.002 and answers in about two seconds.
+  The report's `turn_model` (`turn model:` in the human output) names the
+  configured model, the model the client resolved it to and the state:
+  - `available`;
+  - `unavailable`: Claude Code answered that its provider does not serve the
+    model (its own `model_not_found` message and a 404 result, at no cost).
+    The check blocks with `turn_model_unavailable` and the instruction to
+    set `turns.model` to a model the provider serves;
+  - `unknown`: a refused login, a limit, the ceiling or another failure, as
+    a notice; the first turn reports it in its own way.
 - **The instructions of a blocked report** are exact and pinned:
   - aimem's verifying boot script with `AIMEM_VERSION`;
   - the ai-skills release archive checked against its `SHA256SUMS` and
@@ -2342,6 +2361,13 @@ as `run` leaves it. `serve` refuses a home in `stop-hook` mode, and `run`
 refuses one in `turns` mode, since its client would have no Stop hook to
 wake it.
 
+Before it takes the session, `serve` probes the turn model with check's
+call ("Checking dependencies and clients", the turn model). A model the
+provider does not serve refuses the start with the instruction to set
+`turns.model`, and `serve` exits 2, so a service does not restart into it.
+A served model is logged with the model it resolved to; a probe that shows
+neither is logged as a warning, and the loop starts.
+
 **When a turn starts.** Every 3 s the loop reads the member's pending
 messages and its session status. A turn starts when all of these hold:
 - the team and the member are not paused;
@@ -2454,6 +2480,11 @@ Messages that arrive during a turn wait for the next one.
   - `needs_login`: a refused key, or the client's first authentication
     retry, which ends the turn at once;
   - `limit_reached`: the turn's budget, or the provider's limit;
+  - `model_unavailable`: the provider does not serve the turn's model
+    (Claude Code's `model_not_found`, or a 404 result). The error names
+    `turns.model`, and the member is held as for `needs_login`: an hour,
+    doubling up to 8 hours. It stays in the launcher: a login or a
+    provider limit reaches aicrewd as the member's hold, this does not;
   - `stopped`: the turn's time limit, or the loop's stop;
   - `interrupted`: a turn the loop found running when it started again.
 

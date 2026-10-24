@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -437,9 +438,10 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 }
 
 // afterOutcome holds the member after a turn that hit a limit, a login
-// failure or a failure (1.6, 3.4): until the provider's reset time, or for a
-// backoff that doubles from an hour (a minute after a failure) up to 8
-// hours (30 minutes after a failure). A finished turn clears the backoff.
+// failure, a model its provider does not serve or a failure (1.6, 3.4):
+// until the provider's reset time, or for a backoff that doubles from an
+// hour (a minute after a failure) up to 8 hours (30 minutes after a
+// failure). A finished turn clears the backoff.
 func (l *TurnLoop) afterOutcome(st *turnState, res TurnResult) {
 	now := l.Now()
 	switch {
@@ -447,7 +449,7 @@ func (l *TurnLoop) afterOutcome(st *turnState, res TurnResult) {
 		st.Backoff, st.Hold, st.HoldUntil = 0, "", time.Time{}
 	case res.Outcome == TurnLimitReached && res.ResetAt.After(now):
 		st.HoldUntil, st.Hold, st.Backoff = res.ResetAt, "the provider's limit", 0
-	case res.Outcome == TurnLimitReached || res.Outcome == TurnNeedsLogin:
+	case res.Outcome == TurnLimitReached || res.Outcome == TurnNeedsLogin || res.Outcome == TurnModelUnavailable:
 		st.Backoff = nextBackoff(st.Backoff, time.Hour, 8*time.Hour)
 		st.HoldUntil, st.Hold = now.Add(st.Backoff), res.Outcome
 	default:
@@ -674,6 +676,14 @@ func ServeHome(ctx context.Context, e *Engine, client string, signals <-chan os.
 			"have no Stop hook; an interactive member keeps `aicrew-agent run`", ErrNotTurnsHome, quoteArg(e.Cfg.Home))
 	}
 	warnUserScope(e.Log)
+	home, err := filepath.Abs(e.Cfg.Home)
+	if err != nil {
+		home = e.Cfg.Home
+	}
+	if err := serveModel(ctx, client, home, clientEnviron(e, home), ReadTurnLimits(home).Model, ModelProbeCeiling,
+		e.Log); err != nil {
+		return err
+	}
 	if err := start(ctx, e, signals); err != nil {
 		return err
 	}
@@ -683,10 +693,6 @@ func ServeHome(ctx context.Context, e *Engine, client string, signals <-chan os.
 			e.Leave(context.WithoutCancel(ctx)))
 	}
 	defer steps.Close()
-	home, err := filepath.Abs(e.Cfg.Home)
-	if err != nil {
-		home = e.Cfg.Home
-	}
 	runCtx, stopRun := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopRun()
 	ran := make(chan error, 1)
@@ -714,6 +720,24 @@ func ServeHome(ctx context.Context, e *Engine, client string, signals <-chan os.
 		}
 		return err
 	}
+}
+
+// serveModel probes the turn model before serve takes its session, in the
+// turns' own environment: a model the provider does not serve refuses the
+// start, and a probe that shows neither is logged and the loop starts, its
+// first turn reporting what the probe could not tell.
+func serveModel(ctx context.Context, client, home string, env []string, model string, ceiling time.Duration,
+	log *slog.Logger) error {
+	rep := ProbeTurnModel(ctx, client, home, env, model, ceiling)
+	switch rep.State {
+	case ModelUnavailable:
+		return fmt.Errorf("%w: %s", ErrModelUnavailable, rep.Detail)
+	case ModelAvailable:
+		log.Info("the turn model is available", "model", cmp.Or(model, "(the client's default)"), "resolved", rep.Resolved)
+	default:
+		log.Warn("the turn model could not be verified; the loop starts", "model", model, "detail", rep.Detail)
+	}
+	return nil
 }
 
 // turnCost is a turn's own cost and its source (pricing.go). Every turn is

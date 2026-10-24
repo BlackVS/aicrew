@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -44,6 +45,9 @@ type CheckOptions struct {
 	// probeCeiling bounds Claude Code's init probe on its own, for the
 	// tests; zero means Timeout.
 	probeCeiling time.Duration
+	// modelCeiling bounds the turn model's probe, for the tests; zero means
+	// ModelProbeCeiling.
+	modelCeiling time.Duration
 	// Forge verifies the recorded forge credentials; nil means the real
 	// forges.
 	Forge ForgeAPI
@@ -86,9 +90,12 @@ type CheckReport struct {
 	// OperatorCLI is the operator CLI `aicrew` beside this aicrew-agent,
 	// which the member one-liners install with it. A member does not need
 	// it, so it never blocks.
-	OperatorCLI  *OperatorCLI `json:"operator_cli,omitempty"`
-	Notices      []string     `json:"notices,omitempty"`
-	Instructions []string     `json:"instructions,omitempty"`
+	OperatorCLI *OperatorCLI `json:"operator_cli,omitempty"`
+	// TurnModel is the turn model's probe in a turns home whose client is
+	// Claude Code (modelprobe.go).
+	TurnModel    *TurnModelReport `json:"turn_model,omitempty"`
+	Notices      []string         `json:"notices,omitempty"`
+	Instructions []string         `json:"instructions,omitempty"`
 }
 
 // OperatorCLI is the `aicrew` found beside aicrew-agent: its path and the
@@ -545,6 +552,35 @@ func (c *checker) checkClient(ctx context.Context, name string, single bool) {
 	if d.ApprovalPending {
 		c.notice(fmt.Sprintf("Claude Code will ask at the first interactive start in this home to trust the folder and to "+
 			"approve the project MCP server aimem: accept both (`%s`)", StartCommand(c.o.Home, []string{"claude"})))
+	}
+	if name == "claude" {
+		c.checkTurnModel(ctx, path)
+	}
+}
+
+// checkTurnModel probes the turn model of a turns home (modelprobe.go). The
+// probe is a real model call, so it runs in the member's own environment,
+// not discovery's closed one, and it blocks only on a model the provider
+// does not serve.
+func (c *checker) checkTurnModel(ctx context.Context, path string) {
+	if c.doc.wakeSettings().Mode != WakeTurns {
+		return
+	}
+	ceiling := cmp.Or(c.o.modelCeiling, ModelProbeCeiling)
+	model := c.doc.turnLimits().Model
+	fmt.Fprintf(c.o.Out, "Asking claude to answer with the turn model %s (one minimal model call, at most %s):\n",
+		cmp.Or(model, "(the client's default)"), ceiling)
+	var rep TurnModelReport
+	_ = c.disc.step("claude turn model probe", func() (string, error) {
+		rep = ProbeTurnModel(ctx, path, c.o.Home, checkProbeEnv(os.Environ(), c.o.Home), model, ceiling)
+		return strings.TrimSpace(rep.State + " " + rep.Resolved), nil
+	})
+	c.rep.TurnModel = &rep
+	switch rep.State {
+	case ModelUnavailable:
+		c.block("turn_model_unavailable", rep.Detail)
+	case ModelUnknown:
+		c.notice("the turn model could not be verified (" + rep.Detail + "); the first turn shows whether it is served")
 	}
 }
 

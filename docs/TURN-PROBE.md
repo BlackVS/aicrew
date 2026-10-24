@@ -102,6 +102,18 @@ model call.
 | Claude Code, a wrong key from `apiKeyHelper` | Fragile: no `result` within 90 s. The client retries, emitting `system/api_retry` events with `error_status: 401`, `error: authentication_failed`, `attempt`, `max_retries: 10` and `retry_delay_ms`. A runner must end the turn at the first `authentication_failed` retry and report `needs_login`, not wait out ten retries. |
 | Codex, OpenCode | Not measured: provoking it would mean logging this machine's clients out. |
 
+### A model the provider does not serve (Claude Code)
+
+Measured on 2026-10-24 with Claude Code 2.1.310 against the provider
+directly, for the turn model's probe (DEVELOPMENT, "Checking dependencies
+and clients"):
+
+| Case | Result |
+| --- | --- |
+| `--model` names a model the provider does not have | Works: it fails at once, exit 1, at no cost. An `assistant` event with `error: model_not_found` and model `<synthetic>` carries the client's own message ("There's an issue with the selected model …"), then `result` has `is_error: true`, `api_error_status: 404` and `terminal_reason: api_error`. The init event echoes the requested model, so it does not show whether it is served. |
+| `--model haiku` with a one-line prompt and system prompt, `--tools ""` and `--strict-mcp-config` | Works: one model call, `claude-haiku-5-5` in the `assistant` event, $0.0015 and 1.4 s. |
+| A gateway that does not serve the model | Not measured. The operator saw "Configured model not available: Your gateway couldn't serve …" on 2026-10-13; whether its result carries `model_not_found` or a 404 is not known. |
+
 ### Permissions in a headless turn (Claude Code)
 
 Each case asked the model to make one exact tool call. All ran with

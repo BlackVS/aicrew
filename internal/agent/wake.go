@@ -161,18 +161,24 @@ type WakeSettings struct {
 // ReadWakeSettings reads the home's wake-up settings, with their defaults
 // for what agent.json does not name.
 func ReadWakeSettings(home string) WakeSettings {
-	ws := WakeSettings{Mode: WakeStopHook, KeepAlive: true, IdleHours: DefaultIdleHours, Wait: DefaultWakeWait}
 	doc, ok, err := readAgentDoc(home)
 	if err != nil || !ok {
-		return ws
+		doc = agentDoc{}
 	}
+	return doc.wakeSettings()
+}
+
+// wakeSettings is the wake-up settings agent.json d names, with their
+// defaults.
+func (d agentDoc) wakeSettings() WakeSettings {
+	ws := WakeSettings{Mode: WakeStopHook, KeepAlive: true, IdleHours: DefaultIdleHours, Wait: DefaultWakeWait}
 	var w struct {
 		Mode        string `json:"mode"`
 		KeepAlive   *bool  `json:"keep_alive"`
 		IdleHours   *int   `json:"idle_hours"`
 		WaitSeconds *int   `json:"wait_seconds"`
 	}
-	if raw, ok := doc.top["wake"]; ok && json.Unmarshal(raw, &w) == nil {
+	if raw, ok := d.top["wake"]; ok && json.Unmarshal(raw, &w) == nil {
 		if w.Mode == WakeTurns {
 			ws.Mode = WakeTurns
 		}

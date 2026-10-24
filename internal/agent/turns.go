@@ -58,13 +58,18 @@ const (
 // ReadTurnLimits reads agent.json's "turns" object, with the defaults for
 // what it does not name or names out of range.
 func ReadTurnLimits(home string) TurnLimits {
+	doc, ok, err := readAgentDoc(home)
+	if err != nil || !ok {
+		doc = agentDoc{}
+	}
+	return doc.turnLimits()
+}
+
+// turnLimits is the limits agent.json d names, with the defaults.
+func (d agentDoc) turnLimits() TurnLimits {
 	l := TurnLimits{TurnTimeout: defaultTurnTimeout, TurnBudgetUSD: defaultTurnBudgetUSD,
 		AttemptBudgetUSD: defaultAttemptBudgetUSD, DailyBudgetUSD: defaultDailyBudgetUSD,
 		MaxContinuations: defaultMaxContinuations}
-	doc, ok, err := readAgentDoc(home)
-	if err != nil || !ok {
-		return l
-	}
 	var t struct {
 		TurnTimeout      string   `json:"turn_timeout"`
 		TurnBudgetUSD    *float64 `json:"turn_budget_usd"`
@@ -73,7 +78,7 @@ func ReadTurnLimits(home string) TurnLimits {
 		MaxContinuations *int     `json:"max_continuations"`
 		Model            string   `json:"model"`
 	}
-	raw, ok := doc.top["turns"]
+	raw, ok := d.top["turns"]
 	if !ok || json.Unmarshal(raw, &t) != nil {
 		return l
 	}
@@ -216,6 +221,9 @@ const (
 	TurnLimitReached = "limit_reached"
 	TurnStopped      = "stopped"
 	TurnInterrupted  = "interrupted"
+	// TurnModelUnavailable is a turn whose model the client's provider or
+	// gateway does not serve (modelprobe.go).
+	TurnModelUnavailable = "model_unavailable"
 )
 
 // TurnUsage is a turn's own token use. CacheWrite is split by the cache's

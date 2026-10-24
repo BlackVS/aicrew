@@ -51,10 +51,14 @@ type fakeTools struct {
 	TermMark      string `json:"term_mark,omitempty"`
 	// ClaudeTermAtOnce: the SIGTERM arrives the moment the init event is
 	// out (the fake sends it to itself), before any later step of the fake.
-	ClaudeTermAtOnce bool   `json:"claude_term_at_once,omitempty"`
-	OpenCode         string `json:"opencode,omitempty"` // `opencode --version`
-	OpenCodeMCP      string `json:"opencode_mcp,omitempty"`
-	OpenCodeDB       bool   `json:"opencode_db,omitempty"` // 1.x refuses data 2 wrote
+	ClaudeTermAtOnce bool `json:"claude_term_at_once,omitempty"`
+	// ClaudeModel is how the turn model's probe is answered: "" serves
+	// claude-fake-1, "missing" is Claude Code's answer to a model the
+	// provider does not serve, "failed" any other error.
+	ClaudeModel string `json:"claude_model,omitempty"`
+	OpenCode    string `json:"opencode,omitempty"` // `opencode --version`
+	OpenCodeMCP string `json:"opencode_mcp,omitempty"`
+	OpenCodeDB  bool   `json:"opencode_db,omitempty"` // 1.x refuses data 2 wrote
 	// OpenCodeAPIError: OpenCode 2's /api/mcp answers 500.
 	OpenCodeAPIError bool `json:"opencode_api_error,omitempty"`
 	// AicrewCLI is what the operator CLI stand-in reports; "" is the
@@ -185,10 +189,33 @@ func entryIn(file, parent string) bool {
 	return ok
 }
 
+// fakeModelProbe answers the turn model's probe as Claude Code 2.1.310
+// does.
+func fakeModelProbe(answer string) int {
+	fmt.Println(`{"type":"system","subtype":"init","model":"m"}`)
+	switch answer {
+	case "missing":
+		fmt.Println(streamNoModel)
+		fmt.Println(streamNoModelResult)
+		return 1
+	case "failed":
+		fmt.Println(`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["boom"]}`)
+		return 1
+	}
+	fmt.Println(`{"type":"assistant","message":{"model":"claude-fake-1","usage":{"input_tokens":2}}}`)
+	fmt.Println(`{"type":"result","subtype":"success","is_error":false,"result":"OK","total_cost_usd":0.0015}`)
+	return 0
+}
+
 func fakeClaude(f fakeTools, args []string) int {
 	if len(args) == 1 && args[0] == "--version" {
 		fmt.Println(f.Claude)
 		return 0
+	}
+	// The turn model's probe is a real model call, in the member's own
+	// environment: no provider guard.
+	if slices.Contains(args, "--system-prompt") {
+		return fakeModelProbe(f.ClaudeModel)
 	}
 	if err := providerGuard(); err != nil {
 		fmt.Fprintln(os.Stderr, "fake claude:", err)
@@ -1123,5 +1150,54 @@ func TestCheckDenyRules(t *testing.T) {
 			t.Fatalf("%s: %+v", name, rep.Notices)
 		}
 		_ = json.Unmarshal([]byte(claudeSettings(e.home)), &doc)
+	}
+}
+
+// In a turns home, check probes the turn model with one minimal call and
+// reports the model the client resolved it to; a model the provider does
+// not serve blocks with the instruction to set turns.model, and a probe
+// that shows neither is a notice. A stop-hook home makes no model call.
+func TestCheckProbesTheTurnModel(t *testing.T) {
+	turns := func(t *testing.T, e *checkEnv) {
+		t.Helper()
+		path := filepath.Join(e.home, "agent.json")
+		doc := readJSON(t, path)
+		doc["wake"] = map[string]any{"mode": WakeTurns}
+		doc["turns"] = map[string]any{"model": "haiku"}
+		raw, _ := json.Marshal(doc)
+		if err := os.WriteFile(path, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := setupCheck(t, readyTools, "aimem", "claude")
+	e.installSkills(t, "1.26.1", "oh-code-review")
+	if rep := e.check(t, "claude"); rep.TurnModel != nil {
+		t.Fatalf("a stop-hook home probed the turn model: %+v", rep.TurnModel)
+	}
+	turns(t, e)
+	rep := e.check(t, "claude")
+	if rep.TurnModel == nil || *rep.TurnModel != (TurnModelReport{Configured: "haiku", Resolved: "claude-fake-1", State: ModelAvailable}) ||
+		len(rep.Instructions) != 0 {
+		t.Fatalf("a served model: %+v %+v", rep.TurnModel, rep)
+	}
+
+	f := readyTools
+	f.ClaudeModel = "missing"
+	e = setupCheck(t, f, "aimem", "claude")
+	e.installSkills(t, "1.26.1", "oh-code-review")
+	turns(t, e)
+	rep = e.check(t, "claude")
+	if rep.Status != JoinBlocked || rep.Reason != "turn_model_unavailable" || rep.TurnModel.State != ModelUnavailable ||
+		!hasInstruction(rep, `the turn model "haiku" is not served`) || !hasInstruction(rep, "set turns.model") {
+		t.Fatalf("a model not served: %+v", rep)
+	}
+
+	f.ClaudeModel = "failed"
+	e = setupCheck(t, f, "aimem", "claude")
+	e.installSkills(t, "1.26.1", "oh-code-review")
+	turns(t, e)
+	rep = e.check(t, "claude")
+	if rep.Status == JoinBlocked || rep.TurnModel.State != ModelUnknown || !hasNotice(rep, "could not be verified") {
+		t.Fatalf("a probe that shows neither: %+v", rep)
 	}
 }

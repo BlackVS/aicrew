@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -154,6 +155,13 @@ func printCheck(w io.Writer, rep agent.CheckReport) {
 			line += ", aimem MCP " + c.MCP
 		}
 		fmt.Fprintln(w, line)
+	}
+	if m := rep.TurnModel; m != nil {
+		line := "turn model: " + cmp.Or(m.Configured, "(the client's default)")
+		if m.Resolved != "" {
+			line += " -> " + m.Resolved
+		}
+		fmt.Fprintf(w, "%s (%s)\n", line, m.State)
 	}
 	if len(rep.Forge) > 0 {
 		fmt.Fprintf(w, "%-28s %-24s %-11s %s\n", "forge host", "account", "purpose", "state")

@@ -86,3 +86,19 @@ func TestPrintAutomations(t *testing.T) {
 		t.Errorf("the release defaults alone:\n%s", out.String())
 	}
 }
+
+// check prints the turn model it probed, with the model the client resolved
+// it to, and the client's default when agent.json names none.
+func TestPrintTurnModel(t *testing.T) {
+	var out strings.Builder
+	printCheck(&out, agent.CheckReport{TurnModel: &agent.TurnModelReport{Configured: "haiku", Resolved: "claude-haiku-5-5",
+		State: agent.ModelAvailable}})
+	if !strings.Contains(out.String(), "turn model: haiku -> claude-haiku-5-5 (available)\n") {
+		t.Errorf("a served model:\n%s", out.String())
+	}
+	out.Reset()
+	printCheck(&out, agent.CheckReport{TurnModel: &agent.TurnModelReport{State: agent.ModelUnavailable}})
+	if !strings.Contains(out.String(), "turn model: (the client's default) (unavailable)\n") {
+		t.Errorf("the default model not served:\n%s", out.String())
+	}
+}

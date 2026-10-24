@@ -50,6 +50,15 @@ const (
 		`"modelUsage":{"m":{"contextWindow":10000,"costBasis":"list"}},"permission_denials":[{"tool_name":"Bash"},{"tool_name":"Write"}]}`
 )
 
+// Claude Code 2.1.310's answer to a model its provider does not serve: its
+// own message, then a 404 result, with no model call.
+const (
+	streamNoModel = `{"type":"assistant","message":{"model":"<synthetic>","usage":{"input_tokens":0}},` +
+		`"error":"model_not_found"}`
+	streamNoModelResult = `{"type":"result","subtype":"success","is_error":true,"api_error_status":404,` +
+		`"terminal_reason":"api_error","total_cost_usd":0,"result":"There's an issue with the selected model (x)."}`
+)
+
 func stream(lines ...string) string { return strings.Join(lines, "\n") + "\n" }
 
 // A turn's stream gives its outcome: a normal end, a spent budget, a
@@ -90,6 +99,14 @@ func TestReadTurnStream(t *testing.T) {
 	res, _ = read(stream(`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["boom"]}`))
 	if res.Outcome != TurnFailed || !strings.Contains(res.Error, "boom") {
 		t.Errorf("an error: %+v", res)
+	}
+	res, _ = read(stream(streamInit, streamNoModel, streamNoModelResult))
+	if res.Outcome != TurnModelUnavailable || len(res.Models) != 0 {
+		t.Errorf("a model the provider does not serve: %+v", res)
+	}
+	res, _ = read(stream(`{"type":"result","subtype":"success","is_error":true,"api_error_status":404}`))
+	if res.Outcome != TurnModelUnavailable {
+		t.Errorf("a 404 result: %+v", res)
 	}
 	if res, _ = read(stream(streamInit)); res.Outcome != "" {
 		t.Errorf("a stream without a result: %+v", res)
@@ -147,8 +164,13 @@ func TestRunClaudeTurn(t *testing.T) {
 	if res := RunClaudeTurn(context.Background(), spec); res.Outcome != TurnStopped || time.Since(start) > 20*time.Second {
 		t.Errorf("a turn past its limit: %+v after %s", res, time.Since(start))
 	}
-	os.WriteFile(streamf, []byte(stream(streamInit)), 0o600)
+	os.WriteFile(streamf, []byte(stream(streamInit, streamNoModel, streamNoModelResult)), 0o600)
 	spec.Env, spec.Timeout = append(env, fakeTurnExitEnv+"=1"), time.Minute
+	if res := RunClaudeTurn(context.Background(), spec); res.Outcome != TurnModelUnavailable ||
+		!strings.Contains(res.Error, `"haiku"`) || !strings.Contains(res.Error, "turns.model") {
+		t.Errorf("a turn whose model is not served: %+v", res)
+	}
+	os.WriteFile(streamf, []byte(stream(streamInit)), 0o600)
 	if res := RunClaudeTurn(context.Background(), spec); res.Outcome != TurnFailed || !strings.Contains(res.Error, "without a result") {
 		t.Errorf("a client that exits without a result: %+v", res)
 	}

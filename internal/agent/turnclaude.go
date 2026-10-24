@@ -143,6 +143,8 @@ func RunClaudeTurn(ctx context.Context, spec TurnSpec) TurnResult {
 			strings.TrimSpace(stderr.String()))
 	case res.Outcome == "":
 		res.Outcome, res.Error = TurnFailed, "the client exited without a result"
+	case res.Outcome == TurnModelUnavailable:
+		res.Error = modelUnavailable(spec.Model)
 	}
 	return res
 }
@@ -166,7 +168,8 @@ func (l *limitedWriter) Write(p []byte) (int, error) {
 type streamEvent struct {
 	Type    string `json:"type"`
 	Subtype string `json:"subtype"`
-	// system/api_retry
+	// system/api_retry, and an assistant event the client made up for an
+	// error (model_not_found)
 	Error string `json:"error"`
 	// rate_limit_event
 	RateLimitInfo *struct {
@@ -222,6 +225,7 @@ func ReadTurnStream(r io.Reader, abort func()) TurnResult {
 		window   int64
 		limited  bool
 		aborted  bool
+		noModel  bool
 		models   []string
 	)
 	sc := bufio.NewScanner(r)
@@ -245,14 +249,16 @@ func ReadTurnStream(r io.Reader, abort func()) TurnResult {
 			}
 			limited = ev.RateLimitInfo.Status != "" && ev.RateLimitInfo.Status != "allowed"
 		case ev.Type == "assistant" && ev.Message != nil:
+			noModel = noModel || ev.Error == "model_not_found"
 			if u := ev.Message.Usage; u != nil {
 				lastCall = u.Input + u.CacheRead + u.CacheWrite
 			}
-			if m := ev.Message.Model; m != "" && !slices.Contains(models, m) {
+			// The client's own error message is no model call.
+			if m := ev.Message.Model; m != "" && m != syntheticModel && !slices.Contains(models, m) {
 				models = append(models, m)
 			}
 		case ev.Type == "result":
-			readResult(&res, ev, limited)
+			readResult(&res, ev, limited, noModel)
 			for _, m := range ev.ModelUsage {
 				window = max(window, m.ContextWindow)
 				if res.CostBasis == "" {
@@ -280,10 +286,16 @@ func ReadTurnStream(r io.Reader, abort func()) TurnResult {
 	return res
 }
 
+// syntheticModel is the model the client names on a message it made up
+// itself, such as the one that reports an unknown model.
+const syntheticModel = "<synthetic>"
+
 // readResult reads the result event into res: a normal end is finished; a
 // spent turn budget or a provider limit is limit_reached; a refused key is
-// needs_login; any other error is failed.
-func readResult(res *TurnResult, ev streamEvent, limited bool) {
+// needs_login; a model the provider does not serve (noModel: the client
+// said model_not_found, or the provider answered 404) is model_unavailable;
+// any other error is failed.
+func readResult(res *TurnResult, ev streamEvent, limited, noModel bool) {
 	res.ClientTotalUSD = ev.TotalCostUSD
 	if ev.Usage != nil {
 		res.Usage = TurnUsage{Input: ev.Usage.Input, Output: ev.Usage.Output, CacheRead: ev.Usage.CacheRead,
@@ -308,6 +320,8 @@ func readResult(res *TurnResult, ev streamEvent, limited bool) {
 	case ev.APIErrorStatus == 429 || limited:
 		res.Outcome, res.LimitKind = TurnLimitReached, "provider"
 		res.Error = "the provider's usage or rate limit is reached"
+	case ev.IsError && (noModel || ev.APIErrorStatus == 404):
+		res.Outcome, res.Error = TurnModelUnavailable, "the client's provider does not serve the turn's model"
 	default:
 		res.Outcome = TurnFailed
 		res.Error = strings.TrimSpace(strings.Join(append([]string{ev.Subtype, ev.TerminalReason}, ev.Errors...), " "))

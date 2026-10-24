@@ -179,7 +179,8 @@ func serveHome(ctx context.Context, args []string, stderr io.Writer, sigs <-chan
 		defer release()
 	}
 	err = agent.ServeHome(ctx, e, path, sigs)
-	if errors.Is(err, agent.ErrNotTurnsHome) {
+	// Both are the home's configuration, which a restart does not change.
+	if errors.Is(err, agent.ErrNotTurnsHome) || errors.Is(err, agent.ErrModelUnavailable) {
 		log.Error(err.Error())
 		return exitUsage
 	}

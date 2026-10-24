@@ -76,10 +76,26 @@ func TestGuardRefusal(t *testing.T) {
 			"/bin/rm -rf /",
 			"sudo rm -rf /",
 			"env FOO=1 rm -rf /",
+			"env -u UNUSED git push --force",
+			"env --unset UNUSED git push --force",
+			"env -S 'git push --force'",
+			"env -C /tmp rm -rf x",
+			"sudo -u user git push --force",
+			"sudo -u user -- git push -f",
+			"sudo --user user git push --force",
+			"sudo -D / rm -rf work",
+			"timeout 10 git push --force",
+			"timeout -s KILL 10 git push -f",
+			"nice -n 5 git push --force",
+			"xargs -I {} rm -rf {}",
 			"rm -rf build /etc",
 			"rm -rf -- /etc",
 			"find / -name '*.go' -delete",
 			"find .. -delete",
+			"find . -delete",
+			"find -delete",
+			"find . -name '*.tmp' -delete",
+			"find /work/repo -type f -delete",
 			"find . | xargs rm -rf",
 			"cd .. && rm -rf repo",
 			"cd $X; rm -rf build",
@@ -199,8 +215,11 @@ func TestGuardRefusal(t *testing.T) {
 			"rm -rf -- -odd-name",
 			"cd .work && rm -rf build",
 			"cd /work/repo/.work; rm -rf x",
-			"find . -name '*.tmp' -delete",
+			"find build -name '*.tmp' -delete",
 			"find build -delete",
+			"env -C .work rm -rf build",
+			"sudo -u user git status",
+			"timeout 60 go test ./...",
 			"rmdir empty",
 			"echo 'rm -rf /'",
 			"grep -r reset --hard-coded .",
@@ -255,6 +274,38 @@ func TestGuardRefusal(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A branch switched to earlier in the call is the branch a later command
+// discards work on, in both directions; git checkout of a name that may be
+// a path leaves the branch as it was.
+func TestGuardBranchTransitions(t *testing.T) {
+	cases := []struct {
+		current, line string
+		refused       bool
+	}{
+		{"feature", "git switch main && git reset --hard HEAD~1", true},
+		{"feature", "git checkout main; git clean -fd", true},
+		{"feature", "git checkout master && git reset --hard", true},
+		{"feature", "git -C /work/repo switch main && git -C . reset --hard", true},
+		{"feature", "cd sub && git switch main; cd .. && git reset --hard", false},
+		{"main", "git switch -c task && git reset --hard", false},
+		{"main", "git checkout -b task && git reset --hard", false},
+		{"main", "git switch feature && git commit --amend", false},
+		{"main", "git switch -c task main && git clean -fd", false},
+		{"main", "git checkout file.go && git reset --hard", true},
+		{"main", "git checkout -- main && git reset --hard", true},
+		{"main", "git switch --detach HEAD~1 && git reset --hard", false},
+	}
+	for _, c := range cases {
+		if r := testGuard(c.current, nil).refusal("bash", c.line); (r.what != "") != c.refused {
+			t.Errorf("on %s: %q: refused %q, want refused %v", c.current, c.line, r.what, c.refused)
+		}
+	}
+	var blind []string
+	if r := testGuard("main", &blind).refusal("bash", "git switch - && git reset --hard"); r.what != "" || len(blind) != 1 {
+		t.Errorf("an unknown switch: %q %q", r.what, blind)
 	}
 }
 

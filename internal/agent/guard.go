@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 )
@@ -89,6 +90,9 @@ type refusal struct{ what, next string }
 // knowing the branch.
 type guardEnv struct {
 	root, dir string
+	// switched is the branch each repository was switched to earlier in
+	// the call, "" when the new one cannot be told.
+	switched map[string]string
 	// branches is the repository at dir's current branch and its default
 	// branch (the remote's HEAD), each "" when it cannot be read.
 	branches func(dir string) (current, def string)
@@ -209,6 +213,7 @@ func logGuardBlind(home, rule string, words []string, dir string) {
 const maxGuardDepth = 8
 
 func (e guardEnv) refusal(shell, line string) refusal {
+	e.switched = map[string]string{}
 	return e.refusalIn(shell, line, 0)
 }
 
@@ -364,10 +369,60 @@ func program(w string) string {
 	return w
 }
 
-// leaders are the words that run the command after them: their own
-// options are skipped.
-var leaders = map[string]bool{"sudo": true, "env": true, "command": true, "exec": true, "nohup": true, "time": true,
-	"nice": true, "xargs": true, "builtin": true, "doas": true}
+// leaders are the words that run the command after them, each with its
+// options that take the next word as their value; their options are
+// skipped.
+var leaders = map[string][]string{
+	"sudo": {"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T", "-R", "--user", "--group", "--close-from",
+		"--chdir", "--host", "--prompt", "--role", "--type", "--other-user", "--command-timeout", "--chroot"},
+	"doas":    {"-u", "-C"},
+	"env":     {"-u", "-C", "-S", "--unset", "--chdir", "--split-string"},
+	"nice":    {"-n", "--adjustment"},
+	"ionice":  {"-c", "-n", "-p", "--class", "--classdata", "--pid"},
+	"stdbuf":  {"-i", "-o", "-e", "--input", "--output", "--error"},
+	"timeout": {"-s", "-k", "--signal", "--kill-after"},
+	"time":    {"-o", "-f", "--output", "--format"},
+	"exec":    {"-a"},
+	"xargs": {"-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s", "--arg-file", "--delimiter", "--max-lines", "--max-args",
+		"--max-procs", "--max-chars", "--process-slot-var"},
+	"command": nil, "builtin": nil, "nohup": nil,
+}
+
+// leaderChdir are the leader options that set the wrapped command's
+// working directory.
+var leaderChdir = map[string]bool{"env -C": true, "env --chdir": true, "sudo -D": true, "sudo --chdir": true}
+
+// skipLeader is words after the leader at words[0]: its options and their
+// values skipped, the working directory it sets applied to e, and, for
+// env -S, the command line it splits judged in place (inner).
+func (e *guardEnv) skipLeader(words []string) (rest []string, inner string) {
+	lead := program(words[0])
+	words = words[1:]
+	for len(words) > 0 && strings.HasPrefix(words[0], "-") && words[0] != "-" {
+		w := words[0]
+		words = words[1:]
+		if w == "--" {
+			break
+		}
+		name, value, hasValue := strings.Cut(w, "=")
+		if !hasValue {
+			if !slices.Contains(leaders[lead], name) || len(words) == 0 {
+				continue
+			}
+			value, words = words[0], words[1:]
+		}
+		switch {
+		case leaderChdir[lead+" "+name]:
+			e.dir = joinDir(e.dir, value)
+		case lead == "env" && (name == "-S" || name == "--split-string"):
+			return nil, strings.Join(append([]string{value}, words...), " ")
+		}
+	}
+	if lead == "timeout" && len(words) > 0 {
+		words = words[1:] // the duration
+	}
+	return words, ""
+}
 
 // The refusals' advice.
 const (
@@ -391,11 +446,11 @@ func (e guardEnv) judgeCommand(shell string, words []string, depth int) refusal 
 	piped := false
 	for len(words) > 0 {
 		w := words[0]
-		if leaders[program(w)] {
+		if _, ok := leaders[program(w)]; ok {
 			piped = piped || program(w) == "xargs"
-			words = words[1:]
-			for len(words) > 0 && strings.HasPrefix(words[0], "-") {
-				words = words[1:]
+			var inner string
+			if words, inner = e.skipLeader(words); inner != "" {
+				return e.refusalIn(shell, inner, depth+1)
 			}
 			continue
 		}
@@ -464,7 +519,7 @@ func (e guardEnv) judgeCommand(shell string, words []string, depth int) refusal 
 				if len(starts) == 0 {
 					starts = []string{"."}
 				}
-				return e.deleteTargets("find -delete", starts, piped, true)
+				return e.deleteTargets("find -delete", starts, piped, false)
 			}
 		}
 	case "format", "format-volume", "clear-disk", "diskpart":
@@ -734,6 +789,7 @@ func (e guardEnv) judgeGit(args []string) refusal {
 		return refusal{}
 	}
 	sub, opts := args[0], args[1:]
+	defer e.noteSwitch(repo, sub, opts)
 	has := func(names ...string) bool {
 		for _, o := range opts {
 			name, _, _ := strings.Cut(o, "=")
@@ -826,6 +882,9 @@ func (e guardEnv) judgeGit(args []string) refusal {
 	if repo != "" {
 		current, def = e.branches(repo)
 	}
+	if b, ok := e.switched[repoKey(repo)]; ok {
+		current = b
+	}
 	if current == "" {
 		if e.blind != nil {
 			e.blind(discard, append([]string{"git"}, args...), repo)
@@ -836,6 +895,63 @@ func (e guardEnv) judgeGit(args []string) refusal {
 		return refusal{discard + " on " + current, nextOwnBranch}
 	}
 	return refusal{}
+}
+
+// noteSwitch records the branch a git switch or checkout leaves repo on,
+// for the commands after it in the same call: a new branch (-b, -c and
+// their kin), the branch git switch names, or the shared branch git
+// checkout names. git checkout of another name may be a path, so the
+// branch is left as it was; an unknown target (-, --detach) is "".
+func (e guardEnv) noteSwitch(repo, sub string, opts []string) {
+	if e.switched == nil || (sub != "switch" && sub != "checkout") {
+		return
+	}
+	var names []string
+	for i := 0; i < len(opts); i++ {
+		o := opts[i]
+		switch {
+		case o == "--":
+			if len(names) == 0 {
+				return
+			}
+			i = len(opts)
+		case o == "-b" || o == "-B" || o == "-c" || o == "-C" || o == "--orphan" || o == "--create" ||
+			o == "--force-create":
+			if i+1 < len(opts) {
+				e.switched[repoKey(repo)] = opts[i+1]
+			}
+			return
+		case o == "--detach" || (sub == "switch" && o == "-d"):
+			e.switched[repoKey(repo)] = ""
+			return
+		case strings.HasPrefix(o, "-") && o != "-":
+		default:
+			names = append(names, o)
+		}
+	}
+	switch {
+	case len(names) == 0:
+	case names[0] == "-":
+		e.switched[repoKey(repo)] = ""
+	case sub == "switch":
+		e.switched[repoKey(repo)] = names[0]
+	default:
+		def := ""
+		if repo != "" {
+			_, def = e.branches(repo)
+		}
+		if sharedBranch(names[0], def) {
+			e.switched[repoKey(repo)] = names[0]
+		}
+	}
+}
+
+// repoKey is repo as a key of guardEnv.switched.
+func repoKey(repo string) string {
+	if repo == "" {
+		return ""
+	}
+	return path.Clean(slashPath(repo))
 }
 
 // branchDelete judges a forced branch delete: refused for main, master or

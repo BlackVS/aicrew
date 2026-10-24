@@ -202,8 +202,12 @@ survey, the options and the decision (D-STORE) are recorded in
     parentheses and `$(…)`, outside quotes.
   - It looks inside `bash`/`sh -c`, `eval`, `powershell`/`pwsh -Command` (or
     a bare command), `Invoke-Expression` and `cmd /c`.
-  - It skips variable assignments, `sudo`, `env`, `xargs` and similar
-    leaders, and follows `cd` and `Set-Location`.
+  - It skips variable assignments and leaders (`sudo`, `env`, `xargs`,
+    `timeout`, `nice` and similar) with their options and values, such as
+    `sudo -u user` or `env -u NAME`. It reads `env -S` as a command line.
+  - It follows `cd`, `Set-Location`, `env -C` and `sudo -D`, and a
+    `git switch` or `git checkout` of a branch earlier in the call: in
+    `git switch main && git reset --hard`, the reset is judged on `main`.
 
   With git's global options (`-C`, `-c`, `--git-dir=…`) before the
   subcommand and flags in any order or cluster, it refuses on any branch:
@@ -214,7 +218,8 @@ survey, the options and the decision (D-STORE) are recorded in
   - `git branch -D` of `main`, `master` or the default branch;
   - a recursive delete (`rm -r` in any form, `Remove-Item` and its aliases
     with `-Recurse`, `rmdir|rd|del /s`, `find -delete`) of a path outside
-    the directory the call starts in, of that directory itself, of `.git`,
+    the directory the call starts in, of that directory itself (so
+    `find -delete` starts in a subdirectory, never at `.`), of `.git`,
     or of paths it cannot read: a variable, `~`, a glob over the directory's
     own entries, or paths from a pipe or `xargs`;
   - formatting a disk (`format`, `Format-Volume`, `mkfs*`);
@@ -227,7 +232,8 @@ survey, the options and the decision (D-STORE) are recorded in
   `git commit --amend`. On the member's own branch they pass, and so does a
   recursive delete inside its working directory, such as `.work/build`. When
   git cannot tell the current branch (a detached `HEAD`, no repository,
-  `--git-dir`, or a `cd` it cannot follow), the guard passes the command,
+  `--git-dir`, a `cd` it cannot follow, or `git switch -` earlier in the
+  call), the guard passes the command,
   since it never blocks on its own uncertainty. It records the command in
   `logs/guard.jsonl`, one line each with the time, the rule, the judged
   command (at most 200 characters) and the directory, to show how often it

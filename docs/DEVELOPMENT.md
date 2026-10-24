@@ -1687,11 +1687,22 @@ as the member's own user. The operator's machine uses the same one-liner:
   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.7.0/boot.sh | bash
   ```
 
-- Windows:
+- Windows, in a PowerShell window that is already open:
 
   ```powershell
+  irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.7.0/boot.ps1 | iex
+  ```
+
+  From cmd, or from the Run dialog (Win+R):
+
+  ```bat
   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.7.0/boot.ps1 | iex"
   ```
+
+  The second form starts a new `powershell.exe`. Typed into a PowerShell
+  window that is already open, a host policy may refuse it
+  (`Program 'powershell.exe' failed to run: Access is denied`), so use
+  the first form there.
 
 It replaces copying the binary by hand. Each script installs the release it
 pins (`RELEASE=` or `$release`), which is the release of the tag it is
@@ -2968,7 +2979,11 @@ every pull request (`release-build`), publishing nothing.
   into an edited one, which costs a new review.
 - One release-preparation pull request writes the version's section,
   `## [X.Y.Z] - YYYY-MM-DD`, from the titles of the pull requests merged since
-  the last tag. That section is the release's notes.
+  the last tag. That section is the release's notes. Its upgrade steps
+  show the Windows member one-liner in both forms, as "Installing and
+  upgrading" does: the bare `irm ... | iex` for a PowerShell window that is
+  already open, and the `powershell -NoProfile ...` form for cmd or the
+  Run dialog.
 - The workflow refuses a tag whose section is missing.
 
 **Cutting a release:**

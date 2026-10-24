@@ -476,6 +476,10 @@ type MemberAttempt struct {
 	ProjectID string    `json:"project_id"`
 	TaskID    string    `json:"task_id"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// HandoffUpdatedAt is when the worker's launcher last pushed the
+	// attempt's handoff, which AttemptHandoffPath reads; absent when it has
+	// none.
+	HandoffUpdatedAt time.Time `json:"handoff_updated_at,omitzero"`
 	// Block is the worker's blocked report: why, and since when. HubBlock
 	// is the hub's block, when the team's project is no longer granted.
 	Block    *AttemptBlock `json:"block,omitempty"`
@@ -486,6 +490,22 @@ type MemberAttempt struct {
 type AttemptBlock struct {
 	Reason string    `json:"reason"`
 	Since  time.Time `json:"since"`
+}
+
+// The attempt's handoff (docs/CREW-CONTRACT.md, "The attempt's handoff"):
+// the worker's session doc as its launcher last pushed it to the attempt,
+// in any state of the attempt. The operator credential and an architect
+// credential may read it.
+const AttemptHandoffPath = "/v1/admin/attempt/handoff" // GET (?id=ATTEMPT)
+
+// AttemptHandoff is an attempt's handoff. The text is the worker's, as its
+// launcher redacted and bounded it; Handoff is empty and UpdatedAt absent
+// when the attempt has none.
+type AttemptHandoff struct {
+	AttemptID string    `json:"attempt_id"`
+	TeamID    string    `json:"team_id"`
+	Handoff   string    `json:"handoff"`
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
 }
 
 // The pull requests waiting for the human merge (docs/DESIGN-CONTROL-PLANE.md,

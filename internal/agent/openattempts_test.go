@@ -162,3 +162,22 @@ func TestOpenEscalationPagesFitTheReader(t *testing.T) {
 		t.Fatalf("followed %d escalations, want %d", seen, n)
 	}
 }
+
+// A running attempt's line names when its handoff was last pushed, or that
+// none was; an offer names neither.
+func TestOpenAttemptLineHandoff(t *testing.T) {
+	at := time.Date(2026, 10, 24, 5, 30, 0, 0, time.FixedZone("x", 3600))
+	a := OpenAttempt{ID: "att-1", State: "running", Phase: "working", Task: TaskRef{HubID: "h", ProjectID: "p", TaskID: "t"},
+		WorkerLabel: "worker", NextAction: "Follow it."}
+	if got, want := a.Line(), "- Attempt `att-1`: task `h/p/t`, worker worker, running (working), no handoff pushed. Next: Follow it."; got != want {
+		t.Errorf("without a handoff: %q, want %q", got, want)
+	}
+	a.HandoffUpdatedAt = at
+	if got := a.Line(); !strings.Contains(got, ", running (working), handoff pushed 2026-10-24T04:30:00Z. Next:") {
+		t.Errorf("with a handoff: %q", got)
+	}
+	o := OpenAttempt{ID: "att-2", State: "offered", WorkerLabel: "worker", NextAction: "Wait."}
+	if got := o.Line(); strings.Contains(got, "handoff") {
+		t.Errorf("an offer names a handoff: %q", got)
+	}
+}

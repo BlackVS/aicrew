@@ -467,6 +467,7 @@ in `internal/opapi`:
 | `POST /v1/admin/architect-credentials/revoke` | revoke: `{"id"}` |
 | `GET /v1/admin/team/state?id=TEAM` | the team's pause and each current member's state ("Team state, pause and nudge", below) |
 | `GET /v1/admin/team-states?team=TEAM` | the same state for every team, or for one: a list ("The team's state from the architect seat", below); the operator or an architect credential |
+| `GET /v1/admin/attempt/handoff?id=ATTEMPT` | an attempt's handoff as its worker last pushed it, in any state of the attempt ("An attempt's handoff", below); the operator or an architect credential |
 | `POST /v1/admin/team/pause` | `{"team_id", "reason"}`: pause the team |
 | `POST /v1/admin/team/resume` | `{"team_id"}`: resume the team |
 | `POST /v1/admin/member/pause` | `{"team_id", "agent_id", "reason"}`: pause one member |
@@ -1416,8 +1417,9 @@ through the architect seat. `aicrew status`
 (`GET /v1/admin/team-states[?team=ID]`) lists each team's state, as
 `aicrew team state` prints it ("Team state, pause and nudge", above), for
 every team (at most 100, by name) or for the one named:
-- **What it adds.** Each open attempt's `updated_at`, and `stalled: true`
-  on a member that looks stalled.
+- **What it adds.** Each open attempt's `updated_at` and
+  `handoff_updated_at` (when its worker last pushed its handoff, absent
+  when it has none), and `stalled: true` on a member that looks stalled.
 - **Stalled.** A member is stalled when it is working or waiting, has an
   open attempt, and that attempt has not changed for over an hour (twice
   the working window). A paused or offline member is never stalled, since
@@ -1429,6 +1431,28 @@ every team (at most 100, by name) or for the one named:
   architect credential (`/arch-status`). The architect credential still
   reaches no pause, resume or nudge, and not `GET /v1/admin/team/state`.
 - **Naming the team.** A team is named by its ID, as for the merges.
+
+### An attempt's handoff: `aicrew attempts handoff`
+
+```sh
+bin/aicrew attempts handoff --id ATTEMPT [--json]
+```
+
+The worker's launcher pushes its session doc to its attempt after each turn
+(CREW-CONTRACT, "The attempt's handoff"), so the doc says what the worker
+recorded: its decisions, what it verified, and its next step. The operator
+reads it with `aicrew attempts handoff` (`GET /v1/admin/attempt/handoff?id=ID`),
+for instance before deciding on a stalled or blocked attempt; the team
+state's `handoff_updated_at` says whether there is one.
+- **Who reads it.** The operator credential, and an architect credential.
+- **Any state.** The doc is kept after the attempt closes, and reads the
+  same.
+- **The print.** The header names the attempt, its team and the push time;
+  the doc follows. The text is the worker's, redacted and bounded by its
+  launcher only, so the plain print removes terminal escapes and control
+  characters other than newline and tab. `--json` prints aicrewd's answer
+  as it is.
+- **None.** An attempt without a handoff prints that it has none.
 
 ## Invitations
 
@@ -2364,7 +2388,8 @@ Messages that arrive during a turn wait for the next one.
      a board change. At most 10 messages; the rest are counted and left to
      `aicrew-agent inbox`;
   5. a coordinator's team state: the team's open attempts as aicrewd lists
-     them now (`GET /v1/crew/attempts`), each with its next action, at
+     them now (`GET /v1/crew/attempts`), each with its next action and,
+     for a running one, when its handoff was last pushed or that none was, at
      most 8 KiB of them, with a line counting those left out and naming
      `aicrew-agent attempts`;
   6. the pull requests as the launcher's forge watch last observed them:

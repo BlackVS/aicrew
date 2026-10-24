@@ -41,6 +41,9 @@ type OpenAttempt struct {
 	Expired               bool      `json:"expired"`
 	Declined              bool      `json:"declined"`
 	NextAction            string    `json:"next_action"`
+	// HandoffUpdatedAt is when the worker last pushed the attempt's
+	// handoff; zero when it has none, or when aicrewd is older than 280c.
+	HandoffUpdatedAt time.Time `json:"handoff_updated_at,omitzero"`
 }
 
 // TaskRef names an aimem task.
@@ -94,6 +97,12 @@ func (a OpenAttempt) Line() string {
 	}
 	if w := a.why(); w != "" {
 		state += ", " + w
+	}
+	switch {
+	case !a.HandoffUpdatedAt.IsZero():
+		state += ", handoff pushed " + a.HandoffUpdatedAt.UTC().Format(time.RFC3339)
+	case a.State == "running":
+		state += ", no handoff pushed"
 	}
 	return fmt.Sprintf("- Attempt `%s`: task `%s/%s/%s`, worker %s, %s. Next: %s", a.ID, a.Task.HubID,
 		a.Task.ProjectID, a.Task.TaskID, a.WorkerLabel, state, a.NextAction)

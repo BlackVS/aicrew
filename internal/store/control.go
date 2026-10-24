@@ -224,6 +224,10 @@ type MemberAttempt struct {
 	// UpdatedAt is when the attempt last changed, for the team state. The
 	// member's session status, which carries this struct, leaves it out.
 	UpdatedAt time.Time `json:"-"`
+	// HandoffUpdatedAt is when the attempt's handoff was last pushed, for
+	// the team state; zero when it has none. The session status leaves it
+	// out too.
+	HandoffUpdatedAt time.Time `json:"-"`
 	// Block is the worker's blocked report while the attempt is blocked:
 	// its reason and when it began. HubBlock is the hub's: the team's
 	// project is no longer granted. They are apart, and either may be set.
@@ -330,6 +334,11 @@ func teamStateIn(ctx context.Context, q querier, teamID string) (TeamState, erro
 		}
 		if ms.OpenAttempt, err = memberOpenAttempt(ctx, q, teamID, m.AgentID); err != nil {
 			return TeamState{}, err
+		}
+		if a := ms.OpenAttempt; a != nil {
+			if a.HandoffUpdatedAt, err = handoffTime(ctx, q, a.ID); err != nil {
+				return TeamState{}, err
+			}
 		}
 		if err := q.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM message_recipients r JOIN messages m ON m.id = r.message_id

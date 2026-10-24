@@ -367,7 +367,7 @@ trusts a caller it is given, and a test enforces that.
 | `POST /v1/crew/attempts` | `Authorization: Bearer` session token | Begin an offer ("Attempt steps"). |
 | `POST /v1/crew/attempts/{id}/accept`, `/decline`, `/withdraw` | `Authorization: Bearer` session token | Begin an acceptance or a withdrawal, or record a decline. |
 | `POST /v1/crew/attempts/claim` | `Authorization: Bearer` session token | Begin an independent claim. |
-| `GET /v1/crew/attempts` | `Authorization: Bearer` session token | The team's open attempts (every state but `closed`), oldest first, for its current coordinator to reconcile when its session starts; any other member is refused `role_forbidden`. Each: `id`, `state`, `phase`, `task`, `worker_agent_id`, `worker_label`, the `coordinator_generation` an offer was made under, `offer_expires_at`, `stale` (an offer made under an earlier coordinator generation), `expired`, `declined` and `next_action`. Reply: `coordinator_generation`, `attempts`. |
+| `GET /v1/crew/attempts` | `Authorization: Bearer` session token | The team's open attempts (every state but `closed`), oldest first, for its current coordinator to reconcile when its session starts; any other member is refused `role_forbidden`. Each: `id`, `state`, `phase`, `task`, `worker_agent_id`, `worker_label`, the `coordinator_generation` an offer was made under, `offer_expires_at`, `stale` (an offer made under an earlier coordinator generation), `expired`, `declined`, `next_action`, and `handoff_updated_at`, when the worker last pushed the attempt's handoff (absent when it has none). Reply: `coordinator_generation`, `attempts`. |
 | `POST /v1/crew/attempts/{id}/stop`, `/confirm-stop`, `/release` | `Authorization: Bearer` session token | Request or confirm a stop, or begin the stopped attempt's release. |
 | `POST /v1/crew/attempts/{id}/review`, `/confirm-delivery`, `/finalize` | `Authorization: Bearer` session token | Review the latest result, confirm its delivery, or begin finalizing it as `DONE`. |
 | `POST /v1/crew/attempts/{id}/work` | `Authorization: Bearer` session token | Begin, or supersede, the holder's work update: block, submit or resume. |
@@ -942,6 +942,18 @@ aicrewd reads nothing in the doc, journals no event for a push and sends no
 message: the doc is the worker's memory, not a report. The status reply
 does not carry it, so a poll stays small.
 
+Who else sees it:
+- **The coordinator** sees when it was pushed, not its text: each open
+  attempt of `GET /v1/crew/attempts` carries `handoff_updated_at`, absent
+  when the attempt has none, and the coordinator's brief and
+  `aicrew-agent attempts` print it with the attempt.
+- **The operator and an architect** read the doc on the operator API with
+  `GET /v1/admin/attempt/handoff?id=ATTEMPT` (`aicrew attempts handoff`):
+  `{attempt_id, team_id, handoff, updated_at}`, in any state of the
+  attempt, with an empty `handoff` and no `updated_at` when it has none.
+  An unknown attempt is `404 not_found`. The team state's open attempt
+  carries `handoff_updated_at` too.
+
 ### The turns' costs
 
 The turn loop checks the attempt's and the day's budgets before a turn
@@ -1379,8 +1391,9 @@ only its mirror, and a comment without a recorded answer authorizes nothing.
   - an `aar_` bearer that aicrewd issues and keeps only as a digest;
   - 90 days at most, and revocable;
   - it reaches the three escalation routes and two reads, the merges
-    (`GET /v1/admin/merges`) and the team states
-    (`GET /v1/admin/team-states`), and nothing else. Every other operator
+    (`GET /v1/admin/merges`), the team states
+    (`GET /v1/admin/team-states`) and an attempt's handoff
+    (`GET /v1/admin/attempt/handoff`), and nothing else. Every other operator
     route compares its bearer with the operator credential alone and
     answers `401`.
 - **Its fields:** `{id, decision, rationale}`. The decision is at most

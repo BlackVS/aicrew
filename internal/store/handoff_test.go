@@ -91,3 +91,75 @@ func TestAttemptHandoff(t *testing.T) {
 		t.Fatalf("the read of a closed attempt: %+v, %v", h, err)
 	}
 }
+
+// The operator's caller and an architect's read an attempt's handoff, in
+// any state of the attempt; a member's caller is refused. The coordinator's
+// open attempts and the team state carry the push time, zero before the
+// first push.
+func TestAttemptHandoffForOperator(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	op, err := OperatorCaller("operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := e.s.AttemptHandoff(ctx, op, a.ID)
+	if err != nil || h.AttemptID != a.ID || h.TeamID != a.TeamID || h.Body != "" || !h.UpdatedAt.IsZero() {
+		t.Fatalf("an attempt without a handoff: %+v, %v", h, err)
+	}
+	pushed := func() (open, state time.Time) {
+		t.Helper()
+		o, err := e.s.OpenAttemptsWithToken(ctx, e.leadTok)
+		if err != nil || len(o.Attempts) != 1 {
+			t.Fatalf("the open attempts: %+v, %v", o, err)
+		}
+		st, err := e.s.GetTeamState(ctx, op, a.TeamID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range st.Members {
+			if m.OpenAttempt != nil && m.OpenAttempt.ID == a.ID {
+				state = m.OpenAttempt.HandoffUpdatedAt
+			}
+		}
+		return o.Attempts[0].HandoffUpdatedAt, state
+	}
+	if open, state := pushed(); !open.IsZero() || !state.IsZero() {
+		t.Fatalf("a push time before the first push: %s, %s", open, state)
+	}
+
+	doc := "# Handoff\n\n## CURRENT ATTEMPT\n\n### Next\n\nOpen the pull request.\n"
+	if _, err := e.s.PutHandoffWithToken(ctx, e.indepTk, a.ID, doc); err != nil {
+		t.Fatal(err)
+	}
+	if h, err = e.s.AttemptHandoff(ctx, op, a.ID); err != nil || h.Body != doc || !h.UpdatedAt.Equal(e.now.UTC()) {
+		t.Fatalf("the operator's read: %+v, %v", h, err)
+	}
+	if open, state := pushed(); !open.Equal(h.UpdatedAt) || !state.Equal(h.UpdatedAt) {
+		t.Fatalf("the push time %s: open attempts %s, team state %s", h.UpdatedAt, open, state)
+	}
+
+	agent, err := AgentCaller(a.WorkerAgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.s.AttemptHandoff(ctx, agent, a.ID); !errors.Is(err, ErrForbidden) {
+		t.Errorf("a member's caller: %v", err)
+	}
+	if _, err := e.s.AttemptHandoff(ctx, op, "no-such-attempt"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("an unknown attempt: %v", err)
+	}
+	if _, err := e.s.AttemptHandoff(ctx, op, ""); !errors.Is(err, ErrInvalid) {
+		t.Errorf("no attempt: %v", err)
+	}
+
+	// A closed attempt keeps its handoff for the operator.
+	if _, err := e.s.db.Exec(`UPDATE attempts SET state = 'closed' WHERE id = ?`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if h, err = e.s.AttemptHandoff(ctx, op, a.ID); err != nil || h.Body != doc {
+		t.Fatalf("the read of a closed attempt: %+v, %v", h, err)
+	}
+}

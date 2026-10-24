@@ -64,6 +64,7 @@ const usage = `usage:
   aicrew architect init|credential ...   (run "aicrew architect" for its usage)
   aicrew escalations list|show|answer ...   (run "aicrew escalations" for its usage)
   aicrew merges [--team TEAM]   (the pull requests waiting for the human merge)
+  aicrew attempts handoff --id ATTEMPT [--json]   (an attempt's handoff, as its worker last pushed it)
   aicrew status [--team TEAM]   (each team's members: state, open attempt, unread messages)
   aicrew automation replay --script FILE --events LOG   (a workflow script against a member's run log; nothing is performed)
   aicrew version [--json]
@@ -88,6 +89,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) >= 1 && args[0] == "merges" {
 		return runMerges(ctx, args[1:], stdout, stderr)
+	}
+	if len(args) >= 1 && args[0] == "attempts" {
+		return runAttempts(ctx, args[1:], stdout, stderr)
 	}
 	if len(args) >= 1 && args[0] == "status" {
 		return runStatus(ctx, args[1:], stdout, stderr)

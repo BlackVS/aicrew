@@ -107,6 +107,9 @@ var (
 		// The pull requests waiting for the human merge, which the
 		// operator's caller or an architect's reads (C3).
 		"PendingMerges": true,
+		// An attempt's handoff, which the operator's caller or an
+		// architect's reads (280c).
+		"AttemptHandoff": true,
 	}
 	// wrapperOps are the *store.Store operations only the wrapper calls.
 	wrapperOps = map[string]bool{"AuthenticateArchitect": true}
@@ -127,7 +130,8 @@ var (
 )
 
 // operatorFiles hold the operator API.
-var operatorFiles = map[string]bool{"admin.go": true, "escalations.go": true, "control.go": true, "merges.go": true}
+var operatorFiles = map[string]bool{"admin.go": true, "escalations.go": true, "control.go": true, "merges.go": true,
+	"attempthandoff.go": true}
 
 func TestExposureGuard(t *testing.T) {
 	g := loadServer(t)

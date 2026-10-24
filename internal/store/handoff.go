@@ -113,21 +113,80 @@ func (s *Store) HandoffWithToken(ctx context.Context, token, attemptID string) (
 			return err
 		}
 		h = Handoff{AttemptID: a.ID}
-		var at string
-		err = q.QueryRowContext(ctx, `SELECT body, updated_at FROM attempt_handoffs WHERE attempt_id = ?`, a.ID).Scan(&h.Body, &at)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			return nil
-		case err != nil:
-			return fmt.Errorf("read the handoff: %w", err)
-		}
-		if h.UpdatedAt, err = parseTime(at); err != nil {
-			return fmt.Errorf("read the handoff's time: %w", err)
-		}
-		return nil
+		h.Body, h.UpdatedAt, err = readHandoff(ctx, q, a.ID)
+		return err
 	})
 	if err != nil {
 		return Handoff{}, err
 	}
 	return h, nil
+}
+
+// AttemptHandoff is an attempt's handoff as the operator or an architect
+// reads it: the attempt in any state, with its team. An attempt without a
+// handoff has an empty Body and a zero UpdatedAt.
+type AttemptHandoff struct {
+	Handoff
+	TeamID string `json:"team_id"`
+}
+
+// AttemptHandoff is the handoff of attempt id for the operator or an
+// architect; an unknown attempt is ErrNotFound.
+func (s *Store) AttemptHandoff(ctx context.Context, c Caller, id string) (AttemptHandoff, error) {
+	if err := requireEscalationReader(c); err != nil {
+		return AttemptHandoff{}, err
+	}
+	if !validRefs(id) {
+		return AttemptHandoff{}, fmt.Errorf("%w: the handoff's attempt", ErrInvalid)
+	}
+	var h AttemptHandoff
+	err := s.snapshot(ctx, func(q querier) error {
+		a, err := getAttempt(ctx, q, id)
+		if err != nil {
+			return err
+		}
+		h = AttemptHandoff{Handoff: Handoff{AttemptID: a.ID}, TeamID: a.TeamID}
+		h.Body, h.UpdatedAt, err = readHandoff(ctx, q, a.ID)
+		return err
+	})
+	if err != nil {
+		return AttemptHandoff{}, err
+	}
+	return h, nil
+}
+
+// handoffTime is when attempt id's handoff was last pushed; zero when it
+// has none.
+func handoffTime(ctx context.Context, q querier, id string) (time.Time, error) {
+	var at string
+	err := q.QueryRowContext(ctx, `SELECT updated_at FROM attempt_handoffs WHERE attempt_id = ?`, id).Scan(&at)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return time.Time{}, nil
+	case err != nil:
+		return time.Time{}, fmt.Errorf("read the handoff's time: %w", err)
+	}
+	t, err := parseTime(at)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read the handoff's time: %w", err)
+	}
+	return t, nil
+}
+
+// readHandoff is attempt id's handoff and its push time; "" and zero when
+// it has none.
+func readHandoff(ctx context.Context, q querier, id string) (string, time.Time, error) {
+	var body, at string
+	err := q.QueryRowContext(ctx, `SELECT body, updated_at FROM attempt_handoffs WHERE attempt_id = ?`, id).Scan(&body, &at)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", time.Time{}, nil
+	case err != nil:
+		return "", time.Time{}, fmt.Errorf("read the handoff: %w", err)
+	}
+	t, err := parseTime(at)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("read the handoff's time: %w", err)
+	}
+	return body, t, nil
 }

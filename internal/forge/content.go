@@ -339,7 +339,7 @@ func appendComments(out []PullComment, ws []wireComment, kind string) []PullComm
 			}
 			pc.Path = oneLine(pc.Path)
 		}
-		pc.Body, pc.Cut = bounded(cleanText(w.Body), MaxCommentBody)
+		pc.Body, pc.Cut = bounded(CleanText(w.Body), MaxCommentBody)
 		out = append(out, pc)
 	}
 	return out
@@ -702,7 +702,7 @@ var (
 // fit: from excerptContext lines before its first failure line, or else its
 // first runner error, or else its end. cut says the log holds more.
 func excerpt(log string) (string, bool) {
-	lines := strings.Split(strings.TrimRight(cleanText(log), "\n"), "\n")
+	lines := strings.Split(strings.TrimRight(CleanText(log), "\n"), "\n")
 	for i, l := range lines {
 		lines[i] = timestamp.ReplaceAllString(l, "")
 	}
@@ -751,9 +751,9 @@ func excerpt(log string) (string, bool) {
 // ansi is a terminal escape sequence.
 var ansi = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\-_]`)
 
-// cleanText is s as printable text: valid UTF-8, without terminal escapes,
+// CleanText is s as printable text: valid UTF-8, without terminal escapes,
 // carriage returns or control characters other than newline and tab.
-func cleanText(s string) string {
+func CleanText(s string) string {
 	s = ansi.ReplaceAllString(strings.ToValidUTF8(s, "\uFFFD"), "")
 	return strings.Map(func(r rune) rune {
 		switch {

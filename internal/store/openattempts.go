@@ -29,6 +29,9 @@ type OpenAttempt struct {
 	// NextAction is what the coordinator does about the attempt now.
 	NextAction string    `json:"next_action"`
 	CreatedAt  time.Time `json:"created_at"`
+	// HandoffUpdatedAt is when the worker's launcher last pushed the
+	// attempt's handoff; zero when it has none.
+	HandoffUpdatedAt time.Time `json:"handoff_updated_at,omitzero"`
 }
 
 // OpenAttempts is the team's open attempts and its current coordinator
@@ -92,7 +95,11 @@ func (s *Store) OpenAttemptsWithToken(ctx context.Context, token string) (OpenAt
 			if err != nil {
 				return err
 			}
-			out.Attempts = append(out.Attempts, openAttempt(a, worker.Label, team.CoordinatorGeneration, now))
+			o := openAttempt(a, worker.Label, team.CoordinatorGeneration, now)
+			if o.HandoffUpdatedAt, err = handoffTime(ctx, q, a.ID); err != nil {
+				return err
+			}
+			out.Attempts = append(out.Attempts, o)
 		}
 		return nil
 	})

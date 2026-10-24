@@ -31,6 +31,11 @@ func TestMain(m *testing.M) {
 	if os.Getenv(fakeTurnEnv) != "" {
 		os.Exit(fakeTurnMain())
 	}
+	// The command guard, as the managed PreToolUse hook runs it
+	// (TestGuardHookRuns).
+	if len(os.Args) == 2 && os.Args[1] == "guard" {
+		os.Exit(RunGuard(os.Stdin, os.Stdout))
+	}
 	if root := os.Getenv("AICREW_FAKE_AIMEM_ROOT"); root != "" && len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "identity", "team-session", "reservation", "mcp":

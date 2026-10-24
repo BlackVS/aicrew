@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -87,13 +88,16 @@ func checkProbeEnv(env []string, home string) []string {
 }
 
 // claudeSettings is the home's managed .claude/settings.json: the home's
-// aimem installation, the Stop hook that wakes the member when its inbox
-// changes (task 01a0d6d7-1aed), and the deny rules.
+// aimem installation, the command guard (guard.go) before every Bash and
+// PowerShell call, the Stop hook that wakes the member when its inbox
+// changes (task 01a0d6d7-1aed) outside turns mode, and the deny rules, the
+// guard's second line.
 func claudeSettings(home string) string {
-	doc := map[string]any{"env": aimemVarMap(home), "permissions": map[string]any{"deny": denyRules()}}
+	hooks := guardHooks()
 	if ReadWakeSettings(home).Mode != WakeTurns {
-		doc["hooks"] = wakeHooks(home)
+		maps.Copy(hooks, wakeHooks(home))
 	}
+	doc := map[string]any{"env": aimemVarMap(home), "permissions": map[string]any{"deny": denyRules()}, "hooks": hooks}
 	b, _ := json.MarshalIndent(doc, "", "  ")
 	return string(b) + "\n"
 }
@@ -320,7 +324,16 @@ var selfExecutable = func() string {
 	return p
 }
 
-// wakeHooks is the settings' hooks object: a Stop hook running
+// guardHooks is the settings' PreToolUse hook: `aicrew-agent guard` before
+// every Bash and PowerShell call. Its timeout is short: the guard reads one
+// payload and answers.
+func guardHooks() map[string]any {
+	command := fmt.Sprintf(`"%s" guard`, filepath.ToSlash(selfExecutable()))
+	return map[string]any{"PreToolUse": []any{map[string]any{"matcher": "Bash|PowerShell", "hooks": []any{
+		map[string]any{"type": "command", "command": command, "timeout": 10}}}}}
+}
+
+// wakeHooks is the settings' Stop hook: a Stop hook running
 // `aicrew-agent wait-inbox` for this home, with a timeout a minute past the
 // home's wait, so the hook ends on its own before Claude Code ends it.
 func wakeHooks(home string) map[string]any {

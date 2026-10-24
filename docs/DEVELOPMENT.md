@@ -2006,10 +2006,14 @@ bin/aicrew-agent join --home ~/aicrew/agents/builder    # rerun: refresh and che
   is given. `aimem/` is created owner-only, or restricted if the operator's
   provisioning created it; the individual aimem credential stays there, in
   aimem's own storage.
-- It writes the managed `.claude/settings.json` (`env`: the home's
-  `AIMEM_STATE_DIR` and `AIMEM_SOCKET`, absolute; the Stop hook; and the
-  `permissions.deny` list, WORKSPACE.md "Deny rules"), under the same digest
-  rule as the guidance files.
+- It writes the managed `.claude/settings.json`, under the same digest
+  rule as the guidance files:
+  - `env`: the home's `AIMEM_STATE_DIR` and `AIMEM_SOCKET`, absolute;
+  - the Stop hook;
+  - the command guard, a PreToolUse hook running `aicrew-agent guard` before
+    every Bash and PowerShell call (WORKSPACE.md, "The command guard");
+  - the `permissions.deny` list, the guard's second line (WORKSPACE.md,
+    "Deny rules").
 
 ### Checking dependencies and clients: `aicrew-agent check`
 
@@ -2269,7 +2273,7 @@ A home is woken in one of two ways, recorded in `agent.json` as
 the mode, keeping the `wake` object's other settings, and then rewrites the
 managed files from it:
 - **`.claude/settings.json`** holds the Stop hook only in `stop-hook` mode.
-  The deny rules are there in both modes.
+  The command guard and the deny rules are there in both modes.
 - **`.claude/turn-settings.json`** (managed, in both modes) is the settings
   a headless turn runs under. The turn loop passes it with `--settings`,
   because a home's own allow rules do not apply to a headless turn

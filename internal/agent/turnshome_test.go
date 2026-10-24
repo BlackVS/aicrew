@@ -20,7 +20,8 @@ func writeAgentDoc(t *testing.T, home string, v map[string]any) {
 	}
 }
 
-// A home in turns mode has managed settings without the Stop hook, and its
+// A home in turns mode has managed settings with the command guard but
+// without the Stop hook, and its
 // per-turn settings hold the base allow list, the home's narrow additions
 // and the deny rules; a broad or PowerShell addition is left out. A home
 // in the default mode keeps the Stop hook.
@@ -40,7 +41,9 @@ func TestTurnsModeSettings(t *testing.T) {
 		"turns": map[string]any{"allow": []string{"Bash(go test *)", "Bash", "Bash(*)", "PowerShell(Get-*)",
 			"Edit(/worktrees/**)", "Bash(make *)", "Read(/docs/**)"}}})
 	doc := settings()
-	if _, ok := doc["hooks"]; ok || ReadWakeSettings(home).Mode != WakeTurns || ReadWakeSettings(home).Wait.Seconds() != 30 {
+	hooks, _ := doc["hooks"].(map[string]any)
+	if _, stop := hooks["Stop"]; stop || hooks["PreToolUse"] == nil || ReadWakeSettings(home).Mode != WakeTurns ||
+		ReadWakeSettings(home).Wait.Seconds() != 30 {
 		t.Fatalf("turns mode: %v", doc)
 	}
 	if deny := doc["permissions"].(map[string]any)["deny"].([]any); len(deny) != len(denyRules()) {

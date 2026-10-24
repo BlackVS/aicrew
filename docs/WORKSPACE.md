@@ -182,6 +182,42 @@ survey, the options and the decision (D-STORE) are recorded in
   do not stop a determined bypass through a command they do not name, such
   as a script that opens the file. Isolating the credentials from each
   other stays an OS account per member (aimem's PILOT-HUB-RUNBOOK).
+- **The command guard** (task 01a16922-d552). The managed
+  `.claude/settings.json` runs `aicrew-agent guard` as a PreToolUse hook
+  before every Bash and PowerShell call, in both wake modes. The deny rules
+  are its second line.
+
+  Deny rules match a command's spelling. The guard instead judges what each
+  command does:
+  - It splits the command line on `;`, `&`, `&&`, `|`, `||`, newlines,
+    parentheses and `$(…)`, outside quotes.
+  - It looks inside `bash`/`sh -c`, `eval`, `powershell`/`pwsh -Command` (or
+    a bare command), `Invoke-Expression` and `cmd /c`.
+  - It skips variable assignments, `sudo`, `env`, `xargs` and similar
+    leaders.
+
+  It refuses, with git's global options (`-C`, `-c`, `--git-dir=…`) before
+  the subcommand and flags in any order or cluster:
+  - `git reset --hard`, `git clean -f` (not with `-n`), and `git push` with
+    `--force`, `--force-with-lease`, `--delete`, `--prune`, `--mirror`,
+    `--no-verify` or a `+` or `:` refspec;
+  - `git branch -D`, `git checkout` of `.`, `*` or `:/` or with `--force`,
+    and `git restore` of the whole tree (not `--staged` alone);
+  - `git stash drop|clear`, `git commit --amend|--no-verify|-n`,
+    `git filter-branch|filter-repo` and `git update-ref -d`;
+  - a recursive delete in every spelling: `rm -r` in any form,
+    `Remove-Item` and its aliases with `-Recurse` in any prefix,
+    `rmdir|rd|del /s`, and `find -delete`;
+  - formatting a disk (`format`, `Format-Volume`, `mkfs*`);
+  - an encoded PowerShell command, which it cannot read.
+
+  A refused call gets Claude Code's deny decision with one line, telling the
+  member to turn to its coordinator as ROLES.md asks of a refused member
+  (block the running attempt with the refusal as the reason) instead of
+  working around the guard. Any other call gets no answer. The guard never blocks on
+  its own failure: a payload it cannot read, or a crash, answers nothing.
+  `check` notes a settings file whose hook is missing or names another
+  `aicrew-agent`.
 - **Mismatches.** `check` blocks when a carrier file disagrees with the
   home. It reports, without blocking:
   - `AIMEM_*` values in the environment or in `~/.config/aimem/env` that

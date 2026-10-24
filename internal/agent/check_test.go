@@ -1201,3 +1201,45 @@ func TestCheckProbesTheTurnModel(t *testing.T) {
 		t.Fatalf("a probe that shows neither: %+v", rep)
 	}
 }
+
+// check reports the command guard: a home whose managed settings hold the
+// PreToolUse hook for this aicrew-agent gets no notice; one whose hook is
+// missing, or names another binary, is told to rerun join.
+func TestCheckReportsTheGuardHook(t *testing.T) {
+	e := setupCheck(t, readyTools, "aimem", "claude")
+	e.installSkills(t, "1.26.1", "oh-code-review")
+	if rep := e.check(t, "claude"); hasNotice(rep, "command guard") {
+		t.Fatalf("the managed guard: %v", rep.Notices)
+	}
+	path := filepath.Join(e.home, ".claude", "settings.json")
+	var doc map[string]any
+	raw, _ := os.ReadFile(path)
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	hooks := doc["hooks"].(map[string]any)
+	delete(hooks, "PreToolUse")
+	raw, _ = json.Marshal(doc)
+	os.WriteFile(path, raw, 0o644)
+	if rep := e.check(t, "claude"); !hasNotice(rep, "command guard's PreToolUse hook") {
+		t.Fatalf("no guard: %v", rep.Notices)
+	}
+	hooks["PreToolUse"] = []any{map[string]any{"matcher": "Bash|PowerShell", "hooks": []any{map[string]any{
+		"type": "command", "command": `"/elsewhere/aicrew-agent" guard`, "timeout": 10}}}}
+	raw, _ = json.Marshal(doc)
+	os.WriteFile(path, raw, 0o644)
+	if rep := e.check(t, "claude"); !hasNotice(rep, "command guard's PreToolUse hook") {
+		t.Fatalf("another binary: %v", rep.Notices)
+	}
+	// The operator's switch: agent.json turns the guard off, and check says
+	// so instead of asking for the hook.
+	agentDoc := map[string]any{}
+	if raw, err := os.ReadFile(filepath.Join(e.home, "agent.json")); err == nil {
+		_ = json.Unmarshal(raw, &agentDoc)
+	}
+	agentDoc["guard"] = map[string]any{"off": true}
+	writeAgentDoc(t, e.home, agentDoc)
+	if rep := e.check(t, "claude"); !hasNotice(rep, "command guard is off") || hasNotice(rep, "PreToolUse hook") {
+		t.Fatalf("the guard off: %v", rep.Notices)
+	}
+}

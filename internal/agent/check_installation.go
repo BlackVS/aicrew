@@ -70,6 +70,7 @@ func (c *checker) checkInstallation(sel []string) {
 	if slices.Contains(sel, "claude") {
 		c.checkCarrier(".claude/settings.json", func(doc map[string]json.RawMessage) json.RawMessage { return doc["env"] })
 		c.checkWakeHook()
+		c.checkGuardHook()
 		c.checkDenyRules()
 		c.checkCarrier(".mcp.json (mcpServers.aimem)", func(doc map[string]json.RawMessage) json.RawMessage {
 			var servers map[string]struct {
@@ -131,15 +132,47 @@ func (c *checker) checkWakeHook() {
 		}
 		return
 	}
-	want, _ := json.Marshal(wakeHooks(c.o.Home))
-	var got, exp any
-	_ = json.Unmarshal(doc["hooks"], &got)
-	_ = json.Unmarshal(want, &exp)
-	if !reflect.DeepEqual(got, exp) {
+	if !sameHook(doc, wakeHooks(c.o.Home), "Stop") {
 		c.notice(fmt.Sprintf(".claude/settings.json does not hold the wake-up's Stop hook for this aicrew-agent, so "+
 			"the member waits for a human message after each turn: rerun `aicrew-agent join --home %s`, and merge "+
 			"any .claude/settings.json.aicrew-new it writes", quoteArg(c.o.Home)))
 	}
+}
+
+// checkGuardHook notes a home whose managed Claude Code settings do not hold
+// the command guard as join writes it, for this aicrew-agent: the member's
+// destructive git commands and recursive deletes would then meet only the
+// deny rules. A home whose agent.json turns the guard off is noted as such.
+// A notice, as for the Stop hook.
+func (c *checker) checkGuardHook() {
+	if GuardOff(c.o.Home) {
+		c.notice(`the command guard is off for this home (agent.json "guard": {"off": true}): only the deny rules ` +
+			"stand before a destructive git command or a recursive delete")
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join(c.o.Home, ".claude", "settings.json"))
+	var doc map[string]json.RawMessage
+	if err == nil {
+		_ = json.Unmarshal(raw, &doc)
+	}
+	if !sameHook(doc, guardHooks(c.o.Home), "PreToolUse") {
+		c.notice(fmt.Sprintf(".claude/settings.json does not hold the command guard's PreToolUse hook for this "+
+			"aicrew-agent, so only the deny rules stand before a destructive git command or a recursive delete: rerun "+
+			"`aicrew-agent join --home %s`, and merge any .claude/settings.json.aicrew-new it writes",
+			quoteArg(c.o.Home)))
+	}
+}
+
+// sameHook reports whether the settings doc holds the hook event as want
+// has it.
+func sameHook(doc map[string]json.RawMessage, want map[string]any, event string) bool {
+	var hooks map[string]json.RawMessage
+	_ = json.Unmarshal(doc["hooks"], &hooks)
+	raw, _ := json.Marshal(want[event])
+	var got, exp any
+	_ = json.Unmarshal(hooks[event], &got)
+	_ = json.Unmarshal(raw, &exp)
+	return got != nil && reflect.DeepEqual(got, exp)
 }
 
 // checkDenyRules notes a home whose managed Claude Code settings lack any

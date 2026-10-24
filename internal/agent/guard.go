@@ -90,9 +90,11 @@ type refusal struct{ what, next string }
 // knowing the branch.
 type guardEnv struct {
 	root, dir string
-	// switched is the branch each repository was switched to earlier in
-	// the call, "" when the new one cannot be told.
+	// switched is the branch each worktree was switched to earlier in the
+	// call, "" when the new one cannot be told.
 	switched map[string]string
+	// top is the worktree holding a directory, "" when none is found.
+	top func(dir string) string
 	// branches is the repository at dir's current branch and its default
 	// branch (the remote's HEAD), each "" when it cannot be read.
 	branches func(dir string) (current, def string)
@@ -136,7 +138,7 @@ func RunGuard(in io.Reader, out io.Writer, home string) (code int) {
 		read[dir] = [2]string{current, def}
 		return current, def
 	}
-	env := guardEnv{dir: p.Cwd, branches: branches, blind: func(rule string, words []string, dir string) {
+	env := guardEnv{dir: p.Cwd, branches: branches, top: worktreeTop, blind: func(rule string, words []string, dir string) {
 		logGuardBlind(home, rule, words, dir)
 	}}
 	if env.dir == "" {
@@ -882,7 +884,7 @@ func (e guardEnv) judgeGit(args []string) refusal {
 	if repo != "" {
 		current, def = e.branches(repo)
 	}
-	if b, ok := e.switched[repoKey(repo)]; ok {
+	if b, ok := e.switched[e.repoKey(repo)]; ok {
 		current = b
 	}
 	if current == "" {
@@ -918,11 +920,11 @@ func (e guardEnv) noteSwitch(repo, sub string, opts []string) {
 		case o == "-b" || o == "-B" || o == "-c" || o == "-C" || o == "--orphan" || o == "--create" ||
 			o == "--force-create":
 			if i+1 < len(opts) {
-				e.switched[repoKey(repo)] = opts[i+1]
+				e.switched[e.repoKey(repo)] = opts[i+1]
 			}
 			return
 		case o == "--detach" || (sub == "switch" && o == "-d"):
-			e.switched[repoKey(repo)] = ""
+			e.switched[e.repoKey(repo)] = ""
 			return
 		case strings.HasPrefix(o, "-") && o != "-":
 		default:
@@ -932,26 +934,51 @@ func (e guardEnv) noteSwitch(repo, sub string, opts []string) {
 	switch {
 	case len(names) == 0:
 	case names[0] == "-":
-		e.switched[repoKey(repo)] = ""
+		e.switched[e.repoKey(repo)] = ""
 	case sub == "switch":
-		e.switched[repoKey(repo)] = names[0]
+		e.switched[e.repoKey(repo)] = names[0]
 	default:
 		def := ""
 		if repo != "" {
 			_, def = e.branches(repo)
 		}
 		if sharedBranch(names[0], def) {
-			e.switched[repoKey(repo)] = names[0]
+			e.switched[e.repoKey(repo)] = names[0]
 		}
 	}
 }
 
-// repoKey is repo as a key of guardEnv.switched.
-func repoKey(repo string) string {
+// repoKey is the worktree holding repo, as a key of guardEnv.switched:
+// a switch in one of its directories holds in all of them, and distinct
+// worktrees stay apart. A directory in no worktree it can find is its own
+// key.
+func (e guardEnv) repoKey(repo string) string {
 	if repo == "" {
 		return ""
 	}
+	if e.top != nil {
+		if t := e.top(repo); t != "" {
+			return t
+		}
+	}
 	return path.Clean(slashPath(repo))
+}
+
+// worktreeTop is the worktree holding dir: the nearest directory, dir or
+// above, with a .git entry (a repository's directory, or a linked
+// worktree's file), with forward slashes; "" when there is none.
+func worktreeTop(dir string) string {
+	d := filepath.Clean(filepath.FromSlash(dir))
+	for {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+			return filepath.ToSlash(d)
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return ""
+		}
+		d = parent
+	}
 }
 
 // branchDelete judges a forced branch delete: refused for main, master or

@@ -206,8 +206,9 @@ survey, the options and the decision (D-STORE) are recorded in
     `timeout`, `nice` and similar) with their options and values, such as
     `sudo -u user` or `env -u NAME`. It reads `env -S` as a command line.
   - It follows `cd`, `Set-Location`, `env -C` and `sudo -D`, and a
-    `git switch` or `git checkout` of a branch earlier in the call: in
-    `git switch main && git reset --hard`, the reset is judged on `main`.
+    `git switch` or `git checkout` of a branch earlier in the call, in any
+    directory of the same worktree: in `git switch main && git reset --hard`,
+    the reset is judged on `main`.
 
   With git's global options (`-C`, `-c`, `--git-dir=…`) before the
   subcommand and flags in any order or cluster, it refuses on any branch:

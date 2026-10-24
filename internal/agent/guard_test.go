@@ -14,7 +14,12 @@ import (
 // current, with main as the default branch; blind collects the commands it
 // passes without a branch.
 func testGuard(current string, blind *[]string) guardEnv {
-	return guardEnv{root: "/work/repo", dir: "/work/repo", branches: func(string) (string, string) {
+	return guardEnv{root: "/work/repo", dir: "/work/repo", top: func(dir string) string {
+		if dir == "/work/repo" || strings.HasPrefix(dir, "/work/repo/") {
+			return "/work/repo"
+		}
+		return ""
+	}, branches: func(string) (string, string) {
 		if current == "" {
 			return "", ""
 		}
@@ -289,7 +294,10 @@ func TestGuardBranchTransitions(t *testing.T) {
 		{"feature", "git checkout main; git clean -fd", true},
 		{"feature", "git checkout master && git reset --hard", true},
 		{"feature", "git -C /work/repo switch main && git -C . reset --hard", true},
-		{"feature", "cd sub && git switch main; cd .. && git reset --hard", false},
+		{"feature", "cd sub && git switch main && cd .. && git reset --hard HEAD~1", true},
+		{"feature", "git -C sub switch main && git reset --hard", true},
+		{"main", "cd sub && git switch -c task && cd .. && git reset --hard", false},
+		{"feature", "git -C /work/other switch main && git reset --hard", false},
 		{"main", "git switch -c task && git reset --hard", false},
 		{"main", "git checkout -b task && git reset --hard", false},
 		{"main", "git switch feature && git commit --amend", false},
@@ -306,6 +314,29 @@ func TestGuardBranchTransitions(t *testing.T) {
 	var blind []string
 	if r := testGuard("main", &blind).refusal("bash", "git switch - && git reset --hard"); r.what != "" || len(blind) != 1 {
 		t.Errorf("an unknown switch: %q %q", r.what, blind)
+	}
+}
+
+// worktreeTop finds the worktree holding a directory: the nearest one with
+// a .git entry, a directory or a linked worktree's file.
+func TestWorktreeTop(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	linked := filepath.Join(root, "linked")
+	for _, d := range []string{filepath.Join(repo, ".git"), filepath.Join(repo, "sub", "deep"), linked} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(linked, ".git"), []byte("gitdir: x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for dir, want := range map[string]string{
+		repo: repo, filepath.Join(repo, "sub", "deep"): repo, linked: linked, filepath.Join(linked, "x"): linked,
+	} {
+		if got := worktreeTop(dir); got != filepath.ToSlash(want) {
+			t.Errorf("%s: %q, want %q", dir, got, want)
+		}
 	}
 }
 

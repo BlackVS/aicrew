@@ -93,7 +93,10 @@ func checkProbeEnv(env []string, home string) []string {
 // changes (task 01a0d6d7-1aed) outside turns mode, and the deny rules, the
 // guard's second line.
 func claudeSettings(home string) string {
-	hooks := guardHooks()
+	hooks := map[string]any{}
+	if !GuardOff(home) {
+		maps.Copy(hooks, guardHooks(home))
+	}
 	if ReadWakeSettings(home).Mode != WakeTurns {
 		maps.Copy(hooks, wakeHooks(home))
 	}
@@ -324,13 +327,28 @@ var selfExecutable = func() string {
 	return p
 }
 
-// guardHooks is the settings' PreToolUse hook: `aicrew-agent guard` before
-// every Bash and PowerShell call. Its timeout is short: the guard reads one
-// payload and answers.
-func guardHooks() map[string]any {
-	command := fmt.Sprintf(`"%s" guard`, filepath.ToSlash(selfExecutable()))
+// guardHooks is the settings' PreToolUse hook: `aicrew-agent guard` for
+// this home before every Bash and PowerShell call. Its timeout is short:
+// the guard reads one payload and answers.
+func guardHooks(home string) map[string]any {
+	command := fmt.Sprintf(`"%s" guard --home "%s"`, filepath.ToSlash(selfExecutable()), filepath.ToSlash(home))
 	return map[string]any{"PreToolUse": []any{map[string]any{"matcher": "Bash|PowerShell", "hooks": []any{
 		map[string]any{"type": "command", "command": command, "timeout": 10}}}}}
+}
+
+// GuardOff reports whether the home's agent.json turns the command guard
+// off ("guard": {"off": true}): the operator's switch for one member, read
+// when the managed settings are written.
+func GuardOff(home string) bool {
+	doc, ok, err := readAgentDoc(home)
+	if err != nil || !ok {
+		return false
+	}
+	var g struct {
+		Off bool `json:"off"`
+	}
+	raw, ok := doc.top["guard"]
+	return ok && json.Unmarshal(raw, &g) == nil && g.Off
 }
 
 // wakeHooks is the settings' Stop hook: a Stop hook running

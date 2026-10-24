@@ -10,39 +10,139 @@ import (
 	"testing"
 )
 
-// The guard refuses each rule in its plain form, with options before the
-// subcommand, with flags reordered or combined, chained, and inside the
-// shells and wrappers that run another command line; it admits each safe
-// neighbour.
+// testGuard is a guard in /work/repo whose repositories are on branch
+// current, with main as the default branch; blind collects the commands it
+// passes without a branch.
+func testGuard(current string, blind *[]string) guardEnv {
+	return guardEnv{root: "/work/repo", dir: "/work/repo", branches: func(string) (string, string) {
+		if current == "" {
+			return "", ""
+		}
+		return current, "main"
+	}, blind: func(rule string, words []string, dir string) {
+		if blind != nil {
+			*blind = append(*blind, rule+" @ "+dir)
+		}
+	}}
+}
+
+// The guard refuses what reaches beyond the member's own work in every
+// spelling: options before the subcommand, flags reordered or combined,
+// chained, and inside the shells and wrappers that run another command
+// line; it passes discarding work on the member's own branch and deleting
+// inside its working directory.
 func TestGuardRefusal(t *testing.T) {
-	refused := map[string][]string{
+	// Refused on any branch.
+	always := map[string][]string{
 		"bash": {
-			"git reset --hard",
-			"git reset --hard HEAD~1",
-			"git -C /work/repo reset --hard origin/main",
-			"git --no-pager -c core.pager=cat reset --hard",
-			"git --git-dir=.git --work-tree=. reset --hard",
-			"git clean -f",
-			"git clean -fd",
-			"git clean -xdf",
-			"git clean --force -d",
 			"git push --force",
 			"git push -f origin main",
-			"git push -uf origin main",
+			"git push -uf origin feature",
 			"git push --force-with-lease origin HEAD",
 			"git push --force-with-lease=main:abc origin main",
 			"git push origin --delete feature",
 			"git push origin -d feature",
 			"git push origin :feature",
-			"git push origin +main",
+			"git push origin +feature",
 			"git push --no-verify",
-			"git branch -D feature",
-			"git branch -df feature",
-			"git branch --delete --force feature",
+			"git -C /work/repo push --force",
+			"git commit --no-verify -m wip",
+			"git commit -n -m wip",
+			"git commit -nm wip",
+			"git commit -anm wip",
+			"git branch -D main",
+			"git branch -D master",
+			"git branch --delete --force main",
+			"git filter-branch --tree-filter x HEAD",
+			"git filter-repo --path x",
+			"git update-ref -d refs/heads/x",
+			"rm -rf /",
+			"rm -rf /etc",
+			"rm -rf .",
+			"rm -rf ./",
+			"rm -rf ..",
+			"rm -rf ../other",
+			"rm -rf build/../..",
+			"rm -rf *",
+			"rm -rf .git",
+			"rm -rf src/.git",
+			"rm -rf ~/x",
+			"rm -rf $HOME/x",
+			"rm -rf \"$TARGET\"",
+			"rm -fr /tmp/x",
+			"rm -r -f /work/other",
+			"rm -R /work",
+			"rm --recursive /var",
+			"/bin/rm -rf /",
+			"sudo rm -rf /",
+			"env FOO=1 rm -rf /",
+			"rm -rf build /etc",
+			"rm -rf -- /etc",
+			"find / -name '*.go' -delete",
+			"find .. -delete",
+			"find . | xargs rm -rf",
+			"cd .. && rm -rf repo",
+			"cd $X; rm -rf build",
+			"cd /; rm -rf work",
+			"go test ./... && git push --force",
+			"go build; rm -rf /etc",
+			"false || git push -f",
+			"(cd repo && git push --force)",
+			"echo $(git push --force)",
+			"echo `git push --force`",
+			"bash -c 'git push --force'",
+			"sh -c \"rm -rf /etc\"",
+			"bash -lc 'cd x; git push --force'",
+			"eval 'git push --force'",
+			"git status\ngit push --force",
+			"powershell -Command \"Remove-Item -Recurse C:\\Windows\"",
+			"powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"git push --force\"",
+			"pwsh -c 'git push -f'",
+			"powershell \"git push --force\"",
+			"powershell -EncodedCommand ZwBpAHQA",
+			"cmd /c rd /s /q C:\\work",
+			"cmd.exe /c \"rmdir /S /Q ..\\other\"",
+			"cmd /c del /s C:\\*.tmp",
+			"mkfs.ext4 /dev/sdb1",
+		},
+		"powershell": {
+			"Remove-Item -Recurse -Force C:\\work",
+			"Remove-Item ..\\other -recurse",
+			"Remove-Item -Path C:\\Users -Recurse:$true",
+			"remove-item $env:TEMP -r",
+			"rm -r ~\\x",
+			"rm C:\\work -Recurse",
+			"ri -rec ..",
+			"del . -Recurse",
+			"rmdir C:\\x -Recurse",
+			"Remove-Item -Recurse",
+			"Get-ChildItem work | Remove-Item -Recurse",
+			"git push --force; git status",
+			"& git push --force",
+			"& { git push -f }",
+			"Invoke-Expression 'git push --force'",
+			"iex \"git push -f\"",
+			"cmd /c rd /s /q C:\\work",
+			"Format-Volume -DriveLetter D",
+			"format D:",
+			"Set-Location C:\\; Remove-Item -Recurse work",
+		},
+	}
+	// Refused on main, the default branch; passed on the member's own.
+	shared := map[string][]string{
+		"bash": {
+			"git reset --hard",
+			"git reset --hard HEAD~1",
+			"git -C /work/repo reset --hard origin/main",
+			"git --no-pager -c core.pager=cat reset --hard",
+			"git clean -f",
+			"git clean -fd",
+			"git clean -xdf",
+			"git clean --force -d",
 			"git checkout -- .",
 			"git checkout .",
 			"git checkout -- '*'",
-			"git checkout -f main",
+			"git checkout -f feature",
 			"git restore .",
 			"git restore :/",
 			"git restore --staged --worktree .",
@@ -50,76 +150,19 @@ func TestGuardRefusal(t *testing.T) {
 			"git stash clear",
 			"git commit --amend",
 			"git commit --amend --no-edit",
-			"git commit --no-verify -m wip",
-			"git commit -n -m wip",
-			"git commit -nm wip",
-			"git commit -anm wip",
-			"git filter-branch --tree-filter x HEAD",
-			"git filter-repo --path x",
-			"git update-ref -d refs/heads/x",
-			"rm -rf work",
-			"rm -fr work",
-			"rm -r -f work",
-			"rm -R work",
-			"rm --recursive work",
-			"/bin/rm -rf work",
-			"sudo rm -rf /",
-			"env FOO=1 rm -rf work",
 			"FOO=1 git reset --hard",
-			"find . -name '*.go' -delete",
-			"find . | xargs rm -rf",
 			"go test ./... && git reset --hard",
-			"go build; rm -rf work",
-			"false || git clean -fd",
-			"echo x | git stash drop",
-			"(cd repo && git reset --hard)",
-			"echo $(git reset --hard)",
-			"echo `git reset --hard`",
 			"bash -c 'git reset --hard'",
-			"sh -c \"rm -rf work\"",
-			"bash -lc 'cd x; git push --force'",
-			"eval 'git reset --hard'",
-			"git status\ngit reset --hard",
-			"powershell -Command \"Remove-Item -Recurse work\"",
-			"powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"git reset --hard\"",
-			"pwsh -c 'git clean -fd'",
-			"powershell \"git push --force\"",
-			"powershell -EncodedCommand ZwBpAHQA",
-			"cmd /c rd /s /q work",
-			"cmd.exe /c \"rmdir /S /Q work\"",
-			"cmd /c del /s *.tmp",
-			"mkfs.ext4 /dev/sdb1",
+			"cmd /c git clean -fd",
+			"powershell -Command \"git reset --hard\"",
 		},
 		"powershell": {
-			"Remove-Item -Recurse -Force work",
-			"Remove-Item work -recurse",
-			"Remove-Item -Path work -Recurse:$true",
-			"remove-item work -r",
-			"rm -r work",
-			"rm work -Recurse",
-			"ri -rec work",
-			"del work -Recurse",
-			"rmdir work -Recurse",
-			"Get-ChildItem work | Remove-Item -Recurse",
 			"git reset --hard; git status",
-			"& git reset --hard",
-			"& { git clean -fd }",
-			"Invoke-Expression 'git reset --hard'",
-			"iex \"git push -f\"",
-			"cmd /c rd /s /q work",
-			"Format-Volume -DriveLetter D",
-			"format D:",
 			"Set-Location C:\\work\\repo; git reset --hard",
 		},
 	}
-	for shell, lines := range refused {
-		for _, line := range lines {
-			if GuardRefusal(shell, line) == "" {
-				t.Errorf("%s: %q admitted", shell, line)
-			}
-		}
-	}
-	admitted := map[string][]string{
+	// Passed on any branch.
+	passed := map[string][]string{
 		"bash": {
 			"git status",
 			"git reset --soft HEAD~1",
@@ -132,6 +175,7 @@ func TestGuardRefusal(t *testing.T) {
 			"git push -u origin feature",
 			"git push origin HEAD:refs/heads/feature",
 			"git branch -d feature",
+			"git branch -D feature",
 			"git branch feature",
 			"git checkout -b feature",
 			"git checkout main",
@@ -140,56 +184,110 @@ func TestGuardRefusal(t *testing.T) {
 			"git restore --staged .",
 			"git stash",
 			"git stash pop",
-			"git stash list",
 			"git commit -m 'fix the -n flag'",
 			"git commit -am 'msg'",
-			"git commit -m 'git reset --hard was the old way'",
+			"git commit -m 'git push --force was the old way'",
 			"git rm -r --cached build",
 			"git format-patch -1",
 			"rm file.go",
 			"rm -f file.go",
+			"rm -rf .work/build",
+			"rm -rf build",
+			"rm -r -f ./out dist",
+			"rm -rf build/*",
+			"rm -rf /work/repo/.work/x",
+			"rm -rf -- -odd-name",
+			"cd .work && rm -rf build",
+			"cd /work/repo/.work; rm -rf x",
+			"find . -name '*.tmp' -delete",
+			"find build -delete",
 			"rmdir empty",
 			"echo 'rm -rf /'",
 			"grep -r reset --hard-coded .",
 			"go test ./... -run TestX",
-			"find . -name '*.go'",
 			"bash script.sh",
 			"powershell -File build.ps1",
 			"cmd /c dir",
+			"cmd /c rd /s /q .work\\build",
 			"",
 		},
 		"powershell": {
 			"Remove-Item file.go",
 			"Remove-Item -Path file.go -Force",
+			"Remove-Item -Recurse -Force .work\\build",
+			"Remove-Item -Path .work\\build -Recurse",
+			"Remove-Item -LiteralPath:build -Recurse",
+			"Remove-Item build,dist -Recurse",
+			"Remove-Item C:\\x -Recurse:$false",
+			"Remove-Item -Recurse build -Filter *.tmp",
 			"Get-ChildItem -Recurse work",
 			"rm file.go",
 			"del file.go",
 			"git push -u origin feature",
 			"Rename-Item a b",
 			"Set-Location C:\\work\\repo",
-			"Write-Output 'git reset --hard'",
+			"Write-Output 'git push --force'",
 		},
 	}
-	for shell, lines := range admitted {
+	own, onMain := testGuard("feature", nil), testGuard("main", nil)
+	for shell, lines := range always {
 		for _, line := range lines {
-			if what := GuardRefusal(shell, line); what != "" {
-				t.Errorf("%s: %q refused: %s", shell, line, what)
+			if r := own.refusal(shell, line); r.what == "" || r.next == "" {
+				t.Errorf("%s: %q passed on the own branch", shell, line)
+			}
+		}
+	}
+	for shell, lines := range shared {
+		for _, line := range lines {
+			if r := onMain.refusal(shell, line); r.what == "" || !strings.Contains(r.what, "on main") {
+				t.Errorf("%s: %q on main: %q", shell, line, r.what)
+			}
+			if r := own.refusal(shell, line); r.what != "" {
+				t.Errorf("%s: %q refused on the own branch: %s", shell, line, r.what)
+			}
+		}
+	}
+	for shell, lines := range passed {
+		for _, line := range lines {
+			for _, g := range []guardEnv{own, onMain} {
+				if r := g.refusal(shell, line); r.what != "" {
+					t.Errorf("%s: %q refused: %s", shell, line, r.what)
+				}
 			}
 		}
 	}
 }
 
+// A command that discards work where the branch cannot be read passes,
+// and is recorded; one the guard refuses on any branch is still refused.
+func TestGuardBlind(t *testing.T) {
+	var blind []string
+	g := testGuard("", &blind)
+	if r := g.refusal("bash", "git -C sub reset --hard && git --git-dir=x clean -fd"); r.what != "" {
+		t.Fatalf("refused: %s", r.what)
+	}
+	if len(blind) != 2 || blind[0] != "git reset --hard @ /work/repo/sub" || blind[1] != "git clean --force @ " {
+		t.Fatalf("recorded: %q", blind)
+	}
+	if r := g.refusal("bash", "git push --force"); r.what == "" {
+		t.Fatal("a forced push passed")
+	}
+}
+
 // The guard answers Claude Code's PreToolUse protocol: a refused command
-// gets the deny decision with a one-line reason naming the coordinator; an
-// admitted one, another tool, and a malformed or empty payload get nothing,
-// and every case exits 0.
+// gets the deny decision with a one-line reason that names what was
+// refused, what to do instead and the coordinator; a passed one, another
+// tool, and a malformed or empty payload get nothing, and every case exits
+// 0. A command passed without a branch is recorded in the home's log.
 func TestRunGuard(t *testing.T) {
+	home := t.TempDir()
+	notRepo := t.TempDir()
 	run := func(payload string) (string, int) {
 		var out bytes.Buffer
-		code := RunGuard(strings.NewReader(payload), &out)
+		code := RunGuard(strings.NewReader(payload), &out, home)
 		return out.String(), code
 	}
-	out, code := run(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git -C . reset --hard HEAD"}}`)
+	out, code := run(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git -C . push --force"}}`)
 	var d struct {
 		HookSpecificOutput struct {
 			HookEventName            string `json:"hookEventName"`
@@ -197,35 +295,79 @@ func TestRunGuard(t *testing.T) {
 			PermissionDecisionReason string `json:"permissionDecisionReason"`
 		} `json:"hookSpecificOutput"`
 	}
+	reason := &d.HookSpecificOutput.PermissionDecisionReason
 	if err := json.Unmarshal([]byte(out), &d); err != nil || code != 0 || d.HookSpecificOutput.HookEventName != "PreToolUse" ||
-		d.HookSpecificOutput.PermissionDecision != "deny" ||
-		!strings.Contains(d.HookSpecificOutput.PermissionDecisionReason, "git reset --hard") ||
-		!strings.Contains(d.HookSpecificOutput.PermissionDecisionReason, "coordinator") ||
-		strings.Contains(d.HookSpecificOutput.PermissionDecisionReason, "\n") {
+		d.HookSpecificOutput.PermissionDecision != "deny" || !strings.Contains(*reason, "git push --force") ||
+		!strings.Contains(*reason, nextNoForce) || !strings.Contains(*reason, "coordinator") || strings.Contains(*reason, "\n") {
 		t.Fatalf("a refused command: %d %q", code, out)
 	}
-	if out, code := run(`{"tool_name":"PowerShell","tool_input":{"command":"Remove-Item -Recurse work"}}`); code != 0 ||
+	if out, code := run(`{"tool_name":"PowerShell","tool_input":{"command":"Remove-Item -Recurse C:\\Windows"}}`); code != 0 ||
 		!strings.Contains(out, `"deny"`) {
 		t.Errorf("a refused PowerShell command: %d %q", code, out)
 	}
+	blind, _ := json.Marshal(map[string]any{"tool_name": "Bash", "cwd": notRepo,
+		"tool_input": map[string]string{"command": "git reset --hard"}})
 	for _, p := range []string{
 		`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}`,
-		`{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"command":"git reset --hard"}}`,
-		`{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"git reset --hard"}}`,
+		`{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"command":"git push --force"}}`,
+		`{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"git push --force"}}`,
 		`{"tool_name":"Bash","tool_input":{"command":42}}`,
 		`not json`,
 		``,
+		string(blind),
 	} {
 		if out, code := run(p); out != "" || code != 0 {
 			t.Errorf("%q: %d %q", p, code, out)
 		}
 	}
+	raw, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(GuardLogFile)))
+	var line guardBlind
+	if err != nil || json.Unmarshal(raw, &line) != nil || line.Rule != "git reset --hard" ||
+		line.Command != "git reset --hard" || line.Time == "" {
+		t.Fatalf("the blind log: %v %q", err, raw)
+	}
 }
 
-// The managed settings install the guard as a PreToolUse hook for Bash and
-// PowerShell in both wake modes, next to the Stop hook outside turns mode,
-// and the hook's command, run on a payload, refuses a destructive command
-// and admits a safe one. The settings are the same on a rewrite.
+// The guard reads the branch from the real repository at the payload's
+// working directory: discarding work is refused on main and passed on the
+// member's own branch.
+func TestRunGuardReadsTheBranch(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	if current, _ := gitBranches(repo); current != "main" {
+		t.Fatalf("the branch: %q", current)
+	}
+	payload, _ := json.Marshal(map[string]any{"tool_name": "Bash", "cwd": repo,
+		"tool_input": map[string]string{"command": "git reset --hard"}})
+	home := t.TempDir()
+	var out bytes.Buffer
+	RunGuard(bytes.NewReader(payload), &out, home)
+	if !strings.Contains(out.String(), "git reset --hard on main") {
+		t.Fatalf("on main: %q", out.String())
+	}
+	git("switch", "-q", "-c", "feature")
+	out.Reset()
+	RunGuard(bytes.NewReader(payload), &out, home)
+	if out.String() != "" {
+		t.Fatalf("on the own branch: %q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, filepath.FromSlash(GuardLogFile))); !os.IsNotExist(err) {
+		t.Fatalf("a known branch was recorded as blind: %v", err)
+	}
+}
+
+// The managed settings install the guard for the home as a PreToolUse hook
+// for Bash and PowerShell in both wake modes, next to the Stop hook outside
+// turns mode, and leave it out when agent.json turns it off; the hook's
+// command, run on a payload, refuses a destructive command and passes a
+// safe one. The settings are the same on a rewrite.
 func TestGuardHookRuns(t *testing.T) {
 	home := t.TempDir()
 	old := selfExecutable
@@ -264,14 +406,19 @@ func TestGuardHookRuns(t *testing.T) {
 		pre[0].Hooks[0].Type != "command" || pre[0].Hooks[0].Timeout != 10 {
 		t.Fatalf("stop-hook mode: %+v %+v", pre, stop)
 	}
+	writeAgentDoc(t, home, map[string]any{"guard": map[string]any{"off": true}})
+	if pre, stop := read(); len(pre) != 0 || len(stop) != 1 {
+		t.Fatalf("the guard off: %+v %+v", pre, stop)
+	}
 	writeAgentDoc(t, home, map[string]any{"wake": map[string]any{"mode": WakeTurns}})
 	if pre, stop = read(); len(pre) != 1 || len(stop) != 0 {
 		t.Fatalf("turns mode: %+v %+v", pre, stop)
 	}
-	// The command as Claude Code's shell runs it: the quoted binary, then
-	// guard.
+	// The command as Claude Code's shell runs it: the quoted binary, guard
+	// and the home.
 	words := splitCommands("bash", pre[0].Hooks[0].Command)
-	if len(words) != 1 || len(words[0]) != 2 || words[0][1] != "guard" || filepath.Clean(words[0][0]) != filepath.Clean(exe) {
+	if len(words) != 1 || len(words[0]) != 4 || words[0][1] != "guard" || words[0][2] != "--home" ||
+		filepath.Clean(words[0][0]) != filepath.Clean(exe) || filepath.Clean(words[0][3]) != filepath.Clean(home) {
 		t.Fatalf("the hook runs %q", pre[0].Hooks[0].Command)
 	}
 	run := func(command string) string {
@@ -286,7 +433,7 @@ func TestGuardHookRuns(t *testing.T) {
 		}
 		return string(out)
 	}
-	if out := run("git -C . reset --hard HEAD"); !strings.Contains(out, `"permissionDecision":"deny"`) {
+	if out := run("git -C . push --force"); !strings.Contains(out, `"permissionDecision":"deny"`) {
 		t.Errorf("a destructive command: %q", out)
 	}
 	if out := run("git status"); out != "" {

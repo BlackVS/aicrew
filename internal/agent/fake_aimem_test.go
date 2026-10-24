@@ -33,8 +33,12 @@ func TestMain(m *testing.M) {
 	}
 	// The command guard, as the managed PreToolUse hook runs it
 	// (TestGuardHookRuns).
-	if len(os.Args) == 2 && os.Args[1] == "guard" {
-		os.Exit(RunGuard(os.Stdin, os.Stdout))
+	if len(os.Args) >= 2 && os.Args[1] == "guard" {
+		home := ""
+		if len(os.Args) == 4 && os.Args[2] == "--home" {
+			home = os.Args[3]
+		}
+		os.Exit(RunGuard(os.Stdin, os.Stdout, home))
 	}
 	if root := os.Getenv("AICREW_FAKE_AIMEM_ROOT"); root != "" && len(os.Args) > 1 {
 		switch os.Args[1] {

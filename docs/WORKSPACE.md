@@ -61,6 +61,8 @@ is also independent of the model and client, both of which may change.
   logs/              redacted logs; turns.jsonl records each turn of the turn loop,
                      turns/<turn id>.jsonl keeps its raw stream (owner-only, never sent);
                      serve.log is the log of the home's service (aicrew-agent service)
+                     guard.jsonl records the commands the command guard passed
+                     without knowing the branch
   work/              temporary artifacts
   repos/             clean clones, one per repository key
   worktrees/         one isolated worktree per attempt
@@ -183,9 +185,16 @@ survey, the options and the decision (D-STORE) are recorded in
   as a script that opens the file. Isolating the credentials from each
   other stays an OS account per member (aimem's PILOT-HUB-RUNBOOK).
 - **The command guard** (task 01a16922-d552). The managed
-  `.claude/settings.json` runs `aicrew-agent guard` as a PreToolUse hook
-  before every Bash and PowerShell call, in both wake modes. The deny rules
-  are its second line.
+  `.claude/settings.json` runs `aicrew-agent guard --home <home>` as a
+  PreToolUse hook before every Bash and PowerShell call, in both wake modes.
+  The deny rules are its second line.
+
+  It is a safety catch against a member's mistake, not a sandbox. It reads
+  only the command line of the Bash and PowerShell tools, so a script file,
+  a git alias, a program the member writes, or another tool still reaches
+  what it refuses. Members work without a person, and a false refusal stops
+  the turn, so the guard refuses only what reaches beyond the member's own
+  work.
 
   Deny rules match a command's spelling. The guard instead judges what each
   command does:
@@ -194,30 +203,50 @@ survey, the options and the decision (D-STORE) are recorded in
   - It looks inside `bash`/`sh -c`, `eval`, `powershell`/`pwsh -Command` (or
     a bare command), `Invoke-Expression` and `cmd /c`.
   - It skips variable assignments, `sudo`, `env`, `xargs` and similar
-    leaders.
+    leaders, and follows `cd` and `Set-Location`.
 
-  It refuses, with git's global options (`-C`, `-c`, `--git-dir=…`) before
-  the subcommand and flags in any order or cluster:
-  - `git reset --hard`, `git clean -f` (not with `-n`), and `git push` with
-    `--force`, `--force-with-lease`, `--delete`, `--prune`, `--mirror`,
-    `--no-verify` or a `+` or `:` refspec;
-  - `git branch -D`, `git checkout` of `.`, `*` or `:/` or with `--force`,
-    and `git restore` of the whole tree (not `--staged` alone);
-  - `git stash drop|clear`, `git commit --amend|--no-verify|-n`,
-    `git filter-branch|filter-repo` and `git update-ref -d`;
-  - a recursive delete in every spelling: `rm -r` in any form,
-    `Remove-Item` and its aliases with `-Recurse` in any prefix,
-    `rmdir|rd|del /s`, and `find -delete`;
+  With git's global options (`-C`, `-c`, `--git-dir=…`) before the
+  subcommand and flags in any order or cluster, it refuses on any branch:
+  - `git push` with `--force`, `--force-with-lease`, `--delete`, `--prune`,
+    `--mirror`, `--no-verify` or a `+` or `:` refspec;
+  - `git commit --no-verify|-n`, `git filter-branch|filter-repo` and
+    `git update-ref -d`;
+  - `git branch -D` of `main`, `master` or the default branch;
+  - a recursive delete (`rm -r` in any form, `Remove-Item` and its aliases
+    with `-Recurse`, `rmdir|rd|del /s`, `find -delete`) of a path outside
+    the directory the call starts in, of that directory itself, of `.git`,
+    or of paths it cannot read: a variable, `~`, a glob over the directory's
+    own entries, or paths from a pipe or `xargs`;
   - formatting a disk (`format`, `Format-Volume`, `mkfs*`);
   - an encoded PowerShell command, which it cannot read.
 
-  A refused call gets Claude Code's deny decision with one line, telling the
-  member to turn to its coordinator as ROLES.md asks of a refused member
-  (block the running attempt with the refusal as the reason) instead of
-  working around the guard. Any other call gets no answer. The guard never blocks on
-  its own failure: a payload it cannot read, or a crash, answers nothing.
-  `check` notes a settings file whose hook is missing or names another
-  `aicrew-agent`.
+  It refuses discarding work only on `main`, `master` or the default branch
+  (the remote's `HEAD`): `git reset --hard`, `git clean -f` (not with `-n`),
+  `git checkout` of `.`, `*` or `:/` or with `--force`, `git restore` of the
+  whole tree (not `--staged` alone), `git stash drop|clear` and
+  `git commit --amend`. On the member's own branch they pass, and so does a
+  recursive delete inside its working directory, such as `.work/build`. When
+  git cannot tell the current branch (a detached `HEAD`, no repository,
+  `--git-dir`, or a `cd` it cannot follow), the guard passes the command,
+  since it never blocks on its own uncertainty. It records the command in
+  `logs/guard.jsonl`, one line each with the time, the rule, the judged
+  command (at most 200 characters) and the directory, to show how often it
+  passes a command blind.
+
+  A refused call gets Claude Code's deny decision with one line: what was
+  refused, what to do instead (for example "Push without force: rebase or
+  merge onto the remote branch, or push a new commit on top."), and, if the
+  task truly needs it, to block the running attempt with the refusal as the
+  reason, as ROLES.md asks of a refused member, so the coordinator decides.
+  Any other call gets no answer. The guard never blocks on its own failure:
+  a payload it cannot read, or a crash, answers nothing.
+
+  The operator turns the guard off for one member with
+  `"guard": {"off": true}` in the home's `agent.json` and reruns
+  `aicrew-agent join --home <home>`, which rewrites the managed settings
+  without the hook; `check` then notes that the guard is off. Removing the
+  key and rerunning `join` turns it back on. Otherwise `check` notes a settings
+  file whose hook is missing or names another `aicrew-agent`.
 - **Mismatches.** `check` blocks when a carrier file disagrees with the
   home. It reports, without blocking:
   - `AIMEM_*` values in the environment or in `~/.config/aimem/env` that

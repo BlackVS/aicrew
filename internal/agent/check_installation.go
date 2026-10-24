@@ -142,14 +142,20 @@ func (c *checker) checkWakeHook() {
 // checkGuardHook notes a home whose managed Claude Code settings do not hold
 // the command guard as join writes it, for this aicrew-agent: the member's
 // destructive git commands and recursive deletes would then meet only the
-// deny rules. A notice, as for the Stop hook.
+// deny rules. A home whose agent.json turns the guard off is noted as such.
+// A notice, as for the Stop hook.
 func (c *checker) checkGuardHook() {
+	if GuardOff(c.o.Home) {
+		c.notice(`the command guard is off for this home (agent.json "guard": {"off": true}): only the deny rules ` +
+			"stand before a destructive git command or a recursive delete")
+		return
+	}
 	raw, err := os.ReadFile(filepath.Join(c.o.Home, ".claude", "settings.json"))
 	var doc map[string]json.RawMessage
 	if err == nil {
 		_ = json.Unmarshal(raw, &doc)
 	}
-	if !sameHook(doc, guardHooks(), "PreToolUse") {
+	if !sameHook(doc, guardHooks(c.o.Home), "PreToolUse") {
 		c.notice(fmt.Sprintf(".claude/settings.json does not hold the command guard's PreToolUse hook for this "+
 			"aicrew-agent, so only the deny rules stand before a destructive git command or a recursive delete: rerun "+
 			"`aicrew-agent join --home %s`, and merge any .claude/settings.json.aicrew-new it writes",

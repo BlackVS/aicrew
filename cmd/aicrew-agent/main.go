@@ -58,7 +58,7 @@ const usage = `usage: aicrew-agent session start|status|leave --home DIR   (stat
        aicrew-agent attempts [--home DIR] [--json]   (the coordinator: the team's open attempts)
        aicrew-agent escalations [--home DIR] [--json]   (the open escalations, before raising another)
        aicrew-agent wait-inbox [--home DIR]   (the Claude Code Stop hook join installs)
-       aicrew-agent guard                     (the Claude Code PreToolUse hook join installs: the command guard)
+       aicrew-agent guard [--home DIR]        (the Claude Code PreToolUse hook join installs: the command guard)
        aicrew-agent join --label LABEL [--home DIR] --url URL --tls-trust-mode M --tls-trust-value V --aimem-hub NAME --client C
        aicrew-agent check (--home DIR | --label LABEL) [--client C] [--json]
        aicrew-agent clone [--home DIR] --repository HTTPS_URL --attempt ID --base COMMIT --branch NAME [--json]
@@ -192,8 +192,12 @@ func main() {
 	// The command guard, Claude Code's PreToolUse hook (agent.RunGuard):
 	// before anything else, so that nothing but the payload can fail it, and
 	// it always exits 0.
-	if len(os.Args) == 2 && os.Args[1] == "guard" {
-		os.Exit(agent.RunGuard(os.Stdin, os.Stdout))
+	if len(os.Args) >= 2 && os.Args[1] == "guard" {
+		home := ""
+		if len(os.Args) == 4 && os.Args[2] == "--home" {
+			home = os.Args[3]
+		}
+		os.Exit(agent.RunGuard(os.Stdin, os.Stdout, home))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "service" {
 		os.Exit(serviceCmd(context.Background(), os.Args[2:], os.Stdout, os.Stderr, os.Getenv))

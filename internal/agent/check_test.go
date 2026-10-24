@@ -1231,4 +1231,15 @@ func TestCheckReportsTheGuardHook(t *testing.T) {
 	if rep := e.check(t, "claude"); !hasNotice(rep, "command guard's PreToolUse hook") {
 		t.Fatalf("another binary: %v", rep.Notices)
 	}
+	// The operator's switch: agent.json turns the guard off, and check says
+	// so instead of asking for the hook.
+	agentDoc := map[string]any{}
+	if raw, err := os.ReadFile(filepath.Join(e.home, "agent.json")); err == nil {
+		_ = json.Unmarshal(raw, &agentDoc)
+	}
+	agentDoc["guard"] = map[string]any{"off": true}
+	writeAgentDoc(t, e.home, agentDoc)
+	if rep := e.check(t, "claude"); !hasNotice(rep, "command guard is off") || hasNotice(rep, "PreToolUse hook") {
+		t.Fatalf("the guard off: %v", rep.Notices)
+	}
 }

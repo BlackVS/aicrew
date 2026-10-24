@@ -101,6 +101,21 @@ func TestOneLinersNameTheReleaseTag(t *testing.T) {
 			}
 		}
 	}
+	// A doc that prints the Windows one-liner prints it in both forms: the
+	// bare one for a PowerShell window that is already open, where a host
+	// policy may refuse a nested powershell.exe, and the wrapped one for cmd
+	// or the Run dialog.
+	bare := regexp.MustCompile(`(?m)^\s*irm https://raw\.githubusercontent\.com/BlackVS/aicrew/[^/\s]+/boot\.ps1 \| iex$`)
+	wrapped := regexp.MustCompile(`(?m)^\s*powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw\.githubusercontent\.com/BlackVS/aicrew/[^/\s]+/boot\.ps1 \| iex"$`)
+	for _, f := range files {
+		if !seen[f+" boot.ps1"] || !strings.HasSuffix(f, ".md") {
+			continue
+		}
+		text := read(t, f)
+		if n, m := len(bare.FindAllString(text, -1)), len(wrapped.FindAllString(text, -1)); n == 0 || n != m {
+			t.Errorf("%s prints the Windows one-liner %d times bare and %d times wrapped; want both forms, each as often", f, n, m)
+		}
+	}
 	dev := filepath.Join("docs", "DEVELOPMENT.md")
 	for _, k := range []string{script + " " + script, "boot.sh boot.sh", "boot.ps1 boot.ps1",
 		dev + " " + script, dev + " boot.sh", dev + " boot.ps1"} {

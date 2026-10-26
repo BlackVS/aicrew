@@ -77,8 +77,11 @@ A release-preparation pull request needs a green run at its head
 
 ## Status at the pin
 
-Every scenario passes at the pin: H, S1–S5, G1, G2, T1, E1, B1, C1 and
-F1–F7, under WSL on 2026-10-26 (task 01a17770-ff4a).
+Every scenario passes at the pin on aicrew commit 9096a07: H, S1–S5, G1,
+G2, T1, E1, B1, C1 and F1–F7, in three consecutive runs under WSL with
+Go 1.26.4 on 2026-10-26, about 13.5 minutes each. The skip-the-fault
+matrix at that commit fails all 19 cases as expected (task
+01a17770-ff4a).
 
 ## What a run sets up
 

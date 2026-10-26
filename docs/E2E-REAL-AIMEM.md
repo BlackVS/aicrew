@@ -3,7 +3,8 @@
 crew-execution b4 runs aicrew end to end against a real aimem on an
 isolated local hub. It is a Go test package behind the `realaimem` build tag
 (`e2e/realaimem`). It is not part of `go test ./...` or CI, which only vet
-it. Every process is a real binary:
+it: it is run by hand ("Status at the pin", below). Every process is a real
+binary:
 
 - `aimem serve` and the aimem CLI, built from the pinned aimem commit;
 - this tree's `aicrewd`, `aicrew` and `aicrew-agent`.
@@ -60,6 +61,18 @@ release build stamps the tag. At the pin that is `v0.10.13`, which
 `aicrew-agent`'s dependency check reads as the tested release. The
 source clone must hold the commit and the tag (`git fetch --tags`).
 
+## Status at the pin
+
+The harness is manual: a run takes about ten minutes and builds aimem from
+a local clone, and no CI job runs it. Measured on 2026-10-26 under WSL at
+the pin, on aicrew main 591994f with the process fixture of task
+01a16942-c715 (see "What a run sets up", step 2):
+- H, S1–S5, G1, G2, T1 and E1 pass;
+- B1, C1, F1, F2 and F3 fail, and the run ends in F3. Their diagnosis
+  (harness drift or a product regression), the full matrix green at the
+  pin, and a bounded CI job are task 01a17770-ff4a. Until then a run is
+  evidence for H through E1 only.
+
 ## What a run sets up
 
 All of it lives in one temporary directory. Every process gets an
@@ -75,7 +88,13 @@ Every listener is on 127.0.0.1.
    its default branch's head, and holds no Git data. The members read it
    under the run's CA (`SSL_CERT_FILE`).
 2. **The hub, following aimem's pilot runbook:**
-   - `tasks on` and `process select`;
+   - `tasks on` and `process select`. The process is a set aimem accepts
+     (a version 1 manifest and its handbook), committed to a repository
+     the run creates. The selection records
+     `https://git.example.test/e2e/process.git`, which offers name; the
+     hub host's own `.gitconfig` (in its isolated `HOME`) maps that URL to
+     the local repository with `url.<file URL>.insteadOf`, so aimem reads
+     the set through git without the network;
    - aicrew provisioned as the identity peer with
      `aimem identity peer provision --output-dir`: the identity.redeem,
      reservation.read, team.register and team.read credentials and the hub's

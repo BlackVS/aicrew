@@ -542,20 +542,29 @@ func (h *harness) restartAicrewd() {
 	})
 }
 
-// makeProcess commits a process manifest to a repository of its own and
-// sets processCommit and instructionHash from it.
+// makeProcess commits a process set aimem accepts (a manifest and its
+// handbook) to a repository of its own, sets processCommit and
+// instructionHash from it, and points the hub host's git at it: aimem
+// reads the set from processRepo when it selects it, and the hub host's
+// own git configuration maps that URL to the repository, so the run needs
+// no network.
 func (h *harness) makeProcess() {
 	h.t.Helper()
 	h.processDir = h.mkdir(filepath.Join(h.root, "process"))
 	if err := os.MkdirAll(filepath.Join(h.processDir, "process"), 0o755); err != nil {
 		h.t.Fatal(err)
 	}
-	manifest := `{
-  "name": "e2e process",
-  "roles": ["coordinator", "worker", "independent"]
-}
-`
-	if err := os.WriteFile(filepath.Join(h.processDir, filepath.FromSlash(processManifest)), []byte(manifest), 0o644); err != nil {
+	files := map[string]string{
+		processManifest:       "{\n  \"version\": 1,\n  \"handbook\": \"process/HANDBOOK.md\"\n}\n",
+		"process/HANDBOOK.md": "# e2e process\n\nThe roles are coordinator, worker and independent.\n",
+	}
+	for p, body := range files {
+		if err := os.WriteFile(filepath.Join(h.processDir, filepath.FromSlash(p)), []byte(body), 0o644); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	gitconfig := fmt.Sprintf("[url \"file://%s\"]\n\tinsteadOf = %s\n", filepath.ToSlash(h.processDir), processRepo)
+	if err := os.WriteFile(filepath.Join(h.root, "hub", "home", ".gitconfig"), []byte(gitconfig), 0o644); err != nil {
 		h.t.Fatal(err)
 	}
 	env := h.isolatedEnv(h.processDir)
@@ -564,7 +573,7 @@ func (h *harness) makeProcess() {
 			"-c", "user.email=e2e@example.test", "-c", "commit.gpgsign=false"}, args...)...))
 	}
 	git("init", "-q")
-	git("add", processManifest)
+	git("add", "process")
 	git("commit", "-q", "-m", "process")
 	processCommit = git("rev-parse", "HEAD")
 	instructionHash = h.processDigest(processCommit, processManifest)

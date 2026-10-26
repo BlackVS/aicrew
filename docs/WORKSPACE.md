@@ -177,8 +177,10 @@ survey, the options and the decision (D-STORE) are recorded in
   worker whose team has a toolchain selected for a project (`aicrew team
   toolchain`, for example `dev-go`) runs instead under
   `state/turn-settings-worker.json`, which the turn loop writes from
-  `state/team.json`: the same rules and the toolchain's. The deny rules
-  stay above it (DEVELOPMENT, "Wake modes").
+  `state/team.json`: the same rules and the toolchain's, run in the
+  worktree as `cd worktrees/NAME && COMMAND`, the one compound form the
+  managed `/crew-turn` command allows. The deny rules stay above it
+  (DEVELOPMENT, "Wake modes").
 
   **Its limit:** the rules match command text. They stop an accidental
   violation through the tools they name, as the texts' own rule asks. They

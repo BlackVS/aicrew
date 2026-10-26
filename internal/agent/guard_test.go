@@ -255,6 +255,9 @@ func TestGuardRefusal(t *testing.T) {
 			"rm -rf -- -odd-name",
 			"cd .work && rm -rf build",
 			"cd /work/repo/.work; rm -rf x",
+			// The toolchain's form in a turn (/crew-turn, DEVELOPMENT "Wake modes").
+			"cd worktrees/att-1 && go test ./...",
+			"cd worktrees/att-1 && bash scripts/check.sh",
 			"find build -name '*.tmp' -delete",
 			"find build -delete",
 			"env -C .work rm -rf build",

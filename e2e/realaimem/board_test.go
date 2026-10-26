@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BlackVS/aicrew/internal/server"
+	"github.com/BlackVS/aicrew/internal/store"
 )
 
 // B1: the board wake (docs/DESIGN-CONTROL-PLANE.md, A1; task 5570).
@@ -32,17 +35,17 @@ func (h *harness) b1BoardWake(t *testing.T) {
 	h.pageWith(worker, "nothing-is-named-this")
 
 	task := h.createTaskIn(sc, "B1 board wake", "BACKLOG")
-	time.Sleep(boardTick + 5*time.Second)
+	time.Sleep(boardWait)
 	sc.check("a task created in BACKLOG wakes no one", h.boardCount(sc, task.ID, "") == 0, h.boardCount(sc, task.ID, ""))
 
 	moved := time.Now()
 	task = h.setTaskState(sc, task.ID, "READY")
-	woke := h.waitBoard(sc, task.ID, "READY", 2*boardTick+10*time.Second)
-	sc.check(fmt.Sprintf("the task moved to READY reaches the coordinator's inbox as board.changed within a tick (%s)",
+	woke := h.waitBoard(sc, task.ID, "READY", boardWait)
+	sc.check(fmt.Sprintf("the task moved to READY reaches the coordinator's inbox as action.needed within a tick and the event quiet (%s)",
 		time.Since(moved).Round(time.Second)), woke, task.ID)
 	hook := h.run(coord.env, []byte(`{"session_id":"e2e-b1"}`), agentBin, "wait-inbox", "-home", coord.home)
 	sc.check("the coordinator's keep-alive loop wakes on it: the Stop hook blocks the stop and names it",
-		strings.Contains(hook.stdout, `"decision":"block"`) && strings.Contains(hook.stdout, "lifecycle"), hook.stdout+hook.stderr)
+		strings.Contains(hook.stdout, `"decision":"block"`) && strings.Contains(hook.stdout, "action.needed"), hook.stdout+hook.stderr)
 	page := h.pageWith(coord, task.ID)
 	sc.check("the announcement names the task and the change, and carries the board change",
 		strings.Contains(page, `"board"`) && strings.Contains(page, `"to": "READY"`) && strings.Contains(page, `"from": "BACKLOG"`) &&
@@ -53,21 +56,21 @@ func (h *harness) b1BoardWake(t *testing.T) {
 	// accepts. aicrew's own steps are not announced back.
 	id := h.committed(sc, coord, "offer", "", "", h.offerBody(task, worker, time.Now().Add(time.Hour))).AttemptID
 	h.committed(sc, worker, "accept", id, task.ID, map[string]string{"instruction_digest": instructionHash})
-	time.Sleep(boardTick + 5*time.Second)
+	time.Sleep(boardWait)
 	sc.check("aicrew's own offer and accept are not announced", h.boardCount(sc, task.ID, "") == 1, h.boardCount(sc, task.ID, ""))
 
 	// Restarted, aicrewd reads on from the cursor it stored with the
 	// announcement: nothing is announced again.
 	h.restartAicrewd()
-	time.Sleep(boardTick + 5*time.Second)
+	time.Sleep(boardWait)
 	sc.check("after aicrewd restarts, the task already announced is not announced again", h.boardCount(sc, task.ID, "READY") == 1,
 		h.boardCount(sc, task.ID, "READY"))
 
 	// Cancelled on the board while the worker holds it: one announcement
 	// naming the change.
 	h.recoverHold(sc, task.ID, "cancel")
-	cancelled := h.waitBoard(sc, task.ID, "CANCELLED", 2*boardTick+10*time.Second)
-	time.Sleep(boardTick + 5*time.Second)
+	cancelled := h.waitBoard(sc, task.ID, "CANCELLED", boardWait)
+	time.Sleep(boardWait)
 	sc.check("the task cancelled on the board while the worker held it is announced once, naming the change",
 		cancelled && h.boardCount(sc, task.ID, "CANCELLED") == 1, h.boardCount(sc, task.ID, "CANCELLED"))
 	page = h.pageWith(coord, `"to": "CANCELLED"`)
@@ -84,8 +87,8 @@ func (h *harness) b1BoardWake(t *testing.T) {
 	// it has offered is not among them, and the worker is told nothing.
 	free := h.setTaskState(sc, h.createTaskIn(sc, "B1 READY at the restart", "BACKLOG").ID, "READY")
 	offered := h.setTaskState(sc, h.createTaskIn(sc, "B1 offered at the restart", "BACKLOG").ID, "READY")
-	sc.require("both READY tasks are announced", h.waitBoard(sc, free.ID, "READY", 2*boardTick+10*time.Second) &&
-		h.waitBoard(sc, offered.ID, "READY", 2*boardTick+10*time.Second))
+	sc.require("both READY tasks are announced", h.waitBoard(sc, free.ID, "READY", boardWait) &&
+		h.waitBoard(sc, offered.ID, "READY", boardWait))
 	oid := h.committed(sc, coord, "offer", "", "", h.offerBody(offered, worker, time.Now().Add(time.Hour))).AttemptID
 	h.pageWith(coord, "nothing-is-named-this")
 	h.crashLauncher(coord)
@@ -126,6 +129,10 @@ func readyListText(page string) string {
 // boardTick is aicrewd's board read interval: the reconcile tick.
 const boardTick = 15 * time.Second
 
+// boardWait bounds how long a board change takes to reach the inbox: the
+// board read, then the event queue's quiet and the delivery tick.
+const boardWait = 2*boardTick + store.EventQuiet + server.EventTick + 10*time.Second
+
 // createTaskIn creates a task in the project in state.
 func (h *harness) createTaskIn(sc *scenario, title, state string) taskRef {
 	sc.t.Helper()
@@ -138,13 +145,14 @@ func (h *harness) createTaskIn(sc *scenario, title, state string) taskRef {
 	return taskRef{ID: task.ID, Revision: task.Revision}
 }
 
-// boardCount counts the board.changed announcements of task in aicrew's
-// store, of the changes to state ("" for any).
+// boardCount counts the board announcements of task in aicrew's store, of
+// the changes to state ("" for any). An announcement is an action.needed
+// message, one of whose subjects is the task's board change.
 func (h *harness) boardCount(sc *scenario, task, state string) int {
 	sc.t.Helper()
 	db := h.aicrewDB(sc)
 	defer db.Close()
-	rows, err := db.Query(`SELECT board FROM messages WHERE task_id = ? AND board != ''`, task)
+	rows, err := db.Query(`SELECT action FROM messages WHERE kind = ? AND action != ''`, store.KindActionNeeded)
 	if err != nil {
 		sc.t.Fatal(err)
 	}
@@ -152,14 +160,14 @@ func (h *harness) boardCount(sc *scenario, task, state string) int {
 	n := 0
 	for rows.Next() {
 		var raw string
-		var d struct {
-			To string `json:"to"`
-		}
+		var d store.ActionDetail
 		if rows.Scan(&raw) != nil || json.Unmarshal([]byte(raw), &d) != nil {
-			sc.t.Fatalf("a board change that does not read: %s", raw)
+			sc.t.Fatalf("an action that does not read: %s", raw)
 		}
-		if state == "" || d.To == state {
-			n++
+		for _, s := range d.Subjects {
+			if s.Kind == "board" && s.Task != nil && s.Task.TaskID == task && s.Board != nil && (state == "" || s.Board.To == state) {
+				n++
+			}
 		}
 	}
 	return n

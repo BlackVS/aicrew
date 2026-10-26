@@ -2,9 +2,9 @@
 
 crew-execution b4 runs aicrew end to end against a real aimem on an
 isolated local hub. It is a Go test package behind the `realaimem` build tag
-(`e2e/realaimem`). It is not part of `go test ./...` or CI, which only vet
-it: it is run by hand ("Status at the pin", below). Every process is a real
-binary:
+(`e2e/realaimem`). It is not part of `go test ./...` or the pull-request
+CI, which only vet it: the `e2e-real-aimem` workflow runs it ("In CI",
+below), and it runs by hand. Every process is a real binary:
 
 - `aimem serve` and the aimem CLI, built from the pinned aimem commit;
 - this tree's `aicrewd`, `aicrew` and `aicrew-agent`.
@@ -61,17 +61,27 @@ release build stamps the tag. At the pin that is `v0.10.13`, which
 `aicrew-agent`'s dependency check reads as the tested release. The
 source clone must hold the commit and the tag (`git fetch --tags`).
 
+## In CI
+
+`.github/workflows/e2e-real-aimem.yml` runs the harness once a night on
+main, and by hand (`workflow_dispatch`) on any branch. It checks out aimem
+with its history and tags beside this repository and runs
+`scripts/e2e-real-aimem.sh -aimem-src ../aimem`, with a 45-minute bound; a
+run takes about fifteen minutes. The report and the logs are kept as the
+run's `e2e-real-aimem` artifact for 14 days. It stays out of the ordinary
+pull-request run: it builds aimem and runs for much longer than the
+pull-request jobs.
+
+A release-preparation pull request needs a green run at its head
+(DEVELOPMENT.md, "Releasing").
+
 ## Status at the pin
 
-The harness is manual: a run takes about ten minutes and builds aimem from
-a local clone, and no CI job runs it. Measured on 2026-10-26 under WSL at
-the pin, on aicrew main 591994f with the process fixture of task
-01a16942-c715 (see "What a run sets up", step 2):
-- H, S1–S5, G1, G2, T1 and E1 pass;
-- B1, C1, F1, F2 and F3 fail, and the run ends in F3. Their diagnosis
-  (harness drift or a product regression), the full matrix green at the
-  pin, and a bounded CI job are task 01a17770-ff4a. Until then a run is
-  evidence for H through E1 only.
+Every scenario passes at the pin on aicrew commit 9096a07: H, S1–S5, G1,
+G2, T1, E1, B1, C1 and F1–F7, in three consecutive runs under WSL with
+Go 1.26.4 on 2026-10-26, about 13.5 minutes each. The skip-the-fault
+matrix at that commit fails all 19 cases as expected (task
+01a17770-ff4a).
 
 ## What a run sets up
 
@@ -204,9 +214,11 @@ no fault armed.
   directory.
   - A task created in BACKLOG wakes no one.
   - Moved to READY by the hub's admin, the task reaches the coordinator's
-    inbox as a `board.changed` message within a tick. The Stop hook's
-    `wait-inbox` blocks on it, and the message names the task and the
-    change.
+    inbox as an `action.needed` message whose subject is the board change.
+    It arrives within a board read and the event queue's quiet and tick
+    (`store.EventQuiet`, `server.EventTick`), and the checks that nothing
+    is announced wait that long too. The Stop hook's `wait-inbox` blocks on
+    it, and the message names the task and the change.
   - The coordinator offers the task, and the worker accepts. aicrew's own
     offer and accept are not announced.
   - aicrewd restarts, and nothing is announced again.
@@ -250,6 +262,12 @@ fires once:
 - drop the reply after the target answered;
 - drop the request before forwarding it;
 - delay the reply.
+
+F1's faults instead hold for the whole step. aimem's CLI reads the task
+over the same connection before it sends a reservation mutation, and Go's
+HTTP client replays a request that carries an `Idempotency-Key` once when a
+reused connection closes before any answer. A fault that fired once would
+be replayed past, and the step would commit with no loss to reconcile.
 
 The timed aimem adds **gates**: it can pause a named command until the
 harness releases it, and keep a command's standard input in an owner-only

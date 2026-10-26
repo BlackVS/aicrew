@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Runs the end-to-end harness against a real aimem (crew-execution b4;
-# docs/E2E-REAL-AIMEM.md). It is not part of `go test ./...` or CI: it builds
-# the pinned aimem from a local clone and runs every process on an isolated
-# local hub.
+# docs/E2E-REAL-AIMEM.md). It is not part of `go test ./...` or the
+# pull-request CI: it builds the pinned aimem from a local clone and runs
+# every process on an isolated local hub. The e2e-real-aimem workflow runs it
+# nightly and by hand.
 #
 # usage: scripts/e2e-real-aimem.sh -aimem-src PATH [-runs N] [-out DIR] [-keep] [-skip-faults]
 #   -aimem-src    a local aimem clone holding the pinned commit (only read)
@@ -13,7 +14,7 @@
 #                 every such run must fail (the skip-the-fault matrix)
 set -euo pipefail
 
-usage() { sed -n '7,14p' "$0" >&2; exit 2; }
+usage() { sed -n '8,14p' "$0" >&2; exit 2; }
 src="" runs=1 out="" keep="" skip=""
 while [ $# -gt 0 ]; do
   case "$1" in

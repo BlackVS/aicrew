@@ -244,10 +244,13 @@ func reservationRoute(op string) string {
 }
 
 // lostReply arms the hub proxy to drop the reply of op's mutation, runs the
-// step, and asserts the driver reconciled it by its receipt.
+// step, and asserts the driver reconciled it by its receipt. The rule holds
+// for the whole step, as lostRequest's does: a replay of the mutation would
+// otherwise read the stored answer, and no receipt would be asked for.
 func (h *harness) lostReply(sc *scenario, mem *member, op, stepOp, attempt, task string, body any) stepResult {
 	sc.t.Helper()
-	rule := h.hubProxy.arm(&faultRule{Case: "F1-reply", Action: dropReply, Method: "POST", Path: route(reservationRoute(op))})
+	rule := h.hubProxy.arm(&faultRule{Case: "F1-reply", Action: dropReply, Method: "POST", Path: route(reservationRoute(op)), Persist: true})
+	defer h.hubProxy.disarm(rule)
 	w := h.mark()
 	res := h.committed(sc, mem, stepOp, attempt, task, body)
 	calls := h.aimemCalls(w)
@@ -259,10 +262,13 @@ func (h *harness) lostReply(sc *scenario, mem *member, op, stepOp, attempt, task
 
 // lostRequest arms the hub proxy to drop op's request before the hub sees
 // it, runs the step, and returns its answer; the caller waits for the
-// settle.
+// settle. The rule holds for the whole step: aimem reads the task first on
+// the same connection, and Go's HTTP client replays a request that carries
+// an Idempotency-Key once when a reused connection closes before an answer.
 func (h *harness) lostRequest(sc *scenario, mem *member, op, stepOp, attempt, task string, body any) StepAnswerLite {
 	sc.t.Helper()
-	rule := h.hubProxy.arm(&faultRule{Case: "F1-request", Action: dropRequest, Method: "POST", Path: route(reservationRoute(op))})
+	rule := h.hubProxy.arm(&faultRule{Case: "F1-request", Action: dropRequest, Method: "POST", Path: route(reservationRoute(op)), Persist: true})
+	defer h.hubProxy.disarm(rule)
 	ans, _ := h.step(sc, mem, stepOp, attempt, task, body)
 	var res stepResult
 	_ = json.Unmarshal(ans.Result, &res)

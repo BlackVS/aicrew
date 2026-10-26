@@ -2376,7 +2376,9 @@ managed files from it:
     know (logged, asking for an upgrade), runs with the common file, as
     before. The named lists are aicrew's own (`internal/toolchain`), never
     edited in a home, so another project can carry another list later.
-    `dev-go` admits, run in the worktree (`cd worktrees/NAME && ...`):
+    `dev-go` admits, run in the worktree as `cd worktrees/NAME && COMMAND`,
+    the one compound form the managed `/crew-turn` command allows (the
+    command guard passes it too):
     `go test`, `go vet`, `go build`, `go mod tidy`, `go mod download`,
     `gofmt`, and the repository's scripts, `bash scripts/*.sh` (or
     `./scripts/`), each alone or with arguments. `go -C DIR` and `go run`

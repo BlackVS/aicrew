@@ -19,6 +19,11 @@ section, and the release workflow refuses a tag that has none
   route and every automation builtin they name, in `README.md`, `docs/` and
   the agent home's managed documents (`scripts/check-doc-examples.sh`;
   DEVELOPMENT.md, "Examples in the documentation").
+- The managed `/crew-turn` command allows one compound form, `cd
+  worktrees/NAME && COMMAND` for the project's build and test commands in
+  the attempt's worktree, as the `dev-go` toolchain is documented and
+  probed; before, it forbade every `cd` and `&&`, so a worker following it
+  could not run its tests.
 
 ## [0.7.0] - 2026-10-23
 

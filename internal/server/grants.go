@@ -54,7 +54,7 @@ func (s *Server) readTeam(ctx context.Context, t store.Team) (store.TeamGrantsRe
 		return store.TeamGrantsRead{}, "hub_unavailable"
 	}
 	team, err := b.teams.ReadTeam(ctx, t.ID)
-	read, ok := grantsRead(b.id, team, err, time.Now())
+	read, ok := grantsRead(b.id, team, err, s.grantsNow())
 	if !ok {
 		s.log.Warn("team read", "team_id", t.ID, "hub", t.Hub, "code", hubteams.Code(err))
 		return read, "hub_unavailable"
@@ -133,7 +133,7 @@ func (s *Server) refreshGrants(ctx context.Context) {
 		if len(mine) == 0 {
 			continue
 		}
-		at := time.Now()
+		at := s.grantsNow()
 		all, err := b.teams.ReadTeams(ctx)
 		if err != nil {
 			s.log.Warn("refresh grants", "hub", alias, "code", hubteams.Code(err))
@@ -155,6 +155,14 @@ func (s *Server) refreshGrants(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// grantsNow is the time a grants read is stamped with.
+func (s *Server) grantsNow() time.Time {
+	if s.grantsClock != nil {
+		return s.grantsClock()
+	}
+	return time.Now()
 }
 
 // runGrants refreshes the grants every GrantsRefresh until ctx ends.

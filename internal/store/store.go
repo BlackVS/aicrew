@@ -50,6 +50,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/events"
@@ -68,6 +69,8 @@ type Store struct {
 	rdb  *sql.DB // reads: deferred, query-only transactions
 	lock *storeLock
 	now  func() time.Time
+	// clock is SetClock's clock; nil is the wall clock.
+	clock atomic.Pointer[func() time.Time]
 
 	// flights serializes identical commands that call out before their
 	// transaction; flightWait bounds how long one waits (inflight.go).
@@ -138,7 +141,6 @@ func Open(ctx context.Context, path string) (_ *Store, err error) {
 	s := &Store{
 		db:         db,
 		lock:       lock,
-		now:        func() time.Time { return time.Now().UTC() },
 		flightWait: defaultInflightWait,
 		outstandingWork: func(ctx context.Context, tx *sql.Tx, agentID string) (bool, error) {
 			return openWork(ctx, tx, agentID, "")
@@ -146,6 +148,12 @@ func Open(ctx context.Context, path string) (_ *Store, err error) {
 		subs:         releaseSubs,
 		eventQuiet:   EventQuiet,
 		eventMaxWait: EventMaxWait,
+	}
+	s.now = func() time.Time {
+		if c := s.clock.Load(); c != nil {
+			return (*c)().UTC()
+		}
+		return time.Now().UTC()
 	}
 	s.handlers = map[string]handlerFunc{events.HandlerWake: s.wake}
 	if err := s.migrate(ctx); err != nil {
@@ -169,6 +177,17 @@ func Open(ctx context.Context, path string) (_ *Store, err error) {
 // Close closes the store and releases its file lock.
 func (s *Store) Close() error {
 	return errors.Join(s.rdb.Close(), s.db.Close(), s.lock.release())
+}
+
+// SetClock makes now the store's clock, for every later read of it; nil
+// restores the wall clock. Tests use it to pass an expiry without the wall
+// clock. now must be safe for concurrent use.
+func (s *Store) SetClock(now func() time.Time) {
+	if now == nil {
+		s.clock.Store(nil)
+		return
+	}
+	s.clock.Store(&now)
 }
 
 // snapshot runs fn in one read transaction, so every statement it issues

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -313,12 +314,17 @@ func TestStepRoutesDeclineThenWithdraw(t *testing.T) {
 	}
 }
 
-// An expired offer cannot be accepted; the coordinator releases it.
+// An expired offer cannot be accepted; the coordinator releases it. The
+// store's clock stands still until the test moves it past the expiry, so
+// neither a slow offer nor the wall clock decides the outcome.
 func TestStepRoutesExpiredOffer(t *testing.T) {
 	e := setupCoordination(t)
-	expires := time.Now().Add(time.Second)
-	id, _ := e.offerAndSettle(t, "offer-1", "task-1", expires)
-	time.Sleep(time.Until(expires) + 50*time.Millisecond)
+	var clock atomic.Int64
+	clock.Store(time.Now().UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()) }
+	e.store.SetClock(now)
+	id, _ := e.offerAndSettle(t, "offer-1", "task-1", now().Add(time.Minute))
+	clock.Add(int64(time.Minute + time.Second))
 	refused(t, e.call(t, e.worker.token, AttemptsPath+"/"+id+"/accept", "accept-1",
 		map[string]string{"instruction_digest": coordPin.InstructionDigest}), http.StatusConflict, "offer_expired")
 	rel := stepOf(t, e.call(t, e.lead.token, AttemptsPath+"/"+id+"/withdraw", "withdraw-1", nil))

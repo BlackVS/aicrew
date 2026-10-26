@@ -556,11 +556,18 @@ func TestStepsNameTheHubsRepository(t *testing.T) {
 
 // The refresh blocks the team's open attempt when the hub revokes its
 // project, tells the worker, and a re-grant clears the block; the attempt's
-// state and hold never change.
+// state and hold never change. Each refresh reads a second after the last,
+// since the store drops a read older than the one it has, and the wall
+// clock can step back between two refreshes.
 func TestRefreshBlocksAndUnblocks(t *testing.T) {
 	e := setupCoordination(t)
 	ctx := context.Background()
 	id, _ := e.offerAndSettle(t, "offer-1", "task-1", time.Now().Add(time.Hour))
+	at := time.Now().Add(time.Hour)
+	srv := &Server{store: e.store, log: e.srv.log, hubs: e.srv.hubs, grantsClock: func() time.Time {
+		at = at.Add(time.Second)
+		return at
+	}}
 	before, err := e.store.GetAttempt(ctx, id)
 	if err != nil {
 		t.Fatal(err)
@@ -568,7 +575,7 @@ func TestRefreshBlocksAndUnblocks(t *testing.T) {
 	e.hub.mu.Lock()
 	e.hub.listed, e.hub.grants = []string{e.team.ID}, nil
 	e.hub.mu.Unlock()
-	e.srv.refreshGrants(ctx)
+	srv.refreshGrants(ctx)
 	a, err := e.store.GetAttempt(ctx, id)
 	if err != nil || a.Blocked == nil || a.Blocked.Reason != store.BlockedGrantRevoked || a.State != before.State ||
 		a.ReservationID != before.ReservationID {
@@ -584,7 +591,7 @@ func TestRefreshBlocksAndUnblocks(t *testing.T) {
 		t.Fatal("the worker was not told of the block")
 	}
 	e.hub.set(false, "project-example")
-	e.srv.refreshGrants(ctx)
+	srv.refreshGrants(ctx)
 	if a, err := e.store.GetAttempt(ctx, id); err != nil || a.Blocked != nil {
 		t.Fatalf("after the re-grant = %+v, %v", a.Blocked, err)
 	}

@@ -223,42 +223,81 @@ func (e guardEnv) refusalIn(shell, line string, depth int) refusal {
 	if depth > maxGuardDepth {
 		return refusal{"a command nested too deep to judge", "Run the command directly, without nesting shells."}
 	}
-	for _, words := range splitCommands(shell, line) {
-		if dir, ok := changedDir(e.dir, words); ok {
+	return e.judgeSegments(shell, splitSegments(shell, line, 0), depth)
+}
+
+// judgeSegments judges a command line's segments in order, following the
+// cd among them. A subshell segment is judged with its own copy of the
+// working directory, so its cd stays inside it; a branch switch in it
+// still holds after it, as switched is shared.
+func (e guardEnv) judgeSegments(shell string, segs []segment, depth int) refusal {
+	for _, s := range segs {
+		if s.subshell {
+			if r := e.judgeSegments(shell, s.inner, depth); r.what != "" {
+				return r
+			}
+			continue
+		}
+		if dir, ok := changedDir(e.dir, s.words); ok {
 			e.dir = dir
 			continue
 		}
-		if r := e.judgeCommand(shell, words, depth); r.what != "" {
+		if r := e.judgeCommand(shell, s.words, depth); r.what != "" {
 			return r
 		}
 	}
 	return refusal{}
 }
 
-// guardTooDeep is the command splitCommands puts in place of a command
+// guardTooDeep is the command splitSegments puts in place of a command
 // substitution nested deeper than maxGuardDepth: judgeCommand refuses it.
 const guardTooDeep = "\x00too-deep"
 
-// splitCommands splits a command line into its commands, each as its
-// words: on ;, &, &&, |, ||, newlines, parentheses and standalone braces
-// outside quotes. A command substitution ($(…), and a backquote pair in
-// bash), unquoted or in double quotes, does not end the command it sits
-// in: its text is split into commands of its own, placed before that
-// command as the shell runs them, and its place in the word holds "$(" or
-// "`", so a path it would supply reads as one the guard cannot judge.
-// Quotes are removed; a backslash (bash) or backquote (PowerShell) escapes
-// the next character only before a quote, a space, a $ or itself, so
-// Windows paths keep their backslashes.
-func splitCommands(shell, line string) [][]string {
-	return splitDepth(shell, line, 0)
+// segment is one command of a command line, as its words, or a bash
+// subshell (a command substitution or a ( … ) group) holding its own
+// segments.
+type segment struct {
+	words    []string
+	subshell bool
+	inner    []segment
 }
 
-func splitDepth(shell, line string, depth int) [][]string {
+// splitCommands is a command line's commands, each as its words, with the
+// commands of its subshells in place.
+func splitCommands(shell, line string) [][]string {
+	var flat func([]segment) [][]string
+	flat = func(segs []segment) (cmds [][]string) {
+		for _, s := range segs {
+			if s.subshell {
+				cmds = append(cmds, flat(s.inner)...)
+			} else {
+				cmds = append(cmds, s.words)
+			}
+		}
+		return cmds
+	}
+	return flat(splitSegments(shell, line, 0))
+}
+
+// splitSegments splits a command line into its commands: on ;, &, &&, |,
+// ||, newlines and standalone braces outside quotes, and on parentheses
+// in cmd. A command substitution does not end the command it sits in: its
+// text is split into commands of its own, placed before that command as
+// the shell runs them, and its place in the word holds "$(" or "`", so a
+// path it would supply reads as one the guard cannot judge. That is $(…),
+// unquoted or in double quotes, a backquote pair in bash, and in
+// PowerShell any ( … ), such as (Resolve-Path x) or @( … ). In bash a
+// substitution, and a ( … ) group that starts a command, is a subshell
+// segment; PowerShell runs its subexpressions in the same scope. Quotes
+// are removed; a backslash (bash) or backquote (PowerShell) escapes the
+// next character only before a quote, a space, a $ or itself, so Windows
+// paths keep their backslashes.
+func splitSegments(shell, line string, depth int) []segment {
 	if depth > maxGuardDepth {
-		return [][]string{{guardTooDeep}}
+		return []segment{{words: []string{guardTooDeep}}}
 	}
 	var (
-		cmds  [][]string
+		cmds  []segment
 		words []string
 		word  strings.Builder
 		in    bool // a word is open, maybe empty ("")
@@ -268,8 +307,15 @@ func splitDepth(shell, line string, depth int) [][]string {
 	if shell == "powershell" {
 		escape = '`'
 	}
-	substitute := func(inner, mark string) {
-		cmds = append(cmds, splitDepth(shell, inner, depth+1)...)
+	nested := func(text string) []segment {
+		inner := splitSegments(shell, text, depth+1)
+		if shell == "bash" {
+			return []segment{{subshell: true, inner: inner}}
+		}
+		return inner
+	}
+	substitute := func(text, mark string) {
+		cmds = append(cmds, nested(text)...)
 		word.WriteString(mark)
 		in = true
 	}
@@ -286,7 +332,7 @@ func splitDepth(shell, line string, depth int) [][]string {
 		for _, w := range words {
 			if w == "{" || w == "}" {
 				if len(kept) > 0 {
-					cmds = append(cmds, kept)
+					cmds = append(cmds, segment{words: kept})
 				}
 				kept = nil
 				continue
@@ -294,7 +340,7 @@ func splitDepth(shell, line string, depth int) [][]string {
 			kept = append(kept, w)
 		}
 		if len(kept) > 0 {
-			cmds = append(cmds, kept)
+			cmds = append(cmds, segment{words: kept})
 		}
 		words = nil
 	}
@@ -329,6 +375,19 @@ func splitDepth(shell, line string, depth int) [][]string {
 			}
 		case r == '\'' || r == '"':
 			quote, in = r, true
+		case r == '(' && shell == "powershell":
+			end := closingParen(rs, i+1, escape)
+			substitute(string(rs[i+1:end]), "$(")
+			i = end
+		case r == '(' && shell == "bash":
+			end := closingParen(rs, i+1, escape)
+			if in || len(words) > 0 {
+				// Inside a command: <( … ), an array, or a syntax error.
+				substitute(string(rs[i+1:end]), "$(")
+			} else {
+				cmds = append(cmds, nested(string(rs[i+1:end]))...)
+			}
+			i = end
 		case r == ';' || r == '&' || r == '|' || r == '\n' || r == '\r' || r == '(' || r == ')':
 			endCmd()
 		case r == ' ' || r == '\t':

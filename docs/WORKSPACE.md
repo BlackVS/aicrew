@@ -200,10 +200,17 @@ survey, the options and the decision (D-STORE) are recorded in
   command does:
   - It splits the command line on `;`, `&`, `&&`, `|`, `||`, newlines and
     parentheses, outside quotes.
-  - It judges a command substitution (`$(…)`, and backquotes in bash,
-    also inside double quotes) as commands of its own. The command it sits
-    in keeps its words around it, so `rm $(pwd) -rf` is still a recursive
-    delete, of a path the guard cannot read.
+  - It judges a command substitution as commands of its own: `$(…)`, also
+    inside double quotes, backquotes in bash, and in PowerShell any
+    `(…)` or `@(…)`, such as `(Resolve-Path x)`. The command it sits in
+    keeps its words around it, so `rm $(pwd) -rf` and
+    `Remove-Item (Resolve-Path ..) -Recurse` are still recursive deletes,
+    of a path the guard cannot read.
+  - In bash, a substitution and a `( … )` group are subshells: a `cd`
+    inside one stays inside it, as in bash, so in
+    `(cd build && pwd); rm -rf ../x` the delete is judged from the starting
+    directory. PowerShell runs `(…)` in the same scope, so a
+    `Set-Location` inside one holds after it.
   - It looks inside `bash`/`sh -c`, `eval`, `powershell`/`pwsh -Command` (or
     a bare command), `Invoke-Expression` and `cmd /c`.
   - It skips variable assignments and leaders (`sudo`, `env`, `xargs`,

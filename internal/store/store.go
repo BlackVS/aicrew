@@ -69,8 +69,8 @@ type Store struct {
 	rdb  *sql.DB // reads: deferred, query-only transactions
 	lock *storeLock
 	now  func() time.Time
-	// skew is AdvanceClock's offset, added to the wall clock by now.
-	skew atomic.Int64
+	// clock is SetClock's clock; nil is the wall clock.
+	clock atomic.Pointer[func() time.Time]
 
 	// flights serializes identical commands that call out before their
 	// transaction; flightWait bounds how long one waits (inflight.go).
@@ -149,7 +149,12 @@ func Open(ctx context.Context, path string) (_ *Store, err error) {
 		eventQuiet:   EventQuiet,
 		eventMaxWait: EventMaxWait,
 	}
-	s.now = func() time.Time { return time.Now().UTC().Add(time.Duration(s.skew.Load())) }
+	s.now = func() time.Time {
+		if c := s.clock.Load(); c != nil {
+			return (*c)().UTC()
+		}
+		return time.Now().UTC()
+	}
 	s.handlers = map[string]handlerFunc{events.HandlerWake: s.wake}
 	if err := s.migrate(ctx); err != nil {
 		db.Close()
@@ -174,10 +179,16 @@ func (s *Store) Close() error {
 	return errors.Join(s.rdb.Close(), s.db.Close(), s.lock.release())
 }
 
-// AdvanceClock moves the store's clock forward by d, for every later read
-// of it. Tests use it to pass an expiry without waiting for it on the wall
-// clock.
-func (s *Store) AdvanceClock(d time.Duration) { s.skew.Add(int64(d)) }
+// SetClock makes now the store's clock, for every later read of it; nil
+// restores the wall clock. Tests use it to pass an expiry without the wall
+// clock. now must be safe for concurrent use.
+func (s *Store) SetClock(now func() time.Time) {
+	if now == nil {
+		s.clock.Store(nil)
+		return
+	}
+	s.clock.Store(&now)
+}
 
 // snapshot runs fn in one read transaction, so every statement it issues
 // sees the same committed state.

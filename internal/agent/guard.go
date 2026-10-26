@@ -235,27 +235,43 @@ func (e guardEnv) refusalIn(shell, line string, depth int) refusal {
 	return refusal{}
 }
 
+// guardTooDeep is the command splitCommands puts in place of a command
+// substitution nested deeper than maxGuardDepth: judgeCommand refuses it.
+const guardTooDeep = "\x00too-deep"
+
 // splitCommands splits a command line into its commands, each as its
 // words: on ;, &, &&, |, ||, newlines, parentheses and standalone braces
-// outside quotes, and, in bash, backquotes. A command substitution ($(…)
-// or an opening backquote) leaves the word it starts, ending in "$(" or
-// "`", in the command it cuts, so a path it would supply reads as one the
-// guard cannot judge; its own commands follow. Quotes are removed; a
-// backslash (bash) or backquote (PowerShell) escapes the next character
-// only before a quote, a space or itself, so Windows paths keep their
-// backslashes.
+// outside quotes. A command substitution ($(…), and a backquote pair in
+// bash), unquoted or in double quotes, does not end the command it sits
+// in: its text is split into commands of its own, placed before that
+// command as the shell runs them, and its place in the word holds "$(" or
+// "`", so a path it would supply reads as one the guard cannot judge.
+// Quotes are removed; a backslash (bash) or backquote (PowerShell) escapes
+// the next character only before a quote, a space, a $ or itself, so
+// Windows paths keep their backslashes.
 func splitCommands(shell, line string) [][]string {
+	return splitDepth(shell, line, 0)
+}
+
+func splitDepth(shell, line string, depth int) [][]string {
+	if depth > maxGuardDepth {
+		return [][]string{{guardTooDeep}}
+	}
 	var (
 		cmds  [][]string
 		words []string
 		word  strings.Builder
 		in    bool // a word is open, maybe empty ("")
 		quote rune
-		tick  bool // inside a bash backquote substitution
 	)
 	escape := '\\'
 	if shell == "powershell" {
 		escape = '`'
+	}
+	substitute := func(inner, mark string) {
+		cmds = append(cmds, splitDepth(shell, inner, depth+1)...)
+		word.WriteString(mark)
+		in = true
 	}
 	endWord := func() {
 		if in {
@@ -286,38 +302,37 @@ func splitCommands(shell, line string) [][]string {
 	for i := 0; i < len(rs); i++ {
 		r := rs[i]
 		switch {
-		case quote != 0:
-			switch {
-			case r == quote:
+		case quote == '\'':
+			if r == quote {
 				quote = 0
-			case r == escape && quote == '"' && i+1 < len(rs) && strings.ContainsRune("\"\\`$", rs[i+1]):
-				i++
-				word.WriteRune(rs[i])
-			default:
+			} else {
+				word.WriteRune(r)
+			}
+		case quote == '"' && r == escape && i+1 < len(rs) && strings.ContainsRune("\"\\`$", rs[i+1]),
+			quote == 0 && r == escape && i+1 < len(rs) && strings.ContainsRune("\"' \\`$", rs[i+1]):
+			i++
+			word.WriteRune(rs[i])
+			in = true
+		case r == '$' && i+1 < len(rs) && rs[i+1] == '(':
+			end := closingParen(rs, i+2, escape)
+			substitute(string(rs[i+2:end]), "$(")
+			i = end
+		case r == '`' && shell == "bash":
+			end := closingTick(rs, i+1)
+			substitute(string(rs[i+1:end]), "`")
+			i = end
+		case quote == '"':
+			if r == quote {
+				quote = 0
+			} else {
 				word.WriteRune(r)
 			}
 		case r == '\'' || r == '"':
 			quote, in = r, true
-		case r == escape && i+1 < len(rs) && strings.ContainsRune("\"' \\`", rs[i+1]):
-			i++
-			word.WriteRune(rs[i])
-			in = true
-		case r == '`' && shell == "bash":
-			if !tick {
-				word.WriteRune(r)
-				in = true
-			}
-			tick = !tick
-			endCmd()
 		case r == ';' || r == '&' || r == '|' || r == '\n' || r == '\r' || r == '(' || r == ')':
 			endCmd()
 		case r == ' ' || r == '\t':
 			endWord()
-		case r == '$' && i+1 < len(rs) && rs[i+1] == '(':
-			word.WriteString("$(")
-			in = true
-			endCmd()
-			i++
 		default:
 			word.WriteRune(r)
 			in = true
@@ -325,6 +340,48 @@ func splitCommands(shell, line string) [][]string {
 	}
 	endCmd()
 	return cmds
+}
+
+// closingParen is the index of the ")" that closes the substitution whose
+// text starts at rs[from], counting nested parentheses and skipping quoted
+// text and escaped characters; len(rs) when it is not closed.
+func closingParen(rs []rune, from int, escape rune) int {
+	depth := 1
+	for i := from; i < len(rs); i++ {
+		switch rs[i] {
+		case escape:
+			i++
+		case '\'', '"':
+			q := rs[i]
+			for i++; i < len(rs) && rs[i] != q; i++ {
+				if q == '"' && rs[i] == escape {
+					i++
+				}
+			}
+		case '(':
+			depth++
+		case ')':
+			if depth--; depth == 0 {
+				return i
+			}
+		}
+	}
+	return len(rs)
+}
+
+// closingTick is the index of the backquote that closes the bash
+// substitution whose text starts at rs[from], skipping escaped characters;
+// len(rs) when it is not closed.
+func closingTick(rs []rune, from int) int {
+	for i := from; i < len(rs); i++ {
+		switch rs[i] {
+		case '\\':
+			i++
+		case '`':
+			return i
+		}
+	}
+	return len(rs)
 }
 
 // changedDir is the working directory after words, when words change it
@@ -455,6 +512,9 @@ const (
 )
 
 func (e guardEnv) judgeCommand(shell string, words []string, depth int) refusal {
+	if len(words) == 1 && words[0] == guardTooDeep {
+		return refusal{"a command substitution nested too deep to judge", "Run the command directly, without nesting substitutions."}
+	}
 	// Variable assignments, leaders and their options come before the
 	// program. Under xargs the arguments come from stdin.
 	piped := false

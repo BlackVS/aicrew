@@ -198,8 +198,12 @@ survey, the options and the decision (D-STORE) are recorded in
 
   Deny rules match a command's spelling. The guard instead judges what each
   command does:
-  - It splits the command line on `;`, `&`, `&&`, `|`, `||`, newlines,
-    parentheses and `$(…)`, outside quotes.
+  - It splits the command line on `;`, `&`, `&&`, `|`, `||`, newlines and
+    parentheses, outside quotes.
+  - It judges a command substitution (`$(…)`, and backquotes in bash,
+    also inside double quotes) as commands of its own. The command it sits
+    in keeps its words around it, so `rm $(pwd) -rf` is still a recursive
+    delete, of a path the guard cannot read.
   - It looks inside `bash`/`sh -c`, `eval`, `powershell`/`pwsh -Command` (or
     a bare command), `Invoke-Expression` and `cmd /c`.
   - It skips variable assignments and leaders (`sudo`, `env`, `xargs`,

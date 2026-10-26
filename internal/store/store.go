@@ -50,6 +50,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/events"
@@ -68,6 +69,8 @@ type Store struct {
 	rdb  *sql.DB // reads: deferred, query-only transactions
 	lock *storeLock
 	now  func() time.Time
+	// skew is AdvanceClock's offset, added to the wall clock by now.
+	skew atomic.Int64
 
 	// flights serializes identical commands that call out before their
 	// transaction; flightWait bounds how long one waits (inflight.go).
@@ -138,7 +141,6 @@ func Open(ctx context.Context, path string) (_ *Store, err error) {
 	s := &Store{
 		db:         db,
 		lock:       lock,
-		now:        func() time.Time { return time.Now().UTC() },
 		flightWait: defaultInflightWait,
 		outstandingWork: func(ctx context.Context, tx *sql.Tx, agentID string) (bool, error) {
 			return openWork(ctx, tx, agentID, "")
@@ -147,6 +149,7 @@ func Open(ctx context.Context, path string) (_ *Store, err error) {
 		eventQuiet:   EventQuiet,
 		eventMaxWait: EventMaxWait,
 	}
+	s.now = func() time.Time { return time.Now().UTC().Add(time.Duration(s.skew.Load())) }
 	s.handlers = map[string]handlerFunc{events.HandlerWake: s.wake}
 	if err := s.migrate(ctx); err != nil {
 		db.Close()
@@ -170,6 +173,11 @@ func Open(ctx context.Context, path string) (_ *Store, err error) {
 func (s *Store) Close() error {
 	return errors.Join(s.rdb.Close(), s.db.Close(), s.lock.release())
 }
+
+// AdvanceClock moves the store's clock forward by d, for every later read
+// of it. Tests use it to pass an expiry without waiting for it on the wall
+// clock.
+func (s *Store) AdvanceClock(d time.Duration) { s.skew.Add(int64(d)) }
 
 // snapshot runs fn in one read transaction, so every statement it issues
 // sees the same committed state.

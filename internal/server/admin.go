@@ -524,7 +524,7 @@ func (s *Server) readTeamGrants(w http.ResponseWriter, r *http.Request, _ store.
 		return opapi.CodeInvalid, t.ID
 	}
 	team, err := b.teams.ReadTeam(r.Context(), t.ID)
-	read, answered := grantsRead(b.id, team, err, time.Now())
+	read, answered := grantsRead(b.id, team, err, s.grantsNow())
 	if !answered {
 		code := hubteams.Code(err)
 		if code == "" {

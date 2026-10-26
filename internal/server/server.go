@@ -51,6 +51,9 @@ type Server struct {
 	// grantsEvery is how often the grants snapshot is refreshed
 	// (GrantsRefresh; tests shorten it).
 	grantsEvery time.Duration
+	// grantsClock stamps a grants read; nil is the wall clock. Tests step
+	// it, since the store keeps only a read no older than the last.
+	grantsClock func() time.Time
 	// boardEvery is how often the hubs' board feeds are read (BoardTick;
 	// tests shorten it), and boardPaused when each hub may be read again
 	// after it asked to wait (board.go; the board loop's alone).

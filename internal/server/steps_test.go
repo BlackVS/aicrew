@@ -313,12 +313,12 @@ func TestStepRoutesDeclineThenWithdraw(t *testing.T) {
 	}
 }
 
-// An expired offer cannot be accepted; the coordinator releases it.
+// An expired offer cannot be accepted; the coordinator releases it. The
+// store's clock passes the expiry, so a slow offer cannot expire early.
 func TestStepRoutesExpiredOffer(t *testing.T) {
 	e := setupCoordination(t)
-	expires := time.Now().Add(time.Second)
-	id, _ := e.offerAndSettle(t, "offer-1", "task-1", expires)
-	time.Sleep(time.Until(expires) + 50*time.Millisecond)
+	id, _ := e.offerAndSettle(t, "offer-1", "task-1", time.Now().Add(time.Minute))
+	e.store.AdvanceClock(time.Minute + time.Second)
 	refused(t, e.call(t, e.worker.token, AttemptsPath+"/"+id+"/accept", "accept-1",
 		map[string]string{"instruction_digest": coordPin.InstructionDigest}), http.StatusConflict, "offer_expired")
 	rel := stepOf(t, e.call(t, e.lead.token, AttemptsPath+"/"+id+"/withdraw", "withdraw-1", nil))

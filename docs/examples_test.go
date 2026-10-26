@@ -122,12 +122,16 @@ func checkDoc(d doc, v vocabulary) []string {
 	// continued holds the physical lines of a fenced command whose earlier
 	// lines ended in a shell (\) or PowerShell (`) continuation.
 	var continued []physLine
+	// open holds the physical lines of an inline code span that a line
+	// break interrupted; a blank line or a fence ends the paragraph, and
+	// with it the span, as Markdown reads it.
+	var open []physLine
 	for i, line := range strings.Split(d.body, "\n") {
 		line = strings.TrimRight(line, "\r")
 		if strings.HasPrefix(strings.TrimSpace(line), "```") {
 			fenced = !fenced
 			out = append(out, checkCommands(d.name, continued, v)...)
-			continued = nil
+			continued, open = nil, nil
 			continue
 		}
 		if strings.Contains(line, skipMarker) {
@@ -145,12 +149,31 @@ func checkDoc(d doc, v vocabulary) []string {
 			}
 		} else {
 			spans = nil
-			for _, m := range inlineCode.FindAllStringSubmatch(line, -1) {
-				spans = append(spans, m[1])
-				out = append(out, checkCommands(d.name, []physLine{{i + 1, m[1]}}, v)...)
-				if c := builtinCall.FindStringSubmatch(m[1]); c != nil && !v.builtins[c[1]] {
-					out = append(out, fmt.Sprintf("%s: automation builtin %q (nearest: %s)", at, c[1], nearest(c[1], keys(v.builtins))))
+			rest := line
+			if open != nil {
+				j := strings.IndexByte(rest, '`')
+				switch {
+				case j >= 0:
+					spans = append(spans, rest[:j])
+					out = append(out, checkSpan(d.name, append(open, physLine{i + 1, rest[:j]}), v)...)
+					open, rest = nil, rest[j+1:]
+				case strings.TrimSpace(rest) == "":
+					open, rest = nil, ""
+				default:
+					spans = append(spans, rest)
+					open, rest = append(open, physLine{i + 1, rest}), ""
 				}
+			}
+			for _, m := range inlineCode.FindAllStringSubmatch(rest, -1) {
+				spans = append(spans, m[1])
+				out = append(out, checkSpan(d.name, []physLine{{i + 1, m[1]}}, v)...)
+			}
+			// A backtick left over once the pairs are taken opens a span
+			// the next line continues.
+			if tail := inlineCode.ReplaceAllString(rest, ""); strings.Contains(tail, "`") {
+				s := tail[strings.IndexByte(tail, '`')+1:]
+				spans = append(spans, s)
+				open = []physLine{{i + 1, s}}
 			}
 		}
 		for _, s := range spans {
@@ -158,6 +181,16 @@ func checkDoc(d doc, v vocabulary) []string {
 		}
 	}
 	return append(out, checkCommands(d.name, continued, v)...)
+}
+
+// checkSpan checks one inline code span, which may cover several physical
+// lines: the invocations in it, and a builtin call it starts with.
+func checkSpan(name string, lines []physLine, v vocabulary) []string {
+	out := checkCommands(name, lines, v)
+	if c := builtinCall.FindStringSubmatch(strings.TrimSpace(lines[0].text)); c != nil && !v.builtins[c[1]] {
+		out = append(out, fmt.Sprintf("%s:%d: automation builtin %q (nearest: %s)", name, lines[0].n, c[1], nearest(c[1], keys(v.builtins))))
+	}
+	return out
 }
 
 var (
@@ -518,17 +551,22 @@ func TestDocExamplesContinuedLines(t *testing.T) {
 		"ID=$(aicrew-agent attempts --hoem .)\n" +
 		"```\n" +
 		"See `/v1/crew/attempt/{id}/accept`, `/v1/tasks/{id}` and `/v1/crew/attempts/<id>/accept`.\n" +
-		"Then `update_bse()` and `update_base()`.\n"
+		"Then `update_bse()` and `update_base()`.\n" +
+		"Install it with `aicrew-agent service start\n" +
+		"--hoem HOME` and check it with `aicrew-agent check --home HOME`.\n" +
+		"An unclosed `aicrew-agent check\n" +
+		"\n" +
+		"--hoem` after a blank line is prose again.\n"
 	got := checkDoc(doc{"EXAMPLE.md", body}, v)
 	var lines []string
 	for _, g := range got {
 		at, _, _ := strings.Cut(g, ": ")
 		lines = append(lines, at[strings.LastIndex(at, ":")+1:])
 	}
-	if strings.Join(lines, ",") != "3,7,12,14,15" {
-		t.Fatalf("want problems at lines 3, 7, 12, 14 and 15, got:\n%s", strings.Join(got, "\n"))
+	if strings.Join(lines, ",") != "3,7,12,14,15,17" {
+		t.Fatalf("want problems at lines 3, 7, 12, 14, 15 and 17, got:\n%s", strings.Join(got, "\n"))
 	}
-	for i, want := range []string{`flag "--teem"`, `flag "--hoem"`, `flag "--hoem"`, `route "/v1/crew/attempt/{id}/accept"`, `builtin "update_bse"`} {
+	for i, want := range []string{`flag "--teem"`, `flag "--hoem"`, `flag "--hoem"`, `route "/v1/crew/attempt/{id}/accept"`, `builtin "update_bse"`, `flag "--hoem"`} {
 		if !strings.Contains(got[i], want) {
 			t.Errorf("problem %d: want %s, got %s", i, want, got[i])
 		}

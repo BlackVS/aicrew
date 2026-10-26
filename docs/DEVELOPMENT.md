@@ -118,7 +118,8 @@ code, and checks four kinds of name:
   FlagSet in that binary's `cmd/` source or appear as a flag in its usage
   text. A fenced line that ends in `\` (sh) or a backtick (PowerShell)
   continues the invocation on the next line, and a failure names the
-  physical line.
+  physical line. An inline code span that wraps onto the next line of its
+  paragraph is read whole, the same way.
 - **Routes.** A `/v1/crew/...` or `/v1/admin/...` path must match a route
   of `internal/server/routes.txt`, which `TestRouteTableFile` pins to the
   routes the service registers (`AICREW_WRITE_ROUTES=1 go test -run

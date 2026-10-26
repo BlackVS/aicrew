@@ -519,9 +519,10 @@ begin needs an `Idempotency-Key`; settle does not.
       blocker and the attempt's last observed pull request ("Event
       delivery"); the block's broadcast to the team leaves them out.
     - The member's client adds a submitted result's reference to the
-      task's `candidate_refs` with the note `aicrew attempt <id> by member
-      <agent>`, naming the attempt and the submitting member. A resend of
-      the same reference with the same note adds nothing.
+      task's `candidate_refs` with the note
+      `aicrew attempt <id> by member <agent>`, naming the attempt and the <!-- doc-check: skip -->
+      submitting member. A resend of the same reference with the same note
+      adds nothing.
     - It is a fenced update of the holder's own hold, with no coordination
       fact, so it has no proof. Like every aimem mutation it advances the
       hold's fence by exactly one: aicrew confirms a committed update only

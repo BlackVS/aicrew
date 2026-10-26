@@ -56,6 +56,7 @@ Run these before every push; CI runs the same:
 
 ```sh
 bash scripts/check-repo.sh     # repository hygiene
+sh scripts/check-doc-examples.sh   # no stale names in the docs' examples
 gofmt -l .                     # must print nothing
 go vet ./...
 GOOS=linux go vet -tags realaimem ./e2e/...   # the real-aimem harness compiles
@@ -98,6 +99,64 @@ option is kept. The agent package's race run measured:
 
 The end-to-end runs against a real aimem are not part of these checks:
 `scripts/e2e-real-aimem.sh` (`docs/E2E-REAL-AIMEM.md`).
+
+## Examples in the documentation
+
+A reader copies an example as printed, so every name in it must exist in
+the current code. `TestDocExamples` (`docs/examples_test.go`) reads the
+code spans of the operational documents, the fenced blocks and the inline
+code, and checks four kinds of name:
+
+- **Commands.** In an `aicrew`, `aicrew-agent` or `aicrewd` invocation, a
+  first word must be one the binary's dispatch compares its first argument
+  with (`run` in `cmd/aicrew`; `main` and `run` in `cmd/aicrew-agent`;
+  `configCommand` in `cmd/aicrewd`). A following word that looks like a
+  subcommand must appear as a word in a string literal of that binary's
+  `cmd/` source (usage text, a case label, a compared value) or, for
+  `aicrew-agent step`, of `internal/agent/stepserver.go`.
+- **Flags.** A `--flag` or `-f` in an invocation must be registered on a
+  FlagSet in that binary's `cmd/` source or appear as a flag in its usage
+  text. A fenced line that ends in `\` (sh) or a backtick (PowerShell)
+  continues the invocation on the next line, and a failure names the
+  physical line. An inline code span that wraps onto the next line of its
+  paragraph is read whole, the same way.
+- **Routes.** A `/v1/crew/...` or `/v1/admin/...` path must match a route
+  of `internal/server/routes.txt`, which `TestRouteTableFile` pins to the
+  routes the service registers (`AICREW_WRITE_ROUTES=1 go test -run
+  '^TestRouteTableFile$' ./internal/server/` rewrites it). A `{param}` or
+  `<placeholder>` stands for a segment, and a mention such as
+  `/v1/crew/attempts/{id}/` passes when it is the prefix of a real route.
+  Other `/v1/` paths are aimem's and are not checked here.
+- **Automation builtins.** Inline code that starts with a call, such as
+  `update_base()`, must name a builtin of the workflow scripts' host API
+  (`automation.Builtins()`), of Starlark's universe, or `main`.
+
+A failure prints file:line, the name and the nearest current name.
+
+**What it reads.** `README.md`, every Markdown file under `docs/`, and the
+Markdown files the bootstrap writes into an agent home
+(`agent.HomeDocs()`: `AGENTS.md`, `CLAUDE.md`, `docs/START.md`,
+`docs/ROLES.md`, `docs/HANDOFF.md` and the crew commands), reported as
+`home:<path>:<line>`.
+
+**What it skips.**
+- Designs, proposals and probe reports (`DESIGN*.md`, `docs/proposals/`,
+  `*-PROPOSAL.md`, `*-PROBE.md`): they describe proposed names and the
+  corrections made to them. `docs/archive/`, `docs/ROADMAP.md` and
+  `CHANGELOG.md` are records of the past, and `docs/SESSION-STATE.md` is a
+  local file.
+- A line ending in `<!-- doc-check: skip -->`, for prose that names
+  something on purpose, such as a command that does not exist.
+
+**Its limits.** The source text is the oracle, not the dispatch: a renamed
+subcommand is caught only once its old word is gone from the binary's
+source, and a flag is checked against the binary's flags as a whole, not
+those of its own subcommand. Sample outputs, the order of steps and the
+meaning of arguments are not checked; that is a reader's pass.
+
+**Enforcement.** `scripts/check-doc-examples.sh` runs the test in CI's
+`repo-checks` job; `go test ./...` runs it too. aimem has the same check
+for its own documents.
 
 ## Layout
 
@@ -1220,7 +1279,7 @@ events is skipped.
 
 A team has a name and a hub. Its projects are the grants its hub's
 operator gives the team's profile there (`aimem identity team grant
---team-name crew --project PROJECT`): aicrew keeps no project list of its
+--peer SERVICE_ID --team-name crew --project PROJECT`): aicrew keeps no project list of its
 own. The operator manages teams with `aicrew`, while `aicrewd` runs. Each
 command prints the team as JSON; `list` adds each team's member count and
 `show` its current members.

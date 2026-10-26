@@ -45,7 +45,8 @@ is also independent of the model and client, both of which may change.
   agent.json         nonsecret configuration
   .mcp.json          Claude Code's project MCP file; one managed aimem entry
   .claude/settings.json  managed; points every Claude Code session here at aimem/,
-                         wakes the member (Stop hook, except in turns mode), denies credential
+                         wakes the member (Stop hook, except in turns mode), runs the
+                         command guard (PreToolUse, unless off), denies credential
                          reads and TLS weakening
   .claude/turn-settings.json  managed; the allow list and deny rules of a headless turn
   .claude/turn-settings-coordinator.json  managed; the same for a coordinator's turn, with triage and comments
@@ -362,12 +363,13 @@ operator's responsibility.
 ## Repositories and worktrees
 
 A repository key is the forge host, owner path and name as they appear in the
-clone URL, and it maps directly to a directory:
+clone URL, and it maps directly to a directory. The host is written as the
+credential reference spells it, `.` and `:` as `-` (`<service>` above):
 
 ```text
-repos/<host>/<owner>/<name>/
-repos/github.com/blackvs/aicrew/
-repos/git.example.net/platform/aicrew/     # same short name, no collision
+repos/<service>/<owner>/<name>/
+repos/github-com/blackvs/aicrew/
+repos/git-example-net/platform/aicrew/     # same short name, no collision
 ```
 
 Each path segment may contain only letters, digits, `.`, `_` and `-`; any
@@ -381,27 +383,24 @@ the pinned manifest an offer's instruction digest is computed from.
 Work happens in a worktree:
 
 ```text
-worktrees/<name>-<task>-<n>/
-worktrees/aicrew-5ec2a398-1/
+worktrees/<attempt>/
+worktrees/01a16a05-90b2-7000-8c1e-3d4f5a6b7c8d/
 ```
 
 The same layout on Windows, for an agent labelled `builder`:
 
 ```text
 C:\Users\dev\aicrew\agents\builder\creds\
-C:\Users\dev\aicrew\agents\builder\repos\github.com\blackvs\aicrew\
-C:\Users\dev\aicrew\agents\builder\worktrees\aicrew-5ec2a398-1\
+C:\Users\dev\aicrew\agents\builder\repos\github-com\blackvs\aicrew\
+C:\Users\dev\aicrew\agents\builder\worktrees\01a16a05-90b2-7000-8c1e-3d4f5a6b7c8d\
 ```
 
 Nested repository paths are long, so keep the home root short on Windows;
 deep trees can exceed the 260-character path limit unless long paths are
 enabled for the OS and Git.
 
-`<name>` is the repository name, `<task>` the last eight hex digits of the
-task ID (its random part; the leading digits of time-ordered IDs repeat
-across tasks), extended until unique, and `<n>` the attempt number. The attempt
-identifier used by aicrew execution is defined by the execution contract;
-this directory name is only a readable, unique local label. Every worktree is
+`<attempt>` is the attempt's ID as the execution contract defines it
+(`aicrew-agent clone`, DEVELOPMENT.md); one attempt has one worktree. Every worktree is
 created from an explicitly named base commit, recorded with its branch in
 `state/`, never from whatever the shared clone happens to have checked out.
 A worktree is removed after its attempt is finalized and its branch pushed or

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BlackVS/aicrew/internal/managedfiles"
 	"github.com/BlackVS/aicrew/internal/privatefile"
@@ -43,6 +44,18 @@ func homeFiles(home string) []homeFile {
 		{Path: TurnSettingsFile, Content: turnSettings(home, false), Managed: true},
 		{Path: CoordinatorTurnSettingsFile, Content: turnSettings(home, true), Managed: true},
 	}, commandFiles()...)
+}
+
+// HomeDocs are the Markdown files the bootstrap writes into a home, by
+// their path in it; the documentation check reads their examples.
+func HomeDocs() map[string]string {
+	out := map[string]string{}
+	for _, f := range homeFiles("") {
+		if strings.HasSuffix(f.Path, ".md") {
+			out[f.Path] = f.Content
+		}
+	}
+	return out
 }
 
 // FileChange is one planned or applied change to a home file

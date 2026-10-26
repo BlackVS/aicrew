@@ -237,7 +237,10 @@ func (e guardEnv) refusalIn(shell, line string, depth int) refusal {
 
 // splitCommands splits a command line into its commands, each as its
 // words: on ;, &, &&, |, ||, newlines, parentheses and standalone braces
-// outside quotes, and, in bash, backquotes. Quotes are removed; a
+// outside quotes, and, in bash, backquotes. A command substitution ($(…)
+// or an opening backquote) leaves the word it starts, ending in "$(" or
+// "`", in the command it cuts, so a path it would supply reads as one the
+// guard cannot judge; its own commands follow. Quotes are removed; a
 // backslash (bash) or backquote (PowerShell) escapes the next character
 // only before a quote, a space or itself, so Windows paths keep their
 // backslashes.
@@ -248,6 +251,7 @@ func splitCommands(shell, line string) [][]string {
 		word  strings.Builder
 		in    bool // a word is open, maybe empty ("")
 		quote rune
+		tick  bool // inside a bash backquote substitution
 	)
 	escape := '\\'
 	if shell == "powershell" {
@@ -298,12 +302,20 @@ func splitCommands(shell, line string) [][]string {
 			i++
 			word.WriteRune(rs[i])
 			in = true
-		case r == ';' || r == '&' || r == '|' || r == '\n' || r == '\r' || r == '(' || r == ')' ||
-			(r == '`' && shell == "bash"):
+		case r == '`' && shell == "bash":
+			if !tick {
+				word.WriteRune(r)
+				in = true
+			}
+			tick = !tick
+			endCmd()
+		case r == ';' || r == '&' || r == '|' || r == '\n' || r == '\r' || r == '(' || r == ')':
 			endCmd()
 		case r == ' ' || r == '\t':
 			endWord()
 		case r == '$' && i+1 < len(rs) && rs[i+1] == '(':
+			word.WriteString("$(")
+			in = true
 			endCmd()
 			i++
 		default:
@@ -505,7 +517,7 @@ func (e guardEnv) judgeCommand(shell string, words []string, depth int) refusal 
 						targets = append(targets, t)
 					}
 				}
-				return e.deleteTargets(prog+" "+a, targets, piped, false)
+				return e.deleteTargets(prog+" "+a, targets, piped || len(targets) == 0, false)
 			}
 		}
 	case "find":
@@ -554,7 +566,7 @@ func (e guardEnv) judgeRm(args []string, piped bool) refusal {
 	if recursive == "" {
 		return refusal{}
 	}
-	return e.deleteTargets("rm "+recursive, targets, piped, false)
+	return e.deleteTargets("rm "+recursive, targets, piped || len(targets) == 0, false)
 }
 
 // deleteTargets judges a recursive delete of targets: each must name a

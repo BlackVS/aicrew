@@ -221,8 +221,9 @@ survey, the options and the decision (D-STORE) are recorded in
     with `-Recurse`, `rmdir|rd|del /s`, `find -delete`) of a path outside
     the directory the call starts in, of that directory itself (so
     `find -delete` starts in a subdirectory, never at `.`), of `.git`,
-    or of paths it cannot read: a variable, `~`, a glob over the directory's
-    own entries, or paths from a pipe or `xargs`;
+    or of paths it cannot read: a variable, `~`, a command substitution
+    (`$(…)` or backquotes), a glob over the directory's own entries, paths
+    from a pipe or `xargs`, or no path at all;
   - formatting a disk (`format`, `Format-Volume`, `mkfs*`);
   - an encoded PowerShell command, which it cannot read.
 

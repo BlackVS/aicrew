@@ -12,6 +12,14 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+### Changed
+
+- The documentation's examples are checked against the code in CI: every
+  `aicrew`, `aicrew-agent` and `aicrewd` command and flag, every aicrewd
+  route and every automation builtin they name, in `README.md`, `docs/` and
+  the agent home's managed documents (`scripts/check-doc-examples.sh`;
+  DEVELOPMENT.md, "Examples in the documentation").
+
 ## [0.7.0] - 2026-10-23
 
 Increment 3 of the turn-economics design (`docs/DESIGN-TURNS.md`), merged

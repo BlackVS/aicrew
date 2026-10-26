@@ -21,6 +21,14 @@ jobs:
           persist-credentials: false
       - name: Repository hygiene
         run: bash scripts/check-repo.sh
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25'
+          cache: true
+      # A copied example must name commands, flags, routes and builtins
+      # that exist (docs/DEVELOPMENT.md, "Examples in the documentation").
+      - name: no stale names in the docs' examples
+        run: sh scripts/check-doc-examples.sh
 
   go-lint:
     runs-on: ubuntu-latest

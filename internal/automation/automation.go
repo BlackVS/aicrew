@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -367,6 +368,17 @@ func (r *runner) predeclared() starlark.StringDict {
 
 		"update_base": starlark.NewBuiltin("update_base", r.updateBase),
 	}
+}
+
+// Builtins names the host API a script sees beside Starlark's universe,
+// sorted; the documentation check reads it.
+func Builtins() []string {
+	var names []string
+	for n := range (&runner{}).predeclared() {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	return names
 }
 
 func (r *runner) pr(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {

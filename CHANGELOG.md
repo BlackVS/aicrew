@@ -24,6 +24,15 @@ section, and the release workflow refuses a tag that has none
   the attempt's worktree, as the `dev-go` toolchain is documented and
   probed; before, it forbade every `cd` and `&&`, so a worker following it
   could not run its tests.
+- The end-to-end harness against a real aimem passes its whole matrix
+  again at the pinned aimem, and the `e2e-real-aimem` workflow runs it
+  nightly on main and by hand on any branch; a release-preparation pull
+  request needs a green run at its head. The harness had drifted from the
+  product: scenario H selected a process from an unreachable host; B1
+  expected board announcements before the event queue's quiet ended, as
+  `board.changed` rather than `action.needed`; and F1's one-shot network
+  faults were replayed past by aimem's HTTP client. C1, F2 and F3 failed
+  only after those.
 
 ## [0.7.0] - 2026-10-23
 

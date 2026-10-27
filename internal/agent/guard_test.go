@@ -138,6 +138,12 @@ func TestGuardRefusal(t *testing.T) {
 			"find . -name -delete",
 			"find .. -name x -delete",
 			"find .git -name x -delete",
+			"find -L .. -name '*.tmp' -delete",
+			"find -P / -name '*.log' -delete",
+			"find -H -O3 .. -name x -delete",
+			"find -D tree .. -name x -delete",
+			"find -L -name x -o -delete",
+			"find . -delete -name '*.tmp' -delete",
 			"find . | xargs rm -rf",
 			"cd .. && rm -rf repo",
 			"cd $X; rm -rf build",
@@ -273,6 +279,9 @@ func TestGuardRefusal(t *testing.T) {
 			"find build -name '*.tmp' -delete",
 			"find . -name '*.tmp' -delete",
 			"find -name x -delete",
+			"find -L . -name x -delete",
+			"find . -name '*.tmp' -delete -name '*.o' -delete",
+			"find -D tree -P . -name x -delete",
 			"find . -type f -name '*.o' -delete",
 			"find . -iname '*.TMP' -delete",
 			"find . -path './build/*' -delete",
@@ -431,12 +440,14 @@ func TestGuardBlind(t *testing.T) {
 func TestGuardFindAdvice(t *testing.T) {
 	g := testGuard("feature", nil)
 	for _, line := range []string{"find . -delete", "find . -maxdepth 1 -delete", "find -delete",
-		"find /work/repo -type f -delete", "find . -name '*' -delete", "find . -name x -o -delete"} {
+		"find /work/repo -type f -delete", "find . -name '*' -delete", "find . -name x -o -delete",
+		`find . \! -name keep -delete`, "find -L . -delete"} {
 		if r := g.refusal("bash", line); r.next != nextFindDelete {
 			t.Errorf("%q: %q", line, r.next)
 		}
 	}
-	for _, line := range []string{"find .. -name x -delete", "find / -name '*.go' -delete", "find .git -name x -delete"} {
+	for _, line := range []string{"find .. -name x -delete", "find / -name '*.go' -delete", "find .git -name x -delete",
+		"find -L .. -name '*.tmp' -delete", "find -P / -name '*.log' -delete"} {
 		if r := g.refusal("bash", line); r.next != nextDeleteInside {
 			t.Errorf("%q: %q", line, r.next)
 		}

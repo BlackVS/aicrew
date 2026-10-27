@@ -240,10 +240,12 @@ survey, the options and the decision (D-STORE) are recorded in
     or of paths it cannot read: a variable, `~`, a command substitution
     (`$(…)` or backquotes), a glob over the directory's own entries, paths
     from a pipe or `xargs`, or no path at all. A `find -delete` may start
-    at the directory itself when its expression before the last `-delete`
-    narrows it by name: a `-name`, `-iname` or `-path` test whose pattern
-    holds more than wildcards, dots and slashes, with no `-o`, `-or`, `,`,
-    `!` or `-not` there. So `find . -name '*.tmp' -delete` and
+    at the directory itself when it is narrowed by name before its first
+    `-delete`: a `-name`, `-iname` or `-path` test whose pattern holds more
+    than wildcards, dots and slashes, with no `-o`, `-or`, `,`, `!` or
+    `-not` anywhere before the last `-delete`. find's own leading options
+    (`-H`, `-L`, `-P`, `-O<level>`, `-D` and its argument) are skipped to
+    find the start. So `find . -name '*.tmp' -delete` and
     `find . -type f -name '*.o' -delete` pass, while `find . -delete`,
     `find . -type f -delete`, `find . -name '*' -delete` and
     `find . -name x -o -delete` are refused, with advice to narrow it by

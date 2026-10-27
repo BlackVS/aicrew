@@ -720,14 +720,28 @@ func (e guardEnv) judgeFind(args []string, piped bool) refusal {
 	if last < 0 {
 		return refusal{}
 	}
+	// find's own options (-H, -L, -P, -O<level>, -D <debugopts>) come
+	// before the starts.
+	from := 0
+	for from < len(args) {
+		if a := args[from]; a == "-H" || a == "-L" || a == "-P" || strings.HasPrefix(a, "-O") {
+			from++
+		} else if a == "-D" {
+			from += 2
+		} else {
+			break
+		}
+	}
+	// The escaped \( never reaches here in bash yet: the splitter reads it
+	// as a substitution until 01a17d22-4928 lets a backslash escape it.
 	var starts []string
-	for _, s := range args {
-		if strings.HasPrefix(s, "-") || s == "(" || s == "!" {
+	for _, s := range args[min(from, len(args)):] {
+		if strings.HasPrefix(s, "-") || s == "(" || s == "!" || s == `\(` || s == `\!` {
 			break
 		}
 		starts = append(starts, s)
 	}
-	filtered := findFiltered(args[len(starts):last])
+	filtered := last > from && findFiltered(args[from+len(starts):last])
 	if len(starts) == 0 {
 		starts = []string{"."}
 	}
@@ -740,19 +754,21 @@ func (e guardEnv) judgeFind(args []string, piped bool) refusal {
 }
 
 // findFiltered reports whether find's expression before its last -delete
-// narrows it by name or path, with no alternative or negation that could
-// widen it again. A -type test alone does not narrow it: find . -type f
-// -delete deletes every file. Nor does a pattern of only wildcards, dots
-// and slashes, such as * or ./*. What a pattern would match is not read
-// further.
+// narrows it by name or path before its first -delete, with no alternative
+// or negation that could widen it again. A -type test alone does not narrow
+// it: find . -type f -delete deletes every file. Nor does a pattern of only
+// wildcards, dots and slashes, such as * or ./*. What a pattern would match
+// is not read further.
 func findFiltered(expr []string) bool {
-	named := false
+	named, deleted := false, false
 	for i, a := range expr {
 		switch a {
 		case "-o", "-or", ",", "!", `\!`, "-not":
 			return false
+		case "-delete":
+			deleted = true
 		case "-name", "-iname", "-path":
-			if i+1 < len(expr) && strings.Trim(expr[i+1], "*?./") != "" {
+			if !deleted && i+1 < len(expr) && strings.Trim(expr[i+1], "*?./") != "" {
 				named = true
 			}
 		}

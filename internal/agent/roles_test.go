@@ -385,3 +385,28 @@ func TestGuidancePullRequestsUseForgePR(t *testing.T) {
 		}
 	}
 }
+
+// The section every turn reads tells a member that aimem's unreadable_text
+// refusal is a correction to make in the same turn, with the fix the
+// refusal names, and that the same text is refused again (01a17698-f6c3).
+func TestRoleGuidanceUnreadableTextIsACorrection(t *testing.T) {
+	md := rolesMD()
+	start := strings.Index(md, "## "+sectionWriting)
+	end := start + strings.Index(md[start:], "\n## "+sectionCoordinator)
+	if start < 0 || end <= start {
+		t.Fatal("ROLES.md has no writing section before the coordinator's")
+	}
+	writing := strings.Join(strings.Fields(md[start:end]), " ")
+	for _, s := range []string{"When aimem refuses a write with `unreadable_text`", "the fix after `Next:`",
+		"rewrite that text as it says and send it again in the same turn, as a correction, not a failed write.",
+		"Sending the same text again gets the same refusal."} {
+		if !strings.Contains(writing, s) {
+			t.Errorf("the writing section lacks %q", s)
+		}
+	}
+	for _, kind := range []string{kindCoordinator, kindWorkerOffer, kindWorkerAttempt, kindWorkerReview} {
+		if !slices.Contains(kindSections("worker", kind), sectionWriting) {
+			t.Errorf("a %s turn does not read the writing section", kind)
+		}
+	}
+}

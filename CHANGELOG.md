@@ -21,6 +21,14 @@ section, and the release workflow refuses a tag that has none
   A missing binary or a hash mismatch installs neither, and the services'
   stop and start around an upgrade run as before. For an unreleased build
   and for a closed network. `boot.ps1` does not have the knob yet.
+- **The aicrewd installer has an install-only mode** (01a17d8e-427b).
+  `AICREW_NO_SERVICE=1 install-aicrewd.sh` installs and upgrades aicrewd on
+  a host or container without systemd. It skips linger, the unit, the start
+  and the health wait, never calls `systemctl` or `loginctl`, and prints the
+  `aicrewd -config` command a supervisor runs as the service user. An
+  upgrade refuses while aicrewd still answers, because it cannot stop it. A
+  failed swap or migration still restores the binaries, the configuration
+  and the store. The default mode is unchanged.
 
 ### Changed
 

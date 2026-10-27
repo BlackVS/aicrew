@@ -176,7 +176,7 @@ is installed the way the operator installs it:
 | --- | --- | --- |
 | `sim-ca` | a one-shot job: a throwaway CA, the server certificates and the SPKI pins, written to a shared volume | the harness's CA code |
 | `sim-aimem` | `aimem serve`, the hub | aimem built from the pinned commit, as b4 does, because `install-hub.sh` takes no local base yet (aimem task `01a15057-43ed`; the row switches to the installer when that lands); `tasks on`, `process select`, `identity peer provision` |
-| `sim-aicrewd` | `aicrewd serve` | `install-aicrewd.sh` in install-only mode with `AICREW_PREBUILT_DIR` (prerequisite 3), then `aicrew hub add`, `aicrew team setup`, `aicrew invitation issue` per member |
+| `sim-aicrewd` | `aicrewd -config …`, the command the installer prints | `install-aicrewd.sh` in install-only mode (`AICREW_NO_SERVICE=1`) with `AICREW_PREBUILT_DIR` (prerequisite 3), then `aicrew hub add`, `aicrew team setup`, `aicrew invitation issue` per member |
 | `sim-gitea` | Gitea with TLS from the CA, an `operator` user, member users with their own tokens, one repository | the Gitea image pinned at 1.27 or later (verify-delivery reads a review of an older head through its compare diff, which earlier versions do not serve), configured by its own CLI |
 | `sim-hands` | the stub reviewer (section 2.5) | built from `e2e/pilotsim/` |
 | `sim-ci` | the stub CI status (section 2.5) | built from `e2e/pilotsim/` |
@@ -363,7 +363,8 @@ type through a pty, patch an installer or hand-write a home.
    binaries (`AICREW_PREBUILT_DIR`), as `install-aicrewd.sh` does.
 3. `01a17d8e-427b`: `install-aicrewd.sh` has an install-only mode that
    needs neither systemd nor linger, so a plain container can install
-   aicrewd. Its supervisor then runs `aicrewd serve`.
+   aicrewd. Its supervisor then runs the `aicrewd -config` command the
+   installer prints.
 
 ## 9. Increments
 

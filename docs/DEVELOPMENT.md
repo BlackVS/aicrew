@@ -474,12 +474,28 @@ Other knobs:
 - `AICREW_VERSION`: install a release other than the pinned one;
 - `AICREW_REPO`: install from a fork;
 - `AICREW_PREBUILT_DIR`: a directory holding `aicrewd` and `aicrew` to
-  install instead of downloading.
+  install instead of downloading;
+- `AICREW_NO_SERVICE=1`: install-only mode, for a host or container
+  without systemd, where a supervisor of the operator's choice runs
+  aicrewd. `systemctl` and `loginctl` are neither needed nor called.
+  - A fresh install does everything above except linger, the unit, the
+    start and the health wait. It ends by printing the command to run as
+    the service user, `~/aicrew/bin/aicrewd -config ~/aicrew/etc/aicrewd.json`
+    (with the full paths).
+  - An upgrade refuses, with nothing changed, while aicrewd still answers
+    `/healthz`, because the script cannot stop it, and copying a store in
+    use is not safe. Stop it, run the upgrade, then start the printed
+    command. The copies, the `.prev` binaries, the swap and the migration
+    are as above, but nothing is started and there is no health wait.
+  - A failed swap or migration still puts the previous binaries, the
+    configuration copy and the store copy back, and says to start the
+    previous release again.
 
 The script never writes a credential or a secret value itself.
 `internal/installer` checks that `RELEASE` and every documented one-liner
 name the newest CHANGELOG release, and runs the upgrade transaction in bash
-against real builds. The release check refuses a tag that any installer
+against real builds, in both modes. It also runs the whole script in
+install-only mode, with stubs for the account commands and for systemd. The release check refuses a tag that any installer
 does not pin.
 
 The service logs JSON lines to stderr: each request's method, matched route,

@@ -124,8 +124,41 @@ func TestGuardRefusal(t *testing.T) {
 			"find .. -delete",
 			"find . -delete",
 			"find -delete",
-			"find . -name '*.tmp' -delete",
 			"find /work/repo -type f -delete",
+			"find . -maxdepth 1 -delete",
+			"find . -name x -o -delete",
+			"find . -name x -or -delete",
+			"find . ! -name keep -delete",
+			`find . \! -name keep -delete`,
+			"find . -not -name keep -delete",
+			"find . -name x -delete -o -delete",
+			"find . -name '*' -delete",
+			"find . -name '*.*' -delete",
+			"find . -path './*' -delete",
+			"find . -name -delete",
+			"find .. -name x -delete",
+			"find .git -name x -delete",
+			"find -L .. -name '*.tmp' -delete",
+			"find -P / -name '*.log' -delete",
+			"find -H -O3 .. -name x -delete",
+			"find -D tree .. -name x -delete",
+			"find -L -name x -o -delete",
+			"find . -delete -name '*.tmp' -delete",
+			"find -- .. -name '*.tmp' -delete",
+			"find -- .git -name x -delete",
+			"find -L -- / -name x -delete",
+			"find -d .. -name x -delete",
+			"find -x -E .. -name x -delete",
+			"find -f .. -name x -delete",
+			"find -sf .. -name x -delete",
+			"find -f . -f .. -name x -delete",
+			"find -Z .. -name x -delete",
+			"find -type f -name x -delete",
+			"find -maxdepth 2 -name x -delete",
+			"find -f . -f.. -name x -delete",
+			"find -sf.. -name x -delete",
+			"find -f . -Z .. -name x -delete",
+			"find -f. -name x -delete",
 			"find . | xargs rm -rf",
 			"cd .. && rm -rf repo",
 			"cd $X; rm -rf build",
@@ -259,6 +292,23 @@ func TestGuardRefusal(t *testing.T) {
 			"cd worktrees/att-1 && go test ./...",
 			"cd worktrees/att-1 && bash scripts/check.sh",
 			"find build -name '*.tmp' -delete",
+			"find . -name '*.tmp' -delete",
+			"find -name x -delete",
+			"find -L . -name x -delete",
+			"find . -name '*.tmp' -delete -name '*.o' -delete",
+			"find -D tree -P . -name x -delete",
+			"find -- . -name x -delete",
+			"find -f . -name x -delete",
+			"find -d -name x -delete",
+			"find -L -name x -delete",
+			"find -- -iname x -delete",
+			"find . -type f -name x -delete",
+			"find -f . -f build -name x -delete",
+			"find -sx build -delete",
+			"find . -type f -name '*.o' -delete",
+			"find . -iname '*.TMP' -delete",
+			"find . -path './build/*' -delete",
+			"find . -name '*.tmp' -print",
 			"find build -delete",
 			"env -C .work rm -rf build",
 			"sudo -u user git status",
@@ -408,6 +458,69 @@ func TestGuardBlind(t *testing.T) {
 	}
 }
 
+// A find -delete refused at the starting directory itself names the ways
+// out; one that starts outside it keeps the advice to delete inside.
+func TestGuardFindAdvice(t *testing.T) {
+	g := testGuard("feature", nil)
+	for _, line := range []string{"find . -delete", "find . -maxdepth 1 -delete", "find -delete",
+		"find /work/repo -type f -delete", "find . -name '*' -delete", "find . -name x -o -delete",
+		`find . \! -name keep -delete`, "find -L . -delete",
+		"find -Z .. -name x -delete", "find -type f -name x -delete"} {
+		if r := g.refusal("bash", line); r.next != nextFindDelete {
+			t.Errorf("%q: %q", line, r.next)
+		}
+	}
+	for _, line := range []string{"find .. -name x -delete", "find / -name '*.go' -delete", "find .git -name x -delete",
+		"find -L .. -name '*.tmp' -delete", "find -P / -name '*.log' -delete", "find -- .. -name '*.tmp' -delete",
+		"find -- .git -name x -delete", "find -f .. -name x -delete"} {
+		if r := g.refusal("bash", line); r.next != nextDeleteInside {
+			t.Errorf("%q: %q", line, r.next)
+		}
+	}
+}
+
+// A wrapper whose script runs a program the guard cannot read passes and is
+// recorded as unjudged, once, at the wrapper that runs it; a literal script
+// is not recorded, and a refusal inside a wrapper still refuses.
+func TestGuardUnjudged(t *testing.T) {
+	for shell, lines := range map[string]map[string]string{
+		"bash": {
+			`sh -c "$CMD"`:                 `unjudged @ /work/repo`,
+			`eval "$X"`:                    `unjudged @ /work/repo`,
+			`bash -c 'X=1 $CMD args'`:      `unjudged @ /work/repo`,
+			`sh -c "$(curl x)"`:            `unjudged @ /work/repo`,
+			`sh -c 'eval "$X"'`:            `unjudged @ /work/repo`,
+			`cd build && eval $X`:          `unjudged @ /work/repo/build`,
+			`sh -c 'go test ./...'`:        ``,
+			`eval go vet ./...`:            ``,
+			`sh -c 'echo $HOME'`:           ``,
+			`$CMD`:                         ``,
+			`cmd /c %X%`:                   `unjudged @ /work/repo`,
+			`powershell -Command $s`:       `unjudged @ /work/repo`,
+			`powershell -Command "& $s"`:   `unjudged @ /work/repo`,
+			`powershell -Command Get-Date`: ``,
+		},
+		"powershell": {
+			`Invoke-Expression $s`: `unjudged @ /work/repo`,
+			`iex "Get-Date"`:       ``,
+		},
+	} {
+		for line, want := range lines {
+			var blind []string
+			if r := testGuard("feature", &blind).refusal(shell, line); r.what != "" {
+				t.Errorf("%q refused: %s", line, r.what)
+			}
+			if got := strings.Join(blind, "|"); got != want {
+				t.Errorf("%q recorded %q, want %q", line, got, want)
+			}
+		}
+	}
+	var blind []string
+	if r := testGuard("feature", &blind).refusal("bash", `sh -c "rm -rf $DIR"`); r.what == "" || len(blind) != 0 {
+		t.Errorf("a refused script: %q %q", r.what, blind)
+	}
+}
+
 // The guard answers Claude Code's PreToolUse protocol: a refused command
 // gets the deny decision with a one-line reason that names what was
 // refused, what to do instead and the coordinator; a passed one, another
@@ -459,6 +572,41 @@ func TestRunGuard(t *testing.T) {
 	if err != nil || json.Unmarshal(raw, &line) != nil || line.Rule != "git reset --hard" ||
 		line.Command != "git reset --hard" || line.Time == "" {
 		t.Fatalf("the blind log: %v %q", err, raw)
+	}
+}
+
+// Each wrapper whose script the guard cannot read writes one unjudged line
+// to the home's log, with the wrapper's words cut to 200 characters; a
+// literal script writes none.
+func TestRunGuardUnjudged(t *testing.T) {
+	long := `sh -c "$CMD" ` + strings.Repeat("x", 300)
+	for _, c := range []struct{ tool, command, want string }{
+		{"Bash", `sh -c "$CMD"`, "sh -c $CMD"},
+		{"Bash", `eval "$X"`, "eval $X"},
+		{"Bash", `powershell -Command $s`, "powershell -Command $s"},
+		{"PowerShell", `Invoke-Expression $s`, "Invoke-Expression $s"},
+		{"Bash", long, ("sh -c $CMD " + strings.Repeat("x", 300))[:maxGuardLogCommand]},
+		{"Bash", `sh -c 'go test ./...'`, ""},
+	} {
+		home, dir := t.TempDir(), t.TempDir()
+		payload, _ := json.Marshal(map[string]any{"tool_name": c.tool, "cwd": dir,
+			"tool_input": map[string]string{"command": c.command}})
+		var out bytes.Buffer
+		if RunGuard(bytes.NewReader(payload), &out, home); out.String() != "" {
+			t.Errorf("%q refused: %q", c.command, out.String())
+		}
+		raw, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(GuardLogFile)))
+		if c.want == "" {
+			if !os.IsNotExist(err) {
+				t.Errorf("%q recorded: %v %q", c.command, err, raw)
+			}
+			continue
+		}
+		var line guardBlind
+		if err != nil || strings.Count(string(raw), "\n") != 1 || json.Unmarshal(raw, &line) != nil ||
+			line.Rule != "unjudged" || line.Command != c.want || line.Dir != dir || line.Time == "" {
+			t.Errorf("%q: %v %q", c.command, err, raw)
+		}
 	}
 }
 

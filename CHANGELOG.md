@@ -36,6 +36,23 @@ section, and the release workflow refuses a tag that has none
 
   The check itself now keeps the words after a `$(...)` substitution with
   the invocation around it, so a stale flag there is reported.
+- **The command guard passes a `find -delete` narrowed by name at the
+  working directory** (01a17697-e272). `find . -name '*.tmp' -delete` used
+  to be refused like `find . -delete`. It now passes when a `-name`,
+  `-iname` or `-path` test whose pattern holds more than wildcards, dots
+  and slashes comes before the first `-delete`, with no `-o`, `-or`, `,`,
+  `!` or `-not` before the last one. find's leading options (`-L`, `-P`,
+  BSD's `-f <start>` and the like) and `--` are skipped to find the real
+  start, and without a start word after them only a find that goes on with
+  its name test passes. `find . -delete`, `find . -type f -delete` and
+  `find . -name '*' -delete` stay refused, now with advice that fits:
+  narrow it by name, start in a subdirectory, or use `-exec rm {} +`.
+- **The guard records the wrapped scripts it could not read**
+  (01a17697-e286). A wrapper whose script runs a program the guard cannot
+  read, such as `sh -c "$CMD"`, `eval "$X"` or `powershell -Command $s`,
+  still passes, and now writes a line with the rule `unjudged` to
+  `logs/guard.jsonl`, so the log counts every command the guard passed
+  without judging it.
 
 ## [0.8.0] - 2026-10-27
 

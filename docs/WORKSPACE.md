@@ -63,7 +63,8 @@ is also independent of the model and client, both of which may change.
                      turns/<turn id>.jsonl keeps its raw stream (owner-only, never sent);
                      serve.log is the log of the home's service (aicrew-agent service)
                      guard.jsonl records the commands the command guard passed
-                     without knowing the branch
+                     without knowing the branch, and the wrapped scripts it
+                     could not read (unjudged)
   work/              temporary artifacts
   repos/             clean clones, one per repository key
   worktrees/         one isolated worktree per attempt
@@ -235,11 +236,27 @@ survey, the options and the decision (D-STORE) are recorded in
   - `git branch -D` of `main`, `master` or the default branch;
   - a recursive delete (`rm -r` in any form, `Remove-Item` and its aliases
     with `-Recurse`, `rmdir|rd|del /s`, `find -delete`) of a path outside
-    the directory the call starts in, of that directory itself (so
-    `find -delete` starts in a subdirectory, never at `.`), of `.git`,
+    the directory the call starts in, of that directory itself, of `.git`,
     or of paths it cannot read: a variable, `~`, a command substitution
     (`$(…)` or backquotes), a glob over the directory's own entries, paths
-    from a pipe or `xargs`, or no path at all;
+    from a pipe or `xargs`, or no path at all. A `find -delete` may start
+    at the directory itself when it is narrowed by name before its first
+    `-delete`: a `-name`, `-iname` or `-path` test whose pattern holds more
+    than wildcards, dots and slashes, with no `-o`, `-or`, `,`, `!` or
+    `-not` anywhere before the last `-delete`. find's own leading options
+    (GNU's `-H`, `-L`, `-P`, `-O<level>` and `-D` with its argument, BSD's
+    `-E`, `-X`, `-d`, `-s`, `-x` and `-f` with its start) and `--` are
+    skipped to find the start. Without a start word after those options
+    (a start given with `-f` included), only a find that goes on with its
+    name test gets the allowance, so an option the guard does not know
+    cannot hide a start; a start attached to `-f`, as in `-f..`, is
+    refused, and is written as a separate word instead. So `find . -name '*.tmp' -delete` and
+    `find . -type f -name '*.o' -delete` pass, while `find . -delete`,
+    `find . -type f -delete`, `find . -name '*' -delete` and
+    `find . -name x -o -delete` are refused, with advice to narrow it by
+    name, start in a subdirectory or use `-exec rm {} +`. The guard does
+    not read what a pattern matches, so one like `*.*x` that matches nearly
+    everything still passes;
   - formatting a disk (`format`, `Format-Volume`, `mkfs*`);
   - an encoded PowerShell command, which it cannot read.
 
@@ -255,7 +272,11 @@ survey, the options and the decision (D-STORE) are recorded in
   since it never blocks on its own uncertainty. It records the command in
   `logs/guard.jsonl`, one line each with the time, the rule, the judged
   command (at most 200 characters) and the directory, to show how often it
-  passes a command blind.
+  passes a command blind. It records the same way, with the rule
+  `unjudged`, a wrapper (`sh -c`, `eval`, `powershell -Command`,
+  `Invoke-Expression`, `cmd /c`) whose script runs a program it cannot
+  read, such as `sh -c "$CMD"` or `powershell -Command "& $s"`; the
+  command is the wrapper's words. Such a script still passes.
 
   A refused call gets Claude Code's deny decision with one line: what was
   refused, what to do instead (for example "Push without force: rebase or

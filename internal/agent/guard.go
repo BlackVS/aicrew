@@ -32,8 +32,10 @@ import (
 // outside the working directory, discarding work on main, master or the
 // default branch, rewriting or deleting what others share, skipping hooks,
 // and formatting a disk. Discarding work on the member's own branch and
-// deleting inside its working directory pass. A command it passes because
-// the branch could not be determined is recorded in logs/guard.jsonl.
+// deleting inside its working directory pass, and so does a find -delete
+// narrowed by name. A command it passes because the branch could not be
+// determined, and a wrapper's script whose program it cannot read, are
+// recorded in logs/guard.jsonl.
 //
 // The hook protocol (Claude Code 2.1.310, verified on 2026-10-24): the
 // payload on stdin names tool_name, tool_input.command and cwd; a refusal
@@ -45,7 +47,8 @@ import (
 const maxGuardPayload = 1 << 20
 
 // GuardLogFile is the home's record of the commands the guard passed
-// without knowing the branch, relative to the home.
+// without judging them (without knowing the branch, or a wrapper's script
+// whose program it cannot read), relative to the home.
 const GuardLogFile = "logs/guard.jsonl"
 
 // guardGitTimeout bounds each git call the guard makes to read a branch.
@@ -558,6 +561,8 @@ func (e *guardEnv) skipLeader(words []string) (rest []string, inner string) {
 const (
 	nextDeleteInside = "Delete only paths inside your working directory, named literally and relative to it (for " +
 		"example .work/build), never the directory itself or .git."
+	nextFindDelete = "Narrow the find by name before -delete (-name, -iname or -path), start it in a " +
+		"subdirectory (find <subdir> ... -delete), or delete what it prints with -exec rm {} +."
 	nextDeleteNamed = "Name the paths to delete literally, relative to your working directory, without variables, " +
 		"~, a pipe or xargs."
 	nextOwnBranch = "Work on your own task branch (git switch -c <branch>), where discarding your own work is " +
@@ -599,22 +604,22 @@ func (e guardEnv) judgeCommand(shell string, words []string, depth int) refusal 
 	switch prog {
 	case "bash", "sh", "zsh", "dash", "ksh":
 		if inner, ok := shellScript(args); ok {
-			return e.refusalIn("bash", inner, depth+1)
+			return e.wrapped(words, "bash", inner, depth)
 		}
 	case "eval":
-		return e.refusalIn(shell, strings.Join(args, " "), depth+1)
+		return e.wrapped(words, shell, strings.Join(args, " "), depth)
 	case "powershell", "pwsh":
 		if inner, r := powershellScript(args); r.what != "" {
 			return r
 		} else if inner != "" {
-			return e.refusalIn("powershell", inner, depth+1)
+			return e.wrapped(words, "powershell", inner, depth)
 		}
 	case "invoke-expression", "iex":
-		return e.refusalIn("powershell", strings.Join(args, " "), depth+1)
+		return e.wrapped(words, "powershell", strings.Join(args, " "), depth)
 	case "cmd":
 		for i, a := range args {
 			if la := strings.ToLower(a); la == "/c" || la == "/k" || la == "/r" {
-				return e.refusalIn("cmd", strings.Join(args[i+1:], " "), depth+1)
+				return e.wrapped(words, "cmd", strings.Join(args[i+1:], " "), depth)
 			}
 		}
 	case "git":
@@ -640,21 +645,7 @@ func (e guardEnv) judgeCommand(shell string, words []string, depth int) refusal 
 			}
 		}
 	case "find":
-		for _, a := range args {
-			if a == "-delete" {
-				var starts []string
-				for _, s := range args {
-					if strings.HasPrefix(s, "-") || s == "(" || s == "!" {
-						break
-					}
-					starts = append(starts, s)
-				}
-				if len(starts) == 0 {
-					starts = []string{"."}
-				}
-				return e.deleteTargets("find -delete", starts, piped, false)
-			}
-		}
+		return e.judgeFind(args, piped)
 	case "format", "format-volume", "clear-disk", "diskpart":
 		return refusal{"formatting a disk (" + prog + ")", nextFormat}
 	default:
@@ -686,6 +677,125 @@ func (e guardEnv) judgeRm(args []string, piped bool) refusal {
 		return refusal{}
 	}
 	return e.deleteTargets("rm "+recursive, targets, piped || len(targets) == 0, false)
+}
+
+// wrapped judges the script a wrapper command (words) runs. A script it
+// passes with a command whose program it cannot read, such as sh -c "$CMD",
+// is recorded as unjudged.
+func (e guardEnv) wrapped(words []string, shell, script string, depth int) refusal {
+	if r := e.refusalIn(shell, script, depth+1); r.what != "" {
+		return r
+	}
+	if e.blind != nil && unjudged(shell, script) {
+		e.blind("unjudged", words, e.dir)
+	}
+	return refusal{}
+}
+
+// unjudged reports whether a command of script runs a program the guard
+// cannot name: a variable, a substitution, % or ~ in the program's place,
+// after the variable assignments and a call operator (& or .).
+func unjudged(shell, script string) bool {
+	for _, words := range splitCommands(shell, script) {
+		for len(words) > 0 && (words[0] == "&" || words[0] == "." ||
+			strings.Contains(words[0], "=") && !strings.HasPrefix(words[0], "-") && !strings.HasPrefix(words[0], "/")) {
+			words = words[1:]
+		}
+		if len(words) > 0 && !literalPath(words[0]) {
+			return true
+		}
+	}
+	return false
+}
+
+// judgeFind judges find -delete: it deletes only inside the working
+// directory, and from that directory itself only when findFiltered.
+func (e guardEnv) judgeFind(args []string, piped bool) refusal {
+	last := -1
+	for i, a := range args {
+		if a == "-delete" {
+			last = i
+		}
+	}
+	if last < 0 {
+		return refusal{}
+	}
+	// find's own options come before the starts: GNU's -H, -L, -P,
+	// -O<level> and -D <debugopts>, BSD's -E, -X, -d, -s, -x and -f <start>
+	// (clustered, as BSD allows), and -- ends them.
+	var starts []string
+	from := 0
+options:
+	for from < len(args) {
+		a := args[from]
+		switch {
+		case a == "--":
+			from++
+			break options
+		case a == "-D":
+			from += 2
+		case strings.HasPrefix(a, "-O"):
+			from++
+		case len(a) > 1 && a[0] == '-' && strings.Trim(a[1:], "HLPEXdsxf") == "":
+			from++
+			if strings.HasSuffix(a, "f") && from < len(args) {
+				starts = append(starts, args[from])
+				from++
+			}
+		default:
+			break options
+		}
+	}
+	// The escaped \( never reaches here in bash yet: the splitter reads it
+	// as a substitution until 01a17d22-4928 lets a backslash escape it.
+	n := 0
+	for _, s := range args[min(from, len(args)):] {
+		if strings.HasPrefix(s, "-") || s == "(" || s == "!" || s == `\(` || s == `\!` {
+			break
+		}
+		starts = append(starts, s)
+		n++
+	}
+	filtered := last > from && findFiltered(args[from+n:last])
+	// Without a start word after the options, only a find that goes on with
+	// its name test earns the allowance, whether or not -f gave starts: a
+	// word the option scan does not know, such as -Z or an attached -f..,
+	// may hide a start, so it fails closed.
+	if n == 0 && filtered && args[from] != "-name" && args[from] != "-iname" && args[from] != "-path" {
+		filtered = false
+	}
+	if len(starts) == 0 {
+		starts = []string{"."}
+	}
+	r := e.deleteTargets("find -delete", starts, piped, filtered)
+	if r.next == nextDeleteInside && !filtered &&
+		!slices.ContainsFunc(starts, func(s string) bool { return !e.inside(s, true) }) {
+		r.next = nextFindDelete
+	}
+	return r
+}
+
+// findFiltered reports whether find's expression before its last -delete
+// narrows it by name or path before its first -delete, with no alternative
+// or negation that could widen it again. A -type test alone does not narrow
+// it: find . -type f -delete deletes every file. Nor does a pattern of only
+// wildcards, dots and slashes, such as * or ./*. What a pattern would match
+// is not read further.
+func findFiltered(expr []string) bool {
+	named, deleted := false, false
+	for i, a := range expr {
+		switch a {
+		case "-o", "-or", ",", "!", `\!`, "-not":
+			return false
+		case "-delete":
+			deleted = true
+		case "-name", "-iname", "-path":
+			if !deleted && i+1 < len(expr) && strings.Trim(expr[i+1], "*?./") != "" {
+				named = true
+			}
+		}
+	}
+	return named
 }
 
 // deleteTargets judges a recursive delete of targets: each must name a

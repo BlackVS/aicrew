@@ -12,6 +12,18 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+### Changed
+
+- **A write aimem refuses as unreadable text is a correction, not a
+  failure** (01a17698-f6c3). aimem 0.10.14 refuses a task comment or a
+  task field whose prose breaks its writing rule with `unreadable_text`,
+  naming the field, the flagged words and the fix. The refusal reaches the
+  member's model as the tool's result, and the turn goes on: it never fails
+  the turn, holds the member or blocks the attempt. ROLES.md's "Writing
+  that others read" now tells the member to rewrite the text as the fix
+  says and send it again in the same turn. A `join` rerun brings the line
+  to a home.
+
 ## [0.8.0] - 2026-10-27
 
 Twelve pull requests since 0.7.0 (#200 to #211). A member's hold now

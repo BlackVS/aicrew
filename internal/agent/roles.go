@@ -359,6 +359,10 @@ the canonical one, which replaces it here.
 - Unreadable: "fixd parser;tests ok,PR12 rdy4rev". Readable: "Fixed the
   parser's handling of empty lines. The tests pass. Pull request 12 is ready
   for review."
+- When aimem refuses a write with ` + "`unreadable_text`" + `, the refusal names the
+  field, the flagged words and the fix after ` + "`Next:`" + `: rewrite that text as
+  it says and send it again in the same turn, as a correction, not a failed
+  write. Sending the same text again gets the same refusal.
 `)
 	for _, r := range guideRoles {
 		fmt.Fprintf(&b, "\n## %s\n\n%s\n\n", r.Heading, r.Intro)

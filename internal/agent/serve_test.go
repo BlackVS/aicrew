@@ -1085,3 +1085,33 @@ func TestCutText(t *testing.T) {
 		}
 	}
 }
+
+// A coordinator's turn in which aimem refused a comment as unreadable_text
+// and the member sent the rewritten text is a finished turn: no hold, no
+// failure on the record, no step sent for it, and the next message gets
+// its turn (01a17698-f6c3).
+func TestTurnLoopRefusedWriteIsNoFailure(t *testing.T) {
+	e := newLoopEnv(t)
+	e.host.role = "coordinator"
+	e.host.pending = []PendingMessage{msg("m1", "message")}
+	e.next = func(TurnSpec, *fakeHost) TurnResult {
+		e.host.pending = nil
+		return ReadTurnStream(strings.NewReader(stream(streamInit, streamComment, streamUnreadable, streamRewritten,
+			streamCommented, streamCorrected)), func() {})
+	}
+	e.tick(t)
+	if st := readTurnState(e.home); !st.HoldUntil.IsZero() {
+		t.Errorf("held until %s after a corrected write", st.HoldUntil)
+	}
+	if recs := e.records(t); len(recs) != 1 || recs[0].Outcome != TurnFinished || recs[0].Error != "" {
+		t.Errorf("records %+v", recs)
+	}
+	if len(e.host.calls) != 0 || len(e.host.holds) != 0 {
+		t.Errorf("steps %+v and holds %+v after a corrected write", e.host.calls, e.host.holds)
+	}
+	e.host.pending = []PendingMessage{msg("m2", "message")}
+	e.tick(t)
+	if len(e.specs) != 2 {
+		t.Errorf("%d turns; the next message got none", len(e.specs))
+	}
+}

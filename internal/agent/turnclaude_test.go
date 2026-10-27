@@ -234,3 +234,33 @@ func TestReadTurnStreamPricesTheTurn(t *testing.T) {
 		}
 	}
 }
+
+// aimem 0.10.14's refusal of a comment whose prose breaks the writing rule,
+// as its MCP tool returns it (aimem internal/mcp/tasks_test.go at v0.10.14):
+// a tool result, which the client hands to the model.
+const (
+	streamComment = `{"type":"assistant","message":{"model":"m","usage":{"input_tokens":10},"content":[{"type":"tool_use",` +
+		`"id":"t1","name":"mcp__aimem__add_task_comment","input":{"id":"task-1","body":"CI409 SUCCESS99s","idempotency_key":"c1"}}]}}`
+	streamUnreadable = `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,` +
+		`"content":"error: unreadable_text: body: the text is not readable prose (words and numbers joined together at \"CI409\"). ` +
+		`The rule: \"The rule\" in docs/WRITING-PERSISTED-TEXT.md (the writing_rule tool returns it). Decided by the filter alone. ` +
+		`Next: Separate the words from the numbers and write the sentence out, for example \"run 409 succeeded in 99 seconds\" ` +
+		`instead of \"run409 SUCCESS99s\"."}]}}`
+	streamRewritten = `{"type":"assistant","message":{"model":"m","usage":{"input_tokens":12},"content":[{"type":"tool_use",` +
+		`"id":"t2","name":"mcp__aimem__add_task_comment","input":{"id":"task-1","body":"CI run 409 succeeded in 99 seconds.","idempotency_key":"c2"}}]}}`
+	streamCommented = `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2",` +
+		`"content":"{\"id\":\"comment-2\",\"task_id\":\"task-1\"}"}]}}`
+	streamCorrected = `{"type":"result","subtype":"success","is_error":false,"result":"Rewrote the refused comment and sent it again.",` +
+		`"total_cost_usd":0.05,"usage":{"input_tokens":22,"output_tokens":30}}`
+)
+
+// A write aimem refuses with unreadable_text is a tool result the model
+// corrects in the same turn: the turn that rewrote and sent it again
+// finished, with no error and nothing denied (01a17698-f6c3).
+func TestReadTurnStreamRefusedWriteIsNoFailure(t *testing.T) {
+	res := ReadTurnStream(strings.NewReader(stream(streamInit, streamComment, streamUnreadable, streamRewritten,
+		streamCommented, streamCorrected)), func() { t.Error("the turn was aborted") })
+	if res.Outcome != TurnFinished || res.Error != "" || len(res.Denials) != 0 || res.LimitKind != "" {
+		t.Fatalf("a turn that corrected a refused write: %+v", res)
+	}
+}

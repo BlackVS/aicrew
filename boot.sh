@@ -22,13 +22,17 @@
 #   AICREW_VERSION=vX.Y.Z           install another release than RELEASE
 #   AICREW_REPO=owner/name          install from a fork
 #   AICREW_NO_SERVICE=1             leave the members' services alone
+#   AICREW_PREBUILT_DIR=            a directory holding aicrew-agent and aicrew to
+#                                   install instead of downloading; a SHA256SUMS
+#                                   in it, when present, is checked
 set -euo pipefail
 
 # The release this script installs. Bumped together with the CHANGELOG
 # when a release is cut (internal/installer checks they agree).
 RELEASE=v0.8.0
 
-command -v curl >/dev/null 2>&1 || { echo "ERROR: 'curl' is required." >&2; exit 1; }
+[ -n "${AICREW_PREBUILT_DIR:-}" ] || command -v curl >/dev/null 2>&1 ||
+  { echo "ERROR: 'curl' is required." >&2; exit 1; }
 REPO=${AICREW_REPO:-BlackVS/aicrew}
 TAG=${AICREW_VERSION:-$RELEASE}
 DL_BASE="https://github.com/$REPO/releases/download/$TAG"
@@ -46,23 +50,31 @@ esac
 
 # BEGIN install-agent
 # install_agent: install aicrew-agent and the operator CLI aicrew, both
-# $TAG, from $DL_BASE into $BIN_DIR for $OS/$ARCH. A binary that already
-# reports $TAG is left alone. Every download is checked against the
-# release's SHA256SUMS in a temporary directory, all of them before any is
-# installed: nothing in the bin directory changes unless every one passes.
+# $TAG, from $DL_BASE into $BIN_DIR for $OS/$ARCH, or the ones in
+# $AICREW_PREBUILT_DIR when it is set. A binary that already reports $TAG,
+# or is the same file as the prebuilt one, is left alone. Every download is
+# checked against the release's SHA256SUMS in a temporary directory, all of
+# them before any is installed: nothing in the bin directory changes unless
+# every one passes. Both prebuilt binaries are staged and checked the same
+# way, against their directory's SHA256SUMS when it holds one, before either
+# is judged current, so a mismatch for one never lets the other through.
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | awk '{print $1}'; }
 install_agent() {
   local tmp rc=0 name todo=""
-  for name in aicrew-agent aicrew; do
-    if [ "$(installed_version "$name")" = "$TAG" ]; then
-      echo "$name $TAG is current ($BIN_DIR/$name); nothing changed."
-    else
-      todo="$todo $name"
-    fi
-  done
-  [ -n "$todo" ] || return 0
   tmp=$(mktemp -d)
-  fetch_and_swap "$tmp" $todo || rc=$?
+  if [ -n "${AICREW_PREBUILT_DIR:-}" ]; then
+    stage_prebuilt "$tmp" aicrew-agent aicrew || rc=$?
+  fi
+  if [ "$rc" = 0 ]; then
+    for name in aicrew-agent aicrew; do
+      if is_current "$name" "$tmp"; then
+        echo "$name $(installed_version "$name") is current ($BIN_DIR/$name); nothing changed."
+      else
+        todo="$todo $name"
+      fi
+    done
+    [ -z "$todo" ] || fetch_and_swap "$tmp" $todo || rc=$?
+  fi
   rm -rf "$tmp"
   return "$rc"
 }
@@ -71,26 +83,27 @@ installed_version() {
   [ -x "$BIN_DIR/$1" ] || return 0
   "$BIN_DIR/$1" version 2>/dev/null | awk '{print $2}' || true
 }
+# is_current name tmp: whether the installed binary is the one to install:
+# it reports $TAG, or it is the same file as the prebuilt one already staged
+# and checked in tmp. A prebuilt binary is compared by its hash, never run.
+is_current() {
+  if [ -z "${AICREW_PREBUILT_DIR:-}" ]; then
+    [ "$(installed_version "$1")" = "$TAG" ]
+  else
+    [ -f "$BIN_DIR/$1" ] && [ "$(sha256 "$BIN_DIR/$1")" = "$(sha256 "$2/$1")" ]
+  fi
+}
 # fetch_and_swap tmp name...: every step checks its own result, since a
-# function called in a || list runs without errexit.
+# function called in a || list runs without errexit. Prebuilt binaries are
+# already staged in tmp by install_agent.
 fetch_and_swap() {
-  local tmp=$1 name asset want got old new exe
+  local tmp=$1 name old new exe
   shift
-  curl -fsSL "$DL_BASE/SHA256SUMS" -o "$tmp/SHA256SUMS" ||
-    { echo "ERROR: cannot fetch the SHA256SUMS of $TAG; refusing an unverified binary. Nothing changed." >&2; return 1; }
-  for name in "$@"; do
-    asset="$name-$OS-$ARCH"
-    echo "fetching $name $TAG ($asset)"
-    curl -fsSL "$DL_BASE/$asset" -o "$tmp/$name" ||
-      { echo "ERROR: cannot fetch $asset of $TAG. Nothing changed." >&2; return 1; }
-    want=$(awk -v n="$asset" '$2==n || $2=="*"n {print $1}' "$tmp/SHA256SUMS")
-    got=$(sha256 "$tmp/$name")
-    if [ -z "$want" ] || [ "$want" != "$got" ]; then
-      echo "ERROR: checksum mismatch for $asset (want ${want:-absent}, got $got); refusing it. Nothing changed." >&2
-      return 1
-    fi
-    chmod 755 "$tmp/$name" || return 1
-  done
+  if [ -n "${AICREW_PREBUILT_DIR:-}" ]; then
+    for name in "$@"; do echo "installing the prebuilt $name from $AICREW_PREBUILT_DIR"; done
+  else
+    stage_release "$tmp" "$@" || return 1
+  fi
   mkdir -p "$BIN_DIR" || { echo "ERROR: cannot create $BIN_DIR. Nothing changed." >&2; return 1; }
   case " $* " in *" aicrew-agent "*) svc_stop_all "$tmp/aicrew-agent" ;; esac
   for name in "$@"; do
@@ -112,6 +125,49 @@ fetch_and_swap() {
     fi
   done
   svc_start_all
+}
+# stage_prebuilt tmp name...: copy each binary from $AICREW_PREBUILT_DIR
+# into tmp and check the copy against the directory's SHA256SUMS, which
+# may list it by its name or by its release asset name, when there is one.
+stage_prebuilt() {
+  local tmp=$1 dir=$AICREW_PREBUILT_DIR name want got
+  shift
+  for name in "$@"; do
+    [ -f "$dir/$name" ] ||
+      { echo "ERROR: $dir/$name is missing; AICREW_PREBUILT_DIR must hold aicrew-agent and aicrew. Nothing changed." >&2; return 1; }
+    cp "$dir/$name" "$tmp/$name" || return 1
+    if [ -f "$dir/SHA256SUMS" ]; then
+      want=$(awk -v n="$name" -v a="$name-$OS-$ARCH" \
+        '$2==n || $2=="*"n || $2==a || $2=="*"a {print $1; exit}' "$dir/SHA256SUMS")
+      got=$(sha256 "$tmp/$name")
+      if [ -z "$want" ] || [ "$want" != "$got" ]; then
+        echo "ERROR: checksum mismatch for $dir/$name (want ${want:-absent}, got $got); refusing it. Nothing changed." >&2
+        return 1
+      fi
+    fi
+    chmod 755 "$tmp/$name" || return 1
+  done
+}
+# stage_release tmp name...: download each binary's release asset of $TAG
+# into tmp and check it against the release's SHA256SUMS.
+stage_release() {
+  local tmp=$1 name asset want got
+  shift
+  curl -fsSL "$DL_BASE/SHA256SUMS" -o "$tmp/SHA256SUMS" ||
+    { echo "ERROR: cannot fetch the SHA256SUMS of $TAG; refusing an unverified binary. Nothing changed." >&2; return 1; }
+  for name in "$@"; do
+    asset="$name-$OS-$ARCH"
+    echo "fetching $name $TAG ($asset)"
+    curl -fsSL "$DL_BASE/$asset" -o "$tmp/$name" ||
+      { echo "ERROR: cannot fetch $asset of $TAG. Nothing changed." >&2; return 1; }
+    want=$(awk -v n="$asset" '$2==n || $2=="*"n {print $1}' "$tmp/SHA256SUMS")
+    got=$(sha256 "$tmp/$name")
+    if [ -z "$want" ] || [ "$want" != "$got" ]; then
+      echo "ERROR: checksum mismatch for $asset (want ${want:-absent}, got $got); refusing it. Nothing changed." >&2
+      return 1
+    fi
+    chmod 755 "$tmp/$name" || return 1
+  done
 }
 # The members' services (aicrew-agent service): stop, swap, start. The new
 # aicrew-agent, still in the temporary directory, stops every registered

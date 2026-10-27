@@ -1812,7 +1812,14 @@ Knobs:
   where it already is;
 - `AICREW_VERSION`: another release than the pinned one;
 - `AICREW_REPO`: a fork;
-- `AICREW_NO_SERVICE=1`: leave the members' services alone.
+- `AICREW_NO_SERVICE=1`: leave the members' services alone;
+- `AICREW_PREBUILT_DIR` (`boot.sh` only): a directory holding
+  `aicrew-agent` and `aicrew` to install instead of downloading. Nothing is
+  downloaded, and curl is not needed. A `SHA256SUMS` in the directory, when
+  present, is checked as a release's is, by the binary's name or its
+  release asset name; without one the binaries are installed as they are.
+  An installed binary that is the same file (by hash) is current; a
+  prebuilt binary is never run before its checksum is checked.
 
 `internal/installer` checks both pins and the documented one-liners against
 the CHANGELOG, and runs both scripts' install step against a local release:

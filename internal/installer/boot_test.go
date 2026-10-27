@@ -349,6 +349,176 @@ func TestBootPs1VersionRead(t *testing.T) {
 	}
 }
 
+// sumsForm is how prebuiltDir's SHA256SUMS lists a binary: not at all (no
+// file), by its own name, or by its release asset name, as a SHA256SUMS
+// copied from a release does.
+type sumsForm int
+
+const (
+	noSums sumsForm = iota
+	byName
+	byAsset
+)
+
+// prebuiltDir is a directory as AICREW_PREBUILT_DIR takes it: the binaries
+// of the release directory rel under their own names, and a SHA256SUMS
+// listing them in the given form; badSum names the binary whose listed hash
+// is another one ("" for none).
+func prebuiltDir(t *testing.T, rel string, sums sumsForm, badSum string) string {
+	t.Helper()
+	dir := t.TempDir()
+	var list strings.Builder
+	for _, binary := range memberBinaries {
+		b, err := os.ReadFile(filepath.Join(rel, asset(binary)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, binary), b, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		h := sha256.Sum256(b)
+		if badSum == binary {
+			h = sha256.Sum256(append(b, 0))
+		}
+		listed := binary
+		if sums == byAsset {
+			listed = asset(binary)
+		}
+		list.WriteString(hex.EncodeToString(h[:]) + "  " + listed + "\n")
+	}
+	if sums != noSums {
+		if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(list.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// boot.sh installs from AICREW_PREBUILT_DIR with nothing to download
+// (01a17d8e-4267): a missing binary or one whose hash is not the one the
+// directory's SHA256SUMS lists installs neither, and the refused one is
+// never run; a SHA256SUMS may list the binaries by their own names or by
+// their release asset names. An installed pair that is the same files is
+// current, and another pair replaces it, with or without a SHA256SUMS.
+func TestBootShPrebuilt(t *testing.T) {
+	shellOnly(t)
+	home, tmp := t.TempDir(), t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	nothing := t.TempDir() // DL_BASE: every download from it fails
+	v1 := agentRelease(t, "v0.0.1", "")
+	v2 := agentRelease(t, "v0.0.2", "")
+	run := func(dir string) (string, int) {
+		return bootSh(home, bin, tmp, "AICREW_PREBUILT_DIR="+dir)(t, nothing, "v9.9.9")
+	}
+	versions := func() string {
+		return agentVersion(t, filepath.Join(bin, "aicrew-agent")) + "/" + agentVersion(t, filepath.Join(bin, "aicrew"))
+	}
+
+	partial := prebuiltDir(t, v1, byName, "")
+	if err := os.Remove(filepath.Join(partial, "aicrew")); err != nil {
+		t.Fatal(err)
+	}
+	out, code := run(partial)
+	if code == 0 || !strings.Contains(out, "/aicrew is missing") || len(files(t, home)) != 0 {
+		t.Fatalf("a missing binary was not refused, or something was installed (exit %d):\n%s", code, out)
+	}
+	out, code = run(prebuiltDir(t, v1, byName, "aicrew"))
+	if code == 0 || !strings.Contains(out, "checksum mismatch for") || len(files(t, home)) != 0 {
+		t.Fatalf("a bad hash was not refused, or something was installed (exit %d):\n%s", code, out)
+	}
+	out, code = run(prebuiltDir(t, v1, byAsset, "aicrew-agent"))
+	if code == 0 || !strings.Contains(out, "checksum mismatch for") || len(files(t, home)) != 0 {
+		t.Fatalf("a bad hash listed by asset name was not refused, or something was installed (exit %d):\n%s", code, out)
+	}
+	// A binary whose hash does not match is refused without being run.
+	ran := filepath.Join(t.TempDir(), "ran")
+	tampered := prebuiltDir(t, v1, byName, "")
+	script := "#!/bin/sh\ntouch '" + ran + "'\necho 'aicrew-agent v0.0.9'\n"
+	if err := os.WriteFile(filepath.Join(tampered, "aicrew-agent"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, code = run(tampered)
+	if _, err := os.Stat(ran); err == nil || code == 0 || !strings.Contains(out, "checksum mismatch for") {
+		t.Fatalf("a tampered binary was run or not refused (exit %d):\n%s", code, out)
+	}
+
+	out, code = run(prebuiltDir(t, v1, byName, ""))
+	if code != 0 || !strings.Contains(out, "installing the prebuilt aicrew-agent from") ||
+		!strings.Contains(out, "installed aicrew-agent v0.0.1") || !strings.Contains(out, "installed aicrew v0.0.1") ||
+		versions() != "v0.0.1/v0.0.1" {
+		t.Fatalf("install: exit %d:\n%s", code, out)
+	}
+	// An agent that is the installed one but whose SHA256SUMS entry is wrong,
+	// or absent, beside a changed aicrew with a right one: neither installs.
+	for _, absent := range []bool{false, true} {
+		mixed := prebuiltDir(t, v2, byName, "aicrew-agent")
+		agent, err := os.ReadFile(filepath.Join(bin, "aicrew-agent"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(mixed, "aicrew-agent"), agent, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if absent {
+			b, err := os.ReadFile(filepath.Join(mixed, "SHA256SUMS"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, cli, _ := strings.Cut(string(b), "\n")
+			if err := os.WriteFile(filepath.Join(mixed, "SHA256SUMS"), []byte(cli), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, code = run(mixed)
+		if code == 0 || !strings.Contains(out, "checksum mismatch for "+mixed+"/aicrew-agent") || versions() != "v0.0.1/v0.0.1" {
+			t.Fatalf("a current agent with a bad entry (absent %v) let aicrew through (exit %d, %s):\n%s", absent, code, versions(), out)
+		}
+	}
+	out, code = run(prebuiltDir(t, v1, noSums, ""))
+	if code != 0 || !strings.Contains(out, "aicrew-agent v0.0.1 is current") || !strings.Contains(out, "aicrew v0.0.1 is current") {
+		t.Fatalf("same binaries: exit %d:\n%s", code, out)
+	}
+	out, code = run(prebuiltDir(t, v2, byAsset, ""))
+	if code != 0 || !strings.Contains(out, "upgraded aicrew-agent v0.0.1 -> v0.0.2") ||
+		!strings.Contains(out, "upgraded aicrew v0.0.1 -> v0.0.2") || versions() != "v0.0.2/v0.0.2" {
+		t.Fatalf("upgrade, SHA256SUMS by asset name: exit %d:\n%s", code, out)
+	}
+	out, code = run(prebuiltDir(t, v1, noSums, ""))
+	if code != 0 || !strings.Contains(out, "upgraded aicrew-agent v0.0.2 -> v0.0.1") ||
+		!strings.Contains(out, "upgraded aicrew v0.0.2 -> v0.0.1") || versions() != "v0.0.1/v0.0.1" {
+		t.Fatalf("replace, no SHA256SUMS: exit %d:\n%s", code, out)
+	}
+	if left := files(t, tmp); len(left) != 0 {
+		t.Fatalf("the temporary directory keeps %v", left)
+	}
+}
+
+// boot.sh stops and starts the members' services around a prebuilt
+// upgrade as it does around a downloaded one.
+func TestBootShPrebuiltRestartsTheServices(t *testing.T) {
+	shellOnly(t)
+	home, tmp := t.TempDir(), t.TempDir()
+	bin := filepath.Join(home, "bin")
+	stubLog := filepath.Join(t.TempDir(), "service.log")
+	nothing := t.TempDir()
+	run := func(dir string) {
+		t.Helper()
+		out, code := bootSh(home, bin, tmp, "STUB_LOG="+stubLog, "STUB_SERVICES=1", "AICREW_PREBUILT_DIR="+dir)(t, nothing, "v9.9.9")
+		if code != 0 {
+			t.Fatalf("exit %d:\n%s", code, out)
+		}
+	}
+	run(prebuiltDir(t, stubRelease(t, "v0.0.1"), byName, ""))
+	os.Remove(stubLog)
+	run(prebuiltDir(t, stubRelease(t, "v0.0.2"), byName, ""))
+	b, _ := os.ReadFile(stubLog)
+	got := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(got) != 2 || strings.HasPrefix(got[0], "v0.0.2 bin ") || !strings.HasSuffix(got[0], " service stop --all") ||
+		got[1] != "v0.0.2 bin service start --all" {
+		t.Fatalf("a prebuilt upgrade with a service: %q", got)
+	}
+}
+
 // stubRelease is a release directory whose aicrew-agent and aicrew are
 // stubagent stamped with version.
 func stubRelease(t *testing.T, version string) string {

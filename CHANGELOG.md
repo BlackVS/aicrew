@@ -12,6 +12,16 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+### Added
+
+- **The member one-liner installs prebuilt binaries** (01a17d8e-4267).
+  `AICREW_PREBUILT_DIR=DIR boot.sh` installs `aicrew-agent` and `aicrew`
+  from DIR instead of downloading a release, as `install-aicrewd.sh`
+  already does for aicrewd. A `SHA256SUMS` in DIR is checked when present.
+  A missing binary or a hash mismatch installs neither, and the services'
+  stop and start around an upgrade run as before. For an unreleased build
+  and for a closed network. `boot.ps1` does not have the knob yet.
+
 ### Changed
 
 - **A write aimem refuses as unreadable text is a correction, not a

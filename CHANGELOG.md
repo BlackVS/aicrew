@@ -23,6 +23,19 @@ section, and the release workflow refuses a tag that has none
   that others read" now tells the member to rewrite the text as the fix
   says and send it again in the same turn. A `join` rerun brings the line
   to a home.
+- **The documents match the code again** (01a17737-425e), from the manual
+  pass of the examples check:
+  - WORKSPACE.md states the instruction precedence as the managed START.md
+    does and names it as the authority;
+  - WORKSPACE.md and DEVELOPMENT.md name the two hooks the client wiring
+    installs, the Stop hook and the command guard;
+  - CREW-CONTRACT.md lists the session attempt's `base_commit`, `process`
+    and `repository`;
+  - DEVELOPMENT.md drops the clone note that waited for the attempt's
+    repository, and names two more limits of the examples check.
+
+  The check itself now keeps the words after a `$(...)` substitution with
+  the invocation around it, so a stale flag there is reported.
 
 ## [0.8.0] - 2026-10-27
 

@@ -154,7 +154,10 @@ Markdown files the bootstrap writes into an agent home
 subcommand is caught only once its old word is gone from the binary's
 source, and a flag is checked against the binary's flags as a whole, not
 those of its own subcommand. Sample outputs, the order of steps and the
-meaning of arguments are not checked; that is a reader's pass.
+meaning of arguments are not checked; that is a reader's pass. Every fenced
+block is read as commands, whatever its language tag, and a lone backtick
+in prose opens a span that runs to the next line; the skip marker answers
+both.
 
 **Enforcement.** `scripts/check-doc-examples.sh` runs the test in CI's
 `repo-checks` job; `go test ./...` runs it too. aimem has the same check
@@ -2137,8 +2140,10 @@ member's user-level skills under it. It reports:
     updated only while it matches its recorded digest, and otherwise left
     alone with the proposed file written as `<file>.aicrew-new`.
   - Other keys in those files are kept.
-  - No hook is installed, and no user-level client configuration is
-    written.
+  - Claude Code's `.claude/settings.json` carries two hooks: the Stop hook
+    that wakes the member (except in turns mode) and the PreToolUse command
+    guard before every Bash and PowerShell call. No user-level client
+    configuration is written.
 - **What the client sees.** Each selected client is asked whether aimem's
   MCP server runs in the home and whether the required skills are
   visible. There is no model call: the model endpoint is a local port that
@@ -2808,8 +2813,10 @@ It works with the member's own credential for the repository's host, which
   after a fetch. An existing worktree for the attempt, a base the repository
   lacks, or a branch git refuses stops the command.
 - Only https clone URLs are taken: the member's credential is an https
-  token. Until the attempt carries its repository (354c-1b), the repository,
-  base and branch are given as flags.
+  token. The repository, base and branch are given as flags, and the member
+  takes them from its offer: the attempt carries its repository, base commit
+  and branch (01a105fa-337e). `clone` reads nothing from the attempt
+  itself.
 
 ### Pull requests with the member's credential: `aicrew-agent forge pr`
 

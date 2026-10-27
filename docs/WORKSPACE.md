@@ -112,8 +112,10 @@ other key as it finds it:
 Client wiring is project-level only: `.mcp.json` (Claude Code) and
 `opencode.json` (OpenCode) in the home, each with one managed `aimem` MCP
 entry, and Claude Code's `.claude/settings.json` with the home's aimem
-variables (below). Nothing else of the onboarding's is written there: no
-hook, and no user-level client configuration.
+variables (below). That file also carries the Stop hook that wakes the
+member (except in turns mode) and the PreToolUse command guard before every
+Bash and PowerShell call ("The command guard", below). Nothing else of the
+onboarding's is written there, and no user-level client configuration.
 
 ## The member's aimem installation
 
@@ -412,10 +414,13 @@ abandoned by decision. Unpushed work is never deleted silently.
 
 Onboarding writes `docs/START.md` (managed). It tells the agent:
 
-1. Which instructions win: an explicit operator instruction first, then the
-   repository's own `AGENTS.md`/`CLAUDE.md` for work in that repository, then
-   the project process selected in aimem, then this generic home guidance.
-   Home guidance never copies repository rules.
+1. Which instructions win, as `docs/START.md` states it (that file is the
+   authority): an explicit operator instruction first; then the home's docs
+   and the project process selected in aimem; then the repository's own
+   `AGENTS.md` or `CLAUDE.md`, for work in that repository. Where a
+   repository's instruction files differ from the home's docs or the
+   process, the home's docs and the process come first. Home guidance never
+   copies repository rules.
 2. That `creds/` is credential-only and secrets never leave it.
 3. That every change happens in a worktree created from an explicitly chosen
    base commit, one per attempt.

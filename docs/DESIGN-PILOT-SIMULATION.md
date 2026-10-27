@@ -6,8 +6,8 @@ this document. Written 2026-10-27.
 
 The pilot is the team cycle run for real: a coordinator and a worker in
 their own homes take a task from the board to a merged pull request and a
-recorded delivery. It stopped twice, on 2026-10-12 and 2026-10-15, and
-neither time on the protocol. It stopped on process gaps: a channel a
+recorded delivery. It ran two cycles and was paused on 2026-10-15, and
+neither cycle stumbled on the protocol. Both stumbled on process gaps: a channel a
 message promised that did not exist, a nudge typed into a member's
 terminal, a home file edited by hand, a turn that paid for the whole
 conversation. Before the pilot resumes, the operator wants a test that
@@ -117,6 +117,10 @@ The role scripts follow ROLES.md as code:
   worker, and post the local review in the oh-code-review format at the
   full head SHA. After the merge, run verify-delivery (section 4) and
   confirm the delivery with the evidence it returns, then finalize.
+  verify-delivery is the ai-skills skill's Python helper, and the script
+  runs it at its installed path, `verify-delivery/verify_delivery.py` in
+  the skill directory the home's client reads (section 3), as a model's
+  tool call would.
   Escalate when the scenario says the worker blocked.
 
 Each scenario chooses the member's behaviour for the faults the pilot hit:
@@ -171,12 +175,12 @@ is installed the way the operator installs it:
 | Container | What it runs | How it is installed |
 | --- | --- | --- |
 | `sim-ca` | a one-shot job: a throwaway CA, the server certificates and the SPKI pins, written to a shared volume | the harness's CA code |
-| `sim-aimem` | `aimem serve`, the hub | aimem built from the pinned commit, as b4 does; `tasks on`, `process select`, `identity peer provision` |
+| `sim-aimem` | `aimem serve`, the hub | aimem built from the pinned commit, as b4 does, because `install-hub.sh` takes no local base yet (aimem task `01a15057-43ed`; the row switches to the installer when that lands); `tasks on`, `process select`, `identity peer provision` |
 | `sim-aicrewd` | `aicrewd serve` | `install-aicrewd.sh` in install-only mode with `AICREW_PREBUILT_DIR` (prerequisite 3), then `aicrew hub add`, `aicrew team setup`, `aicrew invitation issue` per member |
 | `sim-gitea` | Gitea with TLS from the CA, an `operator` user, member users with their own tokens, one repository | the Gitea image pinned at 1.27 or later (verify-delivery reads a review of an older head through its compare diff, which earlier versions do not serve), configured by its own CLI |
 | `sim-hands` | the stub reviewer (section 2.5) | built from `e2e/pilotsim/` |
 | `sim-ci` | the stub CI status (section 2.5) | built from `e2e/pilotsim/` |
-| `sim-coordinator`, `sim-worker` | one member home each, `aicrew-agent serve` under the container's init | `boot.sh` with `AICREW_PREBUILT_DIR` (prerequisite 2), then `aicrew-agent join --home … --wake turns --no-service --code-file /sim/invite-<role> …` (prerequisite 1), then `client_command` set to `aicrew-simclient` |
+| `sim-coordinator`, `sim-worker` | one member home each, `aicrew-agent serve` under the container's init | an image with git and Python 3; `boot.sh` with `AICREW_PREBUILT_DIR` (prerequisite 2); ai-skills by its own installer, at the version the selected process set requires, into the skill directory the client reads (`aicrew-agent check` judges it by its `.ai-skills.json`, and the coordinator runs verify-delivery from it); then `aicrew-agent join --home … --wake turns --no-service --code-file /sim/invite-<role> …` (prerequisite 1), then `client_command` set to `aicrew-simclient` |
 | `sim-runner` | the scenarios, the checks and the report | the runner (section 7) |
 
 TLS is real everywhere:
@@ -322,9 +326,13 @@ own expected failure.
 - **Deterministic:**
   - fixed names for users, teams, repositories and tasks;
   - every random choice seeded from the scenario;
-  - the launcher's own timers shortened through its documented
-    configuration only (the turn timeout and the poll interval where
-    `agent.json` sets them), never by patching it.
+  - the launcher's timers set only where `agent.json` documents a
+    setting: `turns.turn_timeout` (1 minute at the least, 30 by default)
+    and `wake.wait_seconds`. The rest are constants and run at the
+    production pace: the forge poll (60 seconds), the inbox poll
+    (3 seconds) and the gap between two turn starts (5 seconds). A cycle
+    waits on the forge poll a handful of times, a few minutes in all,
+    which fits inside the run's bound; nothing patches them.
 - **Report:** `report.jsonl` in b4's record shape (`run`, `step`,
   `scenario`, `fault`, `observation`, `skip_verdict`, `summary`), plus a
   `store_diff` record per step, with the rows each store gained, lost or
@@ -357,7 +365,8 @@ type through a pty, patch an installer or hand-write a home.
 
 ## 9. Increments
 
-Each is under L, filed on the aicrew board in this order.
+Each is under L and filed on the aicrew board; the dependencies below set
+the order of work.
 - **I1 (M), the compose topology, the installers and join** (`01a17d9a-932b`).
   - What it builds: `sim-ca`, `sim-aimem`, `sim-aicrewd`, `sim-gitea` and
     the member containers, installed and joined as section 3 says.

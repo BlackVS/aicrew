@@ -720,29 +720,50 @@ func (e guardEnv) judgeFind(args []string, piped bool) refusal {
 	if last < 0 {
 		return refusal{}
 	}
-	// find's own options (-H, -L, -P, -O<level>, -D <debugopts>) come
-	// before the starts.
+	// find's own options come before the starts: GNU's -H, -L, -P,
+	// -O<level> and -D <debugopts>, BSD's -E, -X, -d, -s, -x and -f <start>
+	// (clustered, as BSD allows), and -- ends them.
+	var starts []string
 	from := 0
+options:
 	for from < len(args) {
-		if a := args[from]; a == "-H" || a == "-L" || a == "-P" || strings.HasPrefix(a, "-O") {
+		a := args[from]
+		switch {
+		case a == "--":
 			from++
-		} else if a == "-D" {
+			break options
+		case a == "-D":
 			from += 2
-		} else {
-			break
+		case strings.HasPrefix(a, "-O"):
+			from++
+		case len(a) > 1 && a[0] == '-' && strings.Trim(a[1:], "HLPEXdsxf") == "":
+			from++
+			if strings.HasSuffix(a, "f") && from < len(args) {
+				starts = append(starts, args[from])
+				from++
+			}
+		default:
+			break options
 		}
 	}
 	// The escaped \( never reaches here in bash yet: the splitter reads it
 	// as a substitution until 01a17d22-4928 lets a backslash escape it.
-	var starts []string
+	n := 0
 	for _, s := range args[min(from, len(args)):] {
 		if strings.HasPrefix(s, "-") || s == "(" || s == "!" || s == `\(` || s == `\!` {
 			break
 		}
 		starts = append(starts, s)
+		n++
 	}
-	filtered := last > from && findFiltered(args[from+len(starts):last])
+	filtered := last > from && findFiltered(args[from+n:last])
 	if len(starts) == 0 {
+		// Without an explicit start, only a find that begins with its name
+		// test earns the allowance: a word the option scan does not know
+		// may be an option that hides a start, so it fails closed.
+		if filtered && args[from] != "-name" && args[from] != "-iname" && args[from] != "-path" {
+			filtered = false
+		}
 		starts = []string{"."}
 	}
 	r := e.deleteTargets("find -delete", starts, piped, filtered)

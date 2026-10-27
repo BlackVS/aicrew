@@ -144,6 +144,17 @@ func TestGuardRefusal(t *testing.T) {
 			"find -D tree .. -name x -delete",
 			"find -L -name x -o -delete",
 			"find . -delete -name '*.tmp' -delete",
+			"find -- .. -name '*.tmp' -delete",
+			"find -- .git -name x -delete",
+			"find -L -- / -name x -delete",
+			"find -d .. -name x -delete",
+			"find -x -E .. -name x -delete",
+			"find -f .. -name x -delete",
+			"find -sf .. -name x -delete",
+			"find -f . -f .. -name x -delete",
+			"find -Z .. -name x -delete",
+			"find -type f -name x -delete",
+			"find -maxdepth 2 -name x -delete",
 			"find . | xargs rm -rf",
 			"cd .. && rm -rf repo",
 			"cd $X; rm -rf build",
@@ -282,6 +293,12 @@ func TestGuardRefusal(t *testing.T) {
 			"find -L . -name x -delete",
 			"find . -name '*.tmp' -delete -name '*.o' -delete",
 			"find -D tree -P . -name x -delete",
+			"find -- . -name x -delete",
+			"find -f . -name x -delete",
+			"find -d -name x -delete",
+			"find -L -name x -delete",
+			"find -- -iname x -delete",
+			"find -sx build -delete",
 			"find . -type f -name '*.o' -delete",
 			"find . -iname '*.TMP' -delete",
 			"find . -path './build/*' -delete",
@@ -441,13 +458,15 @@ func TestGuardFindAdvice(t *testing.T) {
 	g := testGuard("feature", nil)
 	for _, line := range []string{"find . -delete", "find . -maxdepth 1 -delete", "find -delete",
 		"find /work/repo -type f -delete", "find . -name '*' -delete", "find . -name x -o -delete",
-		`find . \! -name keep -delete`, "find -L . -delete"} {
+		`find . \! -name keep -delete`, "find -L . -delete",
+		"find -Z .. -name x -delete", "find -type f -name x -delete"} {
 		if r := g.refusal("bash", line); r.next != nextFindDelete {
 			t.Errorf("%q: %q", line, r.next)
 		}
 	}
 	for _, line := range []string{"find .. -name x -delete", "find / -name '*.go' -delete", "find .git -name x -delete",
-		"find -L .. -name '*.tmp' -delete", "find -P / -name '*.log' -delete"} {
+		"find -L .. -name '*.tmp' -delete", "find -P / -name '*.log' -delete", "find -- .. -name '*.tmp' -delete",
+		"find -- .git -name x -delete", "find -f .. -name x -delete"} {
 		if r := g.refusal("bash", line); r.next != nextDeleteInside {
 			t.Errorf("%q: %q", line, r.next)
 		}

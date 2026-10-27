@@ -41,8 +41,10 @@ section, and the release workflow refuses a tag that has none
   to be refused like `find . -delete`. It now passes when a `-name`,
   `-iname` or `-path` test whose pattern holds more than wildcards, dots
   and slashes comes before the first `-delete`, with no `-o`, `-or`, `,`,
-  `!` or `-not` before the last one. find's leading options (`-L`, `-P`
-  and the like) are skipped to find the real start. `find . -delete`, `find . -type f -delete` and
+  `!` or `-not` before the last one. find's leading options (`-L`, `-P`,
+  BSD's `-f <start>` and the like) and `--` are skipped to find the real
+  start, and without an explicit start only a find that begins with its
+  name test passes. `find . -delete`, `find . -type f -delete` and
   `find . -name '*' -delete` stay refused, now with advice that fits:
   narrow it by name, start in a subdirectory, or use `-exec rm {} +`.
 - **The guard records the wrapped scripts it could not read**

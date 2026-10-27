@@ -55,21 +55,26 @@ esac
 # or is the same file as the prebuilt one, is left alone. Every download is
 # checked against the release's SHA256SUMS in a temporary directory, all of
 # them before any is installed: nothing in the bin directory changes unless
-# every one passes. A prebuilt binary is checked the same way when its
-# directory holds a SHA256SUMS.
+# every one passes. Both prebuilt binaries are staged and checked the same
+# way, against their directory's SHA256SUMS when it holds one, before either
+# is judged current, so a mismatch for one never lets the other through.
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | awk '{print $1}'; }
 install_agent() {
   local tmp rc=0 name todo=""
-  for name in aicrew-agent aicrew; do
-    if is_current "$name"; then
-      echo "$name $(installed_version "$name") is current ($BIN_DIR/$name); nothing changed."
-    else
-      todo="$todo $name"
-    fi
-  done
-  [ -n "$todo" ] || return 0
   tmp=$(mktemp -d)
-  fetch_and_swap "$tmp" $todo || rc=$?
+  if [ -n "${AICREW_PREBUILT_DIR:-}" ]; then
+    stage_prebuilt "$tmp" aicrew-agent aicrew || rc=$?
+  fi
+  if [ "$rc" = 0 ]; then
+    for name in aicrew-agent aicrew; do
+      if is_current "$name" "$tmp"; then
+        echo "$name $(installed_version "$name") is current ($BIN_DIR/$name); nothing changed."
+      else
+        todo="$todo $name"
+      fi
+    done
+    [ -z "$todo" ] || fetch_and_swap "$tmp" $todo || rc=$?
+  fi
   rm -rf "$tmp"
   return "$rc"
 }
@@ -78,24 +83,24 @@ installed_version() {
   [ -x "$BIN_DIR/$1" ] || return 0
   "$BIN_DIR/$1" version 2>/dev/null | awk '{print $2}' || true
 }
-# is_current name: whether the installed binary is the one to install: it
-# reports $TAG, or it is the same file as the prebuilt one. A prebuilt
-# binary is compared by its hash, never run before its checksum is checked.
+# is_current name tmp: whether the installed binary is the one to install:
+# it reports $TAG, or it is the same file as the prebuilt one already staged
+# and checked in tmp. A prebuilt binary is compared by its hash, never run.
 is_current() {
   if [ -z "${AICREW_PREBUILT_DIR:-}" ]; then
     [ "$(installed_version "$1")" = "$TAG" ]
   else
-    [ -f "$BIN_DIR/$1" ] && [ -f "$AICREW_PREBUILT_DIR/$1" ] &&
-      [ "$(sha256 "$BIN_DIR/$1")" = "$(sha256 "$AICREW_PREBUILT_DIR/$1")" ]
+    [ -f "$BIN_DIR/$1" ] && [ "$(sha256 "$BIN_DIR/$1")" = "$(sha256 "$2/$1")" ]
   fi
 }
 # fetch_and_swap tmp name...: every step checks its own result, since a
-# function called in a || list runs without errexit.
+# function called in a || list runs without errexit. Prebuilt binaries are
+# already staged in tmp by install_agent.
 fetch_and_swap() {
   local tmp=$1 name old new exe
   shift
   if [ -n "${AICREW_PREBUILT_DIR:-}" ]; then
-    stage_prebuilt "$tmp" "$@" || return 1
+    for name in "$@"; do echo "installing the prebuilt $name from $AICREW_PREBUILT_DIR"; done
   else
     stage_release "$tmp" "$@" || return 1
   fi
@@ -130,7 +135,6 @@ stage_prebuilt() {
   for name in "$@"; do
     [ -f "$dir/$name" ] ||
       { echo "ERROR: $dir/$name is missing; AICREW_PREBUILT_DIR must hold aicrew-agent and aicrew. Nothing changed." >&2; return 1; }
-    echo "installing the prebuilt $name from $dir"
     cp "$dir/$name" "$tmp/$name" || return 1
     if [ -f "$dir/SHA256SUMS" ]; then
       want=$(awk -v n="$name" -v a="$name-$OS-$ARCH" \

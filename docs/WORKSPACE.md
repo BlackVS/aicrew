@@ -246,9 +246,11 @@ survey, the options and the decision (D-STORE) are recorded in
     `-not` anywhere before the last `-delete`. find's own leading options
     (GNU's `-H`, `-L`, `-P`, `-O<level>` and `-D` with its argument, BSD's
     `-E`, `-X`, `-d`, `-s`, `-x` and `-f` with its start) and `--` are
-    skipped to find the start. Without an explicit start, only a find that
-    begins with its name test gets the allowance, so an option the guard
-    does not know cannot hide a start. So `find . -name '*.tmp' -delete` and
+    skipped to find the start. Without a start word after those options
+    (a start given with `-f` included), only a find that goes on with its
+    name test gets the allowance, so an option the guard does not know
+    cannot hide a start; a start attached to `-f`, as in `-f..`, is
+    refused, and is written as a separate word instead. So `find . -name '*.tmp' -delete` and
     `find . -type f -name '*.o' -delete` pass, while `find . -delete`,
     `find . -type f -delete`, `find . -name '*' -delete` and
     `find . -name x -o -delete` are refused, with advice to narrow it by

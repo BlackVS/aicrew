@@ -43,8 +43,8 @@ section, and the release workflow refuses a tag that has none
   and slashes comes before the first `-delete`, with no `-o`, `-or`, `,`,
   `!` or `-not` before the last one. find's leading options (`-L`, `-P`,
   BSD's `-f <start>` and the like) and `--` are skipped to find the real
-  start, and without an explicit start only a find that begins with its
-  name test passes. `find . -delete`, `find . -type f -delete` and
+  start, and without a start word after them only a find that goes on with
+  its name test passes. `find . -delete`, `find . -type f -delete` and
   `find . -name '*' -delete` stay refused, now with advice that fits:
   narrow it by name, start in a subdirectory, or use `-exec rm {} +`.
 - **The guard records the wrapped scripts it could not read**

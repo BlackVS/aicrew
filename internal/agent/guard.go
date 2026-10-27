@@ -757,13 +757,14 @@ options:
 		n++
 	}
 	filtered := last > from && findFiltered(args[from+n:last])
+	// Without a start word after the options, only a find that goes on with
+	// its name test earns the allowance, whether or not -f gave starts: a
+	// word the option scan does not know, such as -Z or an attached -f..,
+	// may hide a start, so it fails closed.
+	if n == 0 && filtered && args[from] != "-name" && args[from] != "-iname" && args[from] != "-path" {
+		filtered = false
+	}
 	if len(starts) == 0 {
-		// Without an explicit start, only a find that begins with its name
-		// test earns the allowance: a word the option scan does not know
-		// may be an option that hides a start, so it fails closed.
-		if filtered && args[from] != "-name" && args[from] != "-iname" && args[from] != "-path" {
-			filtered = false
-		}
 		starts = []string{"."}
 	}
 	r := e.deleteTargets("find -delete", starts, piped, filtered)

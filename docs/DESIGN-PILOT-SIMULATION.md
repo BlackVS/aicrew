@@ -327,8 +327,10 @@ own expected failure.
   - fixed names for users, teams, repositories and tasks;
   - every random choice seeded from the scenario;
   - the launcher's timers set only where `agent.json` documents a
-    setting: `turns.turn_timeout` (1 minute at the least, 30 by default)
-    and `wake.wait_seconds`. The rest are constants and run at the
+    setting: `turns.turn_timeout` (1 minute at the least, 30 minutes by
+    default). `wake.wait_seconds` bounds only the Stop-hook wait of an
+    interactive client, which `serve` in turns mode does not use. The
+    rest are constants and run at the
     production pace: the forge poll (60 seconds), the inbox poll
     (3 seconds) and the gap between two turn starts (5 seconds). A cycle
     waits on the forge poll a handful of times, a few minutes in all,

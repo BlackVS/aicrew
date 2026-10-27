@@ -228,19 +228,36 @@ func checkCommands(name string, lines []physLine, v vocabulary) []string {
 	}
 	var out []string
 	var seg []word
+	// outer holds the invocations a $(...) substitution interrupted: the
+	// substitution is judged on its own, and the words after its ")" go
+	// back to the invocation around it.
+	var outer [][]word
 	flush := func() {
 		out = append(out, checkInvocation(name, seg, v)...)
 		seg = nil
+	}
+	closeSub := func(inner string, n int) {
+		if inner != "" {
+			seg = append(seg, word{inner, n})
+		}
+		flush()
+		seg, outer = outer[len(outer)-1], outer[:len(outer)-1]
 	}
 	for _, w := range words {
 		switch {
 		case w.s == "|" || w.s == "||" || w.s == "&&" || w.s == ";":
 			flush()
 		case strings.Contains(w.s, "$("):
-			flush()
-			if rest := w.s[strings.LastIndex(w.s, "$(")+2:]; rest != "" {
+			outer, seg = append(outer, seg), nil
+			rest := w.s[strings.LastIndex(w.s, "$(")+2:]
+			if inner, _, closed := strings.Cut(rest, ")"); closed {
+				closeSub(inner, w.n)
+			} else if rest != "" {
 				seg = append(seg, word{rest, w.n})
 			}
+		case len(outer) > 0 && strings.Contains(w.s, ")"):
+			inner, _, _ := strings.Cut(w.s, ")")
+			closeSub(inner, w.n)
 		case strings.HasSuffix(w.s, ";"):
 			seg = append(seg, word{strings.TrimSuffix(w.s, ";"), w.n})
 			flush()
@@ -249,6 +266,10 @@ func checkCommands(name string, lines []physLine, v vocabulary) []string {
 		}
 	}
 	flush()
+	for len(outer) > 0 {
+		seg, outer = outer[len(outer)-1], outer[:len(outer)-1]
+		flush()
+	}
 	return out
 }
 
@@ -533,7 +554,7 @@ func distance(a, b string) int {
 // TestDocExamplesContinuedLines pins the reading of the examples: a stale
 // flag on a continuation line is refused at that line, for the shell's \
 // and PowerShell's `; an invocation inside a $(...) substitution is read
-// too; and so are a stale route of aicrewd and a stale builtin call, while
+// too, and the words after it still belong to the invocation around it; and so are a stale route of aicrewd and a stale builtin call, while
 // aimem's routes are left alone.
 func TestDocExamplesContinuedLines(t *testing.T) {
 	v := loadVocabulary(t)
@@ -549,6 +570,7 @@ func TestDocExamplesContinuedLines(t *testing.T) {
 		"aicrew status \\\n" +
 		"  --team crew\n" +
 		"ID=$(aicrew-agent attempts --hoem .)\n" +
+		"aicrew status --team \"$(printf crew)\" --teem x\n" +
 		"```\n" +
 		"See `/v1/crew/attempt/{id}/accept`, `/v1/tasks/{id}` and `/v1/crew/attempts/<id>/accept`.\n" +
 		"Then `update_bse()` and `update_base()`.\n" +
@@ -563,10 +585,10 @@ func TestDocExamplesContinuedLines(t *testing.T) {
 		at, _, _ := strings.Cut(g, ": ")
 		lines = append(lines, at[strings.LastIndex(at, ":")+1:])
 	}
-	if strings.Join(lines, ",") != "3,7,12,14,15,17" {
-		t.Fatalf("want problems at lines 3, 7, 12, 14, 15 and 17, got:\n%s", strings.Join(got, "\n"))
+	if strings.Join(lines, ",") != "3,7,12,13,15,16,18" {
+		t.Fatalf("want problems at lines 3, 7, 12, 13, 15, 16 and 18, got:\n%s", strings.Join(got, "\n"))
 	}
-	for i, want := range []string{`flag "--teem"`, `flag "--hoem"`, `flag "--hoem"`, `route "/v1/crew/attempt/{id}/accept"`, `builtin "update_bse"`, `flag "--hoem"`} {
+	for i, want := range []string{`flag "--teem"`, `flag "--hoem"`, `flag "--hoem"`, `flag "--teem"`, `route "/v1/crew/attempt/{id}/accept"`, `builtin "update_bse"`, `flag "--hoem"`} {
 		if !strings.Contains(got[i], want) {
 			t.Errorf("problem %d: want %s, got %s", i, want, got[i])
 		}

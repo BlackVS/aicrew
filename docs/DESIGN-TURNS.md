@@ -1,9 +1,7 @@
 # Turn economics design
 
-Status: proposed design for review (task `01a13f80-1a20`). Nothing here is
-implemented. The operator and the monitoring session review it on its pull
-request before it is accepted, and the increments (section 14) are filed only
-after that. Written 2026-10-15.
+Status: accepted design (task `01a13f80-1a20`, written 2026-10-15), shipping
+in parts through 0.8.0; CHANGELOG.md records which release carries each part.
 
 The model writes and decides; aicrewd drives the workflow. This document
 amends [DESIGN-CONTROL-PLANE.md](DESIGN-CONTROL-PLANE.md):

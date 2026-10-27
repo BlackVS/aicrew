@@ -12,27 +12,163 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
-### Changed
+## [0.8.0] - 2026-10-27
 
-- The documentation's examples are checked against the code in CI: every
-  `aicrew`, `aicrew-agent` and `aicrewd` command and flag, every aicrewd
-  route and every automation builtin they name, in `README.md`, `docs/` and
-  the agent home's managed documents (`scripts/check-doc-examples.sh`;
-  DEVELOPMENT.md, "Examples in the documentation").
-- The managed `/crew-turn` command allows one compound form, `cd
-  worktrees/NAME && COMMAND` for the project's build and test commands in
-  the attempt's worktree, as the `dev-go` toolchain is documented and
-  probed; before, it forbade every `cd` and `&&`, so a worker following it
-  could not run its tests.
-- The end-to-end harness against a real aimem passes its whole matrix
-  again at the pinned aimem, and the `e2e-real-aimem` workflow runs it
-  nightly on main and by hand on any branch; a release-preparation pull
-  request needs a green run at its head. The harness had drifted from the
-  product: scenario H selected a process from an unreachable host; B1
-  expected board announcements before the event queue's quiet ended, as
-  `board.changed` rather than `action.needed`; and F1's one-shot network
-  faults were replayed past by aimem's HTTP client. C1, F2 and F3 failed
-  only after those.
+Twelve pull requests since 0.7.0 (#200 to #211). A member's hold now
+reaches the team's coordinators once and shows in `aicrew status` (#200).
+A command guard in each member home refuses destructive git commands and
+recursive deletes beyond the member's own work (#206). `check` and `serve`
+verify the turn model before the first turn (#205). The operator reads an
+attempt's handoff, and the coordinator sees when it was pushed (#203).
+Beside these come exact bounds for the turn brief (#201), a turn record
+that names the brief's messages (#202), the Windows one-liner in both
+forms (#204), a CI check of the documentation's examples (#207), the
+toolchain's `cd` allowed in `/crew-turn` (#208), the real-aimem harness
+passing again with a workflow that runs it (#209, #210), and two server
+tests that no longer depend on the wall clock (#211).
+
+The store moves from schema 38 to schema 39. The hub goes first: an older
+aicrewd refuses the newer store, and going back to 0.7.0 means restoring
+the store copy the upgrade made. aimem 0.10.0 or later stays required;
+this release is tested with aimem 0.10.13. The pilot team stays paused:
+nothing in this release resumes it.
+
+### Breaking changes
+
+- **The store schema is 39** (#200: `member_holds` and
+  `member_hold_announcements`). The hub one-liner migrates it. An older
+  aicrewd refuses a schema-39 store with `store schema is newer than this
+  build`, and a downgrade restores the upgrade's copy
+  (`<store>.backup-<UTC time>`), losing what was written since.
+- **aicrewd before the members** (#200). A 0.8.0 launcher reports its
+  member's holds to `POST /v1/crew/holds`. A 0.7.0 aicrewd answers
+  `not_found`; the launcher then keeps the hold local and logs once that
+  the coordinators are not told.
+- **The managed settings install a command guard** (#206).
+  `aicrew-agent guard --home HOME` runs as a PreToolUse hook (matcher
+  `Bash|PowerShell`) in both wake modes. On any branch it refuses forced,
+  deleting or mirroring pushes, `--no-verify`, history rewrites and the
+  deletion of the default branch. On main, master or the default branch it
+  also refuses `reset --hard`, `clean -f`, a whole-tree checkout or
+  restore, `stash drop` or `clear` and `commit --amend`. A recursive delete
+  is refused when it reaches outside the directory the call starts in. The
+  refusal says what to do next. A command whose branch git cannot tell
+  passes and is logged in `logs/guard.jsonl`. It is a safety catch, not a
+  sandbox. `agent.json` `"guard": {"off": true}` turns it off for one
+  member. A `join` rerun brings the hook to a home; see the upgrade steps.
+- **`serve` refuses an unserved turn model** (#205). Before taking the
+  session, `serve` makes one minimal call with the home's `turns.model`.
+  A model the provider does not serve refuses the start with exit 2 and
+  an instruction naming `turns.model`, so a service does not restart into
+  it. A turn that meets an unserved model ends as `model_unavailable` and
+  holds the member as for `needs_login`.
+- **`/crew-turn` allows one compound command** (#208): the project's build
+  and test commands in the attempt's worktree, as `cd worktrees/NAME &&
+  COMMAND`. Every other `cd`, `&&`, `;`, pipe and redirection stays
+  forbidden. A `join` rerun brings the command to a home.
+
+### Upgrade steps
+
+All of them use product commands and one-liners. The hub goes first.
+
+1. **aicrewd.** On the hub host, as root, run the hub one-liner:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.8.0/install-aicrewd.sh | bash
+   ```
+
+   As before, it backs up the configuration and the store, swaps the
+   binaries, migrates the store to schema 39, waits for health at 0.8.0,
+   and rolls back if the new release does not come up. The holds and
+   attempt-handoff routes come with it.
+2. **The operator's machine and each member.** As that user, rerun the
+   member one-liner, which stops the account's registered member services,
+   swaps the binaries and starts them again:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.8.0/boot.sh | bash
+     ```
+
+   - Windows, in a PowerShell window that is already open:
+
+     ```powershell
+     irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.8.0/boot.ps1 | iex
+     ```
+
+   - Windows, from cmd or the Run dialog:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.8.0/boot.ps1 | iex"
+     ```
+
+3. **Each home.** Rerun `aicrew-agent join --home HOME`. The rerun
+   refreshes `.claude/settings.json` (the guard hook) and the crew commands
+   (the new `/crew-turn`). An edited file is kept, with the new version
+   written beside it with the suffix `.aicrew-new`.
+4. **Check each home.** `aicrew-agent check --home HOME` now probes a turns
+   home's model and prints it as `turn model: CONFIGURED -> RESOLVED
+   (STATE)`, blocking with `turn_model_unavailable` when the provider does
+   not serve it. It notes a missing guard hook, one naming another binary,
+   and a guard turned off.
+
+### Holds
+
+- **A member's hold reaches the coordinators once** (#200). The launcher
+  reports a spent attempt budget, a spent daily budget, the provider's
+  limit and a missing login to `POST /v1/crew/holds`, and the first
+  admitted turn clears it. aicrewd writes one lifecycle message to the
+  team's active coordinators per hold identity: the attempt for its
+  budget, the UTC day for the daily budget, and the reset time or the day
+  for a limit or a login. The same identity reported again tells no one.
+- **`aicrew status` shows the hold** with the amount, the limit and the
+  next check, or the login command (`opapi.MemberState.hold`).
+- **`budget.spent`** is journaled for a spent budget, in the hold's own
+  transaction. No default subscription names it. `CREW-CONTRACT.md`
+  describes the route ("A member's hold").
+
+### Attempts and turns
+
+- **The operator reads an attempt's handoff** (#203) with `aicrew attempts
+  handoff --id ATTEMPT [--json]`, over `GET /v1/admin/attempt/handoff`
+  (the operator or an architect credential). The coordinator's open
+  attempts and the team state carry `handoff_updated_at`, and the
+  open-attempts line says "handoff pushed TIME" or "no handoff pushed".
+- **The turn brief's bounds are exact** (#201): a cut with no room for its
+  ellipsis is empty, so a task snapshot stays within its bound.
+- **The turn record names the brief's messages** (#202):
+  `brief_messages`, and `brief_messages_unacted` for a turn that did not
+  finish. A message's delivery count means "handed to a turn's brief or
+  read by the member", not "acted on".
+- **The turn model** (#205): `check` reports `turn_model` and `serve`
+  probes before the first turn, as above. `docs/TURN-PROBE.md` records the
+  client's answer for an unserved model.
+
+### Docs
+
+- **The Windows member one-liner in both forms** (#204): the bare `irm ...
+  | iex` for a PowerShell window that is already open, and the
+  `powershell -NoProfile ...` form for cmd or the Run dialog, which a host
+  policy may refuse from inside PowerShell.
+- **The documentation's examples are checked against the code** (#207):
+  every `aicrew`, `aicrew-agent` and `aicrewd` command and flag, every
+  aicrewd route and every automation builtin named in `README.md`, `docs/`
+  and the home's managed documents (`scripts/check-doc-examples.sh`, run in
+  CI). The manual pass corrected the repository and worktree paths in
+  `WORKSPACE.md` and a `team grant` line in `DEVELOPMENT.md`.
+
+### CI and tests
+
+- **The real-aimem harness passes its whole matrix again** at the pinned
+  aimem (#209, #210). Scenario H selects a process aimem reads without the
+  network; B1 waits out the event queue's quiet and reads `action.needed`;
+  F1's network faults hold for the whole step, past the replay in aimem's
+  HTTP client. The new `e2e-real-aimem` workflow runs it nightly on main
+  and by hand on any branch; a release-preparation pull request needs a
+  green run at its head.
+- **Two server tests no longer depend on the wall clock** (#211), through
+  `Store.SetClock` and a clock for the grants reads, both unset in
+  production.
 
 ## [0.7.0] - 2026-10-23
 

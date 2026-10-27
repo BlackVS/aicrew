@@ -29,6 +29,14 @@
 # If the new release does not come up, the previous binaries, the
 # configuration and the store copies are put back.
 #
+# Install-only mode (AICREW_NO_SERVICE=1), for a host or container without
+# systemd: the same install or upgrade without linger, the unit, a start or
+# the health wait, and systemctl and loginctl are not needed. It prints the
+# command a supervisor of your choice runs as the service user. An upgrade
+# refuses while aicrewd still answers, since it cannot stop it: stop it,
+# upgrade, then start it again. A failed swap or migration still puts the
+# previous binaries, the configuration and the store copies back.
+#
 # This script never writes a credential or a secret value itself.
 #
 # Environment knobs:
@@ -46,6 +54,8 @@
 #   AICREW_UPGRADE_WAIT=30          seconds to wait for health after a start
 #   AICREW_PREBUILT_DIR=            a directory holding aicrewd and aicrew to
 #                                   install instead of downloading
+#   AICREW_NO_SERVICE=1             install-only: no systemd unit, linger or
+#                                   start; a supervisor of your choice runs it
 set -euo pipefail
 
 # The release this script installs. Bumped together with the CHANGELOG
@@ -53,7 +63,11 @@ set -euo pipefail
 RELEASE=v0.8.0
 
 [ "$(id -u)" = 0 ] || { echo "ERROR: run as root." >&2; exit 1; }
-for t in curl runuser systemctl loginctl sha256sum; do
+NO_SERVICE=""
+[ "${AICREW_NO_SERVICE:-}" != 1 ] || NO_SERVICE=1
+SYSTEMD_TOOLS="systemctl loginctl"
+[ -z "$NO_SERVICE" ] || SYSTEMD_TOOLS=""
+for t in curl runuser sha256sum $SYSTEMD_TOOLS; do
   command -v "$t" >/dev/null 2>&1 || { echo "ERROR: '$t' is required." >&2; exit 1; }
 done
 
@@ -98,6 +112,8 @@ fetch_release() {
 # service), crew_as (runs a command as the service's user), AICREWD_BIN and
 # AICREW_BIN (the installed binaries), CONFIG (aicrewd's configuration) and
 # AICREW_CRED_DIR when the configuration still has the 0.2.0 aimem block.
+# NO_SERVICE=1 is install-only mode: a supervisor of the operator's choice
+# runs aicrewd, so nothing here starts it or waits for its health.
 
 cfg_field() { # show-output name: one field of `aicrewd config show`
   printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -n 1
@@ -150,6 +166,10 @@ preflight_upgrade() {
     echo "ERROR: aicrewd $TAG does not accept $CONFIG (above); nothing was changed." >&2
     return 1
   }
+  if [ -n "${NO_SERVICE:-}" ] && [ -n "$(health_version "$(cfg_field "$show" listen_addr)")" ]; then
+    echo "ERROR: aicrewd answers at $(cfg_field "$show" listen_addr), and with AICREW_NO_SERVICE=1 this installer does not stop it. Stop aicrewd, run this again, then start it. Nothing was changed." >&2
+    return 1
+  fi
   [ "$(cfg_field "$show" legacy_aimem_block)" = yes ] || return 0
   if [ -z "${AICREW_CRED_DIR:-}" ]; then
     refuse_legacy "AICREW_CRED_DIR is not set" "$(cfg_field "$show" service_id)" "$(cfg_field "$show" listen_addr)"
@@ -213,6 +233,13 @@ upgrade_txn() {
       return 1
     fi
   fi
+  if [ -n "${NO_SERVICE:-}" ]; then
+    printf '==> upgraded aicrewd %s -> %s; nothing was started. Start it as the service user: %s -config %s\n' \
+      "${old_v:-unknown}" "${new_v:-unknown}" "$AICREWD_BIN" "$CONFIG"
+    printf '==> the previous binaries are %s.prev and %s.prev; the copies stay at %s.backup-%s and %s.backup-%s (remove them once satisfied)\n' \
+      "$AICREWD_BIN" "$AICREW_BIN" "$CONFIG" "$ts" "$store" "$ts"
+    return 0
+  fi
   svc_start
   if txn_wait "$listen" "$new_v"; then
     printf '==> upgraded aicrewd %s -> %s; the service answers health at %s\n' "${old_v:-unknown}" "$new_v" "$new_v"
@@ -242,6 +269,10 @@ rollback() {
   if [ -z "$ok" ]; then
     echo "ERROR: the rollback could not restore every file: put $AICREWD_BIN.prev, $CONFIG.backup-$ts and $store.backup-$ts back by hand before starting the service." >&2
     return 1
+  fi
+  if [ -n "${NO_SERVICE:-}" ]; then
+    echo "ROLLED BACK: the previous binaries, the configuration and the store copied before the upgrade are restored ($CONFIG.backup-$ts, $store.backup-$ts; the store the failed upgrade left ends in .failed-$ts). Start aicrewd ${old_v:-unknown} again as the service user: $AICREWD_BIN -config $CONFIG" >&2
+    return 0
   fi
   svc_start
   if txn_wait "$listen" any; then
@@ -310,10 +341,14 @@ svc_stop() { sysuser stop aicrewd.service 2>/dev/null || true; }
 # A release that failed to start leaves the unit failed, and past its start
 # limit systemd refuses to start it again until the failure is reset.
 svc_start() { sysuser reset-failed aicrewd.service 2>/dev/null || true; sysuser restart aicrewd.service || true; }
+if [ -n "$NO_SERVICE" ]; then
+  svc_stop() { :; }
+  svc_start() { :; }
+fi
 
 if [ -n "$UPGRADE" ]; then
   preflight_upgrade "$STAGED/aicrewd" || exit 1
-  sysuser daemon-reload
+  [ -n "$NO_SERVICE" ] || sysuser daemon-reload
   upgrade_txn "$STAGED" || exit 1
   exit 0
 fi
@@ -328,10 +363,13 @@ if [ -z "$HOME_DIR" ]; then
   AICREW_BIN="$ROOT_DIR/bin/aicrew"
   CONFIG="$ROOT_DIR/etc/aicrewd.json"
 fi
-loginctl enable-linger "$HUB_USER"
-# Linger starts the user's systemd instance; systemctl --user needs its bus.
-for _ in $(seq 1 20); do [ -S "/run/user/$(id -u "$HUB_USER")/bus" ] && break; sleep 0.5; done
-as_user mkdir -p "$ROOT_DIR/bin" "$ROOT_DIR/etc" "$ROOT_DIR/lib" "$HOME_DIR/.config/systemd/user"
+if [ -z "$NO_SERVICE" ]; then
+  loginctl enable-linger "$HUB_USER"
+  # Linger starts the user's systemd instance; systemctl --user needs its bus.
+  for _ in $(seq 1 20); do [ -S "/run/user/$(id -u "$HUB_USER")/bus" ] && break; sleep 0.5; done
+  as_user mkdir -p "$HOME_DIR/.config/systemd/user"
+fi
+as_user mkdir -p "$ROOT_DIR/bin" "$ROOT_DIR/etc" "$ROOT_DIR/lib"
 as_user chmod 700 "$ROOT_DIR/etc" "$ROOT_DIR/lib"
 as_user cp "$STAGED/aicrewd" "$AICREWD_BIN"
 as_user cp "$STAGED/aicrew" "$AICREW_BIN"
@@ -374,8 +412,16 @@ EOF
   echo "wrote $CONFIG"
 fi
 
+SHOW=$(crew_as "$AICREWD_BIN" config show -config "$CONFIG")
+LISTEN=$(cfg_field "$SHOW" listen_addr)
+SERVICE_ID=$(cfg_field "$SHOW" service_id)
+RESTART="systemctl --user restart aicrewd"
 UNIT=$HOME_DIR/.config/systemd/user/aicrewd.service
-if [ -e "$UNIT" ]; then
+if [ -n "$NO_SERVICE" ]; then
+  RESTART="through your supervisor, with the command above"
+  echo "aicrewd is installed and not started (AICREW_NO_SERVICE=1). Have a supervisor run, as $HUB_USER:"
+  echo "  $AICREWD_BIN -config $CONFIG"
+elif [ -e "$UNIT" ]; then
   echo "kept existing $UNIT"
 else
   as_user sh -c 'cat > "$1"' sh "$UNIT" <<'EOF'
@@ -393,19 +439,17 @@ WantedBy=default.target
 EOF
   echo "wrote $UNIT"
 fi
-sysuser daemon-reload
-sysuser enable aicrewd.service >/dev/null 2>&1 || true
-svc_start
-
-SHOW=$(crew_as "$AICREWD_BIN" config show -config "$CONFIG")
-LISTEN=$(cfg_field "$SHOW" listen_addr)
-SERVICE_ID=$(cfg_field "$SHOW" service_id)
-WANT=$(crew_as "$AICREWD_BIN" -version | awk '{print $2}')
-if txn_wait "$LISTEN" "$WANT"; then
-  echo "aicrewd is up: $WANT on $LISTEN"
-else
-  echo "WARNING: aicrewd did not answer health at $WANT; inspect: journalctl --user -u aicrewd (as $HUB_USER)" >&2
-  exit 1
+if [ -z "$NO_SERVICE" ]; then
+  sysuser daemon-reload
+  sysuser enable aicrewd.service >/dev/null 2>&1 || true
+  svc_start
+  WANT=$(crew_as "$AICREWD_BIN" -version | awk '{print $2}')
+  if txn_wait "$LISTEN" "$WANT"; then
+    echo "aicrewd is up: $WANT on $LISTEN"
+  else
+    echo "WARNING: aicrewd did not answer health at $WANT; inspect: journalctl --user -u aicrewd (as $HUB_USER)" >&2
+    exit 1
+  fi
 fi
 cat <<EOF
 
@@ -416,6 +460,6 @@ Still to supply (this installer writes no credential):
   2. As $HUB_USER, bind the hub (aimem_hubs in $CONFIG):
        $AICREW_BIN hub add NAME --config $CONFIG --base-url HUB_URL \\
          --tls-trust-mode ca_dns --tls-trust-value HUB_HOST --cred-dir DIR
-  3. Restart aicrewd: systemctl --user restart aicrewd
+  3. Restart aicrewd: $RESTART
 The operator credential is $ROOT_DIR/etc/operator.token (aicrew --token-file); it was never shown.
 EOF

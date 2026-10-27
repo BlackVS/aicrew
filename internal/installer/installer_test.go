@@ -435,7 +435,9 @@ func writePrivate(t *testing.T, path, content string) {
 // runUpgrade starts the installed release (by its PID, in place of the
 // systemd unit), waits for its health, then runs the installer's preflight
 // and upgrade transaction to the release in staged, and prints the version
-// health answers at the end.
+// health answers at the end. With NO_SERVICE=1 in env (install-only mode)
+// the service functions do nothing, as the installer defines them then, and
+// the installed release runs only with RUNNING=1, as another supervisor's.
 func runUpgrade(t *testing.T, s *sandbox, staged string, env ...string) (string, int) {
 	t.Helper()
 	text := "set -euo pipefail\n" + extract(t, "upgrade-transaction") + `
@@ -445,13 +447,21 @@ svc_stop() {
 }
 svc_start() { "$AICREWD_BIN" -config "$CONFIG" >>"$SANDBOX/serve.log" 2>&1 & SVC_PID=$!; }
 crew_as() { "$@"; }
-trap svc_stop EXIT
+SUP_PID=
+trap '{ [ -z "$SUP_PID" ] || { kill "$SUP_PID"; wait "$SUP_PID"; }; } 2>/dev/null || true; svc_stop' EXIT
 TAG=test
 AICREWD_BIN=$ROOT/bin/aicrewd
 AICREW_BIN=$ROOT/bin/aicrew
 CONFIG=$ROOT/etc/aicrewd.json
-svc_start
-AICREW_UPGRADE_WAIT=20 txn_wait "$LISTEN" any || { echo "the installed release did not come up"; cat "$SANDBOX/serve.log"; exit 99; }
+if [ -z "${NO_SERVICE:-}" ] || [ -n "${RUNNING:-}" ]; then
+  svc_start
+  AICREW_UPGRADE_WAIT=20 txn_wait "$LISTEN" any || { echo "the installed release did not come up"; cat "$SANDBOX/serve.log"; exit 99; }
+fi
+if [ -n "${NO_SERVICE:-}" ]; then
+  SUP_PID=$SVC_PID SVC_PID=
+  svc_stop() { :; }
+  svc_start() { :; }
+fi
 preflight_upgrade "$STAGED/aicrewd" || exit 1
 rc=0
 upgrade_txn "$STAGED" || rc=$?

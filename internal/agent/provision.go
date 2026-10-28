@@ -47,6 +47,9 @@ func (o *JoinOptions) checkProvisionOptions(linked bool) error {
 	if tokenLike(o.AimemTokenFile) {
 		return errors.New("--aimem-token-file names a file holding the token, or - for the hidden prompt: a token is never an argument")
 	}
+	if o.AimemTokenFile == "-" && !o.Terminal {
+		return errors.New("--aimem-token-file - reads the token at a hidden prompt, and there is no terminal: give the file holding it")
+	}
 	u, err := url.Parse(o.AimemURL)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || strings.ContainsAny(o.AimemURL, "?#") ||
 		(u.Path != "" && u.Path != "/") {

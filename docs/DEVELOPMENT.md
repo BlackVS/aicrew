@@ -2018,11 +2018,24 @@ bin/aicrew-agent join --home ~/aicrew/agents/builder    # rerun: refresh and che
   `--client claude|opencode` (or both, comma-separated) names the clients
   the home is for: required on the first run, recorded in `agent.json`
   after. `--json` prints the report as JSON.
-- The invitation code is read only at a hidden prompt on a terminal, never
-  from an argument, a pipe, a file or the environment; off a terminal the
-  command refuses. A code with a typing error (its checksum) is caught
-  before it costs an invitation attempt, and asked for again: at most three
-  prompts in all.
+- The invitation code is read at a hidden prompt on a terminal, never from
+  an argument or the environment. A headless install (a container, a
+  service account) gives it with `--code-file PATH`, a file readable by its
+  owner only, checked as the token files are, or `--code-file -`, one line
+  on standard input when that is not a terminal (the prompt when it is).
+  Off a terminal and without `--code-file`, the command stops with
+  `no_terminal`, naming both.
+  - `--code-file` links a new home: on a linked home it is a usage error. A
+    value that is not a file is refused without being quoted, since it may
+    be the code itself.
+  - Off a terminal, `--code-file -` and a `--cred HOST=-` would both read
+    standard input, so the pair is refused. `--aimem-token-file -`, a hidden
+    prompt, is refused there too.
+  - A code with a typing error (its checksum) is caught before it costs an
+    invitation attempt. At the prompt it is asked for again, at most three
+    prompts in all. A code from a file or a pipe is refused at once
+    (`code_malformed`), leaving the home as three failed prompts do: fix the
+    code, then rerun.
 - Before the prompt it checks the individual aimem credential in the home's
   installation with `aimem hub credential <hub> --json`. A missing, refused
   or unconfirmed credential, or a hub that installation does not know, stops

@@ -356,9 +356,9 @@ Increment I1 depends on all three. Until they land, the simulation does not
 type through a pty, patch an installer or hand-write a home.
 
 1. `01a17d8e-4255`: `join --code-file PATH|-` reads the invitation code
-   from a file or standard input, as `--aimem-token-file` does. Today join
-   reads it only at a terminal prompt and stops with `no_terminal`
-   otherwise.
+   from a file or standard input, as `--aimem-token-file` does. Before it,
+   join read the code only at a terminal prompt and stopped with
+   `no_terminal` otherwise.
 2. `01a17d8e-4267`: `boot.sh` installs from a local directory of prebuilt
    binaries (`AICREW_PREBUILT_DIR`), as `install-aicrewd.sh` does.
 3. `01a17d8e-427b`: `install-aicrewd.sh` has an install-only mode that

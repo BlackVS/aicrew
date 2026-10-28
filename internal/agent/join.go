@@ -19,6 +19,7 @@ import (
 	"github.com/BlackVS/aicrew/internal/filelock"
 	"github.com/BlackVS/aicrew/internal/forge"
 	"github.com/BlackVS/aicrew/internal/invitecode"
+	"github.com/BlackVS/aicrew/internal/privatefile"
 	"github.com/BlackVS/aicrew/internal/tlstrust"
 )
 
@@ -59,9 +60,13 @@ type JoinOptions struct {
 	Trust        tlstrust.Binding
 	AimemHub     string // aimem's name for the hub; required on the first run
 	AimemCommand string // recorded when set
-	// Terminal reports whether the code can be read at a hidden prompt. The
-	// code is never taken from anywhere else.
+	// Terminal reports whether standard input is a terminal, where the code
+	// is read at a hidden prompt.
 	Terminal bool
+	// CodeFile is where the invitation code is read from instead of the
+	// prompt: an owner-only file, or "-" for standard input (the prompt on a
+	// terminal, one line otherwise). Never the code itself.
+	CodeFile string
 	// Clients are the clients the home is for (claude, opencode): required
 	// on the first run, kept in agent.json after.
 	Clients []string
@@ -81,9 +86,11 @@ type JoinOptions struct {
 
 // JoinDeps are the bootstrap's collaborators; tests replace them.
 type JoinDeps struct {
-	Crew     func(Config) (InvitationAPI, error)
-	Aimem    func(command, hub, home string) JoinAimem // the home's installation
-	ReadCode func() (string, error)                    // the hidden prompt
+	Crew  func(Config) (InvitationAPI, error)
+	Aimem func(command, hub, home string) JoinAimem // the home's installation
+	// ReadCode reads the code from standard input: the hidden prompt on a
+	// terminal, otherwise one line (--code-file -).
+	ReadCode func() (string, error)
 	// ReadToken reads the member's aimem token at a hidden prompt, for
 	// --aimem-token-file -.
 	ReadToken func() (string, error)
@@ -251,6 +258,9 @@ func (j *joiner) options() error {
 	if err := o.checkProvisionOptions(j.doc.linked()); err != nil {
 		return err
 	}
+	if err := o.checkCodeFile(j.doc.linked()); err != nil {
+		return err
+	}
 	if j.doc.linked() {
 		return nil // refresh checks the flags against the recorded binding
 	}
@@ -299,9 +309,10 @@ func (j *joiner) precheck(ctx context.Context) (JoinReport, bool) {
 	if j.doc.linked() {
 		return j.otherBinding()
 	}
-	if !j.o.Terminal {
-		return blocked(j.o, "no_terminal", "run aicrew-agent join in an interactive terminal: the invitation "+
-			"code is read only at its hidden prompt, never from an argument, a pipe, a file or the environment"), true
+	if !j.o.Terminal && j.o.CodeFile == "" {
+		return blocked(j.o, "no_terminal", "the invitation code is read at a hidden prompt, and there is no "+
+			"terminal: run aicrew-agent join in an interactive terminal, or give the code with --code-file PATH "+
+			"(a file readable by its owner only) or --code-file - (one line on standard input)"), true
 	}
 	j.aimem = j.deps.Aimem(j.aimemCommand(), j.o.AimemHub, j.o.Home)
 	if r, stop := j.provision(ctx); stop {
@@ -404,25 +415,75 @@ func (j *joiner) checkCredential(ctx context.Context, am JoinAimem) (JoinReport,
 	return JoinReport{}, false
 }
 
-// readCode reads the code at the hidden prompt and checks its form, so a
-// typing error never costs an invitation attempt.
+// readCode reads the code and checks its form, so a typing error never
+// costs an invitation attempt. Only the prompt asks again: a file or a line
+// on standard input would give the same code.
 func (j *joiner) readCode() (string, JoinReport, bool) {
+	tries := maxCodeTries
+	if j.o.CodeFile != "" && (j.o.CodeFile != "-" || !j.o.Terminal) {
+		tries = 1
+	}
 	for try := 1; ; try++ {
-		code, err := j.deps.ReadCode()
+		code, err := j.codeInput()
 		if err != nil {
 			return "", blocked(j.o, "no_code", "the invitation code could not be read: "+err.Error()), false
 		}
-		norm, err := invitecode.Normalize(code)
+		norm, err := invitecode.Normalize(strings.TrimSpace(code))
 		if err == nil {
 			return norm, JoinReport{}, true
 		}
 		fmt.Fprintf(j.deps.Out, "That is not a valid invitation code (%s).\n", strings.TrimPrefix(err.Error(),
 			invitecode.ErrMalformed.Error()+": "))
-		if try == maxCodeTries {
+		if try == tries {
 			return "", blocked(j.o, "code_malformed", "check the invitation code with the operator who issued "+
 				"it, then rerun"), false
 		}
 	}
+}
+
+// codeInput is the code as given: the file's content, or what ReadCode reads
+// from standard input. Its errors never quote it.
+func (j *joiner) codeInput() (string, error) {
+	if j.o.CodeFile == "" || j.o.CodeFile == "-" {
+		return j.deps.ReadCode()
+	}
+	raw, err := readOwnerOnly(j.o.CodeFile)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", j.o.CodeFile, err)
+	}
+	return string(raw), nil
+}
+
+// checkCodeFile validates --code-file: it links a new home, names a file or
+// standard input (never the code), and shares standard input with no other
+// flag when that is not a terminal.
+func (o *JoinOptions) checkCodeFile(linked bool) error {
+	if o.CodeFile == "" {
+		return nil
+	}
+	if linked {
+		return errors.New("--code-file links a new home; this home is already linked: rerun without it")
+	}
+	if o.CodeFile != "-" {
+		if _, err := os.Stat(o.CodeFile); err != nil {
+			return errors.New("--code-file names no readable file: it takes a file holding the invitation code, " +
+				"or - for standard input, never the code")
+		}
+		if err := privatefile.Check(o.CodeFile); err != nil {
+			return fmt.Errorf("the code file must be readable by its owner only: %w", err)
+		}
+		return nil
+	}
+	if o.Terminal {
+		return nil
+	}
+	for _, c := range o.Creds {
+		if c.Source == "-" {
+			return errors.New("--code-file - and --cred " + c.Host + "=- would both read standard input, " +
+				"which is not a terminal: give one of them a file")
+		}
+	}
+	return nil
 }
 
 // stops are the refusals that end a run, with what to do about them.

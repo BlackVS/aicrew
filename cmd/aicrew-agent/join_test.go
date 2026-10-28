@@ -107,3 +107,34 @@ func TestJoinCredNeverEchoed(t *testing.T) {
 		t.Fatalf("exit %d: %q", code, errb.String())
 	}
 }
+
+// --code-file - reads one line of standard input when it is not a terminal,
+// and refuses to share it with a --cred HOST=- (01a17d8e-4255).
+func TestJoinCodeFromStandardInput(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.WriteString("ABCD-EFGH\r\nnot read\n")
+	w.Close()
+	stdin := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = stdin; r.Close() })
+	var errb bytes.Buffer
+	got, err := joinDeps(&errb).ReadCode()
+	if err != nil || strings.TrimSpace(got) != "ABCD-EFGH" || errb.Len() != 0 {
+		t.Fatalf("read %q, %v; stderr %q", got, err, errb.String())
+	}
+
+	home := filepath.Join(t.TempDir(), "h")
+	args := append([]string{"-home", home, "-code-file", "-", "-cred", "github.com=-"}, joinFlags...)
+	var out bytes.Buffer
+	errb.Reset()
+	if code := join(context.Background(), args, false, &out, &errb, noJoinDeps(t), nil); code != exitUsage ||
+		!strings.Contains(errb.String(), "would both read standard input") {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if _, err := os.Stat(home); !os.IsNotExist(err) {
+		t.Fatal("a usage error created the home")
+	}
+}

@@ -118,6 +118,15 @@ section, and the release workflow refuses a tag that has none
   escaped find is judged as one command and refused, and so is
   `find . \( -name a -o -name b \) -delete`. PowerShell and cmd are
   unchanged.
+- **The command guard reads a bash backslash before a line end as a
+  continuation** (01a1833c-cd6c). The splitter kept the backslash and
+  ended the command at the newline, while bash removes both and goes on:
+  `find . \` and `-delete` on the next line split into two harmless
+  commands, and `rm -rf build\` followed by `/../..` was judged as a
+  delete of `build\` inside the working directory, though bash deletes
+  its parent. Outside single quotes, a backslash before LF or CR LF is
+  now removed with it, and both are refused. PowerShell and cmd are
+  unchanged.
 
 ## [0.8.0] - 2026-10-27
 

@@ -295,7 +295,9 @@ func splitCommands(shell, line string) [][]string {
 // are removed; a backslash (bash) or backquote (PowerShell) escapes the
 // next character only before a quote, a space, a $ or itself, and in bash
 // unquoted also before ( ) ; & | < > ! #, so that find . \( … \) is one
-// command; Windows paths keep their backslashes.
+// command; Windows paths keep their backslashes. In bash a backslash
+// before a line end, outside single quotes, is removed with it, so the
+// next line continues the command.
 func splitSegments(shell, line string, depth int) []segment {
 	if depth > maxGuardDepth {
 		return []segment{{words: []string{guardTooDeep}}}
@@ -361,6 +363,10 @@ func splitSegments(shell, line string, depth int) []segment {
 			} else {
 				word.WriteRune(r)
 			}
+		case shell == "bash" && r == '\\' && i+1 < len(rs) && rs[i+1] == '\n':
+			i++
+		case shell == "bash" && r == '\\' && i+2 < len(rs) && rs[i+1] == '\r' && rs[i+2] == '\n':
+			i += 2
 		case quote == '"' && r == escape && i+1 < len(rs) && strings.ContainsRune("\"\\`$", rs[i+1]),
 			quote == 0 && r == escape && i+1 < len(rs) && strings.ContainsRune(escaped, rs[i+1]):
 			i++

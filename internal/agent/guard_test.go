@@ -132,6 +132,10 @@ func TestGuardRefusal(t *testing.T) {
 			`find . \! -name keep -delete`,
 			`find . \( -true \) -delete`,
 			`find . \( -name a -o -name b \) -delete`,
+			"find . \\\n-delete",
+			"rm -rf \\\n/",
+			"rm -rf \\\r\n/",
+			"rm -rf build\\\n/../..",
 			"find . -not -name keep -delete",
 			"find . -name x -delete -o -delete",
 			"find . -name '*' -delete",
@@ -467,7 +471,7 @@ func TestGuardFindAdvice(t *testing.T) {
 	for _, line := range []string{"find . -delete", "find . -maxdepth 1 -delete", "find -delete",
 		"find /work/repo -type f -delete", "find . -name '*' -delete", "find . -name x -o -delete",
 		`find . \! -name keep -delete`, "find -L . -delete",
-		`find . \( -true \) -delete`, `find . \( -name a -o -name b \) -delete`,
+		`find . \( -true \) -delete`, `find . \( -name a -o -name b \) -delete`, "find . \\\n-delete",
 		"find -Z .. -name x -delete", "find -type f -name x -delete"} {
 		if r := g.refusal("bash", line); r.next != nextFindDelete {
 			t.Errorf("%q: %q", line, r.next)
@@ -526,7 +530,8 @@ func TestGuardUnjudged(t *testing.T) {
 
 // In bash an unquoted backslash makes the next operator character part of
 // the word, as bash passes it on; in double quotes it stays, and other
-// shells keep it.
+// shells keep it. Before a line end, outside single quotes, it continues
+// the command.
 func TestSplitBashEscapes(t *testing.T) {
 	for _, c := range []struct{ shell, line, want string }{
 		{"bash", `echo a\;b`, "echo a;b"},
@@ -538,6 +543,12 @@ func TestSplitBashEscapes(t *testing.T) {
 		{"bash", `echo "a\;b"`, `echo a\;b`},
 		{"bash", `dir C:\work\x`, `dir C:\work\x`},
 		{"powershell", `echo a\#b`, `echo a\#b`},
+		{"bash", "echo a\\\nb", "echo ab"},
+		{"bash", "echo a\\\r\nb", "echo ab"},
+		{"bash", "echo \"a\\\nb\"", "echo ab"},
+		{"bash", "echo \\\n b", "echo b"},
+		{"bash", "rm -rf build\\\n/../..", "rm -rf build/../.."},
+		{"bash", "echo 'a\\\nb'", "echo a\\\nb"},
 	} {
 		var got []string
 		for _, words := range splitCommands(c.shell, c.line) {

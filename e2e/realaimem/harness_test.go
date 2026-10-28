@@ -39,7 +39,7 @@ import (
 	"github.com/BlackVS/aicrew/e2e/testca"
 )
 
-// aimemPin is the aimem commit the harness builds: the v0.10.13 release, which
+// aimemPin is the aimem commit the harness builds: the v0.10.15 release, which
 // internal/agent/supported.json names as the tested aimem (the minimum stays
 // 0.10.0). Beside every earlier prerequisite (C5b, C6, C5-w3, `aimem hub
 // credential`, the fixture's corrected fences, `hub add --ca-file`, team
@@ -47,7 +47,7 @@ import (
 // peer provision`) it carries the control plane's prerequisites: the board
 // feed (`board.read`, whose credential peer provision writes as a fifth
 // file), a task's required capability and team members' report documents.
-const aimemPin = "5b491476a381b01e705391881d67e2eafd6fda56"
+const aimemPin = "2c6e933ec1475cdff649bdc3f6cbc2f08b9a8d10"
 
 const (
 	serviceID = "aicrew-e2e"
@@ -220,7 +220,7 @@ func (h *harness) build(aimemSrc string) {
 	}
 	h.aimemV = aimemPin
 	// A source install stamps its version as aimem's release build does,
-	// with the commit's `git describe`: v0.10.13 at the pin, which
+	// with the commit's `git describe`: v0.10.15 at the pin, which
 	// aicrew-agent's dependency check reads as the tested release.
 	desc, err := exec.Command("git", "-C", aimemSrc, "describe", "--tags", aimemPin).Output()
 	if err != nil {

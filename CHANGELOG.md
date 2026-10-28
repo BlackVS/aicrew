@@ -85,6 +85,12 @@ section, and the release workflow refuses a tag that has none
   still passes, and now writes a line with the rule `unjudged` to
   `logs/guard.jsonl`, so the log counts every command the guard passed
   without judging it.
+- **The tested aimem release is 0.10.15** (01a181f7-ebb3), up from
+  0.10.13; the minimum stays 0.10.0. check's aimem instruction installs
+  0.10.15, and the real-aimem harness builds it. The pilot simulation's
+  hub is now installed by that release's `install-hub.sh` in its
+  install-only mode (`AIMEM_NO_SERVICE=1`), which it runs from the staged
+  release asset, instead of a copy of the installer's steps.
 - **The tested ai-skills release is 1.33.13** (01a18173-b005), up from
   1.26.1; the minimum stays 1.26.1. Its installer writes the
   `.ai-skills.json` record check reads (ai-skills writes it from 1.28.0

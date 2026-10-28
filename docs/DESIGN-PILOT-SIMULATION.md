@@ -176,7 +176,7 @@ is installed the way the operator installs it:
 | Container | What it runs | How it is installed |
 | --- | --- | --- |
 | `sim-ca` | a one-shot job: a throwaway CA, the server certificates and the SPKI pins, written to a shared volume | the harness's CA code |
-| `sim-aimem` | `aimem serve`, the hub | the tested aimem release, its asset checked against the release's `SHA256SUMS` as `install-hub.sh` checks it, then the installer's env file and `aimem serve` under the container's init, because `install-hub.sh` needs systemd (aimem task `01a18163-87ac`; the row switches to the installer when it has a service-less mode); `tasks on`, `process select`, `identity peer provision` |
+| `sim-aimem` | `aimem serve`, the hub | the tested aimem release, installed by its `install-hub.sh` in the install-only mode (`AIMEM_NO_SERVICE=1`, aimem task `01a18163-87ac`) from the staged asset, then the printed serve command under the container's init; `tasks on`, `process select`, `identity peer provision` |
 | `sim-aicrewd` | `aicrewd -config …`, the command the installer prints | `install-aicrewd.sh` in install-only mode (`AICREW_NO_SERVICE=1`) with `AICREW_PREBUILT_DIR` (prerequisite 3), then `aicrew hub add`, `aicrew team setup`, `aicrew invitation issue` per member |
 | `sim-gitea` | Gitea with TLS from the CA, an `operator` user, member users with their own tokens, one repository | the Gitea image pinned at 1.27 or later (verify-delivery reads a review of an older head through its compare diff, which earlier versions do not serve), configured by its own CLI |
 | `sim-hands` | the stub reviewer (section 2.5) | built from `e2e/pilotsim/` |

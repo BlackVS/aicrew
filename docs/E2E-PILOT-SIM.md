@@ -20,9 +20,10 @@ scripts/pilot-sim.sh [-keep] [-out DIR]
 
 - `-out` is where the staged image contexts, the logs and the reports go
   (default `.work/pilotsim` in the repository).
-- `-keep` leaves the stack up after the run, for a look inside with
-  `docker compose -f e2e/pilotsim/compose.yaml …`. Without it the stack and
-  its volumes are removed at the end, green or not.
+- `-keep` leaves the stack up after the run and prints the
+  `docker compose` command, with its environment, to look inside. Without
+  it the stack and its volumes are removed at the end, green or not. Every
+  run starts by removing a stack an earlier `-keep` left.
 
 It needs Docker with Compose v2, Go 1.26 or later, Python 3, and network
 access: the images install aimem and ai-skills from their GitHub releases,

@@ -15,7 +15,9 @@
 # No secret is printed or passed as an argument: tokens and codes go from
 # the container that makes them to the one that reads them through a pipe,
 # into owner-only files.
-set -euo pipefail
+set -Eeuo pipefail
+# fail writes here, also from a check whose output waitfor discards.
+exec 3>&2
 
 usage() { echo "usage: scripts/pilot-sim.sh [-keep] [-out DIR]" >&2; exit 2; }
 KEEP=
@@ -82,18 +84,21 @@ stage() {
 collect() {
   mkdir -p "$LOGS"
   local s
-  for s in $(dc ps -a --services 2>/dev/null); do
+  for s in $(dc ps -a --services 2>/dev/null || true); do
     dc logs --no-color "$s" > "$LOGS/$s.log" 2>&1 || true
   done
 }
 fail() {
-  echo "pilot-sim: FAILED: $*" >&2
+  # In a command substitution, leave the report to the script itself.
+  [ "$BASHPID" = "$$" ] || exit 1
+  trap - ERR
+  echo "pilot-sim: FAILED: $*" >&3
   collect
-  dc ps -a >&2 || true
+  dc ps -a >&3 2>&1 || true
   local s
-  for s in $(dc ps -a --services 2>/dev/null); do
-    echo "---- $s (last 40 lines; all in $LOGS/$s.log)" >&2
-    tail -n 40 "$LOGS/$s.log" >&2 || true
+  for s in $(dc ps -a --services 2>/dev/null || true); do
+    echo "---- $s (last 40 lines; all in $LOGS/$s.log)" >&3
+    tail -n 40 "$LOGS/$s.log" >&3 || true
   done
   exit 1
 }
@@ -102,7 +107,9 @@ finish() {
   if [ -z "$KEEP" ]; then
     dc down -v --remove-orphans >/dev/null 2>&1 || true
   else
-    echo "pilot-sim: -keep: the stack is still up (docker compose -f $COMPOSE ...)"
+    echo "pilot-sim: -keep: the stack is still up; inspect it with:" >&3
+    echo "  PILOTSIM_STAGE=$STAGE PILOTSIM_AIMEM_VERSION=$PILOTSIM_AIMEM_VERSION" \
+      "PILOTSIM_AISKILLS_VERSION=$PILOTSIM_AISKILLS_VERSION docker compose -f $COMPOSE ps" >&3
   fi
   exit "$code"
 }
@@ -142,6 +149,8 @@ json_field() { python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[
 
 trap finish EXIT
 trap 'fail "line $LINENO exited $?"' ERR
+# A stack an earlier -keep run left up would refuse this run's accounts.
+dc down -v --remove-orphans >/dev/null 2>&1 || true
 stage
 step "building the images"
 dc build --quiet || fail "the images did not build"
@@ -227,7 +236,14 @@ done
 
 # ---- the smoke check -------------------------------------------------------------------
 step "the smoke check"
-served() { dc logs --no-color "$1" 2>&1 | grep -q 'the turn model is available'; }
+# served SERVICE: its serve passed the model probe; a member that exited
+# (a failed join) fails the run at once.
+served() {
+  if dc ps -a --status exited --services 2>/dev/null | grep -qx "$1"; then
+    fail "$1 exited before serving"
+  fi
+  dc logs --no-color "$1" 2>&1 | grep -q 'the turn model is available'
+}
 for role in coordinator worker; do
   waitfor "sim-$role's serve and its model probe" 600 served "sim-$role"
   dc exec -T -u member "sim-$role" aicrew-agent check --home /home/member/agent --json > "$OUT/check-$role.json" ||

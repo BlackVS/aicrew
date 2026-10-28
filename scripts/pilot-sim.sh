@@ -74,10 +74,12 @@ stage() {
   (cd "$STAGE/member/prebuilt" && sha256sum aicrew-agent aicrew > SHA256SUMS)
   cp "$ROOT/install-aicrewd.sh" "$STAGE/aicrewd/"
   cp "$ROOT/boot.sh" "$STAGE/member/"
-  step "fetching aimem v$PILOTSIM_AIMEM_VERSION (checked against SHA256SUMS in sim-aimem)"
+  step "fetching aimem v$PILOTSIM_AIMEM_VERSION and its install-hub.sh (the installer checks the asset in sim-aimem)"
   local base="https://github.com/BlackVS/aimem/releases/download/v$PILOTSIM_AIMEM_VERSION"
   curl -fsSL "$base/aimem-linux-$arch" -o "$STAGE/hub/aimem-release/aimem-linux-$arch"
   curl -fsSL "$base/SHA256SUMS" -o "$STAGE/hub/aimem-release/SHA256SUMS"
+  curl -fsSL "https://raw.githubusercontent.com/BlackVS/aimem/v$PILOTSIM_AIMEM_VERSION/install-hub.sh" \
+    -o "$STAGE/hub/install-hub.sh"
 }
 
 # ---- failure and teardown ----------------------------------------------------
@@ -127,7 +129,7 @@ waitfor() {
 
 # ---- the parties' commands -----------------------------------------------------
 # The hub's admin, on the hub's host.
-hub() { dc exec -T -u aimem -e HOME=/home/aimem sim-aimem "$@"; }
+hub() { dc exec -T -u aimem -e HOME=/home/aimem -e PATH=/home/aimem/.local/bin:/usr/bin:/bin sim-aimem "$@"; }
 identity() {
   hub aimem identity "$@" --hub https://sim-aimem:8440 --admin-token-file /home/aimem/admin.token \
     --hub-ca-file /sim/tls/ca.pem

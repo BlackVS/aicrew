@@ -138,6 +138,10 @@ func TestGuardRefusal(t *testing.T) {
 			"rm -rf build\\\n/../..",
 			"echo ok # \\\nfind . -delete",
 			"echo ok # \\\r\nfind . -delete",
+			"echo ok # don't\nfind . -delete",
+			"echo ok # say \"hi\nfind . -delete",
+			"echo ok # $(\nrm -rf /",
+			"echo ok # `\nrm -rf /",
 			"find . -not -name keep -delete",
 			"find . -name x -delete -o -delete",
 			"find . -name '*' -delete",
@@ -533,7 +537,8 @@ func TestGuardUnjudged(t *testing.T) {
 // In bash an unquoted backslash makes the next operator character part of
 // the word, as bash passes it on; in double quotes it stays, and other
 // shells keep it. Before a newline, outside single quotes and comments, it
-// continues the command.
+// continues the command. A comment, from a # that starts an unquoted word,
+// is skipped to the newline.
 func TestSplitBashEscapes(t *testing.T) {
 	for _, c := range []struct{ shell, line, want string }{
 		{"bash", `echo a\;b`, "echo a;b"},
@@ -549,9 +554,14 @@ func TestSplitBashEscapes(t *testing.T) {
 		{"bash", "echo \"a\\\nb\"", "echo ab"},
 		{"bash", "echo \\\n b", "echo b"},
 		{"bash", "rm -rf build\\\n/../..", "rm -rf build/../.."},
-		{"bash", "echo a # \\\nb", "echo a # \\|b"},
-		{"bash", "echo a;# \\\nb", "echo a|# \\|b"},
+		{"bash", "echo a # \\\nb", "echo a|b"},
+		{"bash", "echo a;# \\\nb", "echo a|b"},
 		{"bash", "echo a#\\\nb", "echo a#b"},
+		{"bash", "echo a # b 'c\nd", "echo a|d"},
+		{"bash", "echo a # $(x \"y\nd", "echo a|d"},
+		{"bash", "# only\nd", "d"},
+		{"bash", "echo a#b $# \"#\" '#' \\#c", "echo a#b $# # # #c"},
+		{"powershell", "echo a # b", "echo a # b"},
 		{"bash", "echo 'a\\\nb'", "echo a\\\nb"},
 	} {
 		var got []string

@@ -83,7 +83,7 @@ func (h *harness) newFaultProxy(name, certFile, keyFile, target string) *faultPr
 		t.Fatal(err)
 	}
 	pool := x509.NewCertPool()
-	pool.AddCert(h.ca)
+	pool.AddCert(h.ca.Cert)
 	p := &faultProxy{h: h, name: name, ln: ln, url: "https://" + ln.Addr().String(), target: target,
 		client: &http.Client{Timeout: 2 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse

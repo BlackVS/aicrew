@@ -841,11 +841,11 @@ func TestSkillsInstructionVerifies(t *testing.T) {
 	for _, g := range []string{"linux", "darwin", "windows"} {
 		goos = g
 		s := skillsInstruction(set.Components["ai-skills"], "", []string{"oh-code-review"})
-		if !strings.Contains(s, "SHA256SUMS") || strings.Contains(s, "boot.") || !strings.Contains(s, "aiskills-1.26.1") {
+		if !strings.Contains(s, "SHA256SUMS") || strings.Contains(s, "boot.") || !strings.Contains(s, "aiskills-1.33.13") {
 			t.Fatalf("%s: %s", g, s)
 		}
 		// The archive may store install.sh without its execute bit (ai-skills
-		// 1.26.1 does), so the installer runs through bash.
+		// 1.33.13 does), so the installer runs through bash.
 		if g != "windows" && (!strings.Contains(s, "&& bash ./src/install.sh --user -t claude -s oh-code-review`") ||
 			strings.Contains(s, "&& ./src/install.sh")) {
 			t.Fatalf("%s: the installer does not run through bash: %s", g, s)

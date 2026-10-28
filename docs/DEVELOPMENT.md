@@ -2133,9 +2133,9 @@ member's user-level skills under it. It reports:
   (`internal/agent/supported.json`):
   - aimem from `aimem version`;
   - ai-skills from its installer's `.ai-skills.json` beside the skills the
-    clients read. The ai-skills installer does not write it yet
-    ([aiskills#24](https://github.com/BlackVS/aiskills/issues/24)); until a
-    release does, the ai-skills version is "unknown";
+    clients read. The ai-skills installers write it from 1.28.0 on
+    ([aiskills#24](https://github.com/BlackVS/aiskills/issues/24)); an
+    installation without it, from an older release, is "unknown";
   - each selected client from `--version`.
 
   Older than the minimum gives `blocked`. Newer than tested gives a notice.
@@ -2228,7 +2228,7 @@ member's user-level skills under it. It reports:
     boot does not verify its download yet
     ([aiskills#25](https://github.com/BlackVS/aiskills/issues/25)). The
     installer runs through `bash` because an archive may store it without
-    its execute bit, as 1.26.1 does;
+    its execute bit, as 1.33.13 does;
   - the client's npm package at the tested version.
 
   OpenCode 1.x refusing data that OpenCode 2 wrote is reported, not

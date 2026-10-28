@@ -2223,10 +2223,12 @@ member's user-level skills under it. It reports:
 - **The instructions of a blocked report** are exact and pinned:
   - aimem's verifying boot script with `AIMEM_VERSION`;
   - the ai-skills release archive checked against its `SHA256SUMS` and
-    installed with `install.sh --user -t claude -s <skills>` (OpenCode reads
-    the same directory), because the ai-skills one-line boot does not
-    verify its download yet
-    ([aiskills#25](https://github.com/BlackVS/aiskills/issues/25));
+    installed with `bash ./src/install.sh --user -t claude -s <skills>`
+    (OpenCode reads the same directory), because the ai-skills one-line
+    boot does not verify its download yet
+    ([aiskills#25](https://github.com/BlackVS/aiskills/issues/25)). The
+    installer runs through `bash` because an archive may store it without
+    its execute bit, as 1.26.1 does;
   - the client's npm package at the tested version.
 
   OpenCode 1.x refusing data that OpenCode 2 wrote is reported, not

@@ -73,7 +73,7 @@ func skillsInstruction(c supportedComponent, found string, skills []string) stri
 	}
 	return fmt.Sprintf("install ai-skills %s (%s) from its release archive, checked against SHA256SUMS: "+
 		"`cd \"$(mktemp -d)\" && curl -fsSLO %s/aiskills-%s.tar.gz && curl -fsSLO %s/SHA256SUMS && %s && "+
-		"mkdir src && tar -xzf aiskills-%s.tar.gz -C src --strip-components=1 && ./src/install.sh --user -t claude -s %s`; "+
+		"mkdir src && tar -xzf aiskills-%s.tar.gz -C src --strip-components=1 && bash ./src/install.sh --user -t claude -s %s`; "+
 		"then rerun `aicrew-agent check`", rel, list, base, rel, base, sum, rel, list)
 }
 

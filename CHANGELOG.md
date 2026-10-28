@@ -124,8 +124,10 @@ section, and the release workflow refuses a tag that has none
   `find . \` and `-delete` on the next line split into two harmless
   commands, and `rm -rf build\` followed by `/../..` was judged as a
   delete of `build\` inside the working directory, though bash deletes
-  its parent. Outside single quotes, a backslash before LF or CR LF is
-  now removed with it, and both are refused. PowerShell and cmd are
+  its parent. Outside single quotes and comments, a backslash before a
+  newline is now removed with it, and both are refused. Before CR LF it
+  continues the line only on Windows, where Git for Windows' bash does
+  so; bash on Linux ends the command at the LF. PowerShell and cmd are
   unchanged.
 
 ## [0.8.0] - 2026-10-27

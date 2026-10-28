@@ -406,7 +406,7 @@ On a Debian or Ubuntu host, usually the aimem hub's own, aicrewd is
 installed and upgraded with the release's one-liner, run as root:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.8.0/install-aicrewd.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.9.0/install-aicrewd.sh | bash
 ```
 
 It replaces the manual steps: downloading, checking the sums, copying the
@@ -1764,19 +1764,19 @@ as the member's own user. The operator's machine uses the same one-liner:
 - Linux and macOS:
 
   ```sh
-  curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.8.0/boot.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.9.0/boot.sh | bash
   ```
 
 - Windows, in a PowerShell window that is already open:
 
   ```powershell
-  irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.8.0/boot.ps1 | iex
+  irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.9.0/boot.ps1 | iex
   ```
 
   From cmd, or from the Run dialog (Win+R):
 
   ```bat
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.8.0/boot.ps1 | iex"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.9.0/boot.ps1 | iex"
   ```
 
   The second form starts a new `powershell.exe`. Typed into a PowerShell

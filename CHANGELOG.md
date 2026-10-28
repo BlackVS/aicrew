@@ -12,6 +12,70 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.9.0] - 2026-10-28
+
+Fifteen pull requests since 0.8.0 (#213 to #227). Three of them close
+ways past the command guard in member homes: a backslash before an
+operator, a backslash at a line end, and a quote inside a comment could
+each hide a destructive delete from it (#225, #226, #227). Member homes
+should upgrade for these. The pilot simulation's stack is in (#220), with
+what it needed from the installers: a member join without a terminal
+(#219), the member one-liner from prebuilt binaries (#217), and an
+install-only aicrewd installer (#218); its hub is installed by aimem's own
+installer (#224), and its smoke run found the check instruction fixed in
+#221. Beside these come a write aimem refuses as unreadable text handled
+as a correction (#213), the documents matched to the code (#214), the
+find-delete rule narrowed and the unjudged wrapped scripts logged (#215),
+the pilot simulation design (#216), the tested ai-skills release (#222),
+and two intermittent tests traced to wall-clock steps (#223).
+
+The store stays at schema 39, and aicrewd's routes are unchanged, so the
+hub and the members can be upgraded in either order. aimem 0.10.0 or
+later stays required; this release is tested with aimem 0.10.15 and
+ai-skills 1.33.13. The pilot team stays paused: nothing in this release
+resumes it.
+
+### Upgrade steps
+
+All of them use product commands and one-liners.
+
+1. **Each member and the operator's machine.** As that user, rerun the
+   member one-liner, which stops the account's registered member
+   services, swaps the binaries and starts them again. The guard fixes
+   are in `aicrew-agent`, so this step brings them:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.9.0/boot.sh | bash
+     ```
+
+   - Windows, in a PowerShell window that is already open:
+
+     ```powershell
+     irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.9.0/boot.ps1 | iex
+     ```
+
+   - Windows, from cmd or the Run dialog:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.9.0/boot.ps1 | iex"
+     ```
+
+2. **Each home.** Rerun `aicrew-agent join --home HOME`, which brings
+   ROLES.md's line on rewriting a refused text (#213). An edited file is
+   kept, with the new version written beside it with the suffix
+   `.aicrew-new`.
+3. **aicrewd.** On the hub host, as root, run the hub one-liner, so the
+   hub reports the same release:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.9.0/install-aicrewd.sh | bash
+   ```
+
+4. **Check each home.** `aicrew-agent check --home HOME` reports aimem
+   0.10.15 as tested and ai-skills `supported` when its installer wrote
+   its record (ai-skills 1.28.0 and later).
+
 ### Added
 
 - **The pilot simulation's stack** (01a17d9a-932b, increment I1).
@@ -138,6 +202,17 @@ section, and the release workflow refuses a tag that has none
   or a continuation, and the next line is judged on its own. Words in a
   comment are no longer judged, since bash does not run them. PowerShell
   and cmd are unchanged.
+
+### Docs and tests
+
+- **The pilot simulation's design** (01a16a06-f242, #216):
+  `docs/DESIGN-PILOT-SIMULATION.md` describes the containerized pilot, its
+  increments and the installer gaps the first increment needed.
+- **Two intermittent test failures were backward wall-clock steps**
+  (01a181ce-5983, #223). Under load, WSL2's wall clock steps back by a
+  few milliseconds. A store test and the engine's grants read now run on
+  a clock that only moves forward, through `Store.SetClock` and
+  `server.WithGrantsClock`, both unset in production.
 
 ## [0.8.0] - 2026-10-27
 

@@ -132,6 +132,12 @@ func TestGuardRefusal(t *testing.T) {
 			`find . \! -name keep -delete`,
 			`find . \( -true \) -delete`,
 			`find . \( -name a -o -name b \) -delete`,
+			"find . \\\n-delete",
+			"rm -rf \\\n/",
+			"rm -rf \\\r\n/",
+			"rm -rf build\\\n/../..",
+			"echo ok # \\\nfind . -delete",
+			"echo ok # \\\r\nfind . -delete",
 			"find . -not -name keep -delete",
 			"find . -name x -delete -o -delete",
 			"find . -name '*' -delete",
@@ -467,7 +473,7 @@ func TestGuardFindAdvice(t *testing.T) {
 	for _, line := range []string{"find . -delete", "find . -maxdepth 1 -delete", "find -delete",
 		"find /work/repo -type f -delete", "find . -name '*' -delete", "find . -name x -o -delete",
 		`find . \! -name keep -delete`, "find -L . -delete",
-		`find . \( -true \) -delete`, `find . \( -name a -o -name b \) -delete`,
+		`find . \( -true \) -delete`, `find . \( -name a -o -name b \) -delete`, "find . \\\n-delete",
 		"find -Z .. -name x -delete", "find -type f -name x -delete"} {
 		if r := g.refusal("bash", line); r.next != nextFindDelete {
 			t.Errorf("%q: %q", line, r.next)
@@ -526,7 +532,8 @@ func TestGuardUnjudged(t *testing.T) {
 
 // In bash an unquoted backslash makes the next operator character part of
 // the word, as bash passes it on; in double quotes it stays, and other
-// shells keep it.
+// shells keep it. Before a newline, outside single quotes and comments, it
+// continues the command.
 func TestSplitBashEscapes(t *testing.T) {
 	for _, c := range []struct{ shell, line, want string }{
 		{"bash", `echo a\;b`, "echo a;b"},
@@ -538,6 +545,14 @@ func TestSplitBashEscapes(t *testing.T) {
 		{"bash", `echo "a\;b"`, `echo a\;b`},
 		{"bash", `dir C:\work\x`, `dir C:\work\x`},
 		{"powershell", `echo a\#b`, `echo a\#b`},
+		{"bash", "echo a\\\nb", "echo ab"},
+		{"bash", "echo \"a\\\nb\"", "echo ab"},
+		{"bash", "echo \\\n b", "echo b"},
+		{"bash", "rm -rf build\\\n/../..", "rm -rf build/../.."},
+		{"bash", "echo a # \\\nb", "echo a # \\|b"},
+		{"bash", "echo a;# \\\nb", "echo a|# \\|b"},
+		{"bash", "echo a#\\\nb", "echo a#b"},
+		{"bash", "echo 'a\\\nb'", "echo a\\\nb"},
 	} {
 		var got []string
 		for _, words := range splitCommands(c.shell, c.line) {
@@ -545,6 +560,38 @@ func TestSplitBashEscapes(t *testing.T) {
 		}
 		if strings.Join(got, "|") != c.want {
 			t.Errorf("%s %q: %q, want %q", c.shell, c.line, got, c.want)
+		}
+	}
+}
+
+// A backslash before CR LF continues the line where bash does (Git for
+// Windows' bash); elsewhere the LF ends the command, so a find after it is
+// judged on its own.
+func TestSplitBashCRLF(t *testing.T) {
+	defer func(v bool) { crlfContinues = v }(crlfContinues)
+	g := testGuard("feature", nil)
+	for _, c := range []struct {
+		continues bool
+		want      string
+		refused   bool
+	}{
+		{true, "echo ok find . -delete", false},
+		{false, "echo ok \\|find . -delete", true},
+	} {
+		crlfContinues = c.continues
+		line := "echo ok \\\r\nfind . -delete"
+		var got []string
+		for _, words := range splitCommands("bash", line) {
+			got = append(got, strings.Join(words, " "))
+		}
+		if strings.Join(got, "|") != c.want {
+			t.Errorf("continues=%v: %q, want %q", c.continues, got, c.want)
+		}
+		if r := g.refusal("bash", line); (r.what != "") != c.refused {
+			t.Errorf("continues=%v: refused %q", c.continues, r.what)
+		}
+		if r := g.refusal("bash", "rm -rf build\\\r\n/../.."); c.continues && r.what == "" {
+			t.Errorf("the continued rm passed")
 		}
 	}
 }

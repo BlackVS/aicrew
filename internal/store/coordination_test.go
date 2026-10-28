@@ -109,6 +109,10 @@ func checkStep(t *testing.T, s *Store, st step, want Fact) {
 // checks; an update sends none. Each proof ends with its step.
 func TestCoordinationFactsFromRealTransitions(t *testing.T) {
 	s, path := openTemp(t)
+	// checkStep compares a proof's expiry, stamped at issue, with the store's
+	// clock after the step; a backward wall-clock step in between (WSL2 makes
+	// them every 30 s, of up to tens of milliseconds) would fail it.
+	s.SetClock(monotonicClock())
 	e := newClaimTeam(t, s)
 	log := watchProofs(t, e.execTeam)
 	lead, builder := memberOf(e.lead, RoleCoordinator), memberOf(e.builder, RoleWorker)

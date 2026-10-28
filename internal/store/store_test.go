@@ -23,6 +23,13 @@ func openTemp(t *testing.T) (*Store, string) {
 	return s, path
 }
 
+// monotonicClock is the wall clock at its call, advanced by the monotonic
+// clock since: a backward step of the wall clock does not move it back.
+func monotonicClock() func() time.Time {
+	start := time.Now()
+	return func() time.Time { return start.Add(time.Since(start)) }
+}
+
 func operator(t *testing.T) Caller {
 	t.Helper()
 	c, err := OperatorCaller("op-1")

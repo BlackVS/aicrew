@@ -166,7 +166,13 @@ func setupCrewWith(t *testing.T, o crewOptions) *crewEnv {
 	root := filepath.Join(dir, "aimem")
 	opts := []server.Option{server.WithVerifier(testVerifier{}), server.WithEventTick(50 * time.Millisecond)}
 	if o.steps {
-		opts = append(opts, server.WithReader(fileReader{root: root}), server.WithHub("main", "hub-test", grantingHub{}))
+		// The server drops a grants read stamped before the last one; a
+		// backward wall-clock step (WSL2 makes them every 30 s) between two
+		// reads would drop the fresher one, so the reads are stamped by a
+		// clock that only moves forward.
+		start := time.Now()
+		opts = append(opts, server.WithReader(fileReader{root: root}), server.WithHub("main", "hub-test", grantingHub{}),
+			server.WithGrantsClock(func() time.Time { return start.Add(time.Since(start)) }))
 	}
 	srv, err := server.New(server.Config{StorePath: storePath, ListenAddr: "127.0.0.1:0", TLSCertFile: certFile,
 		TLSKeyFile: keyFile, ServiceID: "aicrew-test", ShutdownTimeout: server.Duration(5 * time.Second),

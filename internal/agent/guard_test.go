@@ -130,6 +130,8 @@ func TestGuardRefusal(t *testing.T) {
 			"find . -name x -or -delete",
 			"find . ! -name keep -delete",
 			`find . \! -name keep -delete`,
+			`find . \( -true \) -delete`,
+			`find . \( -name a -o -name b \) -delete`,
 			"find . -not -name keep -delete",
 			"find . -name x -delete -o -delete",
 			"find . -name '*' -delete",
@@ -465,6 +467,7 @@ func TestGuardFindAdvice(t *testing.T) {
 	for _, line := range []string{"find . -delete", "find . -maxdepth 1 -delete", "find -delete",
 		"find /work/repo -type f -delete", "find . -name '*' -delete", "find . -name x -o -delete",
 		`find . \! -name keep -delete`, "find -L . -delete",
+		`find . \( -true \) -delete`, `find . \( -name a -o -name b \) -delete`,
 		"find -Z .. -name x -delete", "find -type f -name x -delete"} {
 		if r := g.refusal("bash", line); r.next != nextFindDelete {
 			t.Errorf("%q: %q", line, r.next)
@@ -518,6 +521,31 @@ func TestGuardUnjudged(t *testing.T) {
 	var blind []string
 	if r := testGuard("feature", &blind).refusal("bash", `sh -c "rm -rf $DIR"`); r.what == "" || len(blind) != 0 {
 		t.Errorf("a refused script: %q %q", r.what, blind)
+	}
+}
+
+// In bash an unquoted backslash makes the next operator character part of
+// the word, as bash passes it on; in double quotes it stays, and other
+// shells keep it.
+func TestSplitBashEscapes(t *testing.T) {
+	for _, c := range []struct{ shell, line, want string }{
+		{"bash", `echo a\;b`, "echo a;b"},
+		{"bash", `echo \(x\)`, "echo (x)"},
+		{"bash", `echo a\|b`, "echo a|b"},
+		{"bash", `echo \#x`, "echo #x"},
+		{"bash", `echo a\&b \<c\> \!d`, "echo a&b <c> !d"},
+		{"bash", `find . \( -true \) -delete`, "find . ( -true ) -delete"},
+		{"bash", `echo "a\;b"`, `echo a\;b`},
+		{"bash", `dir C:\work\x`, `dir C:\work\x`},
+		{"powershell", `echo a\#b`, `echo a\#b`},
+	} {
+		var got []string
+		for _, words := range splitCommands(c.shell, c.line) {
+			got = append(got, strings.Join(words, " "))
+		}
+		if strings.Join(got, "|") != c.want {
+			t.Errorf("%s %q: %q, want %q", c.shell, c.line, got, c.want)
+		}
 	}
 }
 

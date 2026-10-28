@@ -293,8 +293,9 @@ func splitCommands(shell, line string) [][]string {
 // substitution, and a ( … ) group that starts a command, is a subshell
 // segment; PowerShell runs its subexpressions in the same scope. Quotes
 // are removed; a backslash (bash) or backquote (PowerShell) escapes the
-// next character only before a quote, a space, a $ or itself, so Windows
-// paths keep their backslashes.
+// next character only before a quote, a space, a $ or itself, and in bash
+// unquoted also before ( ) ; & | < > ! #, so that find . \( … \) is one
+// command; Windows paths keep their backslashes.
 func splitSegments(shell, line string, depth int) []segment {
 	if depth > maxGuardDepth {
 		return []segment{{words: []string{guardTooDeep}}}
@@ -306,7 +307,10 @@ func splitSegments(shell, line string, depth int) []segment {
 		in    bool // a word is open, maybe empty ("")
 		quote rune
 	)
-	escape := '\\'
+	escape, escaped := '\\', "\"' \\`$();&|<>!#"
+	if shell != "bash" {
+		escaped = "\"' \\`$"
+	}
 	if shell == "powershell" {
 		escape = '`'
 	}
@@ -358,7 +362,7 @@ func splitSegments(shell, line string, depth int) []segment {
 				word.WriteRune(r)
 			}
 		case quote == '"' && r == escape && i+1 < len(rs) && strings.ContainsRune("\"\\`$", rs[i+1]),
-			quote == 0 && r == escape && i+1 < len(rs) && strings.ContainsRune("\"' \\`$", rs[i+1]):
+			quote == 0 && r == escape && i+1 < len(rs) && strings.ContainsRune(escaped, rs[i+1]):
 			i++
 			word.WriteRune(rs[i])
 			in = true
@@ -746,8 +750,8 @@ options:
 			break options
 		}
 	}
-	// The escaped \( never reaches here in bash yet: the splitter reads it
-	// as a substitution until 01a17d22-4928 lets a backslash escape it.
+	// In bash the splitter drops the backslash of \( and \!, so they arrive
+	// as ( and !; a shell that keeps it passes \( and \!.
 	n := 0
 	for _, s := range args[min(from, len(args)):] {
 		if strings.HasPrefix(s, "-") || s == "(" || s == "!" || s == `\(` || s == `\!` {

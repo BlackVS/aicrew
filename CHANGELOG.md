@@ -109,6 +109,15 @@ section, and the release workflow refuses a tag that has none
   without its execute bit, as ai-skills 1.26.1 does. It now reads
   `bash ./src/install.sh`. The pilot simulation found it, and its member
   image now runs the command as printed.
+- **The command guard reads a bash backslash before ( ) ; & | < > ! # as
+  bash does** (01a17d22-4928). The splitter took `\(` for the start of a
+  substitution, so `find . \( -true \) -delete` split into three commands,
+  none of them a find with `-delete`, and it passed although it deletes
+  everything under the working directory, `.git` included. Unquoted in
+  bash, the backslash now makes those characters part of the word, the
+  escaped find is judged as one command and refused, and so is
+  `find . \( -name a -o -name b \) -delete`. PowerShell and cmd are
+  unchanged.
 
 ## [0.8.0] - 2026-10-27
 

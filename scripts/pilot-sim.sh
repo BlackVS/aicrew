@@ -248,7 +248,7 @@ for role in coordinator worker; do
   waitfor "sim-$role's serve and its model probe" 600 served "sim-$role"
   dc exec -T -u member "sim-$role" aicrew-agent check --home /home/member/agent --json > "$OUT/check-$role.json" ||
     fail "aicrew-agent check is not green in sim-$role (report: $OUT/check-$role.json)"
-  python3 "$SIM/smoke.py" check "$OUT/check-$role.json" || fail "sim-$role's check report ($OUT/check-$role.json)"
+  python3 "$SIM/smoke.py" check "$OUT/check-$role.json" "$PILOTSIM_AISKILLS_VERSION" || fail "sim-$role's check report ($OUT/check-$role.json)"
 done
 op aicrew status --team "$TEAM_ID" > "$OUT/status.json" || fail "aicrew status"
 python3 "$SIM/smoke.py" status "$OUT/status.json" coordinator worker || fail "aicrew status ($OUT/status.json)"

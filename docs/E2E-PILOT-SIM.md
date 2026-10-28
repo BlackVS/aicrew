@@ -101,12 +101,11 @@ the container that makes it to the one that reads it through a pipe.
     required skill missing;
   - the turn model available;
   - a verified forge credential;
-  - ai-skills installed where the client reads it.
+  - ai-skills supported at the tested release, as the record its
+    installer writes (`.ai-skills.json`) names it, and installed where the
+    client reads it.
 
-  The reports are kept as `DIR/check-<role>.json`. ai-skills 1.26.1, the
-  tested release, records no version (aiskills#24), so check reports it
-  `unknown`, and the smoke check accepts that until task `01a18173-b005`
-  moves the tested release to one that records it.
+  The reports are kept as `DIR/check-<role>.json`.
 - `aicrew status` lists both members, each holding a session
   (`DIR/status.json`).
 - `verify_delivery.py --help` runs from the coordinator's skill directory.

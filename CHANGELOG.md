@@ -85,6 +85,14 @@ section, and the release workflow refuses a tag that has none
   still passes, and now writes a line with the rule `unjudged` to
   `logs/guard.jsonl`, so the log counts every command the guard passed
   without judging it.
+- **The tested ai-skills release is 1.33.13** (01a18173-b005), up from
+  1.26.1; the minimum stays 1.26.1. Its installer writes the
+  `.ai-skills.json` record check reads (ai-skills writes it from 1.28.0
+  on), so a home installed as check instructs reports ai-skills
+  `supported` instead of `unknown`. The pilot simulation's smoke check
+  now requires `supported` at the tested release. An installation from
+  a release before 1.28.0 still has no record and is still `unknown`, a
+  notice that does not block.
 
 ### Fixed
 

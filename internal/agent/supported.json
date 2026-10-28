@@ -7,7 +7,7 @@
       "note": "the release this aicrew is tested with"
     },
     "ai-skills": {
-      "ranges": [{"min": "1.26.1", "tested": "1.26.1"}]
+      "ranges": [{"min": "1.26.1", "tested": "1.33.13"}]
     },
     "claude": {
       "ranges": [{"min": "2.1.283", "tested": "2.1.286"}]

@@ -621,9 +621,9 @@ func skillDirs(client, home string) []string {
 // clients take the first required skill from: for each client, the first
 // of its skill directories holding the skill. Each is reported and judged
 // by its installer's .ai-skills.json (decision K5; written from ai-skills
-// https://github.com/BlackVS/aiskills/issues/24 on). An absent record is an
-// unknown version; a record that exists but cannot be read, decoded or
-// names no version is blocked.
+// 1.28.0 on, https://github.com/BlackVS/aiskills/issues/24). An absent
+// record is an unknown version; a record that exists but cannot be read,
+// decoded or names no version is blocked.
 func (c *checker) checkSkills(clients []string) {
 	comp := c.set.Components["ai-skills"]
 	required := comp.minimum() + " or later"
@@ -664,8 +664,8 @@ func (c *checker) skillsInstallation(comp supportedComponent, dir string, unknow
 		r.State, r.Detail = StateUnknown, "installed in "+dir+" without a version record"
 		if !*unknownNoticed {
 			*unknownNoticed = true
-			c.notice("the ai-skills version is unknown: its installer records no version yet " +
-				"(https://github.com/BlackVS/aiskills/issues/24), so it neither blocks nor counts as supported")
+			c.notice("the ai-skills version is unknown: the installation has no version record " +
+				"(ai-skills installers write one from 1.28.0 on), so it neither blocks nor counts as supported")
 		}
 		return r
 	}

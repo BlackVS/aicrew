@@ -157,6 +157,12 @@ func (s *Server) refreshGrants(ctx context.Context) {
 	}
 }
 
+// WithGrantsClock stamps grants reads with now instead of the wall clock,
+// for tests whose reads must not reorder when the wall clock steps back.
+func WithGrantsClock(now func() time.Time) Option {
+	return func(s *Server) { s.grantsClock = now }
+}
+
 // grantsNow is the time a grants read is stamped with.
 func (s *Server) grantsNow() time.Time {
 	if s.grantsClock != nil {

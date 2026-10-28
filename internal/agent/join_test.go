@@ -773,8 +773,9 @@ func TestExecAimemCredential(t *testing.T) {
 	}
 }
 
-// The code is read only at a terminal's prompt, checked before it costs an
-// attempt, and a malformed one is asked again and at last refused.
+// The code is read at a terminal's prompt unless --code-file names its file
+// or standard input, checked before it costs an attempt, and a malformed one
+// is asked again at the prompt and at last refused.
 func TestJoinCodeEntry(t *testing.T) {
 	t.Run("off a terminal", func(t *testing.T) {
 		e := setupJoin(t)
@@ -782,7 +783,8 @@ func TestJoinCodeEntry(t *testing.T) {
 		o.Terminal = false
 		crew := &recCrew{}
 		rep, reads := e.join(t, o, crew, activeAimem(), e.invite(t, "inv-1", store.RoleWorker))
-		if rep.Status != JoinBlocked || rep.Reason != "no_terminal" || reads != 0 || len(crew.beginKeys) != 0 {
+		if rep.Status != JoinBlocked || rep.Reason != "no_terminal" || reads != 0 || len(crew.beginKeys) != 0 ||
+			!strings.Contains(rep.Instruction, "--code-file PATH") || !strings.Contains(rep.Instruction, "--code-file -") {
 			t.Fatalf("%+v, %d reads", rep, reads)
 		}
 		if _, err := os.Stat(e.home); !errors.Is(err, os.ErrNotExist) {
@@ -815,6 +817,139 @@ func TestJoinCodeEntry(t *testing.T) {
 		if rep.Status != JoinReady || second.beginKeys[0] == first.beginKeys[0] {
 			t.Fatalf("%+v; begins %v then %v", rep, first.beginKeys, second.beginKeys)
 		}
+	})
+}
+
+// typoOf is code with its last character changed: its checksum fails.
+func typoOf(code string) string {
+	return code[:len(code)-1] + map[bool]string{true: "1", false: "2"}[code[len(code)-1] != '1']
+}
+
+// filesUnder lists the files under home, relative to it.
+func filesUnder(t *testing.T, home string) []string {
+	t.Helper()
+	var names []string
+	filepath.WalkDir(home, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			rel, _ := filepath.Rel(home, path)
+			names = append(names, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	return names
+}
+
+// --code-file reads the code from an owner-only file, or with - from
+// standard input off a terminal, without asking again; it is never the code
+// itself, links only a new home, and shares standard input with no --cred
+// (01a17d8e-4255). The code appears in no report, output or file.
+func TestJoinCodeFile(t *testing.T) {
+	t.Run("a file, off a terminal", func(t *testing.T) {
+		e := setupJoin(t)
+		code := e.invite(t, "inv-1", store.RoleWorker)
+		o := e.opts()
+		o.Terminal = false
+		o.CodeFile = filepath.Join(t.TempDir(), "code")
+		privateFile(t, o.CodeFile, code+"\r\n")
+		rep, reads := e.join(t, o, &recCrew{}, activeAimem())
+		if rep.Status != JoinReady || reads != 0 {
+			t.Fatalf("%+v, %d reads", rep, reads)
+		}
+		e.noCodeAnywhere(t, rep, code)
+	})
+	t.Run("standard input, off a terminal", func(t *testing.T) {
+		e := setupJoin(t)
+		code := e.invite(t, "inv-1", store.RoleWorker)
+		o := e.opts()
+		o.Terminal, o.CodeFile = false, "-"
+		rep, reads := e.join(t, o, &recCrew{}, activeAimem(), code+"\r\n")
+		if rep.Status != JoinReady || reads != 1 {
+			t.Fatalf("%+v, %d reads", rep, reads)
+		}
+		e.noCodeAnywhere(t, rep, code)
+	})
+	t.Run("standard input on a terminal is the prompt", func(t *testing.T) {
+		e := setupJoin(t)
+		code := e.invite(t, "inv-1", store.RoleWorker)
+		o := e.opts()
+		o.CodeFile = "-"
+		rep, reads := e.join(t, o, &recCrew{}, activeAimem(), typoOf(code), code)
+		if rep.Status != JoinReady || reads != 2 {
+			t.Fatalf("%+v, %d reads", rep, reads)
+		}
+	})
+	// A malformed code from a file or a pipe is refused at once, and leaves
+	// the home as three malformed answers at the prompt do.
+	t.Run("malformed, not asked again", func(t *testing.T) {
+		prompt := setupJoin(t)
+		code := prompt.invite(t, "inv-1", store.RoleWorker)
+		rep, _ := prompt.join(t, prompt.opts(), &recCrew{}, activeAimem(), "x", "y", "z")
+		if rep.Status != JoinBlocked || rep.Reason != "code_malformed" {
+			t.Fatalf("the prompt: %+v", rep)
+		}
+		want := filesUnder(t, prompt.home)
+		for _, src := range []string{"file", "stdin"} {
+			e := setupJoin(t)
+			o := e.opts()
+			o.Terminal = false
+			o.CodeFile = "-"
+			if src == "file" {
+				o.CodeFile = filepath.Join(t.TempDir(), "code")
+				privateFile(t, o.CodeFile, typoOf(code)+"\n")
+			}
+			crew := &recCrew{}
+			rep, reads := e.join(t, o, crew, activeAimem(), typoOf(code)+"\n", code)
+			if rep.Status != JoinBlocked || rep.Reason != "code_malformed" || len(crew.beginKeys) != 0 ||
+				reads > 1 || !strings.Contains(e.out.String(), "checksum does not match") {
+				t.Fatalf("%s: %+v, %d reads", src, rep, reads)
+			}
+			if got := filesUnder(t, e.home); strings.Join(got, " ") != strings.Join(want, " ") {
+				t.Fatalf("%s: the home has %v, the prompt's %v", src, got, want)
+			}
+			e.noCodeAnywhere(t, rep, code)
+		}
+	})
+	refused := func(t *testing.T, e *joinEnv, o JoinOptions, want, secret string) {
+		t.Helper()
+		reads := 0
+		rep, err := Join(context.Background(), o, e.deps(&recCrew{}, activeAimem(), &reads))
+		if !errors.Is(err, ErrJoinUsage) || rep.Status != JoinBlocked || reads != 0 ||
+			!strings.Contains(rep.Instruction, want) || secret != "" && strings.Contains(rep.Instruction+e.out.String(), secret) {
+			t.Fatalf("%+v, %v, %d reads", rep, err, reads)
+		}
+	}
+	t.Run("refused before anything is created", func(t *testing.T) {
+		e := setupJoin(t)
+		code := e.invite(t, "inv-1", store.RoleWorker)
+		o := e.opts()
+		o.Terminal = false
+		o.CodeFile = code
+		refused(t, e, o, "never the code", code)
+		o.CodeFile = "-"
+		o.Creds = []ForgeCred{{Host: "github.com", Source: "-"}}
+		refused(t, e, o, "would both read standard input", "")
+		o.Creds, o.AimemURL, o.AimemTokenFile = nil, "https://hub.example", "-"
+		refused(t, e, o, "there is no terminal", "")
+		open := filepath.Join(t.TempDir(), "open")
+		os.WriteFile(open, []byte(code+"\n"), 0o644)
+		if privatefile.Check(open) != nil {
+			o.AimemURL, o.AimemTokenFile, o.CodeFile = "", "", open
+			refused(t, e, o, "readable by its owner only", code)
+		}
+		if _, err := os.Stat(e.home); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("a refused run created the home")
+		}
+	})
+	t.Run("a linked home", func(t *testing.T) {
+		e := setupJoin(t)
+		rep, _ := e.join(t, e.opts(), &recCrew{}, activeAimem(), e.invite(t, "inv-1", store.RoleWorker))
+		if rep.Status != JoinReady {
+			t.Fatalf("join: %+v", rep)
+		}
+		o := e.opts()
+		o.CodeFile = filepath.Join(t.TempDir(), "code")
+		privateFile(t, o.CodeFile, e.invite(t, "inv-2", store.RoleWorker)+"\n")
+		refused(t, e, o, "already linked", "")
 	})
 }
 

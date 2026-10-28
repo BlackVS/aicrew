@@ -87,8 +87,10 @@ The invitation code is a bearer capability:
 - It has at least 128 bits of randomness, in a form a person can type, with
   a checksum. The exact format belongs to implementation review.
 - It is shown once to the operator, and aicrew stores only a digest.
-- The person at the client enters it at a hidden prompt. It never appears in
-  command arguments, environment files, logs, Git, chat or task comments.
+- The person at the client enters it at a hidden prompt. A headless
+  install gives it instead in a file readable by its owner only, or on
+  standard input (`join --code-file`). It never appears in command
+  arguments, environment files, logs, Git, chat or task comments.
 - It is single use: completion moves the invitation to `redeemed`.
 
 Pinning the expected aimem user is recommended for `join` and `link`, and

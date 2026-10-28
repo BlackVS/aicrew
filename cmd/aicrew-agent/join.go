@@ -20,7 +20,10 @@ const joinUsage = `usage: aicrew-agent join --label LABEL [--home DIR] --url htt
          --client claude|opencode[,…] [--aimem-command PATH] [--json]
          [--aimem-url https://HUB --aimem-token-file PATH|- [--aimem-ca-file PATH]]
          [--cred HOST=PATH|- ...] [--wake stop-hook|turns] [--no-service]
-       The invitation code is read at a hidden prompt. The --aimem flags
+         [--code-file PATH|-]
+       The invitation code is read at a hidden prompt, or with --code-file
+       from its owner-only file or, with -, from standard input (a hidden
+       prompt on a terminal, one line otherwise). The --aimem flags
        provision the home's aimem installation on the first run, the token
        read from its owner-only file or, with -, at a hidden prompt. Each
        --cred gives the member's own token for one forge host, from its
@@ -43,7 +46,12 @@ func joinDeps(stderr io.Writer) agent.JoinDeps {
 		Aimem: func(command, hub, home string) agent.JoinAimem {
 			return agent.ExecAimem{Command: command, Hub: hub, Home: home}.JoinAimem()
 		},
-		ReadCode:  func() (string, error) { return agent.ReadHidden(os.Stdin, stderr, "Invitation code: ") },
+		ReadCode: func() (string, error) {
+			if agent.IsTerminal(os.Stdin) {
+				return agent.ReadHidden(os.Stdin, stderr, "Invitation code: ")
+			}
+			return readLine(os.Stdin)
+		},
 		ReadToken: func() (string, error) { return agent.ReadHidden(os.Stdin, stderr, "The member's aimem token: ") },
 		ReadCred: func(host string) (string, error) {
 			if agent.IsTerminal(os.Stdin) {
@@ -138,6 +146,7 @@ func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.W
 	fs.StringVar(&o.AimemURL, "aimem-url", "", "")
 	fs.StringVar(&o.AimemTokenFile, "aimem-token-file", "", "")
 	fs.StringVar(&o.AimemCAFile, "aimem-ca-file", "", "")
+	fs.StringVar(&o.CodeFile, "code-file", "", "")
 	var credRefused error
 	fs.Var(credFlags{&o.Creds, &credRefused}, "cred", "")
 	fs.StringVar(&o.Wake, "wake", "", "")

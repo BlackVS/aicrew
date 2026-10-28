@@ -14,6 +14,14 @@ section, and the release workflow refuses a tag that has none
 
 ### Added
 
+- **A headless member joins without a terminal** (01a17d8e-4255).
+  `aicrew-agent join --code-file PATH` reads the invitation code from a
+  file readable by its owner only, and `--code-file -` from one line of
+  standard input when that is not a terminal (the hidden prompt when it
+  is). The code is never an argument: a value that is not a file is
+  refused without being quoted. A malformed code from a file or a pipe is
+  refused at once instead of asked again. Without the flag and without a
+  terminal, join still stops with `no_terminal`, now naming `--code-file`.
 - **The member one-liner installs prebuilt binaries** (01a17d8e-4267).
   `AICREW_PREBUILT_DIR=DIR boot.sh` installs `aicrew-agent` and `aicrew`
   from DIR instead of downloading a release, as `install-aicrewd.sh`

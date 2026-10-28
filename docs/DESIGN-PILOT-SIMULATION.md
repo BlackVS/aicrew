@@ -51,13 +51,14 @@ and a prerequisite (section 8), not a workaround in the test.
 
 ### 2.1 Where it sits
 
-A member home names its client in `agent.json` as
-`aicrew.client_command` (`internal/agent/config.go`). `serve`, `run` and
-`check` run that command in place of `claude`. The scripted member is a
-small Go binary, `aicrew-simclient`, built from this repository under
-`e2e/pilotsim/`. It is installed in each member container, and the
-scenario puts its path in `client_command`. aicrewd, the launcher and the
-hub are not changed and do not know about it.
+A member finds its client on `PATH`, unless its home names another
+command in `agent.json` as `aicrew.client_command`
+(`internal/agent/config.go`). No product command sets that field, and the
+simulation writes no home file by hand, so it uses `PATH`. The scripted
+member is a small Go binary, `aicrew-simclient`, built from this
+repository under `e2e/pilotsim/`. Each member image installs it as
+`claude` on `PATH`. aicrewd, the launcher and the hub are not changed and
+do not know about it.
 
 The launcher runs the client in three ways, and the scripted member
 answers each the way the real client does:
@@ -175,12 +176,12 @@ is installed the way the operator installs it:
 | Container | What it runs | How it is installed |
 | --- | --- | --- |
 | `sim-ca` | a one-shot job: a throwaway CA, the server certificates and the SPKI pins, written to a shared volume | the harness's CA code |
-| `sim-aimem` | `aimem serve`, the hub | aimem built from the pinned commit, as b4 does, because `install-hub.sh` takes no local base yet (aimem task `01a15057-43ed`; the row switches to the installer when that lands); `tasks on`, `process select`, `identity peer provision` |
+| `sim-aimem` | `aimem serve`, the hub | the tested aimem release, its asset checked against the release's `SHA256SUMS` as `install-hub.sh` checks it, then the installer's env file and `aimem serve` under the container's init, because `install-hub.sh` needs systemd (aimem task `01a18163-87ac`; the row switches to the installer when it has a service-less mode); `tasks on`, `process select`, `identity peer provision` |
 | `sim-aicrewd` | `aicrewd -config …`, the command the installer prints | `install-aicrewd.sh` in install-only mode (`AICREW_NO_SERVICE=1`) with `AICREW_PREBUILT_DIR` (prerequisite 3), then `aicrew hub add`, `aicrew team setup`, `aicrew invitation issue` per member |
 | `sim-gitea` | Gitea with TLS from the CA, an `operator` user, member users with their own tokens, one repository | the Gitea image pinned at 1.27 or later (verify-delivery reads a review of an older head through its compare diff, which earlier versions do not serve), configured by its own CLI |
 | `sim-hands` | the stub reviewer (section 2.5) | built from `e2e/pilotsim/` |
 | `sim-ci` | the stub CI status (section 2.5) | built from `e2e/pilotsim/` |
-| `sim-coordinator`, `sim-worker` | one member home each, `aicrew-agent serve` under the container's init | an image with git and Python 3; `boot.sh` with `AICREW_PREBUILT_DIR` (prerequisite 2); ai-skills by its own installer, at the version the selected process set requires, into the skill directory the client reads (`aicrew-agent check` judges it by its `.ai-skills.json`, and the coordinator runs verify-delivery from it); then `aicrew-agent join --home … --wake turns --no-service --code-file /sim/invite-<role> …` (prerequisite 1), then `client_command` set to `aicrew-simclient` |
+| `sim-coordinator`, `sim-worker` | one member home each, `aicrew-agent serve` under the container's init | an image with git and Python 3; `boot.sh` with `AICREW_PREBUILT_DIR` (prerequisite 2); ai-skills by its own installer, at the version the selected process set requires, into the skill directory the client reads (`aicrew-agent check` judges it by its `.ai-skills.json`, and the coordinator runs verify-delivery from it); `aicrew-simclient` installed as `claude` on `PATH`; then `aicrew-agent join --home … --wake turns --no-service --code-file /sim/in/invite …` (prerequisite 1) |
 | `sim-runner` | the scenarios, the checks and the report | the runner (section 7) |
 
 TLS is real everywhere:

@@ -17,20 +17,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
-	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -42,6 +35,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/BlackVS/aicrew/e2e/testca"
 )
 
 // aimemPin is the aimem commit the harness builds: the v0.10.13 release, which
@@ -85,8 +80,7 @@ type harness struct {
 	aimemV  string // the aimem commit built
 	aicrewV string // this tree's commit
 
-	ca          *x509.Certificate
-	caKey       *ecdsa.PrivateKey
+	ca          *testca.CA
 	caFile      string
 	hubPort     int
 	hubURL      string
@@ -356,23 +350,15 @@ func (h *harness) checkIsolated(env []string) {
 // newCA makes the run's throwaway CA.
 func (h *harness) newCA() {
 	t := h.t
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ca, err := testca.New("aicrew e2e CA", 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "aicrew e2e CA"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour),
-		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.ca, _ = x509.ParseCertificate(der)
-	h.caKey = key
+	h.ca = ca
 	h.caFile = filepath.Join(h.root, "ca.pem")
-	h.writePEM(h.caFile, "CERTIFICATE", der, 0o644)
+	h.writePEM(h.caFile, "CERTIFICATE", ca.DER, 0o644)
 	pool := x509.NewCertPool()
-	pool.AddCert(h.ca)
+	pool.AddCert(ca.Cert)
 	h.httpClient = &http.Client{Timeout: 30 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}}
 }
@@ -381,37 +367,19 @@ func (h *harness) newCA() {
 // returns its files and its public key's pin.
 func (h *harness) leaf(name string) (certFile, keyFile, pin string) {
 	t := h.t
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	serial, _ := rand.Int(rand.Reader, big.NewInt(1<<62))
-	tmpl := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: name},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour),
-		DNSNames: []string{"localhost"}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
-		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, h.ca, &key.PublicKey, h.caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	kder, err := x509.MarshalECPrivateKey(key)
+	l, err := h.ca.Leaf(name, []string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1")}, 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := h.mkdir(filepath.Join(h.root, "tls"))
 	certFile, keyFile = filepath.Join(dir, name+".pem"), filepath.Join(dir, name+".key")
-	h.writePEM(certFile, "CERTIFICATE", der, 0o644)
-	h.writePEM(keyFile, "EC PRIVATE KEY", kder, 0o600)
-	spki, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(spki)
-	return certFile, keyFile, "sha256-" + base64.StdEncoding.EncodeToString(sum[:])
+	h.writePEM(certFile, "CERTIFICATE", l.CertDER, 0o644)
+	h.writePEM(keyFile, "EC PRIVATE KEY", l.KeyDER, 0o600)
+	return certFile, keyFile, l.Pin
 }
 
 func (h *harness) writePEM(path, typ string, der []byte, mode os.FileMode) {
-	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: typ, Bytes: der}), mode); err != nil {
+	if err := testca.WritePEM(path, typ, der, mode); err != nil {
 		h.t.Fatal(err)
 	}
 }

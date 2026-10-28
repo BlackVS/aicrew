@@ -14,6 +14,12 @@ section, and the release workflow refuses a tag that has none
 
 ### Added
 
+- **The pilot simulation's stack** (01a17d9a-932b, increment I1).
+  `scripts/pilot-sim.sh` brings up the hub, aicrewd, Gitea and two member
+  homes in containers, each installed and joined the way the operator
+  does it, with real TLS and no typed input, and checks that both members
+  are green, listed and serving (docs/E2E-PILOT-SIM.md). The b4 harness's
+  CA code moved to `e2e/testca`, unchanged, so both share it.
 - **A headless member joins without a terminal** (01a17d8e-4255).
   `aicrew-agent join --code-file PATH` reads the invitation code from a
   file readable by its owner only, and `--code-file -` from one line of

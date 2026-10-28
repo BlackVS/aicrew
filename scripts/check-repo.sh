@@ -31,6 +31,15 @@ if [ -n "$bom" ]; then
   fail=1
 fi
 
+# Shell syntax of every tracked script, including the ones only a later run
+# executes (the pilot simulation's).
+while IFS= read -r script; do
+  if ! bash -n "$script"; then
+    echo "error: $script: shell syntax" >&2
+    fail=1
+  fi
+done < <(git ls-files --cached -- '*.sh')
+
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi

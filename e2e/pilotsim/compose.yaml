@@ -1,0 +1,98 @@
+# The pilot simulation's stack (docs/DESIGN-PILOT-SIMULATION.md, section 3;
+# docs/E2E-PILOT-SIM.md). scripts/pilot-sim.sh stages the build contexts
+# under PILOTSIM_STAGE and drives it; it is not meant for a bare
+# `docker compose up`.
+name: pilotsim
+
+x-member: &member
+  build:
+    context: ${PILOTSIM_STAGE:?run scripts/pilot-sim.sh}/member
+    args:
+      AIMEM_VERSION: ${PILOTSIM_AIMEM_VERSION:?}
+      AISKILLS_VERSION: ${PILOTSIM_AISKILLS_VERSION:?}
+      AISKILLS: oh-code-review,verify-delivery
+  image: pilotsim-member
+  depends_on:
+    sim-ca: {condition: service_completed_successfully}
+  environment:
+    SSL_CERT_FILE: /sim/tls/ca.pem
+  restart: "no"
+
+services:
+  sim-ca:
+    build: ${PILOTSIM_STAGE:?}/ca
+    volumes: [tls:/sim/tls]
+
+  sim-aimem:
+    build: ${PILOTSIM_STAGE:?}/hub
+    depends_on:
+      sim-ca: {condition: service_completed_successfully}
+    volumes: [tls:/sim/tls:ro]
+    environment:
+      SSL_CERT_FILE: /sim/tls/ca.pem
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "--cacert", "/sim/tls/ca.pem", "https://sim-aimem:8440/v1/status"]
+      interval: 2s
+      retries: 60
+
+  sim-aicrewd:
+    build: ${PILOTSIM_STAGE:?}/aicrewd
+    depends_on:
+      sim-ca: {condition: service_completed_successfully}
+    volumes: [tls:/sim/tls:ro]
+    environment:
+      SSL_CERT_FILE: /sim/tls/ca.pem
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "--cacert", "/sim/tls/ca.pem", "https://sim-aicrewd:9443/healthz"]
+      interval: 2s
+      retries: 60
+
+  sim-gitea:
+    image: gitea/gitea:1.27.3@sha256:87a67ee09d3ae0d1df5fda5dcda3e2a1f9236a45b0a59025d6e00e46adc43bef
+    depends_on:
+      sim-ca: {condition: service_completed_successfully}
+    volumes: [tls:/sim/tls:ro]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        install -d -o 1000 -g 1000 /data/tls &&
+        install -o 1000 -g 1000 -m 644 /sim/tls/sim-gitea.pem /data/tls/cert.pem &&
+        install -o 1000 -g 1000 -m 600 /sim/tls/sim-gitea.key /data/tls/key.pem &&
+        exec /usr/bin/entrypoint
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__server__PROTOCOL: https
+      GITEA__server__HTTP_PORT: "3000"
+      GITEA__server__DOMAIN: sim-gitea
+      GITEA__server__ROOT_URL: https://sim-gitea:3000/
+      GITEA__server__CERT_FILE: /data/tls/cert.pem
+      GITEA__server__KEY_FILE: /data/tls/key.pem
+      GITEA__server__DISABLE_SSH: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "--cacert", "/sim/tls/ca.pem", "https://sim-gitea:3000/api/healthz"]
+      interval: 2s
+      retries: 90
+
+  sim-coordinator:
+    <<: *member
+    volumes: [tls:/sim/tls:ro, in-coordinator:/sim/in]
+    environment:
+      SSL_CERT_FILE: /sim/tls/ca.pem
+      SIM_ROLE: coordinator
+
+  sim-worker:
+    <<: *member
+    volumes: [tls:/sim/tls:ro, in-worker:/sim/in]
+    environment:
+      SSL_CERT_FILE: /sim/tls/ca.pem
+      SIM_ROLE: worker
+
+volumes:
+  tls:
+  in-coordinator:
+  in-worker:

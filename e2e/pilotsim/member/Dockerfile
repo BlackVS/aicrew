@@ -3,9 +3,7 @@
 # installer, as aicrew-agent check instructs (DESIGN-PILOT-SIMULATION
 # section 3): aicrew's boot.sh from this tree's binaries, aimem's
 # verifying boot script at the tested release, ai-skills from its release
-# archive checked against SHA256SUMS. The archive's install.sh has no
-# execute bit, so it runs with bash, not as check's `./src/install.sh`
-# instruction says (aicrew task 01a18173-b01e). aimem's installer needs jq.
+# archive checked against SHA256SUMS. aimem's installer needs jq.
 FROM debian:bookworm-20261020-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
 ARG AIMEM_VERSION
 ARG AISKILLS_VERSION

@@ -844,6 +844,12 @@ func TestSkillsInstructionVerifies(t *testing.T) {
 		if !strings.Contains(s, "SHA256SUMS") || strings.Contains(s, "boot.") || !strings.Contains(s, "aiskills-1.26.1") {
 			t.Fatalf("%s: %s", g, s)
 		}
+		// The archive may store install.sh without its execute bit (ai-skills
+		// 1.26.1 does), so the installer runs through bash.
+		if g != "windows" && (!strings.Contains(s, "&& bash ./src/install.sh --user -t claude -s oh-code-review`") ||
+			strings.Contains(s, "&& ./src/install.sh")) {
+			t.Fatalf("%s: the installer does not run through bash: %s", g, s)
+		}
 		a := aimemInstruction(supportedComponent{Ranges: []versionRange{{Min: "0.7.4", Tested: "0.7.4"}}}, "")
 		if !strings.Contains(a, "AIMEM_VERSION") || !strings.Contains(a, "v0.7.4") {
 			t.Fatalf("%s: %s", g, a)

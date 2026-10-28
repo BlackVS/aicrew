@@ -86,6 +86,16 @@ section, and the release workflow refuses a tag that has none
   `logs/guard.jsonl`, so the log counts every command the guard passed
   without judging it.
 
+### Fixed
+
+- **check's ai-skills instruction runs the installer through bash**
+  (01a18173-b01e). The command `aicrew-agent check` prints to install
+  ai-skills ended in `./src/install.sh`, which fails with "Permission
+  denied" on Linux and macOS when the release archive stores the script
+  without its execute bit, as ai-skills 1.26.1 does. It now reads
+  `bash ./src/install.sh`. The pilot simulation found it, and its member
+  image now runs the command as printed.
+
 ## [0.8.0] - 2026-10-27
 
 Twelve pull requests since 0.7.0 (#200 to #211). A member's hold now

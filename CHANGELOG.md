@@ -129,6 +129,15 @@ section, and the release workflow refuses a tag that has none
   continues the line only on Windows, where Git for Windows' bash does
   so; bash on Linux ends the command at the LF. PowerShell and cmd are
   unchanged.
+- **The command guard skips a bash comment** (01a18387-8dfe). A quote in
+  a comment opened a quote that ran across the newline, so in
+  `echo ok # don't` followed by `find . -delete` on the next line the find
+  sat inside a quoted word and was never judged. In bash, a `#` that
+  starts an unquoted word now begins a comment that the splitter skips to
+  the newline, as bash does; nothing in it opens a quote, a substitution
+  or a continuation, and the next line is judged on its own. Words in a
+  comment are no longer judged, since bash does not run them. PowerShell
+  and cmd are unchanged.
 
 ## [0.8.0] - 2026-10-27
 

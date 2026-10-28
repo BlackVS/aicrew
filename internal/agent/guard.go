@@ -304,7 +304,8 @@ var crlfContinues = runtime.GOOS == "windows"
 // command; Windows paths keep their backslashes. In bash a backslash
 // before a newline, outside single quotes and comments, is removed with
 // it, so the next line continues the command; before CR LF only where
-// crlfContinues.
+// crlfContinues. A bash comment, from a # that starts an unquoted word to
+// the newline, is skipped.
 func splitSegments(shell, line string, depth int) []segment {
 	if depth > maxGuardDepth {
 		return []segment{{words: []string{guardTooDeep}}}
@@ -315,9 +316,6 @@ func splitSegments(shell, line string, depth int) []segment {
 		word  strings.Builder
 		in    bool // a word is open, maybe empty ("")
 		quote rune
-		// A bash comment runs to the line end, and a backslash in it does
-		// not continue the line; its words are still judged.
-		comment bool
 	)
 	escape, escaped := '\\', "\"' \\`$();&|<>!#"
 	if shell != "bash" {
@@ -373,9 +371,9 @@ func splitSegments(shell, line string, depth int) []segment {
 			} else {
 				word.WriteRune(r)
 			}
-		case shell == "bash" && !comment && r == '\\' && i+1 < len(rs) && rs[i+1] == '\n':
+		case shell == "bash" && r == '\\' && i+1 < len(rs) && rs[i+1] == '\n':
 			i++
-		case shell == "bash" && !comment && r == '\\' && i+2 < len(rs) && rs[i+1] == '\r' && rs[i+2] == '\n' && crlfContinues:
+		case shell == "bash" && r == '\\' && i+2 < len(rs) && rs[i+1] == '\r' && rs[i+2] == '\n' && crlfContinues:
 			i += 2
 		case quote == '"' && r == escape && i+1 < len(rs) && strings.ContainsRune("\"\\`$", rs[i+1]),
 			quote == 0 && r == escape && i+1 < len(rs) && strings.ContainsRune(escaped, rs[i+1]):
@@ -413,15 +411,16 @@ func splitSegments(shell, line string, depth int) []segment {
 			i = end
 		case r == ';' || r == '&' || r == '|' || r == '\n' || r == '\r' || r == '(' || r == ')':
 			endCmd()
-			if r == '\n' {
-				comment = false
-			}
 		case r == ' ' || r == '\t':
 			endWord()
-		default:
-			if r == '#' && !in && shell == "bash" {
-				comment = true
+		case r == '#' && !in && shell == "bash":
+			// A comment: bash skips it to the newline, which still ends
+			// the command, so nothing in it opens a quote, a
+			// substitution or a continuation.
+			for i+1 < len(rs) && rs[i+1] != '\n' {
+				i++
 			}
+		default:
 			word.WriteRune(r)
 			in = true
 		}

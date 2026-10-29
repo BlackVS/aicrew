@@ -144,6 +144,10 @@ func (s *Server) teamStateOf(st store.TeamState, now time.Time) opapi.TeamState 
 			if b := a.HubBlock; b != nil {
 				v.OpenAttempt.HubBlock = &opapi.AttemptBlock{Reason: b.Reason, Since: b.Since}
 			}
+			if w := a.ReviewWait; w != nil {
+				v.OpenAttempt.ReviewWait = &opapi.ReviewWait{Pull: w.Pull, URL: w.URL, Head: w.Head, Since: w.Since,
+					Overdue: !now.Before(w.Since.Add(store.ReviewPickupAfter))}
+			}
 			changed, phase = a.UpdatedAt, a.Phase
 		}
 		v.State = store.DeriveState(st.Paused != nil || m.Paused != nil, m.Session != nil, seen.seen, seen.waited, now)

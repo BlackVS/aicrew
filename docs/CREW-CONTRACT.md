@@ -1699,9 +1699,9 @@ core"). The routing is the subscription file embedded in the release.
   events name, as the team is at that moment: a burst of changes about one
   subject wakes a member once. Subjects due at the same tick for the same
   members are one message, whose `action.subjects` list each (`pull`,
-  `blocked`, `board`, `automation`) with its content and whose text holds
-  each in turn. An `automation` subject carries the runs (`runs`) that
-  woke the member: for the coordinators a failed run with its error and
+  `blocked`, `board`, `automation`, `review_pickup`) with its content and
+  whose text holds each in turn. An `automation` subject carries the runs
+  (`runs`) that woke the member: for the coordinators a failed run with its error and
   steps, for the worker a run that asks for a turn, with the turn's kind
   and content.
   A pull subject's `pre_push` field is the declared check that failed
@@ -1717,8 +1717,12 @@ core"). The routing is the subscription file embedded in the release.
   kept and replayed by a release that changes the subscriptions.
 - **aicrewd's own changes** are journaled too: an attempt's phase change,
   a member's session starting, resuming or ending, and a stored deadline
-  passing. Of these, only a worker's blocked report wakes anyone: the
-  team's coordinators.
+  passing. Of these, two wake the team's coordinators: a worker's blocked
+  report, and a review pickup's deadline. The latter is a pull request
+  whose `review-this` has waited 30 minutes at its head with no
+  `hands-reviewing` and no external review there; its `review_pickup`
+  subject carries the pull request and the wait (`wait`: pull, URL, head,
+  since), once per head and request. The worker is not woken for it.
 - **Automation runs** at the extension points (`automation.run`, "Forge
   events") wake the team's coordinators when the run failed and the
   worker when it asks for a turn.

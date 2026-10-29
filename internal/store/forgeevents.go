@@ -264,6 +264,13 @@ func (s *Store) ObservePullWithToken(ctx context.Context, token string, o PullOb
 		prev.Comments == o.Comments && !newReview && prePushEqual(prevPrePush, cf.PrePush) {
 		return res, tx.Commit()
 	}
+	var armed bool
+	cf.Wait, armed = reviewWait(pf, o, cf, now)
+	if armed {
+		if err := armReviewPickup(ctx, tx, a, *cf.Wait); err != nil {
+			return ObserveResult{}, err
+		}
+	}
 	if err := writePullFacts(ctx, tx, a.ID, cf); err != nil {
 		return ObserveResult{}, err
 	}

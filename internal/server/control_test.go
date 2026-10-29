@@ -188,12 +188,22 @@ func TestLiveness(t *testing.T) {
 
 // GET /v1/admin/team-states reads every team's state, or one team's, for the
 // operator and an architect credential, with the open attempt's last change
-// and a worker's blocked report;
+// a worker's blocked report and its pull request's wait for the external
+// review;
 // the operator's own team state route stays the operator's, and an unknown
 // parameter or team is refused.
 func TestTeamStatesRoute(t *testing.T) {
 	e := setupCoordination(t)
 	id := e.runningOffer(t)
+	// The attempt's pull request asks for the external review: the state
+	// shows the wait, not yet overdue.
+	obs := map[string]any{"host": "git.example.test", "repository": "crew/project-example", "number": 7,
+		"url": "https://git.example.test/crew/project-example/pulls/7", "state": "open", "head": "work/task-1",
+		"head_commit": "0123456789abcdef0123456789abcdef01234567", "labels": []string{"review-this"}, "checks": "pending",
+		"comments": 0}
+	if got := e.call(t, e.worker.token, PullsPath, "", obs); got.status != http.StatusOK {
+		t.Fatalf("the pull request: %d %s", got.status, got.raw)
+	}
 	// The worker reports its attempt blocked: the state shows the reason.
 	ctx := context.Background()
 	b, err := e.store.AuthenticateSessionToken(ctx, e.worker.token)
@@ -221,7 +231,9 @@ func TestTeamStatesRoute(t *testing.T) {
 				if m.AgentID == e.worker.agent.ID {
 					found = m.OpenAttempt != nil && m.OpenAttempt.ID == id && !m.OpenAttempt.UpdatedAt.IsZero() && !m.Stalled &&
 						m.OpenAttempt.Block != nil && m.OpenAttempt.Block.Reason == "Waiting on the schema decision." &&
-						!m.OpenAttempt.Block.Since.IsZero() && m.OpenAttempt.HubBlock == nil
+						!m.OpenAttempt.Block.Since.IsZero() && m.OpenAttempt.HubBlock == nil &&
+						m.OpenAttempt.ReviewWait != nil && m.OpenAttempt.ReviewWait.Pull == 7 && !m.OpenAttempt.ReviewWait.Overdue &&
+						m.OpenAttempt.ReviewWait.Head == "0123456789abcdef0123456789abcdef01234567" && !m.OpenAttempt.ReviewWait.Since.IsZero()
 				}
 			}
 			if !found {

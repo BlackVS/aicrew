@@ -59,7 +59,7 @@ type ActionDetail struct {
 
 // ActionSubject is one subject that needs a decision, with its content.
 type ActionSubject struct {
-	// Kind is pull, blocked, board or automation.
+	// Kind is pull, blocked, board, automation or review_pickup.
 	Kind      string   `json:"kind"`
 	AttemptID string   `json:"attempt_id,omitempty"`
 	Task      *TaskRef `json:"task,omitempty"`
@@ -79,6 +79,9 @@ type ActionSubject struct {
 	// Runs are an automation subject's runs (automations.go): those that
 	// failed, for the coordinators, or asked for a turn, for the worker.
 	Runs []AutomationRunReport `json:"runs,omitempty"`
+	// Wait is a review_pickup subject's review request, waiting at the head
+	// for the external reviewer since its start.
+	Wait *PullWait `json:"wait,omitempty"`
 	// Text is the subject in words, as the message's text holds it.
 	Text string `json:"text"`
 }
@@ -236,6 +239,9 @@ type pullContentFacts struct {
 	// Streak is the run of consecutive heads whose last observation carried
 	// a failure of one declared command (the 2d-b follow-up); nil for none.
 	Streak *prePushStreak `json:"pre_push_streak,omitempty"`
+	// Wait is the review request waiting for the external reviewer at the
+	// head (reviewpickup.go); nil for none.
+	Wait *PullWait `json:"review_wait,omitempty"`
 }
 
 // prePushStreak is a run of consecutive heads failing one declared
@@ -284,7 +290,7 @@ func nextStreak(pf *pullContentFacts, cf pullContentFacts) *prePushStreak {
 	return nil // a new head after one that never failed
 }
 
-func readPullFacts(ctx context.Context, tx *sql.Tx, attemptID string) (*pullContentFacts, error) {
+func readPullFacts(ctx context.Context, tx querier, attemptID string) (*pullContentFacts, error) {
 	var raw string
 	err := tx.QueryRowContext(ctx, `SELECT facts FROM attempt_pull_facts WHERE attempt_id = ?`, attemptID).Scan(&raw)
 	if err == sql.ErrNoRows {

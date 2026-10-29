@@ -233,6 +233,10 @@ type MemberAttempt struct {
 	// project is no longer granted. They are apart, and either may be set.
 	Block    *AttemptBlock `json:"block,omitempty"`
 	HubBlock *AttemptBlock `json:"hub_block,omitempty"`
+	// ReviewWait is the review request waiting for the external reviewer at
+	// the attempt's pull request's head, for the team state; nil for none.
+	// The session status leaves it out.
+	ReviewWait *PullWait `json:"-"`
 }
 
 // TeamState is a team's pause and its current members' state.
@@ -338,6 +342,15 @@ func teamStateIn(ctx context.Context, q querier, teamID string) (TeamState, erro
 		if a := ms.OpenAttempt; a != nil {
 			if a.HandoffUpdatedAt, err = handoffTime(ctx, q, a.ID); err != nil {
 				return TeamState{}, err
+			}
+			if a.State == AttemptRunning {
+				pf, err := readPullFacts(ctx, q, a.ID)
+				if err != nil {
+					return TeamState{}, err
+				}
+				if pf != nil {
+					a.ReviewWait = pf.Wait
+				}
 			}
 		}
 		if err := q.QueryRowContext(ctx,

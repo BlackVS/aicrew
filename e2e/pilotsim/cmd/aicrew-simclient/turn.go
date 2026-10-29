@@ -8,11 +8,6 @@ package main
 // (aicrew-agent's steps, clone and forge commands, git in its worktree, the
 // home's aimem MCP server), acks the messages it read, records the turn in
 // docs/HANDOFF.md, and ends with one stream-json result line.
-//
-// Three inputs stand in for product surfaces a coordinator lacks today
-// (task 01a186f6-8286); the runner writes them to the member's input
-// directory as offer.json: the worker's agent ID, the process pin and its
-// instruction digest.
 
 import (
 	"bytes"
@@ -122,7 +117,6 @@ type mcpFunc func(ctx context.Context, tool string, args map[string]any) (string
 // member is one turn of the scripted member.
 type member struct {
 	home string
-	in   string // the simulation's input directory
 	run  runFunc
 	mcp  mcpFunc
 	now  func() time.Time
@@ -392,19 +386,6 @@ func recordedPull(section string) int64 {
 
 // ---- the coordinator -------------------------------------------------------------
 
-// offerInput is the runner's stand-in for what a coordinator cannot read
-// from the product yet (01a186f6-8286): the worker to offer to and the
-// process pin with its instruction digest.
-type offerInput struct {
-	Worker  string `json:"worker_agent_id"`
-	Process struct {
-		Repo     string `json:"repo"`
-		Commit   string `json:"commit"`
-		Manifest string `json:"manifest"`
-	} `json:"process"`
-	Digest string `json:"instruction_digest"`
-}
-
 var taskID = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 
 // candidates are the tasks the messages name: a board change's, or those a
@@ -512,15 +493,10 @@ func (m *member) triageAndOffer(ctx context.Context, t agent.TaskRef) error {
 	return m.offer(ctx, t, task.Revision)
 }
 
+// offer offers the task to a worker that verified the project's repository
+// at write access (`aicrew-agent members`), with the repository filled from
+// the forge and the process pin and its digest from the hub.
 func (m *member) offer(ctx context.Context, t agent.TaskRef, revision int64) error {
-	raw, err := os.ReadFile(filepath.Join(m.in, "offer.json"))
-	if err != nil {
-		return fmt.Errorf("the simulation's offer input: %w", err)
-	}
-	var in offerInput
-	if err := json.Unmarshal(raw, &in); err != nil || in.Worker == "" || in.Digest == "" {
-		return errors.New("the simulation's offer input names no worker or digest")
-	}
 	text, err := m.mcp(ctx, "project_repository", map[string]any{"project": t.ProjectID})
 	if err != nil {
 		return err
@@ -533,13 +509,16 @@ func (m *member) offer(ctx context.Context, t agent.TaskRef, revision int64) err
 	if err := json.Unmarshal([]byte(text), &repo); err != nil || repo.Repository == nil || repo.Repository.URL == "" {
 		return fmt.Errorf("project_repository %s names no repository: %.200s", t.ProjectID, text)
 	}
+	worker, err := m.writer(ctx, repo.Repository.URL)
+	if err != nil {
+		return err
+	}
 	body := map[string]any{
-		"worker_agent_id": in.Worker, "task": t, "expected_revision": revision,
+		"worker_agent_id": worker, "task": t, "expected_revision": revision,
 		"repository": map[string]string{"access": "write", "branch": "work/" + t.TaskID},
-		"process":    in.Process, "instruction_digest": in.Digest,
 		"expires_at": m.now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 	}
-	ans, err := m.step(ctx, "offer", "", "", body, "--repository", repo.Repository.URL)
+	ans, err := m.step(ctx, "offer", "", "", body, "--repository", repo.Repository.URL, "--process")
 	if err != nil {
 		return err
 	}
@@ -547,8 +526,34 @@ func (m *member) offer(ctx context.Context, t agent.TaskRef, revision int64) err
 		AttemptID string `json:"attempt_id"`
 	}
 	_ = json.Unmarshal(ans.Result, &res)
-	m.note("Offered task %s to %s: attempt %s.", t.TaskID, in.Worker, res.AttemptID)
+	m.note("Offered task %s to %s: attempt %s.", t.TaskID, worker, res.AttemptID)
 	return nil
+}
+
+// writer is the agent ID of the first worker whose last capability report
+// verified the repository at write access.
+func (m *member) writer(ctx context.Context, repoURL string) (string, error) {
+	var ans agent.StepAnswer
+	if err := m.agentJSON(ctx, m.home, "", &ans, "members"); err != nil {
+		return "", err
+	}
+	var team agent.TeamMembers
+	if err := json.Unmarshal(ans.Result, &team); err != nil {
+		return "", fmt.Errorf("aicrew-agent members: %w", err)
+	}
+	for _, mb := range team.Members {
+		if mb.Role != "worker" {
+			continue
+		}
+		for _, c := range mb.Capabilities {
+			for _, r := range c.Repositories {
+				if r.URL == repoURL && r.Access == "write" {
+					return mb.AgentID, nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("no worker verified %s at write access (aicrew-agent members)", repoURL)
 }
 
 // ---- the handoff -------------------------------------------------------------------
@@ -678,11 +683,7 @@ func newMember(dir string) *member {
 	if home == "" {
 		home = dir
 	}
-	in := os.Getenv("SIM_IN")
-	if in == "" {
-		in = "/sim/in"
-	}
-	return &member{home: home, in: in, run: execRun, now: time.Now,
+	return &member{home: home, run: execRun, now: time.Now,
 		mcp: func(ctx context.Context, tool string, args map[string]any) (string, error) {
 			s, ok, err := aimemServer(home)
 			if err != nil || !ok {

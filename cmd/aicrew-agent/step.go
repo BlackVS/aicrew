@@ -21,7 +21,7 @@ const (
 )
 
 const stepUsage = `usage: aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
-                         [--repository CLONE_URL]
+                         [--repository CLONE_URL] [--process]
   OP: offer claim accept withdraw work release finalize
       decline review answer stop confirm-stop confirm-delivery
       recover pending
@@ -29,10 +29,24 @@ const stepUsage = `usage: aicrew-agent step OP [--home DIR] [--attempt ID] [--ta
   --repository (offer and claim): fill the body's repository object: its
   url and kind when the body names none, the default branch, and that
   branch's head as base_commit when it has none, read through the forge
-  with this home's own credential for its host.`
+  with this home's own credential for its host.
+  --process (offer): fill the body's process pin and instruction_digest
+  from the hub's current process selection for task.project_id, read with
+  aimem process pin through this home's aimem installation. A body that
+  names both keeps them; one that names only one of them is refused.`
 
 // newForge is the forge client step reads with; tests replace it.
 var newForge = func() agent.BaseAPI { return forge.NewClient() }
+
+// readPin reads a project's process pin through the home's aimem; tests
+// replace it.
+var readPin = func(home string) (func(context.Context, string) (agent.HubPin, error), error) {
+	cfg, err := agent.LoadConfig(home)
+	if err != nil {
+		return nil, err
+	}
+	return agent.ExecAimem{Command: cfg.AimemCommand, Hub: cfg.AimemHub, Home: cfg.Home}.ProcessPin, nil
+}
 
 // step asks the agent home's launcher for one step and prints its answer.
 func step(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
@@ -48,6 +62,7 @@ func step(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	task := fs.String("task", "", "the aimem task's ID")
 	body := fs.String("body", "", "the step's JSON body, or - to read it from stdin")
 	repository := fs.String("repository", "", "offer and claim: fill the body's repository from this clone URL's forge")
+	process := fs.Bool("process", false, "offer: fill the body's process pin and instruction digest from the hub")
 	if err := fs.Parse(args[1:]); err != nil || *home == "" || fs.NArg() != 0 {
 		fmt.Fprintln(stderr, stepUsage)
 		return exitUsage
@@ -79,6 +94,29 @@ func step(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 			fmt.Fprintf(stderr, "base_commit %s kept from the body\n", res.BaseCommit)
 		} else {
 			fmt.Fprintf(stderr, "base_commit %s: the head of %s on %s/%s\n", res.BaseCommit, res.DefaultBranch, res.Host, res.Repository)
+		}
+	}
+	if *process {
+		if op != "offer" {
+			fmt.Fprintln(stderr, "--process fills an offer's process pin only")
+			return exitUsage
+		}
+		read, err := readPin(*home)
+		if err != nil {
+			fmt.Fprintln(stderr, "read the process pin:", err)
+			return stepFailed
+		}
+		filled, res, err := agent.FillProcess(ctx, raw, read)
+		if err != nil {
+			fmt.Fprintln(stderr, "read the process pin:", err)
+			return stepFailed
+		}
+		raw = filled
+		if res.Kept {
+			fmt.Fprintln(stderr, "process and instruction_digest kept from the body")
+		} else {
+			fmt.Fprintf(stderr, "process %s@%s %s, instruction_digest %s: project %s's selection on the hub\n",
+				res.Pin.Repository, res.Pin.Commit, res.Pin.Manifest, res.Pin.InstructionDigest, res.Project)
 		}
 	}
 	ans, err := agent.CallStep(ctx, *home, agent.StepCall{Op: op, AttemptID: *attempt, TaskID: *task, Body: raw})

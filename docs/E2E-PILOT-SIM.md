@@ -199,9 +199,11 @@ records what it did in `docs/HANDOFF.md`, and ends with one stream-json
   names. It skips a task with an open attempt (`aicrew-agent attempts`).
   It triages a BACKLOG or READY task to READY, with its next action and a
   comment, through `triage_task` and `add_task_comment`. Then it offers the
-  task with
-  `aicrew-agent step offer --repository URL`, where the URL comes from
-  `project_repository`.
+  task to the first worker that `aicrew-agent members` shows with the
+  project's repository verified at write access, with
+  `aicrew-agent step offer --repository URL --process`. The URL comes from
+  `project_repository`; `--process` fills the process pin and its
+  instruction digest from the hub's selection.
 - **The worker** accepts an offer with the instruction digest the offer
   carries. In its running attempt it makes the worktree with
   `aicrew-agent clone`, commits one file, pushes with the home's own
@@ -211,11 +213,9 @@ records what it did in `docs/HANDOFF.md`, and ends with one stream-json
   Once sim-hands's review at the head is READY and the checks passed, the
   worker submits it through `work` (intent `submit`).
 
-Three inputs stand in for what the product does not give a coordinator yet
-(task `01a186f6-8286`). The script writes them to the coordinator's
-`/sim/in/offer.json`: the worker's agent ID, read from `aicrew status`, and
-the selected process pin with its instruction digest, the SHA-256 of the
-manifest at the selected commit.
+The coordinator reads everything an offer names from the product: the
+script gives it no input of its own. `--process` needs an aimem with
+`aimem process pin`, the first release after 0.10.16.
 
 A worker that waits on its pull request's gates gets no continuation turn
 and is never stalled (docs/DESIGN-CONTROL-PLANE.md, 1.8). The submit's check

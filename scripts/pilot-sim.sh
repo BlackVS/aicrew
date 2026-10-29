@@ -419,11 +419,6 @@ member_id() {
 }
 WORKER_ID=$(member_id worker)
 COORD_ID=$(member_id coordinator)
-# What a coordinator cannot read from the product yet (task 01a186f6-8286): the
-# worker to offer to, and the selected process pin with its instruction digest.
-DIGEST=sha256:$(hub git -C /home/aimem/process show "$COMMIT:process/manifest.json" | sha256sum | cut -d' ' -f1)
-printf '{"worker_agent_id":"%s","process":{"repo":"https://git.example.test/sim/process.git","commit":"%s","manifest":"process/manifest.json"},"instruction_digest":"%s"}\n' \
-  "$WORKER_ID" "$COMMIT" "$DIGEST" | into sim-coordinator member /sim/in/offer.json
 # hubapi METHOD PATH [JSON]: the hub's API as its admin, on the hub's host.
 hubapi() {
   hub sh -c 'curl -fsS --cacert /sim/tls/ca.pem -X "$1" -H "Authorization: Bearer $(cat "$HOME/admin.token")" \

@@ -100,8 +100,8 @@ var crewCommands = []crewCommand{
 			"2. Check that every dependency is DONE; the launcher refuses the offer otherwise.\n" +
 			"3. Take the worker's agent ID from `aicrew-agent members`: a worker that verified the project's " +
 			"repository at write access.\n" +
-			"4. Read the project's selected process (`aimem process show`) and compute its instruction digest " +
-			"with `aicrew-agent digest` (`docs/ROLES.md`, \"The instruction digest\").\n" +
+			"4. Pass `--process` to fill the offer's `process` pin and `instruction_digest` from the hub's current " +
+			"selection for the task's project; the hub vouches for both, and you clone nothing.\n" +
 			"5. Name the project's repository as the hub binds it (`aimem project show`), or pass " +
 			"`--repository REPO_URL` to fill it from the forge.\n" +
 			"6. Send the offer with the step below, then tell the worker nothing else: the offer reaches its inbox.",

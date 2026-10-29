@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -95,5 +96,36 @@ func TestStepRepository(t *testing.T) {
 	if code, _, stderr := runStep(home, "", "offer", "--repository", "https://github.com/team/app", "--body", "{}"); code != stepFailed ||
 		!strings.Contains(stderr, "--cred github.com=FILE") {
 		t.Fatalf("offer without a credential: %d %q", code, stderr)
+	}
+}
+
+// --process fills an offer only. A failed pin read ends the step before
+// any launcher is asked; a filled pin is reported and the step goes on to
+// the launcher.
+func TestStepProcess(t *testing.T) {
+	home := shortHome(t)
+	saved := readPin
+	t.Cleanup(func() { readPin = saved })
+	var fail error
+	readPin = func(string) (func(context.Context, string) (agent.HubPin, error), error) {
+		return func(_ context.Context, project string) (agent.HubPin, error) {
+			return agent.HubPin{Project: project, Repository: "https://forge.example/team/process.git",
+				Commit: strings.Repeat("ab", 20), Manifest: "process/manifest.json", InstructionDigest: "sha256:" + strings.Repeat("cd", 32)}, fail
+		}, nil
+	}
+	if code, _, stderr := runStep(home, "", "claim", "--process"); code != exitUsage || !strings.Contains(stderr, "an offer's process pin only") {
+		t.Fatalf("claim with --process: %d %q", code, stderr)
+	}
+	body := `{"task":{"hub_id":"hub-a","project_id":"pilot","task_id":"t-1"}}`
+	fail = errors.New("aimem process pin failed: no process is selected for project pilot")
+	if code, _, stderr := runStep(home, "", "offer", "--process", "--body", body); code != stepFailed ||
+		!strings.Contains(stderr, "no process is selected for project pilot") || strings.Contains(stderr, "no launcher serves") {
+		t.Fatalf("a failed read: %d %q", code, stderr)
+	}
+	fail = nil
+	code, _, stderr := runStep(home, "", "offer", "--process", "--body", body)
+	if code != stepFailed || !strings.Contains(stderr, "process https://forge.example/team/process.git@"+strings.Repeat("ab", 20)+
+		" process/manifest.json, instruction_digest sha256:") || !strings.Contains(stderr, "no launcher serves") {
+		t.Fatalf("a filled pin: %d %q", code, stderr)
 	}
 }

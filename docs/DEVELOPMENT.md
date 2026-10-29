@@ -99,8 +99,8 @@ option is kept. The agent package's race run measured:
 
 The end-to-end runs against a real aimem are not part of these checks:
 `scripts/e2e-real-aimem.sh` (`docs/E2E-REAL-AIMEM.md`). The
-`e2e-real-aimem` workflow runs them nightly on main and by hand on any
-branch.
+`e2e-real-aimem` workflow runs them nightly on main, by hand on any
+branch, and on a pull request labelled `e2e-real-aimem`.
 
 ## Examples in the documentation
 
@@ -3130,9 +3130,11 @@ every pull request (`release-build`), publishing nothing.
   already open, and the `powershell -NoProfile ...` form for cmd or the
   Run dialog.
 - The workflow refuses a tag whose section is missing.
-- The release-preparation pull request needs a green run of the
-  `e2e-real-aimem` workflow at its head, started by hand on its branch
-  (`docs/E2E-REAL-AIMEM.md`, "In CI"). The pull request links the run.
+- The release-preparation pull request carries the label
+  `e2e-real-aimem`, and its `real-aimem` check (workflow
+  `e2e (real aimem)`) must be green at its head
+  (`docs/E2E-REAL-AIMEM.md`, "In CI"). The label starts the run, and a
+  push reruns it.
 
 **Cutting a release:**
 

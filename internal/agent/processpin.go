@@ -57,8 +57,6 @@ func (a ExecAimem) ProcessPin(ctx context.Context, project string) (HubPin, erro
 	cmd.Env = os.Environ()
 	if a.Home != "" {
 		cmd.Env = HomeAimemEnv(cmd.Env, a.Home)
-	}
-	if a.Home != "" {
 		cmd.Dir = absHome(a.Home)
 	}
 	var stderr bytes.Buffer

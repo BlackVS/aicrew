@@ -192,3 +192,16 @@ func TestTheGuidanceNamesTheDigestCommand(t *testing.T) {
 		}
 	}
 }
+
+// ROLES.md's offer step and /crew-offer name the members command as where a
+// worker's agent ID comes from.
+func TestTheGuidanceNamesTheMembersCommand(t *testing.T) {
+	if !strings.Contains(strings.Join(strings.Fields(rolesMD()), " "), "`worker_agent_id` is a worker's agent ID from `aicrew-agent members`") {
+		t.Error("ROLES.md's offer step does not name aicrew-agent members")
+	}
+	for _, c := range crewCommands {
+		if c.Name == "crew-offer" && !strings.Contains(commandMD(c), "`aicrew-agent members`") {
+			t.Error("/crew-offer does not name aicrew-agent members")
+		}
+	}
+}

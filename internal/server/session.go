@@ -163,7 +163,7 @@ var sessionRefusals = map[string]struct {
 		"Ask the hub's operator for the grant (aimem identity team grant), or choose a task of a granted project."},
 	"capability_missing": {http.StatusConflict, "", false,
 		"The worker has not verified the offer's repository at the access it needs; nothing was sent.",
-		"Offer the task to a worker that has (GET /v1/crew/capabilities), or ask the worker to provision the forge credential (aicrew-agent join --cred) and run aicrew-agent check."},
+		"Offer the task to a worker that has (aicrew-agent members lists what each member verified), or ask the worker to provision the forge credential (aicrew-agent join --cred) and run aicrew-agent check."},
 	"repository_mismatch": {http.StatusConflict, "", false,
 		"The step's repository kind, URL or access is not the one the hub binds to the task's project; nothing was sent.",
 		"Read the project's repository from the hub (aimem project show) and name it in the step."},

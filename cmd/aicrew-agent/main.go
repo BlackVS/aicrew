@@ -56,6 +56,7 @@ const usage = `usage: aicrew-agent session start|status|leave --home DIR   (stat
        aicrew-agent inbox [--home DIR] [--limit N] [--ack ID,ID...] [--json]
        aicrew-agent escalate [--home DIR] --body FILE|-   (the coordinator, through the launcher)
        aicrew-agent attempts [--home DIR] [--json]   (the coordinator: the team's open attempts)
+       aicrew-agent members [--home DIR] [--json]    (the coordinator: the team's members, for an offer's worker)
        aicrew-agent escalations [--home DIR] [--json]   (the open escalations, before raising another)
        aicrew-agent wait-inbox [--home DIR]   (the Claude Code Stop hook join installs)
        aicrew-agent guard [--home DIR]        (the Claude Code PreToolUse hook join installs: the command guard)
@@ -229,6 +230,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "attempts" {
 		os.Exit(attempts(context.Background(), os.Args[2:], os.Stdout, os.Stderr, os.Getenv))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "members" {
+		os.Exit(members(context.Background(), os.Args[2:], os.Stdout, os.Stderr, os.Getenv))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "inbox" {
 		os.Exit(inbox(context.Background(), os.Args[2:], os.Stdout, os.Stderr, os.Getenv))

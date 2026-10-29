@@ -3101,6 +3101,21 @@ aicrew-agent attempts --json
 
 Only the team's coordinator may read it. A worker's start records nothing.
 
+### The team's members: `aicrew-agent members`
+
+An offer names its worker by agent ID (`worker_agent_id`). The coordinator
+reads the IDs through the launcher, which lists the team's members from
+aicrewd (`GET /v1/crew/capabilities`) with the repositories each member's
+last capability report verified:
+
+```sh
+aicrew-agent members            # one line each: agent ID, label (role), verified repositories
+aicrew-agent members --json
+```
+
+The offer step in ROLES.md, `/crew-offer` and the `capability_missing`
+refusal of an offer name the command. Any member of the team may read it.
+
 ### Reading the inbox: `aicrew-agent inbox`
 
 Offers, acceptances, submissions, stops and other lifecycle messages reach

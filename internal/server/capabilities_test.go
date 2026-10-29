@@ -60,8 +60,8 @@ func TestRequirementsAndCapabilities(t *testing.T) {
 
 // An offer goes only to a worker whose last report verified the offer's
 // repository at the offer's access: no report, or read access for a write
-// offer, is capability_missing naming the host and the access, and nothing
-// begins. A claim is not checked: the claimer verifies with its own
+// offer, is capability_missing naming the host and the access, and the
+// command that lists what each member verified, and nothing begins. A claim is not checked: the claimer verifies with its own
 // credential.
 func TestOfferNeedsTheWorkersCapability(t *testing.T) {
 	e := setupCoordination(t)
@@ -83,6 +83,9 @@ func TestOfferNeedsTheWorkersCapability(t *testing.T) {
 		refused(t, got, http.StatusConflict, "capability_missing")
 		if msg, _ := got.body["message"].(string); !strings.Contains(msg, "write access") || !strings.Contains(msg, "git.example.test") {
 			t.Fatalf("the refusal does not name the host and the access: %s", got.raw)
+		}
+		if next, _ := got.body["next_action"].(string); !strings.Contains(next, "aicrew-agent members") {
+			t.Fatalf("the refusal does not name the command that lists the members: %s", got.raw)
 		}
 	}
 	stepOf(t, e.call(t, e.indep.token, ClaimPath, "claim-1", e.claimBody("task-2")))

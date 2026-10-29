@@ -28,7 +28,10 @@ section, and the release workflow refuses a tag that has none
   `_windows.go` file; `scripts/ci-gate.sh` decides. Main runs everything on
   every push and nightly. AGENTS.md now has one task per pull request and
   commit, tasks no finer than S, review gates tiered by size and surface,
-  and the next task taken right after a merge.
+  the next task taken right after a merge, and merge rule A: the architect
+  session merges an ordinary pull request once both reviews are READY and CI
+  is green at its head, and the operator merges sensitive-surface and
+  release-preparation pull requests.
 
 ## [0.9.0] - 2026-10-28
 

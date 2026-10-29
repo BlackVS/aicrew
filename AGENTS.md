@@ -25,7 +25,15 @@ says. Cross-project dependencies must be checked by ID; unknown is not DONE.
 
 The task's assignee owns its aicrew changes; aimem prerequisites belong to
 the aimem project and its assignees. Reviewing and watching integration is
-not implementation. Human merges remain human merges. Parallel work across
+not implementation.
+
+Merges follow merge rule A (operator decision, 2026-10-29). The architect
+session merges an ordinary pull request as soon as the worker's high
+review and the external review are both `READY_FOR_HUMAN_MERGE` at its
+head and CI is green there. The operator merges a pull request on a
+sensitive surface (the list under "Delivery") and a release-preparation
+pull request. No other session merges, and no merge happens with a gate
+open at the head. Parallel work across
 the two repositories is allowed; within this repository use one work PR at a
 time, targeting `main`.
 
@@ -131,7 +139,8 @@ head. hands-reviewed is not a verdict. Never push while hands-reviewing;
 after a new source head (not a base-only update with the same patch
 identity), clear stale hands-reviewed and re-request review.
 Do not hand-edit hands-reviewing or claim the reviewer runs merely because
-a label exists. No automatic human merge, release or deployment.
+a label exists. Merges follow merge rule A (under "Ownership and
+boundaries"); no automatic release or deployment.
 
 PR text and reviews must omit private hosts, hub names, bindings, credential
 names/paths and session URLs, even in quoted logs. At most one line of tool

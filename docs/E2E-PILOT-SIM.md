@@ -5,9 +5,10 @@ agent typing into it. The design is [DESIGN-PILOT-SIMULATION.md](DESIGN-PILOT-SI
 This document says how to run it, and what each increment adds.
 
 **I1** (task `01a17d9a-932b`) is the stack: every party installed and
-joined the way the operator installs and joins it, and a smoke check. The
-cycle, the scripted roles, the stub reviewer and CI, the faults, the report
-and the CI workflow come in I2 to I6.
+joined the way the operator installs and joins it, and a smoke check.
+**I3** (task `01a17d9a-bbff`) adds the stub reviewer and the stub CI, with
+fixture pull requests that verify-delivery reads. The cycle, the scripted
+roles, the faults, the report and the CI workflow come in I2 and I4 to I6.
 
 ## Running it
 
@@ -29,7 +30,7 @@ It needs Docker with Compose v2, Go 1.26 or later, Python 3, and network
 access: the images install aimem and ai-skills from their GitHub releases,
 as an operator's host does.
 
-The script exits 0 when the stack is healthy. Otherwise it exits non-zero
+The script exits 0 when the stack is healthy and the stubs' fixtures pass. Otherwise it exits non-zero
 and prints the last lines of every container's log; the full logs are in
 `DIR/logs/`.
 
@@ -43,6 +44,7 @@ and prints the last lines of every container's log; the full logs are in
 | `sim-aimem` | `aimem serve`, the hub | the tested aimem release (`internal/agent/supported.json`), installed on the first start by that release's `install-hub.sh` in its install-only mode (`AIMEM_NO_SERVICE=1`) from the staged asset (`AIMEM_PREBUILT_DIR`, checked against the release's `SHA256SUMS`); the container then runs the serve command the installer prints on its last line. The introspection credential's file is added to the env file by hand, as aimem's hub runbook says |
 | `sim-aicrewd` | `aicrewd -config …` | `install-aicrewd.sh` with `AICREW_NO_SERVICE=1` and `AICREW_PREBUILT_DIR`, from this tree's binaries; the container runs the command it prints |
 | `sim-gitea` | Gitea 1.27 with TLS from the run's CA | the pinned image, configured by its own CLI and API |
+| `sim-hands`, `sim-ci` | the stub reviewer and the stub CI ([below](#the-stub-reviewer-and-the-stub-ci)) | `simstub` (`e2e/pilotsim/cmd/simstub`) in one image, `e2e/pilotsim/stub/` |
 | `sim-coordinator`, `sim-worker` | one member home each, `aicrew-agent serve` | `boot.sh` with `AICREW_PREBUILT_DIR`; aimem's verifying boot script and the ai-skills release archive checked against `SHA256SUMS`, both as `aicrew-agent check` instructs; then `aicrew-agent join … --wake turns --no-service --code-file …` |
 
 The member's client is `aicrew-simclient` (`e2e/pilotsim/cmd/aicrew-simclient`),
@@ -76,8 +78,14 @@ command on the host it belongs to:
    - `aicrew team setup`, with the grant it prints run by the hub's admin,
      then setup again;
    - `aicrew hub-credential issue` for the hub's introspection credential.
-3. In Gitea: the `operator` account and one account per member, each with
-   its own token, and the repository with both members as collaborators.
+3. In Gitea:
+   - the `operator` account, one account per member and one per stub
+     (`sim-hands`, `sim-ci`), each with its own token;
+   - the repositories `pilot` (the team's) and `fixture` (the stubs'
+     fixtures), with the members and the stubs as collaborators and the
+     labels `review-this`, `hands-reviewing` and `hands-reviewed`, as a
+     real reviewer's site has them;
+   - each stub's token in its own `/sim/in`, then the scenario file.
 4. Per member:
    - an aimem user and a user token, `aicrew invitation issue`;
    - the member's input files.
@@ -109,3 +117,58 @@ the container that makes it to the one that reads it through a pipe.
 - `aicrew status` lists both members, each holding a session
   (`DIR/status.json`).
 - `verify_delivery.py --help` runs from the coordinator's skill directory.
+
+## The stub reviewer and the stub CI
+
+Both are `simstub`, in `sim-hands` (`simstub hands`) and `sim-ci`
+(`simstub ci`). Each reads only its own Gitea token and the scenario file,
+`/sim/scenario/scenario.json`, which they share. A stub reads the file
+again on every poll, so the runner changes a verdict or a CI state by
+replacing it:
+
+```json
+{
+  "repos": ["operator/pilot", "operator/fixture"],
+  "poll_seconds": 1,
+  "hands": {"verdict": "READY_FOR_HUMAN_MERGE", "review_seconds": 0},
+  "ci": {"state": "success", "context": "sim-ci"}
+}
+```
+
+Every field but `repos` has the default shown. `hands.verdict` may be
+`RETURN_TO_IMPLEMENTATION`; `ci.state` may be any Gitea commit state.
+
+`sim-hands` follows the external-review label protocol:
+1. On an open pull request labelled `review-this`, it puts
+   `hands-reviewing` on, then takes `review-this` off, so the pull request
+   always carries one of the protocol's labels.
+2. After `review_seconds` it reads the head again.
+   - If the head moved, it posts nothing and takes `hands-reviewing` off,
+     so the pull request can be requested again.
+   - Otherwise it posts one comment headed
+     `[hands-bot review] reviewed at head <full SHA>`, in the oh-code-review
+     layout, with a `VERDICT` line followed by the verdict. Then it puts
+     `hands-reviewed` on and takes `hands-reviewing` off.
+
+`sim-ci` posts one commit status under its context on every branch head
+that has none: the pull requests' heads and, after a merge, the merge
+commit.
+
+## The stubs' fixtures
+
+After the smoke check, the script opens pull requests on `fixture` as the
+operator and checks them:
+1. **Confirmed.** Both stubs serve the pull request, the coordinator's
+   account posts a local review headed `[oh-code-review (high) review]`,
+   and `operator` merges it. verify-delivery runs unchanged from the
+   coordinator's skill directory, with `--api-base` and
+   `--review-author local=sim-coordinator --review-author external=sim-hands`.
+   It must return `confirmed` with the evidence kinds `reviewed_head`,
+   `human_merge` and `post_merge_ci`.
+2. **A failed CI.** The scenario sets `ci.state` to `failure`, and the same
+   steps must give `not_confirmed`, with `post_merge_ci` failed.
+3. **A moved head.** With `review_seconds` at 15, a commit is pushed while
+   `hands-reviewing` is on. Neither head gets a review, and the labels come
+   off. A new `review-this` is then served at the new head, with one review.
+
+The verify-delivery results are kept as `DIR/verify-<number>.json`.

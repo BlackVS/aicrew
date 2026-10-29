@@ -13,7 +13,9 @@ name: e2e (real aimem)
 # name of its own. In the shared group its pending run would replace a real
 # run queued behind a running one. Under the shared name its skipped check,
 # newer than the real one at the same head (a hands label change after the
-# run), would stand for it, and skipped counts as passing.
+# run), would stand for it, and skipped counts as passing. GitHub does not
+# evaluate a skipped job's name, so that check shows the expression text;
+# evaluated or not, it is never "real-aimem".
 on:
   schedule:
     - cron: '17 2 * * *'

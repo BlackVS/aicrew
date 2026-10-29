@@ -78,10 +78,13 @@ while the label is on runs it again. The run shows on the pull request as
 the check `real-aimem` of the workflow `e2e (real aimem)`. Adding the label
 needs only the right to label a pull request, not to start workflows.
 Another label added to a labelled pull request starts no second run.
-Any pull request event that does not run the harness, on a pull request
-without the label or for another label, shows as a skipped check named
-`real-aimem (not requested)`. It never takes the name `real-aimem`, so it
-cannot stand in for a real run at the same head.
+A pull request event that does not run the harness, such as another label
+added to a labelled pull request or a push to a pull request without the
+label, shows as a skipped check under a name of its own. GitHub does not
+evaluate a skipped job's name, so that check carries the name's expression
+text. A pull request opened without the label gets no run at all. The
+skipped check never takes the name `real-aimem`, so it cannot stand in for
+a real run at the same head.
 
 A release-preparation pull request carries the label and needs the check
 green at its head (DEVELOPMENT.md, "Releasing").

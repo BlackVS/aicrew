@@ -122,7 +122,8 @@ var guideRoles = []guideRole{
 		"message that names the reason and the attempt's last observed pull request: its state, head, labels, " +
 		"CI conclusion and comment count. Read the rest with `aicrew-agent forge pr show --pr N` if you need it: " +
 		"the comments' bodies, the checks and a failed job's log excerpt. Then settle it as the rule below says: " +
-		"answer a question that is yours in a task comment, and escalate every other one with those facts in its " +
+		"answer a question that is yours with the answer step below, which wakes the worker with your answer, and " +
+		"mirror the answer on the task in a comment; escalate every other one with those facts in its " +
 		"context and the worker as the blocked member, whom the answer reaches. Never leave a blocked report " +
 		"unanswered.\n\n" +
 		escalationRule,
@@ -146,6 +147,10 @@ var guideRoles = []guideRole{
 				"record the evidence the project's process requires, each kind with its link."},
 			{"finalize", "--attempt ATTEMPT_ID --task TASK_ID", `{"result_seq": 1}`, "Finalize the accepted, delivered " +
 				"result as DONE, if the worker has not."},
+			{"answer", "--attempt ATTEMPT_ID", `{"text": "Retry with the cache cleared: the runner disk was full."}`,
+				"Answer a worker's blocked report whose question is yours (see \"A worker's blocked report\" above). " +
+					"aicrew wakes the worker with the answer. Only the team's coordinator may, and only while the " +
+					"attempt is blocked."},
 			{"stop", "--attempt ATTEMPT_ID", `{"reason": "Priorities changed; the parser work waits."}`, "Ask the " +
 				"worker to stop a running attempt. The worker confirms and releases the task."},
 			{"escalate", "", escalationExample, "Raise a question you cannot settle to the architect, as the " +
@@ -175,7 +180,8 @@ var guideRoles = []guideRole{
 		Steps: []guideStep{
 			{"work", "--attempt ATTEMPT_ID --task TASK_ID", `{"intent": "submit", "detail": "RESULT_URL"}`, "Report " +
 				"progress: `submit` with the result's link (a pull request), `block` with the reason as `detail`, " +
-				"or `resume` after a block or a rework decision."},
+				"or `resume` after a block or a rework decision. The coordinator's answer to a block arrives in " +
+				"your inbox as an `action.needed` message: act on it, then `resume`."},
 			{"finalize", "--attempt ATTEMPT_ID --task TASK_ID", `{"result_seq": 1}`, "Finalize your accepted result " +
 				"as DONE once the coordinator confirmed its delivery."},
 			{"confirm-stop", "--attempt ATTEMPT_ID", "", "Confirm that you stopped, after the coordinator asked."},

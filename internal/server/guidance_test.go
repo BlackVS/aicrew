@@ -16,6 +16,7 @@ func TestRoleGuidanceBodiesDecode(t *testing.T) {
 		"claim":            func() any { return &claimBody{} },
 		"accept":           func() any { return &acceptBody{} },
 		"stop":             func() any { return &stopBody{} },
+		"answer":           func() any { return &answerBody{} },
 		"release":          func() any { return &releaseBody{} },
 		"review":           func() any { return &reviewBody{} },
 		"confirm-delivery": func() any { return &deliveryBody{} },

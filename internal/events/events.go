@@ -35,6 +35,9 @@ const (
 	KindAttemptChanged = "attempt.changed"
 	// KindMemberChanged is a member's session starting, resuming or ending.
 	KindMemberChanged = "member.changed"
+	// KindAttemptAnswered is the team's coordinator's answer to a worker's
+	// blocked report.
+	KindAttemptAnswered = "attempt.answered"
 	// KindTimerDue is a deadline aicrewd stored, passed.
 	KindTimerDue = "timer.due"
 	// KindAutomationRun is an automation's run at an extension point of an
@@ -95,7 +98,7 @@ const (
 const HandlerWake = "wake"
 
 var (
-	kinds      = []string{KindBoardChanged, KindForgeChanged, KindAttemptChanged, KindMemberChanged, KindTimerDue, KindAutomationRun, KindBudgetSpent}
+	kinds      = []string{KindBoardChanged, KindForgeChanged, KindAttemptChanged, KindAttemptAnswered, KindMemberChanged, KindTimerDue, KindAutomationRun, KindBudgetSpent}
 	roles      = []string{RoleWorker, RoleCoordinator}
 	conditions = []string{WhenAlways, WhenNotOwnChange, WhenReadyOrTeamAttempt, WhenSubmitOrSubmitted, WhenBlocked, WhenAction,
 		WhenFailed, WhenTurn, WhenCheckStreak}

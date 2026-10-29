@@ -629,6 +629,8 @@ func (s *Store) wake(ctx context.Context, tx *sql.Tx, q queue, evs []queuedEvent
 		return wakeForge(ctx, tx, evs, roles)
 	case events.KindAttemptChanged:
 		return wakeAttempt(ctx, tx, evs, roles)
+	case events.KindAttemptAnswered:
+		return wakeAnswer(ctx, tx, evs, roles)
 	case events.KindAutomationRun:
 		return wakeAutomation(ctx, tx, evs)
 	case events.KindTimerDue:

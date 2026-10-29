@@ -59,7 +59,7 @@ type ActionDetail struct {
 
 // ActionSubject is one subject that needs a decision, with its content.
 type ActionSubject struct {
-	// Kind is pull, blocked, board, automation or review_pickup.
+	// Kind is pull, blocked, board, automation, review_pickup or answer.
 	Kind      string   `json:"kind"`
 	AttemptID string   `json:"attempt_id,omitempty"`
 	Task      *TaskRef `json:"task,omitempty"`

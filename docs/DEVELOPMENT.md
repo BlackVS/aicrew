@@ -2825,7 +2825,7 @@ current process selection for the body's `task.project_id`. It runs
 aimem installation and its own credential, so the coordinator needs no
 clone of the process repository and no route to it: the hub checks its
 stored set against the selection and hashes the manifest. It needs an aimem
-that has `process pin`, the first release after 0.10.16. It prints the pin
+that has `process pin`, 0.10.17 or later. It prints the pin
 it filled on stderr. A body that names both `process` and
 `instruction_digest` is kept as it is; one that names only one of them is
 refused, since the hub's digest need not be its pin's. A project with no

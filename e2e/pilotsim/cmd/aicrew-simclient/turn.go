@@ -167,7 +167,7 @@ func (m *member) step(ctx context.Context, op, attempt, task string, body any, e
 	}
 	var ans agent.StepAnswer
 	if err := json.Unmarshal(raw, &ans); err != nil {
-		return ans, fmt.Errorf("step %s: the answer is not JSON (exit %d)", op, code)
+		return ans, fmt.Errorf("step %s: the answer is not JSON (exit %d): %.400s", op, code, strings.TrimSpace(string(raw)))
 	}
 	if code != 0 && code != 4 {
 		why := ans.Status

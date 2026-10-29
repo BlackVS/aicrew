@@ -83,7 +83,8 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	// digest is the manifest's at the pinned commit.
 	h.makeProcess()
 	h.must(host, nil, h.aimem(), "tasks", "on", "-p", projectID)
-	h.must(host, nil, h.aimem(), "process", "select", processRepo, processCommit, processManifest, "-p", projectID)
+	// The process repository has no tag: aimem takes its commit with --commit.
+	h.must(host, nil, h.aimem(), "process", "select", processRepo, processCommit, processManifest, "--commit", "-p", projectID)
 	// The project's repository: recorded, never fetched; every offer and
 	// claim names it, and aicrewd checks it against the hub's.
 	h.must(host, nil, h.aimem(), "project", "repo", "set", "--project", projectID, "--kind", repoKind, "--url", h.forge.repoURL(),

@@ -190,6 +190,8 @@ type loopEnv struct {
 	// ATTEMPT section as it found it; by default each turn adds a line to
 	// its Next, as the member is asked to.
 	staleHandoff bool
+	// dirty is an uncommitted change in the attempt's worktree.
+	dirty bool
 }
 
 // touchHandoff is the member keeping its handoff: a line added to the
@@ -210,8 +212,9 @@ func newLoopEnv(t *testing.T) *loopEnv {
 		return TurnResult{Outcome: TurnFinished, CostUSD: 0.5, Denials: []string{}}
 	}
 	e.loop = &TurnLoop{Home: e.home, Client: "claude", Host: e.host, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Now:  func() time.Time { return e.clock },
-		Head: func(context.Context, string) string { return e.head },
+		Now:   func() time.Time { return e.clock },
+		Head:  func(context.Context, string) string { return e.head },
+		Clean: func(context.Context, string) bool { return !e.dirty },
 		Run: func(_ context.Context, spec TurnSpec) TurnResult {
 			e.specs = append(e.specs, spec)
 			res := e.next(spec, e.host)
@@ -463,17 +466,21 @@ func TestTurnLoopWaitsOnGates(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		o    func(PullObservation) PullObservation
+		// dirty leaves an uncommitted change at the pull request's head.
+		dirty bool
 	}{
-		{"an unpushed commit", func(o PullObservation) PullObservation { o.HeadCommit = "h0"; return o }},
+		{"an unpushed commit", func(o PullObservation) PullObservation { o.HeadCommit = "h0"; return o }, false},
 		{"a blocking review", func(o PullObservation) PullObservation {
 			o.Labels = []string{"hands-reviewed"}
 			o.Review = &ObservedReview{AtHead: true, Verdict: "RETURN_TO_IMPLEMENTATION", Blocker: true}
 			return o
-		}},
-		{"a failed check", func(o PullObservation) PullObservation { o.Checks = forge.ChecksFailure; return o }},
-		{"a closed pull request", func(o PullObservation) PullObservation { o.State = forge.PullClosed; return o }},
+		}, false},
+		{"a failed check", func(o PullObservation) PullObservation { o.Checks = forge.ChecksFailure; return o }, false},
+		{"a closed pull request", func(o PullObservation) PullObservation { o.State = forge.PullClosed; return o }, false},
+		{"uncommitted work at the head", func(o PullObservation) PullObservation { return o }, true},
 	} {
 		e := newLoopEnv(t)
+		e.dirty = c.dirty
 		open(e, c.o(waiting))
 		for range 6 {
 			e.tick(t)
@@ -482,6 +489,37 @@ func TestTurnLoopWaitsOnGates(t *testing.T) {
 			t.Errorf("%s: %d turns and %d blocks, want the continuations and the stall as before", c.name,
 				len(e.specs), len(e.host.calls))
 		}
+	}
+}
+
+// worktreeClean sees every uncommitted change, an untracked file and a
+// tracked edit alike, and a worktree it cannot read is not clean.
+func TestWorktreeClean(t *testing.T) {
+	ctx := context.Background()
+	wt := t.TempDir()
+	write := func(name, text string) {
+		if err := os.WriteFile(filepath.Join(wt, name), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(t, wt, "init", "-q", "-b", "work")
+	write("a.txt", "a\n")
+	git(t, wt, "add", "a.txt")
+	git(t, wt, "commit", "-q", "-m", "work")
+	if !worktreeClean(ctx, wt) {
+		t.Fatal("a committed worktree is not clean")
+	}
+	write("b.txt", "b\n")
+	if worktreeClean(ctx, wt) {
+		t.Fatal("an untracked file is clean")
+	}
+	os.Remove(filepath.Join(wt, "b.txt"))
+	write("a.txt", "edited\n")
+	if worktreeClean(ctx, wt) {
+		t.Fatal("a tracked edit is clean")
+	}
+	if worktreeClean(ctx, filepath.Join(wt, "missing")) {
+		t.Fatal("a missing worktree is clean")
 	}
 }
 

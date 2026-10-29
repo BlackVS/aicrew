@@ -133,6 +133,9 @@ type TurnLoop struct {
 	Now    func() time.Time
 	// Head reads the commit a worktree is at; "" when it cannot.
 	Head func(ctx context.Context, worktree string) string
+	// Clean reports whether a worktree has no uncommitted change, tracked
+	// or untracked; false when it cannot tell, or when it is nil.
+	Clean func(ctx context.Context, worktree string) bool
 
 	lastStart time.Time
 	nextPoll  time.Time
@@ -524,18 +527,18 @@ func openTranscript(home, turnID string) (io.Writer, func()) {
 // head is the commit the attempt's worktree is at, or "".
 // waitingOnGates reports whether the attempt waits on its pull request's
 // gates, the harness's states of docs/DESIGN-TURNS.md 4.2 (checking,
-// external-review, gates), where a turn has nothing to do. A watched pull
-// request, as last observed, is open at the worktree's head (all the work
-// is pushed); no external review at the head blocks it and no check
-// failed; and the external review is requested or in progress, or the
-// checks are pending.
+// external-review, gates), where a turn has nothing to do. The worktree is
+// clean, and a watched pull request, as last observed, is open at its head
+// (all the work is committed and pushed); no external review at the head
+// blocks it and no check failed; and the external review is requested or
+// in progress, or the checks are pending.
 func (l *TurnLoop) waitingOnGates(ctx context.Context, attempt *memberAttempt) bool {
 	observed := l.Host.Observed()
 	if len(observed) == 0 {
 		return false
 	}
 	head := l.head(ctx, attempt.ID)
-	if head == "" {
+	if head == "" || l.Clean == nil || !l.Clean(ctx, filepath.Join(l.Home, "worktrees", attempt.ID)) {
 		return false
 	}
 	for _, o := range observed {
@@ -571,6 +574,16 @@ func worktreeHead(ctx context.Context, worktree string) string {
 		return ""
 	}
 	return strings.TrimSpace(out)
+}
+
+// worktreeClean reports whether a worktree has no uncommitted change, an
+// untracked file included; false when git cannot tell.
+func worktreeClean(ctx context.Context, worktree string) bool {
+	if _, err := os.Stat(worktree); err != nil {
+		return false
+	}
+	out, err := execGit(ctx, worktree, gitEnv, "status", "--porcelain")
+	return err == nil && strings.TrimSpace(out) == ""
 }
 
 // pendingSummary names what started a turn: the messages' kinds and ids,
@@ -747,7 +760,7 @@ func ServeHome(ctx context.Context, e *Engine, client string, signals <-chan os.
 	loopCtx, stopLoop := context.WithCancel(ctx)
 	defer stopLoop()
 	loop := &TurnLoop{Home: home, Client: client, Host: steps, Run: RunClaudeTurn, Log: e.Log, Now: time.Now,
-		Head: worktreeHead, Env: clientEnviron(e, home)}
+		Head: worktreeHead, Clean: worktreeClean, Env: clientEnviron(e, home)}
 	looped := make(chan error, 1)
 	go func() { looped <- loop.Loop(loopCtx) }()
 	e.Log.Info("the turn loop runs", "home", home)

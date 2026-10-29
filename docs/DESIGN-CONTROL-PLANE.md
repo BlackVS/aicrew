@@ -283,7 +283,8 @@ turns until a message arrives for the worker.
 
 A wait on the pull request's gates costs no turn and is no stall. This is
 the case when the pull request, as last observed, meets three conditions:
-- it is open at the worktree's head, so all the work is pushed;
+- it is open at the head of a clean worktree, so all the work is
+  committed and pushed;
 - no external review at the head blocks it, and no check failed;
 - the external review is requested or in progress (`review-this` or
   `hands-reviewing`), or the checks are pending.

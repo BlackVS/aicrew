@@ -281,6 +281,20 @@ A stall is reported through the attempt's own block (the `work` step),
 whose lifecycle message reaches the coordinator, and it stops continuation
 turns until a message arrives for the worker.
 
+A wait on the pull request's gates costs no turn and is no stall. This is
+the case when the pull request, as last observed, meets three conditions:
+- it is open at the worktree's head, so all the work is pushed;
+- no external review at the head blocks it, and no check failed;
+- the external review is requested or in progress (`review-this` or
+  `hands-reviewing`), or the checks are pending.
+
+Those are the harness's states of DESIGN-TURNS 4.2. While they hold, the
+runner defers the continuation, which spends nothing of the limit. A turn
+that ends in such a wait resets both stall counts. The continuation comes
+once the gates move. A message, the forge's action.needed among them, still
+starts a turn at once. A forge pr command's report counts as an observation
+at once, so the runner sees the label the turn just added.
+
 A submitted or blocked attempt gets no continuation turns. It waits for
 messages: the coordinator's review, a forge event or an answer. The
 coordinator decides what a stall means, as it decides any block.

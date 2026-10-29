@@ -378,6 +378,7 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 		if err != nil {
 			return answerErr(err)
 		}
+		s.noteObserved(call.Body)
 		return StepAnswer{OK: true, Status: StepDone, Result: out}
 	case call.Op == "escalate":
 		// Raise an escalation as the team's coordinator (docs/DESIGN-CONTROL-PLANE.md,

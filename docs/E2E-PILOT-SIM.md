@@ -217,10 +217,9 @@ Three inputs stand in for what the product does not give a coordinator yet
 the selected process pin with its instruction digest, the SHA-256 of the
 manifest at the selected commit.
 
-The waiting worker's turns also meet task `01a186f4-64cd`: a worker that
-waits on its pull request's gates is stalled after three turns with no
-step. sim-hands reviews at once here, so the worker submits inside that
-window, and the submit's check asserts that the attempt was never blocked.
+A worker that waits on its pull request's gates gets no continuation turn
+and is never stalled (docs/DESIGN-CONTROL-PLANE.md, 1.8). The submit's check
+asserts that the attempt was never blocked.
 
 The operator files the task READY through the hub's API: a coordinator is
 woken by a change to READY, not by a new BACKLOG task. The script

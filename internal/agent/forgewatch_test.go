@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -96,6 +97,11 @@ func TestWaitWakesOnAForgeEvent(t *testing.T) {
 	if w := readWatched(s.cfg.Home); len(w) != 1 || w[0].Number != 4 {
 		t.Fatalf("watched: %+v", w)
 	}
+	// The report is the launcher's last observation at once, before a poll:
+	// the turn loop reads the label the turn just added.
+	if o := srv.Observed(); len(o) != 1 || o[0].Number != 4 || !slices.Equal(o[0].Labels, []string{"review-this"}) {
+		t.Fatalf("the observation after the report: %+v", o)
+	}
 	one, _ := json.Marshal(map[string]int{"seconds": 1})
 	var wake WakeResult
 	ans = s.call(t, &answers, StepCall{Op: "wait-inbox", Body: one})
@@ -150,6 +156,20 @@ func TestWaitWakesOnAForgeEvent(t *testing.T) {
 		kept[0].Review.Verdict != "READY_FOR_HUMAN_MERGE" || len(kept[0].Passed) != 1 || kept[0].Passed[0].Name != "build" {
 		t.Fatalf("after %d more polls (%d content reads), the last keptervation: %+v", fake.readCount()-reads,
 			fake.contentReads(), kept)
+	}
+	// A command's report of the same head replaces the observation and
+	// carries its content on, as a poll does.
+	fake.mu.Lock()
+	again := observation("git.example.test", "crew/project-t", fake.st)
+	fake.mu.Unlock()
+	again.Labels = []string{"hands-reviewed", "review-this"}
+	rep, _ := json.Marshal(again)
+	if ans := s.call(t, &answers, StepCall{Op: "watch-pull", Body: rep}); !ans.OK {
+		t.Fatalf("the second report: %+v", ans)
+	}
+	if o := srv.Observed(); len(o) != 1 || !slices.Equal(o[0].Labels, again.Labels) || o[0].Review == nil ||
+		o[0].Review.Verdict != "READY_FOR_HUMAN_MERGE" {
+		t.Fatalf("the observation after the second report: %+v", o)
 	}
 
 	// Merged: reported once more, then no longer watched.

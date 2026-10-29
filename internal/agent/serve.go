@@ -13,8 +13,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/BlackVS/aicrew/internal/forge"
 )
 
 // `aicrew-agent serve` (docs/DESIGN-CONTROL-PLANE.md, sections 1.3 to 1.10;
@@ -29,6 +32,8 @@ import (
 //   - three turns of an attempt with no step and no new commit stall it: the
 //     loop blocks the attempt through the work step, which tells the
 //     coordinator, and gives it no more continuation turns until a message;
+//   - a wait on the pull request's gates (waitingOnGates) gets no
+//     continuation turn and is no stall;
 //   - each turn is a fresh conversation that starts from the brief the
 //     launcher writes into its prompt (brief.go; docs/DESIGN-TURNS.md, T1),
 //     and is recorded in logs/turns.jsonl.
@@ -200,6 +205,11 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	case attempt.inWork() && st.Continue == attempt.ID:
 		a := st.attempt(attempt.ID)
 		if a.Stalled || a.Continuations >= limits.MaxContinuations {
+			return
+		}
+		// A wait on the pull request's gates costs no turn: the
+		// continuation comes once they move, or a message comes first.
+		if l.waitingOnGates(ctx, attempt) {
 			return
 		}
 		trigger, continuation = "a continuation of attempt "+attempt.ID, true
@@ -415,6 +425,11 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 			l.handoffAfterTurn(ctx, attempt.ID, a, rec, sectionBefore, head, newHead, opened && doc != nil)
 		}
 		a.Head = newHead
+		// A turn that leaves the attempt waiting on its pull request's
+		// gates has done its part: the wait is not a stall.
+		if worker && l.waitingOnGates(ctx, attempt) {
+			a.NoProgress, a.Unchanged = 0, 0
+		}
 	}
 	st.Continue = ""
 	if afterErr == nil && after.Attempt.inWork() {
@@ -507,6 +522,38 @@ func openTranscript(home, turnID string) (io.Writer, func()) {
 }
 
 // head is the commit the attempt's worktree is at, or "".
+// waitingOnGates reports whether the attempt waits on its pull request's
+// gates, the harness's states of docs/DESIGN-TURNS.md 4.2 (checking,
+// external-review, gates), where a turn has nothing to do. A watched pull
+// request, as last observed, is open at the worktree's head (all the work
+// is pushed); no external review at the head blocks it and no check
+// failed; and the external review is requested or in progress, or the
+// checks are pending.
+func (l *TurnLoop) waitingOnGates(ctx context.Context, attempt *memberAttempt) bool {
+	observed := l.Host.Observed()
+	if len(observed) == 0 {
+		return false
+	}
+	head := l.head(ctx, attempt.ID)
+	if head == "" {
+		return false
+	}
+	for _, o := range observed {
+		if o.State != forge.PullOpen || o.HeadCommit != head || o.Checks == forge.ChecksFailure ||
+			(o.Review != nil && o.Review.AtHead && o.Review.Blocker) {
+			continue
+		}
+		if slices.Contains(o.Labels, labelReviewRequest) || slices.Contains(o.Labels, labelReviewing) ||
+			o.Checks == forge.ChecksPending {
+			return true
+		}
+	}
+	return false
+}
+
+// labelReviewRequest is the label that asks for the external review.
+const labelReviewRequest = "review-this"
+
 func (l *TurnLoop) head(ctx context.Context, attemptID string) string {
 	if l.Head == nil {
 		return ""

@@ -76,6 +76,24 @@ and the repository's secret scan; a commit on main shows the twelve. A
 head is green when all of them pass, and the three `go-race` jobs are
 required beside the three `go-test` jobs.
 
+What runs where:
+- **On main** (every push, and nightly at 03:41 UTC): every job runs in
+  full.
+- **On a pull request:** `repo-checks`, `go-lint`, `go-build`, every
+  `release-build`, and `go-test` on Linux and macOS run in full.
+  - A `go-race` job runs its package's tests only when the change touches
+    that package or a package of this module its tests import.
+  - `go-test (windows-latest)` runs only when the change touches
+    `internal/agent`, `internal/service`, `scripts`, an installer
+    (`boot.sh`, `boot.ps1`, `install-aicrewd.sh`) or a `_windows.go` file.
+  - A change to `go.mod`, `go.sum`, `ci.yml` or the gate script runs both.
+  - A gated job that has nothing to test still reports its check, as
+    passed, with the test steps skipped.
+
+`scripts/ci-gate.sh` makes that decision and prints the file that made it
+in the job's log. A pull request's checkout is its merge commit, so
+`HEAD^1..HEAD` is the change it makes.
+
 The `go-race` jobs run the agent, server and store packages under the
 race detector, on Linux, one package per job in parallel, so that the
 `go-test` results do not wait for them and the race pass takes as long as

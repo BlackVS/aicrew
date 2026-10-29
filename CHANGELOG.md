@@ -21,6 +21,14 @@ section, and the release workflow refuses a tag that has none
   DEVELOPMENT.md now reads that check, so a release preparation no longer
   needs a run started by hand, or a token that may start workflows. The
   nightly run and the manual dispatch stay.
+- **A pull request's CI skips the slow tests its change cannot reach**
+  (01a1869d-a0c9). The `go-race` jobs test a package only when the change
+  touches it or a package its tests import, and the Windows tests run only
+  for the agent, the service, the scripts, the installers or a
+  `_windows.go` file; `scripts/ci-gate.sh` decides. Main runs everything on
+  every push and nightly. AGENTS.md now has one task per pull request and
+  commit, tasks no finer than S, review gates tiered by size and surface,
+  and the next task taken right after a merge.
 
 ## [0.9.0] - 2026-10-28
 

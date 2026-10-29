@@ -69,14 +69,26 @@ comments, not only this host-local file.
 
 ## Delivery
 
-Assess READY criteria before claiming. Split L/XL work and reassess provisional
-M tasks if scope grew. Commit only intentional files on a feature branch;
+Assess READY criteria before claiming. One board task is one pull request
+and one commit on main (the repository squash-merges). A task is not cut
+finer than S: findings from reviews are grouped per surface into one task,
+not filed one task each. L/XL work is split, no finer than M, and only where
+a reviewer could not read it whole; reassess a provisional M task if its
+scope grew. Take the next task right after a merge: record DONE, with
+verify-delivery's evidence, once the CI on the merge commit is green,
+without waiting for it before starting. Commit only intentional files on a feature branch;
 preserve operator/unrelated work. No release, deployment or token/membership
 changes merely because a task was merged. Use commit/body files for multiline
 Git metadata on Windows, with UTF-8 and no BOM.
 
-Use medium pre-push review and high final-head review; docs-only changes also
-get high pre-merge review. Request external review with plain `review-this`,
+The gates are tiered by size and surface. An XS or S pull request on an
+ordinary surface (documents, tests, CI, message texts) gets the worker's
+medium pre-push review, the worker's high review at the final head and the
+external review. An M pull request, and any pull request on a sensitive
+surface, also gets the architect's high review at the final head. The
+sensitive surfaces are the command guard, the installers, aicrewd's routes
+and authentication, the store schema and migrations, and wire protocols.
+Docs-only changes get the high review too. Request external review with plain `review-this`,
 watch and read the result, and never push while `hands-reviewing` is present.
 Check whether the external reviewer is installed on this new repository;
 a label alone does not prove it is. Report any missing gate instead of
@@ -88,6 +100,10 @@ Use the installed oh-code-review skill and read a repository-specific
 custom-codereview-guide if present. Pre-push: medium inline, no subagents,
 against the final pending changes. Pre-merge: high, including docs-only PRs,
 with verified findings, risk and verdict posted on the actual final head.
+The second local reader of the machine-wide gates is the architect's high
+review, and this repository asks for it only on M and sensitive-surface
+pull requests (the tiers under "Delivery"); on the others, the worker's high
+review and the external review are the pre-merge gate.
 After a change of your own, high delta review and renewed external review
 are required; a base-only update follows the patch-identity rule below.
 Max/ultra only on explicit operator request.

@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The full set nightly on main, beside every push to it: a pull request
+  # skips the slow tests its change cannot reach (scripts/ci-gate.sh).
+  schedule:
+    - cron: '41 3 * * *'
 
 permissions:
   contents: read
@@ -63,16 +67,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 2
+      # On a pull request the Windows tests run only when the change can
+      # reach them; the job then passes with its steps skipped.
+      - name: gate
+        id: gate
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then bash scripts/ci-gate.sh windows
+          else echo "run=true" >>"$GITHUB_OUTPUT"; fi
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.gate.outputs.run == 'true'
         with:
           go-version: '1.25'
           cache: true
       - run: go test -count=1 ./...
+        if: steps.gate.outputs.run == 'true'
       # A member's service against the runner's real service manager
       # (launchd, the task scheduler, systemd's user manager): install,
       # run, stop, start, uninstall. The test skips where the runner has no
       # login session or user manager, and says so.
       - name: real user service
+        if: steps.gate.outputs.run == 'true'
         timeout-minutes: 10
         env:
           AICREW_REAL_SERVICE: '1'
@@ -83,7 +99,9 @@ jobs:
   # state (agent), and the server's handlers, reconciler and logging run
   # store commands concurrently (server, store). It is its own job, one per
   # package in parallel, so the go-test results do not wait for it and its
-  # wall time is the slowest package's, not the sum.
+  # wall time is the slowest package's, not the sum. On a pull request a
+  # package runs only when the change touches it or a package its tests
+  # import; the job then passes with the test step skipped.
   go-race:
     strategy:
       fail-fast: false
@@ -95,11 +113,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 2
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.25'
           cache: true
+      - name: gate
+        id: gate
+        run: bash scripts/ci-gate.sh race ${{ matrix.pkg }}
       - name: go test -race (${{ matrix.pkg }})
+        if: steps.gate.outputs.run == 'true'
         run: go test -race -count=1 -timeout 20m ./internal/${{ matrix.pkg }}/
 
   go-build:

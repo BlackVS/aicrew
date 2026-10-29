@@ -23,7 +23,7 @@ const (
 const stepUsage = `usage: aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
                          [--repository CLONE_URL]
   OP: offer claim accept withdraw work release finalize
-      decline review stop confirm-stop confirm-delivery
+      decline review answer stop confirm-stop confirm-delivery
       recover pending
   --home defaults to $` + agent.HomeEnv + `, which the launcher gives its client.
   --repository (offer and claim): fill the body's repository object: its

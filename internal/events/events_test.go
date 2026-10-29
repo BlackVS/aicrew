@@ -30,8 +30,8 @@ func TestDefaultsMatchTheSchema(t *testing.T) {
 		t.Fatalf("the defaults do not match the schema:\n%s", strings.Join(errs, "\n"))
 	}
 	d := Defaults()
-	if len(d.Subscriptions) != 5 || len(d.Version) != 16 || len(d.Matching(KindBoardChanged)) != 1 ||
-		len(d.Matching(KindForgeChanged)) != 1 || len(d.Matching(KindAttemptChanged)) != 1 ||
+	if len(d.Subscriptions) != 6 || len(d.Version) != 16 || len(d.Matching(KindBoardChanged)) != 1 ||
+		len(d.Matching(KindForgeChanged)) != 1 || len(d.Matching(KindAttemptChanged)) != 1 || len(d.Matching(KindAttemptAnswered)) != 1 ||
 		len(d.Matching(KindMemberChanged)) != 0 || len(d.Matching(KindTimerDue)) != 1 || len(d.Matching(KindAutomationRun)) != 1 {
 		t.Fatalf("the defaults: %+v", d)
 	}

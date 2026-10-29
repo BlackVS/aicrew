@@ -110,7 +110,8 @@ var stepOps = map[string]struct {
 }
 
 // localOps are the local steps: no reservation.
-var localOps = map[string]bool{"decline": true, "review": true, "stop": true, "confirm-stop": true, "confirm-delivery": true}
+var localOps = map[string]bool{"decline": true, "review": true, "stop": true, "confirm-stop": true, "confirm-delivery": true,
+	"answer": true}
 
 // StepServer serves the step channel for one launcher.
 type StepServer struct {
@@ -415,7 +416,7 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 	op, ok := stepOps[call.Op]
 	if !ok {
 		return refuse("invalid_request", "Unknown step "+call.Op+".", "Use offer, accept, withdraw, claim, work, release, finalize, "+
-			"decline, review, stop, confirm-stop, confirm-delivery, recover, pending, inbox, ack, capabilities, escalate or watch-pull.")
+			"decline, review, answer, stop, confirm-stop, confirm-delivery, recover, pending, inbox, ack, capabilities, escalate or watch-pull.")
 	}
 	req := StepRequest{Body: bodyOrEmpty(call.Body), TaskID: call.TaskID}
 	if op.fromBody {

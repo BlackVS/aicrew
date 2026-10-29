@@ -36,6 +36,7 @@ GET /v1/crew/attempts
 POST /v1/crew/attempts
 POST /v1/crew/attempts/claim
 POST /v1/crew/attempts/{id}/accept
+POST /v1/crew/attempts/{id}/answer
 POST /v1/crew/attempts/{id}/confirm-delivery
 POST /v1/crew/attempts/{id}/confirm-stop
 POST /v1/crew/attempts/{id}/decline

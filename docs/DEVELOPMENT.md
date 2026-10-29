@@ -838,7 +838,9 @@ event is data; the bus is core.
     failed, and to the worker when it asks for a turn (increment 2d-a,
     "Workflow scripts");
   - `review-pickup-wake`: `timer.due` to the coordinators, for the review
-    pickup below.
+    pickup below;
+  - `answer-wake`: `attempt.answered` to the attempt's worker, with the
+    coordinator's answer to its blocked report.
 
   These reproduce the routing from before the event core. The kinds, roles,
   conditions and handlers a file may name are this release's; a test
@@ -868,6 +870,11 @@ event is data; the bus is core.
     keeps the whole of it until it leaves the blocked phase.
   - `member.changed`: a member's session started, resumed, or ended (left,
     stopped or ended).
+  - `attempt.answered`: the team's current coordinator answered a
+    worker's blocked report (`aicrew-agent step answer`, CREW-CONTRACT.md,
+    "Answer"), keyed by the request's idempotency key. Its payload is the
+    attempt, the task, the worker, the coordinator and the answer's text,
+    at most 12 KiB as JSON encodes it.
   - `timer.due`: a deadline stored in aicrewd (schema 34) passed. The
     delivery loop journals it once, on its first tick after the deadline,
     and a restart keeps it. The review pickup is its first user.
@@ -880,7 +887,12 @@ event is data; the bus is core.
   observed pull request (state, head, labels, CI conclusion, comment
   count), so the coordinator can answer or escalate without reading the
   forge. The report's broadcast to the team then leaves the coordinators
-  out, so they are woken once for it. No default subscription takes the
+  out, so they are woken once for it. The coordinator answers a question
+  that is its own with `aicrew-agent step answer`, and the default
+  `answer-wake` subscription wakes the worker with one `action.needed`
+  message holding the answer, as long as the attempt is open (a message
+  to a worker whose attempt has since moved on says so). No default
+  subscription takes the
   other attempt changes, member changes or spent budgets yet; a member's
   hold reaches the coordinators as aicrewd's own lifecycle message.
 - **The review pickup** (DESIGN-TURNS.md 4.2, `external-review`). A
@@ -2810,8 +2822,9 @@ with the `join --cred` command that fixes it.
   `withdraw`, `work`, `release` and `finalize` take the begin route's body
   (`docs/CREW-CONTRACT.md`, "Attempt steps"). `offer` and `claim` create
   their attempt and name the task in the body. The others need `--attempt`
-  and the aimem task's `--task`. The local steps `decline`, `review`, `stop`,
-  `confirm-stop` and `confirm-delivery` need only `--attempt` and their body.
+  and the aimem task's `--task`. The local steps `decline`, `review`,
+  `answer`, `stop`, `confirm-stop` and `confirm-delivery` need only
+  `--attempt` and their body.
   `pending` lists the recorded steps, and `recover` finishes them.
 - **Finding the launcher.** `--home` defaults to `AICREW_AGENT_HOME`, which
   `run` sets in its client's environment only, to the agent home's absolute

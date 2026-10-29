@@ -797,3 +797,34 @@ func TestSupersedeThroughTheRoutes(t *testing.T) {
 	}
 	settled(t, e.settleAs(t, e.lead, id, second, "unknown", ""), "committed", "running")
 }
+
+// The answer route takes the team's coordinator's answer to a blocked
+// attempt, up to the bound as JSON encodes it; it refuses the worker, a
+// working attempt, a body without text, a text past the bound and a call
+// without a session token.
+func TestAnswerRoute(t *testing.T) {
+	e := setupCoordination(t)
+	id := e.runningOffer(t)
+	path := AttemptsPath + "/" + id + "/answer"
+	refused(t, e.call(t, e.lead.token, path, "answer-0", map[string]string{"text": "Too early."}),
+		http.StatusConflict, "attempt_state")
+	ctx := context.Background()
+	b, err := e.store.AuthenticateSessionToken(ctx, e.worker.token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.UpdateWork(ctx, e.worker.caller, e.aimem, "block-1", id, store.WorkUpdate{SessionID: b.SessionID,
+		Generation: b.Generation, Intent: store.IntentBlock, Detail: "Waiting on the schema decision."}); err != nil {
+		t.Fatalf("block: %v", err)
+	}
+	refused(t, e.call(t, e.worker.token, path, "answer-w", map[string]string{"text": "Mine."}),
+		http.StatusForbidden, "attempt_forbidden")
+	refused(t, e.call(t, e.lead.token, path, "answer-x", map[string]string{}), http.StatusBadRequest, "invalid_request")
+	refused(t, e.call(t, "", path, "answer-y", map[string]string{"text": "x"}), http.StatusUnauthorized, "invalid_token")
+	refused(t, e.call(t, e.lead.token, path, "answer-z", map[string]string{"text": strings.Repeat("x", store.MaxAnswerText-1)}),
+		http.StatusBadRequest, "invalid_request")
+	// An answer at the bound, as JSON encodes it, fits the route's body.
+	if got := e.call(t, e.lead.token, path, "answer-1", map[string]string{"text": strings.Repeat(`"`, (store.MaxAnswerText-2)/2)}); got.status != http.StatusOK {
+		t.Fatalf("the answer: %d %s", got.status, got.raw)
+	}
+}

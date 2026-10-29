@@ -369,6 +369,7 @@ trusts a caller it is given, and a test enforces that.
 | `POST /v1/crew/attempts/claim` | `Authorization: Bearer` session token | Begin an independent claim. |
 | `GET /v1/crew/attempts` | `Authorization: Bearer` session token | The team's open attempts (every state but `closed`), oldest first, for its current coordinator to reconcile when its session starts; any other member is refused `role_forbidden`. Each: `id`, `state`, `phase`, `task`, `worker_agent_id`, `worker_label`, the `coordinator_generation` an offer was made under, `offer_expires_at`, `stale` (an offer made under an earlier coordinator generation), `expired`, `declined`, `next_action`, and `handoff_updated_at`, when the worker last pushed the attempt's handoff (absent when it has none). Reply: `coordinator_generation`, `attempts`. |
 | `POST /v1/crew/attempts/{id}/stop`, `/confirm-stop`, `/release` | `Authorization: Bearer` session token | Request or confirm a stop, or begin the stopped attempt's release. |
+| `POST /v1/crew/attempts/{id}/answer`, JSON `{"text"}` | `Authorization: Bearer` session token | The team's current coordinator answers the worker's blocked report ("Answer"). |
 | `POST /v1/crew/attempts/{id}/review`, `/confirm-delivery`, `/finalize` | `Authorization: Bearer` session token | Review the latest result, confirm its delivery, or begin finalizing it as `DONE`. |
 | `POST /v1/crew/attempts/{id}/work` | `Authorization: Bearer` session token | Begin, or supersede, the holder's work update: block, submit or resume. |
 | `POST /v1/crew/attempts/{id}/settle` | `Authorization: Bearer` session token | Settle a step through aimem's read scope. |
@@ -586,6 +587,22 @@ begin needs an `Idempotency-Key`; settle does not.
     the stop of a running attempt. The worker never requests its own stop.
   - `/{id}/confirm-stop`, with an empty body or `{}`: the worker confirms,
     from its current session, with no step in flight.
+- **Answer.** `/{id}/answer`, with `{text}`: the team's current
+  coordinator answers a worker's blocked report. It is local, with no step
+  and no proof, and answers with the attempt.
+  - The attempt must be the coordinator's team's, running and blocked; the
+    worker never answers its own report. Any other caller, another team's
+    coordinator included, is refused `attempt_forbidden`, and an attempt in
+    another phase `attempt_state`.
+  - `text` is non-blank UTF-8 of at most 12 KiB as JSON encodes it (its
+    escapes counted), so that the event and the worker's message carry it
+    whole (`invalid_request` otherwise). The route's body may be that plus
+    256 bytes.
+  - aicrewd journals it as an `attempt.answered` event in the same
+    transaction. Its key is the request's idempotency key, so a replay
+    journals nothing more. The default `answer-wake` subscription wakes the
+    worker with one `action.needed` message whose `answer` subject carries
+    the text ("Event delivery").
 - **Review.** `/{id}/review`, with `{result_seq, decision}`: the team's
   current coordinator accepts the latest submitted result, or returns it for
   rework. It is local, and no member reviews its own result.
@@ -1699,10 +1716,10 @@ core"). The routing is the subscription file embedded in the release.
   events name, as the team is at that moment: a burst of changes about one
   subject wakes a member once. Subjects due at the same tick for the same
   members are one message, whose `action.subjects` list each (`pull`,
-  `blocked`, `board`, `automation`, `review_pickup`) with its content and
-  whose text holds each in turn. An `automation` subject carries the runs
-  (`runs`) that woke the member: for the coordinators a failed run with its error and
-  steps, for the worker a run that asks for a turn, with the turn's kind
+  `blocked`, `board`, `automation`, `review_pickup`, `answer`) with its
+  content and whose text holds each in turn. An `automation` subject
+  carries the runs (`runs`) that woke the member: for the coordinators a
+  failed run with its error and steps, for the worker a run that asks for a turn, with the turn's kind
   and content.
   A pull subject's `pre_push` field is the declared check that failed
   after the push (increment 2d-b: the command, its exit, its output and
@@ -1716,13 +1733,17 @@ core"). The routing is the subscription file embedded in the release.
   the team's coordinators get one message naming it. Parked events are
   kept and replayed by a release that changes the subscriptions.
 - **aicrewd's own changes** are journaled too: an attempt's phase change,
-  a member's session starting, resuming or ending, and a stored deadline
-  passing. Of these, two wake the team's coordinators: a worker's blocked
-  report, and a review pickup's deadline. The latter is a pull request
-  whose `review-this` has waited 30 minutes at its head with no
-  `hands-reviewing` and no external review there; its `review_pickup`
-  subject carries the pull request and the wait (`wait`: pull, URL, head,
-  since), once per head and request. The worker is not woken for it.
+  a member's session starting, resuming or ending, a stored deadline
+  passing, and a coordinator's answer to a blocked report. Of these, three
+  wake anyone:
+  - a worker's blocked report wakes the team's coordinators;
+  - a review pickup's deadline wakes the team's coordinators, not the
+    worker. It is a pull request whose `review-this` has waited 30 minutes
+    at its head with no `hands-reviewing` and no external review there; its
+    `review_pickup` subject carries the pull request and the wait (`wait`:
+    pull, URL, head, since), once per head and request;
+  - the coordinator's answer ("Answer") wakes the attempt's worker; its
+    `answer` subject's text carries the answer.
 - **Automation runs** at the extension points (`automation.run`, "Forge
   events") wake the team's coordinators when the run failed and the
   worker when it asks for a turn.

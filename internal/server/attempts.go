@@ -30,12 +30,15 @@ const (
 	// 20 steps of a kibibyte, 4 KiB of turn content, 2 KiB of error and a
 	// command of 32 arguments, as the launcher bounds them.
 	maxReportBody = 48 << 10
+	// maxAnswerBody is an answer's body: its text, at most
+	// store.MaxAnswerText as JSON encodes it, in {"text": ...}.
+	maxAnswerBody = store.MaxAnswerText + 256
 )
 
 // The actions on one attempt, at AttemptsPath/{id}/{action}. Every one is a
 // POST, except the handoff, which its worker also reads (handoff.go).
 var attemptActions = []string{"accept", "decline", "withdraw", "settle", "stop", "confirm-stop", "release", "review",
-	"confirm-delivery", "finalize", "work", "handoff"}
+	"confirm-delivery", "finalize", "work", "handoff", "answer"}
 
 var attemptIDShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
@@ -48,7 +51,7 @@ func (s *Server) registerAttempts() {
 	handlers := map[string]http.HandlerFunc{"accept": s.accept, "decline": s.decline, "withdraw": s.withdraw,
 		"settle": s.settle, "stop": s.requestStop, "confirm-stop": s.confirmStop, "release": s.releaseStopped,
 		"review": s.review, "confirm-delivery": s.confirmDelivery, "finalize": s.finalize, "work": s.work,
-		"handoff": s.putHandoff}
+		"handoff": s.putHandoff, "answer": s.answer}
 	for _, action := range attemptActions {
 		s.handle(http.MethodPost, attemptRoute(action), handlers[action])
 	}
@@ -411,6 +414,23 @@ func (s *Server) requestStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, err := s.store.RequestStopWithToken(r.Context(), key, token, id, in.Reason)
+	s.writeAttempt(w, r, a, err)
+}
+
+type answerBody struct {
+	Text string `json:"text"`
+}
+
+// answer records the team's current coordinator's answer to a worker's
+// blocked report, which wakes the worker. It is local: no step, no proof.
+func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
+	id, _, _ := attemptPath(requestPath(r))
+	var in answerBody
+	token, key, ok := s.stepRequestMax(w, r, true, &in, maxAnswerBody)
+	if !ok {
+		return
+	}
+	a, err := s.store.AnswerWithToken(r.Context(), key, token, id, in.Text)
 	s.writeAttempt(w, r, a, err)
 }
 

@@ -32,6 +32,15 @@
       "handler": "wake"
     },
     {
+      "name": "answer-wake",
+      "description": "The team's coordinator answered a worker's blocked report: the attempt's worker is woken with the answer.",
+      "kinds": ["attempt.answered"],
+      "to": [
+        {"role": "worker", "when": ["always"]}
+      ],
+      "handler": "wake"
+    },
+    {
       "name": "automation-wake",
       "description": "An automation ran at an extension point of an attempt's pull request. One that failed wakes the team's coordinators with the handler, the subject and the error; one that asked for a model turn wakes the attempt's worker with the turn's content; each role reads a message of its own, holding only its runs. A run that handled its point wakes no one.",
       "kinds": ["automation.run"],

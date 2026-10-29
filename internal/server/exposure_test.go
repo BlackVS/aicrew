@@ -45,7 +45,7 @@ var (
 		"RefreshHandle": true, "LeaveWithToken": true, "AuthenticateSessionToken": true,
 		"BeginOfferWithToken": true, "BeginAcceptWithToken": true, "DeclineWithToken": true,
 		"BeginWithdrawWithToken": true, "SettleWithToken": true, "BeginClaimWithToken": true,
-		"RequestStopWithToken": true, "ConfirmStopWithToken": true, "BeginStopReleaseWithToken": true,
+		"RequestStopWithToken": true, "ConfirmStopWithToken": true, "BeginStopReleaseWithToken": true, "AnswerWithToken": true,
 		"ReviewWithToken": true, "ConfirmDeliveryWithToken": true, "BeginFinalizeWithToken": true,
 		"BeginWorkWithToken": true, "SupersedeWorkWithToken": true,
 		// The member's inbox, as the token's session (pilot G1).

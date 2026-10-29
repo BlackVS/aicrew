@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BlackVS/aicrew/internal/forge"
 	"github.com/BlackVS/aicrew/internal/store"
 	"github.com/BlackVS/aicrew/internal/toolchain"
 )
@@ -189,6 +190,8 @@ type loopEnv struct {
 	// ATTEMPT section as it found it; by default each turn adds a line to
 	// its Next, as the member is asked to.
 	staleHandoff bool
+	// dirty is an uncommitted change in the attempt's worktree.
+	dirty bool
 }
 
 // touchHandoff is the member keeping its handoff: a line added to the
@@ -209,8 +212,9 @@ func newLoopEnv(t *testing.T) *loopEnv {
 		return TurnResult{Outcome: TurnFinished, CostUSD: 0.5, Denials: []string{}}
 	}
 	e.loop = &TurnLoop{Home: e.home, Client: "claude", Host: e.host, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Now:  func() time.Time { return e.clock },
-		Head: func(context.Context, string) string { return e.head },
+		Now:   func() time.Time { return e.clock },
+		Head:  func(context.Context, string) string { return e.head },
+		Clean: func(context.Context, string) bool { return !e.dirty },
 		Run: func(_ context.Context, spec TurnSpec) TurnResult {
 			e.specs = append(e.specs, spec)
 			res := e.next(spec, e.host)
@@ -399,6 +403,123 @@ func TestTurnLoopStall(t *testing.T) {
 	}
 	if len(e2.host.calls) != 0 || len(e2.specs) != 5 {
 		t.Fatalf("a worker that steps each turn stalled: %d turns, %d blocks", len(e2.specs), len(e2.host.calls))
+	}
+}
+
+// A worker that pushed its head, opened the pull request and asked for the
+// external review waits on the gates: no continuation turn and no stall
+// while the review is requested or in progress or the checks are pending,
+// however many ticks pass and however many messages without progress come
+// (each still gets its turn at once). The continuation comes back once the
+// gates moved. A worker with work left (an unpushed commit, a blocking
+// review, a failed check) keeps its continuations and stalls as before.
+func TestTurnLoopWaitsOnGates(t *testing.T) {
+	waiting := PullObservation{Host: "git.example.test", Repository: "crew/p", Number: 4, State: forge.PullOpen,
+		HeadCommit: "h1", Labels: []string{"review-this"}, Checks: forge.ChecksPending}
+	open := func(e *loopEnv, o PullObservation) {
+		e.host.attempt = &memberAttempt{ID: "att-1", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-1"}}
+		e.host.pending = []PendingMessage{msg("offer", "lifecycle")}
+		e.next = func(TurnSpec, *fakeHost) TurnResult {
+			// The turn commits, pushes, opens the pull request and labels it.
+			e.host.pending, e.head, e.host.observed = nil, "h1", []PullObservation{o}
+			return TurnResult{Outcome: TurnFinished}
+		}
+		e.tick(t)
+		e.next = func(TurnSpec, *fakeHost) TurnResult {
+			e.host.pending = nil
+			return TurnResult{Outcome: TurnFinished}
+		}
+	}
+
+	e := newLoopEnv(t)
+	open(e, waiting)
+	for range 8 {
+		e.tick(t)
+	}
+	if len(e.specs) != 1 || len(e.host.calls) != 0 {
+		t.Fatalf("a waiting worker got %d turns and %d blocks, want its one turn", len(e.specs), len(e.host.calls))
+	}
+	for i := range stallTurns + 1 {
+		e.host.pending = []PendingMessage{msg(fmt.Sprintf("m%d", i), "message")}
+		e.tick(t)
+	}
+	if len(e.specs) != stallTurns+2 || len(e.host.calls) != 0 {
+		t.Fatalf("messages while waiting: %d turns and %d blocks", len(e.specs), len(e.host.calls))
+	}
+	st := readTurnState(e.home)
+	if a := st.Attempts["att-1"]; a == nil || a.Continuations != 0 || a.NoProgress != 0 || a.Stalled {
+		t.Fatalf("the waiting attempt's state: %+v", a)
+	}
+	// hands moves on: the review in progress, then READY with CI green.
+	e.host.observed[0].Labels = []string{"hands-reviewing"}
+	e.tick(t)
+	if len(e.specs) != stallTurns+2 {
+		t.Fatal("a continuation while the review is in progress")
+	}
+	e.host.observed[0].Labels, e.host.observed[0].Checks = []string{"hands-reviewed"}, forge.ChecksSuccess
+	e.host.observed[0].Review = &ObservedReview{AtHead: true, Verdict: verdictReady}
+	e.tick(t)
+	if len(e.specs) != stallTurns+3 || !strings.Contains(e.specs[len(e.specs)-1].Prompt, "a continuation of attempt att-1") {
+		t.Fatalf("no continuation once the gates moved: %d turns", len(e.specs))
+	}
+
+	for _, c := range []struct {
+		name string
+		o    func(PullObservation) PullObservation
+		// dirty leaves an uncommitted change at the pull request's head.
+		dirty bool
+	}{
+		{"an unpushed commit", func(o PullObservation) PullObservation { o.HeadCommit = "h0"; return o }, false},
+		{"a blocking review", func(o PullObservation) PullObservation {
+			o.Labels = []string{"hands-reviewed"}
+			o.Review = &ObservedReview{AtHead: true, Verdict: "RETURN_TO_IMPLEMENTATION", Blocker: true}
+			return o
+		}, false},
+		{"a failed check", func(o PullObservation) PullObservation { o.Checks = forge.ChecksFailure; return o }, false},
+		{"a closed pull request", func(o PullObservation) PullObservation { o.State = forge.PullClosed; return o }, false},
+		{"uncommitted work at the head", func(o PullObservation) PullObservation { return o }, true},
+	} {
+		e := newLoopEnv(t)
+		e.dirty = c.dirty
+		open(e, c.o(waiting))
+		for range 6 {
+			e.tick(t)
+		}
+		if len(e.specs) != 1+stallTurns || len(e.host.calls) != 1 {
+			t.Errorf("%s: %d turns and %d blocks, want the continuations and the stall as before", c.name,
+				len(e.specs), len(e.host.calls))
+		}
+	}
+}
+
+// worktreeClean sees every uncommitted change, an untracked file and a
+// tracked edit alike, and a worktree it cannot read is not clean.
+func TestWorktreeClean(t *testing.T) {
+	ctx := context.Background()
+	wt := t.TempDir()
+	write := func(name, text string) {
+		if err := os.WriteFile(filepath.Join(wt, name), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(t, wt, "init", "-q", "-b", "work")
+	write("a.txt", "a\n")
+	git(t, wt, "add", "a.txt")
+	git(t, wt, "commit", "-q", "-m", "work")
+	if !worktreeClean(ctx, wt) {
+		t.Fatal("a committed worktree is not clean")
+	}
+	write("b.txt", "b\n")
+	if worktreeClean(ctx, wt) {
+		t.Fatal("an untracked file is clean")
+	}
+	os.Remove(filepath.Join(wt, "b.txt"))
+	write("a.txt", "edited\n")
+	if worktreeClean(ctx, wt) {
+		t.Fatal("a tracked edit is clean")
+	}
+	if worktreeClean(ctx, filepath.Join(wt, "missing")) {
+		t.Fatal("a missing worktree is clean")
 	}
 }
 

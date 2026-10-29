@@ -246,6 +246,27 @@ func (s *StepServer) setObserved(last []PullObservation) {
 	s.last = last
 }
 
+// noteObserved puts a forge pr command's observation of a pull request in
+// place of the one last observed, with its content carried on as a poll
+// carries it, so the turn loop sees what the turn just did (a label it
+// added) before the next poll.
+func (s *StepServer) noteObserved(body []byte) {
+	var o PullObservation
+	if json.Unmarshal(body, &o) != nil || o.Number < 1 {
+		return
+	}
+	s.seenMu.Lock()
+	defer s.seenMu.Unlock()
+	o = withLastContent(s.last, o)
+	for i, p := range s.last {
+		if p.Host == o.Host && p.Repository == o.Repository && p.Number == o.Number {
+			s.last[i] = o
+			return
+		}
+	}
+	s.last = append(s.last, o)
+}
+
 func (s *StepServer) markSeen(key string, st forge.PullStatus) {
 	s.seenMu.Lock()
 	defer s.seenMu.Unlock()

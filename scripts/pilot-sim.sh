@@ -174,7 +174,9 @@ PROJECT=pilot
 REPO_URL=https://sim-gitea:3000/operator/pilot.git
 hub aimem tasks on -p "$PROJECT" >/dev/null
 COMMIT=$(hub git -C /home/aimem/process rev-parse HEAD)
-hub aimem process select https://git.example.test/sim/process.git "$COMMIT" process/manifest.json -p "$PROJECT" >/dev/null
+# The sim's process repository has no tag, so the commit is selected with
+# --commit (aimem 0.10.17 takes a bare commit only with it).
+hub aimem process select https://git.example.test/sim/process.git "$COMMIT" process/manifest.json --commit -p "$PROJECT" >/dev/null
 hub aimem project repo set --project "$PROJECT" --kind gitea --url "$REPO_URL" --access write >/dev/null
 identity peer provision aicrew-service --endpoint https://sim-aicrewd:9443/v1/crew/introspect \
   --peer-trust-pin "$PIN_SIM_AICREWD" --output-dir /home/aimem/peer --expires 30d >/dev/null
@@ -419,11 +421,6 @@ member_id() {
 }
 WORKER_ID=$(member_id worker)
 COORD_ID=$(member_id coordinator)
-# What a coordinator cannot read from the product yet (task 01a186f6-8286): the
-# worker to offer to, and the selected process pin with its instruction digest.
-DIGEST=sha256:$(hub git -C /home/aimem/process show "$COMMIT:process/manifest.json" | sha256sum | cut -d' ' -f1)
-printf '{"worker_agent_id":"%s","process":{"repo":"https://git.example.test/sim/process.git","commit":"%s","manifest":"process/manifest.json"},"instruction_digest":"%s"}\n' \
-  "$WORKER_ID" "$COMMIT" "$DIGEST" | into sim-coordinator member /sim/in/offer.json
 # hubapi METHOD PATH [JSON]: the hub's API as its admin, on the hub's host.
 hubapi() {
   hub sh -c 'curl -fsS --cacert /sim/tls/ca.pem -X "$1" -H "Authorization: Bearer $(cat "$HOME/admin.token")" \

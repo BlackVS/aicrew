@@ -54,6 +54,8 @@ func TestMain(m *testing.M) {
 			}
 		case "mcp":
 			os.Exit(fakeMCP(root))
+		case "process":
+			os.Exit(fakeProcessPin(root, os.Args[2:]))
 		}
 	}
 	childrenExitAtOnce()

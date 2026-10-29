@@ -169,9 +169,9 @@ func TestDigestRefusals(t *testing.T) {
 	}
 }
 
-// ROLES.md's digest paragraph and accept step, /crew-accept and /crew-offer
-// name the command, so a worker never makes its own clone or handles a
-// credential to verify an offer.
+// ROLES.md's digest paragraph and accept step and /crew-accept name the
+// command, so a worker never makes its own clone or handles a credential
+// to verify an offer.
 func TestTheGuidanceNamesTheDigestCommand(t *testing.T) {
 	md := rolesMD()
 	for _, want := range []string{
@@ -187,21 +187,33 @@ func TestTheGuidanceNamesTheDigestCommand(t *testing.T) {
 		t.Error("ROLES.md still asks for a clone the worker makes itself")
 	}
 	for _, c := range crewCommands {
-		if (c.Name == "crew-accept" || c.Name == "crew-offer") && !strings.Contains(commandMD(c), "`aicrew-agent digest") {
+		if c.Name == "crew-accept" && !strings.Contains(commandMD(c), "`aicrew-agent digest") {
 			t.Errorf("/%s does not name aicrew-agent digest", c.Name)
 		}
 	}
 }
 
 // ROLES.md's offer step and /crew-offer name the members command as where a
-// worker's agent ID comes from.
+// worker's agent ID comes from, and `--process` as where the pin and the
+// digest come from, never `aimem process show` with a digest of their own.
 func TestTheGuidanceNamesTheMembersCommand(t *testing.T) {
-	if !strings.Contains(strings.Join(strings.Fields(rolesMD()), " "), "`worker_agent_id` is a worker's agent ID from `aicrew-agent members`") {
+	md := strings.Join(strings.Fields(rolesMD()), " ")
+	if !strings.Contains(md, "`worker_agent_id` is a worker's agent ID from `aicrew-agent members`") {
 		t.Error("ROLES.md's offer step does not name aicrew-agent members")
 	}
+	if !strings.Contains(md, "`--process` fills both from the hub's current selection") || strings.Contains(md, "(`aimem process show`)") {
+		t.Error("ROLES.md's offer step does not take the pin and the digest from --process")
+	}
 	for _, c := range crewCommands {
-		if c.Name == "crew-offer" && !strings.Contains(commandMD(c), "`aicrew-agent members`") {
+		if c.Name != "crew-offer" {
+			continue
+		}
+		body := commandMD(c)
+		if !strings.Contains(body, "`aicrew-agent members`") {
 			t.Error("/crew-offer does not name aicrew-agent members")
+		}
+		if !strings.Contains(body, "Pass `--process`") || strings.Contains(body, "aicrew-agent digest") || strings.Contains(body, "process show") {
+			t.Error("/crew-offer does not take the pin and the digest from --process")
 		}
 	}
 }

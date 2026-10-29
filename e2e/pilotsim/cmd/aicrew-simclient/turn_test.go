@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,8 @@ type fakeTools struct {
 	home     string
 	inbox    []map[string]any
 	attempts []agent.OpenAttempt
-	pull     *agent.PullReport // what forge pr show answers
+	members  []agent.TeamMember // what aicrew-agent members answers
+	pull     *agent.PullReport  // what forge pr show answers
 	// labelFails makes forge pr label fail.
 	labelFails bool
 	tasks      map[string]map[string]any
@@ -47,7 +49,7 @@ func newFake(t *testing.T) *fakeTools {
 }
 
 func (f *fakeTools) member() *member {
-	return &member{home: f.home, in: f.home, run: f.run, mcp: f.mcp,
+	return &member{home: f.home, run: f.run, mcp: f.mcp,
 		now: func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }}
 }
 
@@ -80,6 +82,9 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 		if r := flagOf(args, "--repository"); r != "" {
 			line += " --repository " + r
 		}
+		if slices.Contains(args, "--process") {
+			line += " --process"
+		}
 	}
 	f.calls = append(f.calls, line)
 	if stdin != "" {
@@ -95,6 +100,8 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 		return answer(map[string]any{"messages": f.inbox}), 0, nil
 	case args[0] == "attempts":
 		return answer(agent.OpenAttempts{Attempts: f.attempts}), 0, nil
+	case args[0] == "members":
+		return answer(agent.TeamMembers{Members: f.members}), 0, nil
 	case args[0] == "step" && args[1] == "offer":
 		return answer(map[string]string{"attempt_id": tAttempt, "request_key": "k1"}), 0, nil
 	case args[0] == "step":
@@ -411,11 +418,7 @@ func TestCoordinatorTriagesAndOffers(t *testing.T) {
 		{"id": "m2", "kind": "lifecycle", "project": map[string]string{"hub_id": "H1", "project_id": "pilot"},
 			"text": "2 READY tasks are in project pilot: " + other + ", " + tTask + "."},
 	}
-	in := `{"worker_agent_id":"` + tWorker + `","process":{"repo":"https://sim-gitea:3000/operator/process.git",` +
-		`"commit":"` + tBase + `","manifest":"process/manifest.json"},"instruction_digest":"sha256:abc"}`
-	if err := os.WriteFile(filepath.Join(f.home, "offer.json"), []byte(in), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	f.members = teamOf(tWorker)
 	var out bytes.Buffer
 	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
 		t.Fatalf("turnRun = %d: %s", code, out.String())
@@ -425,15 +428,16 @@ func TestCoordinatorTriagesAndOffers(t *testing.T) {
 	}
 	body := f.bodies["offer"]
 	task, _ := body["task"].(map[string]any)
-	proc, _ := body["process"].(map[string]any)
 	repo, _ := body["repository"].(map[string]any)
+	_, hasProcess := body["process"]
+	_, hasDigest := body["instruction_digest"]
 	if body["worker_agent_id"] != tWorker || body["expected_revision"] != float64(2) || task["task_id"] != tTask ||
-		task["hub_id"] != "H1" || proc["commit"] != tBase || body["instruction_digest"] != "sha256:abc" ||
+		task["hub_id"] != "H1" || hasProcess || hasDigest ||
 		repo["branch"] != "work/"+tTask || repo["access"] != "write" || body["expires_at"] != "2026-10-29T14:00:00Z" {
 		t.Fatalf("offer body = %v", body)
 	}
-	if !f.called("aicrew-agent step offer --repository " + tRepo) {
-		t.Fatalf("the offer did not name the project's repository: %v", f.calls)
+	if !f.called("aicrew-agent step offer --repository " + tRepo + " --process") {
+		t.Fatalf("the offer did not fill its repository and process pin from the product: %v", f.calls)
 	}
 	offers := 0
 	for _, c := range f.calls {
@@ -458,10 +462,7 @@ func TestCoordinatorTriagesAReadyTask(t *testing.T) {
 	ref := map[string]string{"hub_id": "H1", "project_id": "pilot", "task_id": tTask}
 	f.inbox = []map[string]any{{"id": "m1", "kind": "action.needed", "text": "Task is READY.",
 		"action": map[string]any{"subjects": []map[string]any{{"kind": "board", "task": ref}}}}}
-	in := `{"worker_agent_id":"` + tWorker + `","process":{},"instruction_digest":"sha256:abc"}`
-	if err := os.WriteFile(filepath.Join(f.home, "offer.json"), []byte(in), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	f.members = teamOf(tWorker)
 	var out bytes.Buffer
 	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
 		t.Fatalf("turnRun = %d: %s", code, out.String())
@@ -478,6 +479,40 @@ func TestCoordinatorTriagesAReadyTask(t *testing.T) {
 	}
 	if f.called("mcp triage_task") || !f.called("aicrew-agent step offer") {
 		t.Fatalf("the retry triaged again or did not offer: %v", f.calls)
+	}
+}
+
+// teamOf is a team whose coordinator, a worker with read access only, and
+// the given worker with write access to the project's repository report.
+func teamOf(writer string) []agent.TeamMember {
+	at := time.Date(2026, 10, 29, 11, 0, 0, 0, time.UTC)
+	repo := func(access string) []agent.Capability {
+		return []agent.Capability{{Host: "sim-gitea:3000", Kind: "gitea", Account: "m",
+			Repositories: []agent.RepositoryCapability{{URL: tRepo, Access: access}}}}
+	}
+	return []agent.TeamMember{
+		{AgentID: "coord", Label: "coordinator", Role: "coordinator", ReportedAt: &at, Capabilities: repo("write")},
+		{AgentID: "reader", Label: "reader", Role: "worker", ReportedAt: &at, Capabilities: repo("read")},
+		{AgentID: writer, Label: "worker", Role: "worker", ReportedAt: &at, Capabilities: repo("write")},
+	}
+}
+
+// Without a worker that verified the project's repository at write access,
+// the coordinator offers nothing and the turn fails, saying so.
+func TestCoordinatorNeedsAWriter(t *testing.T) {
+	f := newFake(t)
+	f.tasks[tTask] = map[string]any{"id": tTask, "revision": float64(3), "state": "READY", "next_action": offerNext}
+	ref := map[string]string{"hub_id": "H1", "project_id": "pilot", "task_id": tTask}
+	f.inbox = []map[string]any{{"id": "m1", "kind": "action.needed", "text": "Task is READY.",
+		"action": map[string]any{"subjects": []map[string]any{{"kind": "board", "task": ref}}}}}
+	f.members = teamOf(tWorker)[:2]
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code == 0 ||
+		!strings.Contains(out.String(), "no worker verified "+tRepo+" at write access") {
+		t.Fatalf("turnRun = %d: %s", code, out.String())
+	}
+	if f.called("aicrew-agent step offer") {
+		t.Fatalf("an offer went without a writer: %v", f.calls)
 	}
 }
 

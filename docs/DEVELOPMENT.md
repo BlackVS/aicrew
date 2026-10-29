@@ -2803,7 +2803,7 @@ aicrew-agent step release --attempt A1 --task T1 --body '{"target":"BLOCKED","bl
 aicrew-agent step confirm-stop --attempt A1
 aicrew-agent step pending
 aicrew-agent step recover
-aicrew-agent step offer --repository https://github.com/team/app --body - < offer.json
+aicrew-agent step offer --repository https://github.com/team/app --process --body - < offer.json
 ```
 
 `--repository CLONE_URL`, on `offer` and `claim` only, fills the body's
@@ -2817,6 +2817,22 @@ is kept: a given `base_commit` is never replaced, and the `branch` and the
 `access` with the repository the hub binds to the project
 (`repository_mismatch`). A host the home holds no credential for is refused
 with the `join --cred` command that fixes it.
+
+`--process`, on `offer` only, fills the body's `process` pin (`repo`, the
+full `commit`, `manifest`) and its `instruction_digest` from the hub's
+current process selection for the body's `task.project_id`. It runs
+`aimem process pin -p PROJECT --json` from the home's root with the home's
+aimem installation, so the coordinator needs no clone of the process
+repository and no route to it: the hub checks its stored set against the
+selection and hashes the manifest. The client's team session
+(`AIMEM_TEAM_SESSION`) is kept, so a member reads under its team's grant;
+without one the home's own credential reads. It needs aimem 0.10.18 or
+later, the first that reads a pin under a team session. It prints the pin
+it filled on stderr. A body that names both `process` and
+`instruction_digest` is kept as it is; one that names only one of them is
+refused, since the hub's digest need not be its pin's. A project with no
+selection, a selection without a stored set, or a refused credential ends
+the step with aimem's reason, and nothing is sent.
 
 - **Operations.** The reservation steps `offer`, `claim`, `accept`,
   `withdraw`, `work`, `release` and `finalize` take the begin route's body

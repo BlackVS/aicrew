@@ -131,8 +131,9 @@ var guideRoles = []guideRole{
 			{"offer", "", offerExample, "Offer a task to a named worker: `worker_agent_id` is a worker's agent ID " +
 				"from `aicrew-agent members`, which lists the team's members with the repositories each one verified. " +
 				"`expected_revision` is the task's current " +
-				"revision in aimem; `process` is the project's selected process (`aimem process show`), and " +
-				"`instruction_digest` its digest (see \"The instruction digest\" above). `repository` is the project's " +
+				"revision in aimem; `process` is the project's selected process and `instruction_digest` its digest: " +
+				"`--process` fills both from the hub's current selection for `task.project_id`, through your home's " +
+				"aimem, with no clone of the process repository. `repository` is the project's " +
 				"repository as the hub binds it (`aimem project show`: kind, url, access, which aicrewd checks against the hub), " +
 				"with its default branch, the base commit and the attempt's branch; `--repository REPO_URL` fills the URL, " +
 				"default branch and base commit from the forge with your own credential. The launcher reads the task's " +

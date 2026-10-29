@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -45,13 +46,18 @@ func (p HubPin) check(project string) error {
 }
 
 // ProcessPin reads the project's current pin from the hub through the
-// home's aimem installation and its own credential, from the home's root,
-// as the client's own aimem calls run. aimem's error text says why there
-// is none: no selection, a selection without a stored set, or a refused
-// credential.
+// home's aimem installation, from the home's root, as the client's own aimem
+// calls run. The client's team session (AIMEM_TEAM_SESSION) is kept, unlike
+// the launcher's own calls: a member reads under its team's grant, which
+// aimem 0.10.18 reads a pin under; without a session the home's own
+// credential reads. aimem's error text says why there is none: no
+// selection, a selection without a stored set, or a refused credential.
 func (a ExecAimem) ProcessPin(ctx context.Context, project string) (HubPin, error) {
 	cmd := exec.CommandContext(ctx, a.Command, "process", "pin", "-p", project, "--json")
-	cmd.Env = a.environ("")
+	cmd.Env = os.Environ()
+	if a.Home != "" {
+		cmd.Env = HomeAimemEnv(cmd.Env, a.Home)
+	}
 	if a.Home != "" {
 		cmd.Dir = absHome(a.Home)
 	}

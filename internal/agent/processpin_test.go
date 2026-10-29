@@ -16,7 +16,8 @@ import (
 // pin.out, or pin.err on stderr with exit 1.
 func fakeProcessPin(root string, args []string) int {
 	wd, _ := os.Getwd()
-	call, _ := json.Marshal(map[string]any{"args": args, "dir": wd, "state_dir": os.Getenv(StateDirEnv)})
+	call, _ := json.Marshal(map[string]any{"args": args, "dir": wd, "state_dir": os.Getenv(StateDirEnv),
+		"session": os.Getenv(SessionEnv)})
 	_ = os.WriteFile(filepath.Join(root, "pin-call.json"), call, 0o600)
 	if msg, err := os.ReadFile(filepath.Join(root, "pin.err")); err == nil {
 		fmt.Fprint(os.Stderr, string(msg))
@@ -63,6 +64,10 @@ func TestExecAimemProcessPin(t *testing.T) {
 		}
 	}
 	write("pin.out", pinJSON("pilot"))
+	// The client's team session reaches aimem, which reads the pin under
+	// the team's grant.
+	session := filepath.Join(t.TempDir(), "team-session.json")
+	t.Setenv(SessionEnv, session)
 	pin, err := a.ProcessPin(context.Background(), "pilot")
 	if err != nil || pin.Commit != pinCommit || pin.InstructionDigest != pinDigest || pin.Repository != "https://forge.example/team/process.git" {
 		t.Fatalf("pin = %+v, %v", pin, err)
@@ -71,6 +76,7 @@ func TestExecAimemProcessPin(t *testing.T) {
 		Args     []string `json:"args"`
 		Dir      string   `json:"dir"`
 		StateDir string   `json:"state_dir"`
+		Session  string   `json:"session"`
 	}
 	b, _ := os.ReadFile(filepath.Join(root, "pin-call.json"))
 	if err := json.Unmarshal(b, &call); err != nil {
@@ -81,7 +87,8 @@ func TestExecAimemProcessPin(t *testing.T) {
 		fy, _ := os.Stat(y)
 		return fx != nil && fy != nil && os.SameFile(fx, fy)
 	}
-	if strings.Join(call.Args, " ") != "pin -p pilot --json" || !same(call.Dir, a.Home) || call.StateDir != AimemDir(a.Home) {
+	if strings.Join(call.Args, " ") != "pin -p pilot --json" || !same(call.Dir, a.Home) || call.StateDir != AimemDir(a.Home) ||
+		call.Session != session {
 		t.Errorf("aimem ran as %+v, want in the home %s with its installation", call, a.Home)
 	}
 

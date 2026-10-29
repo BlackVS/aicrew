@@ -215,7 +215,7 @@ records what it did in `docs/HANDOFF.md`, and ends with one stream-json
 
 The coordinator reads everything an offer names from the product: the
 script gives it no input of its own. `--process` needs an aimem with
-`aimem process pin`, 0.10.17 or later.
+`aimem process pin` that reads under the team session, 0.10.18 or later.
 
 A worker that waits on its pull request's gates gets no continuation turn
 and is never stalled (docs/DESIGN-CONTROL-PLANE.md, 1.8). The submit's check

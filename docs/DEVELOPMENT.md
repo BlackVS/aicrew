@@ -2822,10 +2822,12 @@ with the `join --cred` command that fixes it.
 full `commit`, `manifest`) and its `instruction_digest` from the hub's
 current process selection for the body's `task.project_id`. It runs
 `aimem process pin -p PROJECT --json` from the home's root with the home's
-aimem installation and its own credential, so the coordinator needs no
-clone of the process repository and no route to it: the hub checks its
-stored set against the selection and hashes the manifest. It needs an aimem
-that has `process pin`, 0.10.17 or later. It prints the pin
+aimem installation, so the coordinator needs no clone of the process
+repository and no route to it: the hub checks its stored set against the
+selection and hashes the manifest. The client's team session
+(`AIMEM_TEAM_SESSION`) is kept, so a member reads under its team's grant;
+without one the home's own credential reads. It needs aimem 0.10.18 or
+later, the first that reads a pin under a team session. It prints the pin
 it filled on stderr. A body that names both `process` and
 `instruction_digest` is kept as it is; one that names only one of them is
 refused, since the hub's digest need not be its pin's. A project with no

@@ -16,11 +16,15 @@ import (
 // launcher, and records the path it was asked for.
 type fakeAttempts struct {
 	answer string
+	err    error
 	paths  []string
 }
 
 func (f *fakeAttempts) Read(_ context.Context, _, path string) (json.RawMessage, error) {
 	f.paths = append(f.paths, path)
+	if f.err != nil {
+		return nil, f.err
+	}
 	return json.RawMessage(f.answer), nil
 }
 

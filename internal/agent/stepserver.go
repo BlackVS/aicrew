@@ -341,6 +341,14 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 			return answerErr(err)
 		}
 		return StepAnswer{OK: true, Status: StepDone, Result: out}
+	case call.Op == "members":
+		// The team's members with their last capability reports: the
+		// worker agent IDs an offer names.
+		out, err := s.local.Read(ctx, s.driver.Session.stepToken(), capabilitiesPath)
+		if err != nil {
+			return answerErr(err)
+		}
+		return StepAnswer{OK: true, Status: StepDone, Result: out}
 	case call.Op == "capabilities":
 		// Verify the team's requirements with this home's credentials and
 		// report them (aicrew-agent check): answers the check's rows.

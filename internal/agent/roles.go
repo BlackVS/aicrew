@@ -127,7 +127,9 @@ var guideRoles = []guideRole{
 		"unanswered.\n\n" +
 		escalationRule,
 		Steps: []guideStep{
-			{"offer", "", offerExample, "Offer a task to a named worker. `expected_revision` is the task's current " +
+			{"offer", "", offerExample, "Offer a task to a named worker: `worker_agent_id` is a worker's agent ID " +
+				"from `aicrew-agent members`, which lists the team's members with the repositories each one verified. " +
+				"`expected_revision` is the task's current " +
 				"revision in aimem; `process` is the project's selected process (`aimem process show`), and " +
 				"`instruction_digest` its digest (see \"The instruction digest\" above). `repository` is the project's " +
 				"repository as the hub binds it (`aimem project show`: kind, url, access, which aicrewd checks against the hub), " +

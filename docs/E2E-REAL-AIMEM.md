@@ -64,16 +64,27 @@ source clone must hold the commit and the tag (`git fetch --tags`).
 ## In CI
 
 `.github/workflows/e2e-real-aimem.yml` runs the harness once a night on
-main, and by hand (`workflow_dispatch`) on any branch. It checks out aimem
-with its history and tags beside this repository and runs
+main, by hand (`workflow_dispatch`) on any branch, and on a pull request
+that carries the label `e2e-real-aimem`. It checks out aimem with its
+history and tags beside this repository and runs
 `scripts/e2e-real-aimem.sh -aimem-src ../aimem`, with a 45-minute bound; a
 run takes about fifteen minutes. The report and the logs are kept as the
 run's `e2e-real-aimem` artifact for 14 days. It stays out of the ordinary
 pull-request run: it builds aimem and runs for much longer than the
 pull-request jobs.
 
-A release-preparation pull request needs a green run at its head
-(DEVELOPMENT.md, "Releasing").
+On a pull request, adding the label starts a run, and every later push
+while the label is on runs it again. The run shows on the pull request as
+the check `real-aimem` of the workflow `e2e (real aimem)`. Adding the label
+needs only the right to label a pull request, not to start workflows.
+Another label added to a labelled pull request starts no second run.
+Any pull request event that does not run the harness, on a pull request
+without the label or for another label, shows as a skipped check named
+`real-aimem (not requested)`. It never takes the name `real-aimem`, so it
+cannot stand in for a real run at the same head.
+
+A release-preparation pull request carries the label and needs the check
+green at its head (DEVELOPMENT.md, "Releasing").
 
 ## Status at the pin
 

@@ -1,23 +1,49 @@
 name: e2e (real aimem)
 
 # The end-to-end harness against a real aimem (docs/E2E-REAL-AIMEM.md):
-# nightly on main, and by hand on any branch (a release-preparation pull
-# request runs it on its head). It builds aimem from the commit the harness
-# pins, so it is kept out of the ordinary pull-request run.
+# nightly on main, by hand on any branch, and on a pull request that carries
+# the label e2e-real-aimem (a release-preparation pull request does). It
+# builds aimem from the commit the harness pins, so it is kept out of the
+# ordinary pull-request run.
+#
+# A pull request event runs the job only while the label is on the pull
+# request, and a labeled event only when that label is the one added, so
+# another label on a labelled pull request starts no second run. Every
+# other pull request event is skipped, under a concurrency group and a job
+# name of its own. In the shared group its pending run would replace a real
+# run queued behind a running one. Under the shared name its skipped check,
+# newer than the real one at the same head (a hands label change after the
+# run), would stand for it, and skipped counts as passing.
 on:
   schedule:
     - cron: '17 2 * * *'
   workflow_dispatch:
+  pull_request:
+    types: [labeled, synchronize]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: >-
+    ${{ github.workflow }}-${{ github.ref }}${{
+    github.event_name == 'pull_request' &&
+    !(contains(github.event.pull_request.labels.*.name, 'e2e-real-aimem') &&
+    (github.event.action != 'labeled' || github.event.label.name == 'e2e-real-aimem')) &&
+    format('-skipped-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 jobs:
   real-aimem:
+    name: >-
+      ${{ (github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'e2e-real-aimem') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'e2e-real-aimem')))
+      && 'real-aimem' || 'real-aimem (not requested)' }}
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'e2e-real-aimem') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'e2e-real-aimem'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

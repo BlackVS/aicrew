@@ -12,6 +12,16 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+### Changed
+
+- **The real-aimem e2e runs on a pull request labelled `e2e-real-aimem`**
+  (01a183fa-10c5). Adding the label starts the `e2e (real aimem)` workflow
+  at the pull request's head, and a push while the label is on reruns it.
+  The run shows as the `real-aimem` check. The release gate in
+  DEVELOPMENT.md now reads that check, so a release preparation no longer
+  needs a run started by hand, or a token that may start workflows. The
+  nightly run and the manual dispatch stay.
+
 ## [0.9.0] - 2026-10-28
 
 Fifteen pull requests since 0.8.0 (#213 to #227). Three of them close

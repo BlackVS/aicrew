@@ -8,10 +8,11 @@
 //     .mcp.json, the skill directories) and its aimem server reached with a
 //     real MCP initialize, so a green check means the wiring works;
 //   - the model probe (`-p … --strict-mcp-config`): one finished turn, with
-//     no model call and no cost.
+//     no model call and no cost;
+//   - a turn (`-p … --session-id ID`, the brief on standard input): the
+//     role's script (turn.go).
 //
-// Anything else exits 2 with "not simulated": the scripted roles come in
-// a later increment.
+// Anything else exits 2 with "not simulated".
 package main
 
 import (
@@ -55,6 +56,8 @@ func run(ctx context.Context, args []string, dir string, stdout, stderr io.Write
 		return 0
 	case slices.Equal(args, []string{"mcp", "list"}):
 		return mcpList(ctx, dir, stdout)
+	case turnMode(args):
+		return turnRun(ctx, dir, os.Stdin, stdout, newMember(dir))
 	case printMode(args) && slices.Contains(args, "--strict-mcp-config"):
 		return probe(args, stdout)
 	case printMode(args) && flag(args, "-p") == "hi":
@@ -120,6 +123,36 @@ func aimemServer(dir string) (server, bool, error) {
 
 // connect starts the server and completes an MCP initialize with it.
 func connect(ctx context.Context, s server) error {
+	_, err := exchange(ctx, s, nil)
+	return err
+}
+
+// callTool calls one tool after the initialize, as the client does, and
+// returns the text of its result.
+func callTool(ctx context.Context, s server, tool string, args map[string]any) (string, error) {
+	raw, err := exchange(ctx, s, map[string]any{"name": tool, "arguments": args})
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", tool, err)
+	}
+	var res struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil || len(res.Content) == 0 {
+		return "", fmt.Errorf("%s: a result without text", tool)
+	}
+	if res.IsError {
+		return "", fmt.Errorf("%s: %s", tool, res.Content[0].Text)
+	}
+	return res.Content[0].Text, nil
+}
+
+// exchange starts the server, sends the initialize and, when call is not
+// nil, the initialized notice and one tools/call with call as its params;
+// it returns the result of the last request.
+func exchange(ctx context.Context, s server, call map[string]any) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, mcpTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, s.Command, s.Args...)
@@ -130,14 +163,14 @@ func connect(ctx context.Context, s server) error {
 	cmd.WaitDelay = 2 * time.Second
 	in, err := cmd.StdinPipe()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return err
+		return nil, err
 	}
 	defer func() {
 		in.Close()
@@ -146,8 +179,17 @@ func connect(ctx context.Context, s server) error {
 	}()
 	req := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05",` +
 		`"capabilities":{},"clientInfo":{"name":"aicrew-simclient","version":"1"}}}` + "\n"
+	last := "1"
+	if call != nil {
+		raw, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": call})
+		if err != nil {
+			return nil, err
+		}
+		req += `{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n" + string(raw) + "\n"
+		last = "2"
+	}
 	if _, err := io.WriteString(in, req); err != nil {
-		return err
+		return nil, err
 	}
 	sc := bufio.NewScanner(out)
 	sc.Buffer(make([]byte, 64<<10), 4<<20)
@@ -159,24 +201,24 @@ func connect(ctx context.Context, s server) error {
 				Message string `json:"message"`
 			} `json:"error"`
 		}
-		if json.Unmarshal(sc.Bytes(), &resp) != nil || string(resp.ID) != "1" {
+		if json.Unmarshal(sc.Bytes(), &resp) != nil || string(resp.ID) != last {
 			continue
 		}
 		if resp.Error != nil {
-			return errors.New(resp.Error.Message)
+			return nil, errors.New(resp.Error.Message)
 		}
 		if len(resp.Result) == 0 {
-			return errors.New("an initialize response without a result")
+			return nil, errors.New("a response without a result")
 		}
-		return nil
+		return resp.Result, nil
 	}
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 	if err := sc.Err(); err != nil {
-		return err
+		return nil, err
 	}
-	return errors.New("the server ended without answering initialize")
+	return nil, errors.New("the server ended without answering")
 }
 
 // aimemStatus is the aimem server's state in Claude Code's words, and the

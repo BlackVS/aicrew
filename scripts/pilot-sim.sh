@@ -8,11 +8,13 @@
 # compose stack up, does the operator's steps (the hub's project, process
 # and peer; aicrewd's hub and team; Gitea's accounts, labels and
 # repositories; each member's aimem user, token and invitation), hands each
-# member and stub its input files, and runs the smoke check and the stubs'
-# fixture pull requests. It brings the stack down and removes its volumes
-# unless -keep is given. Exit 0: a healthy stack whose stubs serve the review
-# protocol and CI that verify-delivery reads; otherwise non-zero with the
-# containers' logs.
+# member and stub its input files, and runs the smoke check, the stubs'
+# fixture pull requests and the cycle up to the submitted attempt, checking
+# each step read-only (e2e/pilotsim/cycle.py). It brings the stack down and
+# removes its volumes unless -keep is given. Exit 0: a healthy stack whose
+# stubs serve the review protocol and CI that verify-delivery reads, and
+# whose scripted members take a filed task to a submitted attempt; otherwise
+# non-zero with the containers' logs.
 #
 # No secret is printed or passed as an argument: tokens and codes go from
 # the container that makes them to the one that reads them through a pipe,
@@ -406,5 +408,84 @@ forge POST "$FIX/issues/$n/labels" '{"labels":['$REVIEW_THIS']}' >/dev/null
 waitfor "sim-hands's review of #$n at its new head" 120 reviewed "$n" "$second"
 [ "$(hands_comments "$n" | wc -l)" = 1 ] || fail "fixture #$n: more than one review: $(hands_comments "$n")"
 
+# ---- the cycle: from a filed task to a submitted attempt ---------------------------------
+step "the cycle: a filed task, triaged and offered by the scripted coordinator, accepted, opened and submitted by the scripted worker"
+CYC=$OUT/cycle
+rm -rf "$CYC"
+mkdir -p "$CYC"
+member_id() {
+  python3 -c 'import json,sys; print(next(m["agent_id"] for t in json.load(open(sys.argv[1])) for m in t["members"] if m["label"] == sys.argv[2]))' \
+    "$OUT/status.json" "$1"
+}
+WORKER_ID=$(member_id worker)
+COORD_ID=$(member_id coordinator)
+# What a coordinator cannot read from the product yet (task 01a186f6-8286): the
+# worker to offer to, and the selected process pin with its instruction digest.
+DIGEST=sha256:$(hub git -C /home/aimem/process show "$COMMIT:process/manifest.json" | sha256sum | cut -d' ' -f1)
+printf '{"worker_agent_id":"%s","process":{"repo":"https://git.example.test/sim/process.git","commit":"%s","manifest":"process/manifest.json"},"instruction_digest":"%s"}\n' \
+  "$WORKER_ID" "$COMMIT" "$DIGEST" | into sim-coordinator member /sim/in/offer.json
+# hubapi METHOD PATH [JSON]: the hub's API as its admin, on the hub's host.
+hubapi() {
+  hub sh -c 'curl -fsS --cacert /sim/tls/ca.pem -X "$1" -H "Authorization: Bearer $(cat "$HOME/admin.token")" \
+    -H "Content-Type: application/json" ${3:+-H "Idempotency-Key: sim-cycle-$1-$2"} ${3:+-d "$3"} "https://sim-aimem:8440$2"' sh "$@"
+}
+worker() { op aicrew member "$1" --team "$TEAM_ID" --agent "$WORKER_ID" ${2:+--reason "$2"} >/dev/null; }
+# store_copy DIR: a copy of aicrewd's store in DIR. aicrewd keeps writing
+# while the worker is paused, and tar exits 1 when a file changed as it read
+# it: such a copy is taken again.
+store_copy() {
+  local i
+  for i in 1 2 3 4 5; do
+    rm -rf "$1" && mkdir -p "$1"
+    if op tar -C "$OPS_HOME/aicrew/lib" -cf - . 2>/dev/null | tar -C "$1" -xf -; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+# peek: the task's attempt as STATE/PHASE PULLS, from a copy of aicrewd's store.
+peek() {
+  store_copy "$CYC/peek" && python3 "$SIM/cycle.py" state "$CYC/peek" "$TASK"
+}
+at() { [[ "$(peek)" == $1 ]]; }
+# snapshot STEP: the step's read-only copy of the three places (cycle.py), then its checks.
+snapshot() {
+  local d=$CYC/$1 role f
+  mkdir -p "$d/aimem"
+  printf '{"task":"%s","worker":"%s","coordinator":"%s"}\n' "$TASK" "$WORKER_ID" "$COORD_ID" > "$d/ids.json"
+  store_copy "$d/store" || fail "no stable copy of aicrewd's store for the $1 step"
+  hubapi GET "/v1/tasks/$TASK" > "$d/aimem/task.json"
+  hubapi GET "/v1/tasks/$TASK/comments" > "$d/aimem/comments.json"
+  hub aimem reservation recover status --task "$TASK" --hub https://sim-aimem:8440 \
+    --admin-token-file /home/aimem/admin.token --hub-ca-file /sim/tls/ca.pem > "$d/aimem/reservation.json"
+  for role in coordinator worker; do
+    mkdir -p "$d/homes/$role"
+    for f in logs/turns.jsonl logs/guard.jsonl docs/HANDOFF.md; do
+      dc exec -T -u member "sim-$role" sh -c '[ ! -f "$1" ] || cat "$1"' sh "/home/member/agent/$f" \
+        > "$d/homes/$role/${f##*/}"
+    done
+  done
+  python3 "$SIM/cycle.py" check "$1" "$d" || fail "the cycle's checks after the $1 step (snapshot $d)"
+}
+# Each step's state is held for its checks by pausing the worker, as the
+# operator can; the worker's turns resume after them.
+worker pause "the cycle's offer checks"
+TASK=$(hubapi POST "/v1/projects/$PROJECT/tasks" '{"title":"Pilot simulation cycle task","objective":"Add the file sim/TASK.md to the repository through a reviewed pull request.","acceptance_criteria":"The pull request adds one file, and the external review and CI pass at its head.","non_goals":"Everything else.","state":"READY","blocker":"","dependencies":[],"candidate_refs":[],"evidence_refs":[],"next_action":"Triage it.","archived":false}' |
+  json_field id)
+waitfor "the coordinator's triage and offer of task $TASK" 300 at 'offered/* 0'
+snapshot offer
+worker resume
+waitfor "the worker's accept" 300 at 'running/working *'
+worker pause "the cycle's accept checks"
+snapshot accept
+worker resume
+# A fast review lets the worker submit in its next turn, which may start
+# before the pause: the pull request's checks take either phase.
+waitfor "the worker's pull request" 300 at 'running/@(working|submitted) 1'
+worker pause "the cycle's pull request checks"
+snapshot pull
+worker resume
+waitfor "the worker's submit" 300 at 'running/submitted 1'
+snapshot submit
+
 collect
-step "pilot-sim: green: both members checked, listed and serving; the stubs' fixtures confirmed, refused and released (reports in $OUT)"
+step "pilot-sim: green: both members checked, listed and serving; the stubs' fixtures confirmed, refused and released; the cycle reached the submit (reports in $OUT)"

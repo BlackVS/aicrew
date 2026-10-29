@@ -90,6 +90,7 @@ services:
     volumes: [tls:/sim/tls:ro, in-coordinator:/sim/in]
     environment:
       SSL_CERT_FILE: /sim/tls/ca.pem
+      GIT_SSL_CAINFO: /sim/tls/ca.pem
       SIM_ROLE: coordinator
 
   sim-worker:
@@ -97,6 +98,7 @@ services:
     volumes: [tls:/sim/tls:ro, in-worker:/sim/in]
     environment:
       SSL_CERT_FILE: /sim/tls/ca.pem
+      GIT_SSL_CAINFO: /sim/tls/ca.pem
       SIM_ROLE: worker
 
   # The stub reviewer and the stub CI (DESIGN-PILOT-SIMULATION section

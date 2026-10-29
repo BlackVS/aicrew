@@ -6,11 +6,13 @@
 #
 # It builds this tree's binaries, stages the image contexts, brings the
 # compose stack up, does the operator's steps (the hub's project, process
-# and peer; aicrewd's hub and team; Gitea's accounts and repository; each
-# member's aimem user, token and invitation), hands each member its input
-# files, and runs the smoke check. It brings the stack down and removes its
-# volumes unless -keep is given. Exit 0: a healthy stack; otherwise non-zero
-# with the containers' logs.
+# and peer; aicrewd's hub and team; Gitea's accounts, labels and
+# repositories; each member's aimem user, token and invitation), hands each
+# member and stub its input files, and runs the smoke check and the stubs'
+# fixture pull requests. It brings the stack down and removes its volumes
+# unless -keep is given. Exit 0: a healthy stack whose stubs serve the review
+# protocol and CI that verify-delivery reads; otherwise non-zero with the
+# containers' logs.
 #
 # No secret is printed or passed as an argument: tokens and codes go from
 # the container that makes them to the one that reads them through a pipe,
@@ -59,7 +61,7 @@ step() { printf '==> %s\n' "$*"; }
 stage() {
   rm -rf "$STAGE"
   mkdir -p "$STAGE"
-  cp -r "$SIM/ca" "$SIM/hub" "$SIM/aicrewd" "$SIM/member" "$STAGE/"
+  cp -r "$SIM/ca" "$SIM/hub" "$SIM/aicrewd" "$SIM/member" "$SIM/stub" "$STAGE/"
   mkdir -p "$STAGE/aicrewd/prebuilt" "$STAGE/member/prebuilt" "$STAGE/hub/aimem-release"
   local arch
   arch=$(docker version --format '{{.Server.Arch}}')
@@ -71,6 +73,7 @@ stage() {
   build "$STAGE/member/prebuilt/aicrew" ./cmd/aicrew
   build "$STAGE/member/claude" ./e2e/pilotsim/cmd/aicrew-simclient
   build "$STAGE/ca/simca" ./e2e/pilotsim/cmd/simca
+  build "$STAGE/stub/simstub" ./e2e/pilotsim/cmd/simstub
   (cd "$STAGE/member/prebuilt" && sha256sum aicrew-agent aicrew > SHA256SUMS)
   cp "$ROOT/install-aicrewd.sh" "$STAGE/aicrewd/"
   cp "$ROOT/boot.sh" "$STAGE/member/"
@@ -198,8 +201,8 @@ op cat $OPS_HOME/introspection.token | into sim-aimem aimem /home/aimem/introspe
 op rm -f $OPS_HOME/introspection.token
 
 # ---- Gitea: the accounts, their tokens, the repository -------------------------------
-step "Gitea: the operator and the members, their tokens and the repository"
-for user in operator sim-coordinator sim-worker; do
+step "Gitea: the operator, the members and the stubs, their tokens, the repositories and the labels"
+for user in operator sim-coordinator sim-worker sim-hands sim-ci; do
   admin=()
   [ "$user" = operator ] && admin=(--admin)
   gitea admin user create --username "$user" --email "$user@example.test" --random-password \
@@ -211,10 +214,42 @@ forge() { # METHOD PATH [JSON]: the operator's Gitea API call, from aicrewd's ho
   op sh -c 'curl -fsS --cacert /sim/tls/ca.pem -X "$1" -H "Authorization: token $(cat "$HOME/forge-operator.token")" \
     -H "Content-Type: application/json" ${3:+-d "$3"} "https://sim-gitea:3000/api/v1$2"' sh "$@"
 }
-forge POST /user/repos '{"name":"pilot","auto_init":true,"default_branch":"main"}' >/dev/null
-for user in sim-coordinator sim-worker; do
-  forge PUT "/repos/operator/pilot/collaborators/$user" '{"permission":"write"}' >/dev/null
+# pilot is the team's repository; fixture holds the stubs' fixture pull
+# requests. The external-review labels exist on both, as a real reviewer's
+# site has them before anyone asks for a review.
+for repo in pilot fixture; do
+  forge POST /user/repos '{"name":"'$repo'","auto_init":true,"default_branch":"main"}' >/dev/null
+  for user in sim-coordinator sim-worker sim-hands sim-ci; do
+    forge PUT "/repos/operator/$repo/collaborators/$user" '{"permission":"write"}' >/dev/null
+  done
+  for label in review-this hands-reviewing hands-reviewed; do
+    forge POST "/repos/operator/$repo/labels" '{"name":"'$label'","color":"#0e8a16"}' >/dev/null
+  done
 done
+
+# ---- the stubs: their tokens, the scenario, their start ------------------------------
+step "sim-hands and sim-ci: their tokens and the scenario"
+# scenario JSON: the stubs' scenario file, replaced by a rename so a stub
+# never reads half of it (DESIGN-PILOT-SIMULATION section 2.5). It carries
+# the next generation, and returns once both stubs acknowledge it: a poll
+# that read the old scenario has finished by then, so what the runner does
+# next meets the new one.
+GENERATION=0
+acked() { [ "$(dc exec -T sim-hands cat "/sim/scenario/$1.ack" 2>/dev/null)" = "$GENERATION" ]; }
+scenario() {
+  GENERATION=$((GENERATION + 1))
+  printf '{"generation":%d,%s\n' "$GENERATION" "${1#\{}" | dc exec -T sim-hands sh -c \
+    'cat > /sim/scenario/scenario.json.new && mv /sim/scenario/scenario.json.new /sim/scenario/scenario.json'
+  waitfor "sim-hands taking scenario $GENERATION" 120 acked hands
+  waitfor "sim-ci taking scenario $GENERATION" 120 acked ci
+}
+SCENARIO_REPOS='"repos":["operator/pilot","operator/fixture"],"poll_seconds":1'
+dc up -d sim-hands sim-ci >/dev/null
+for stub in hands ci; do
+  gitea admin user generate-access-token --username "sim-$stub" --token-name sim --scopes all --raw |
+    into "sim-$stub" stub /sim/in/forge.token
+done
+scenario "{$SCENARIO_REPOS}"
 
 # ---- the members ---------------------------------------------------------------------
 step "the members: aimem users and tokens, invitations, and their input files"
@@ -257,5 +292,119 @@ python3 "$SIM/smoke.py" status "$OUT/status.json" coordinator worker || fail "ai
 dc exec -T -u member sim-coordinator sh -c \
   'python3 "$HOME/.claude/skills/verify-delivery/verify_delivery.py" --help >/dev/null' ||
   fail "verify_delivery.py --help does not run in sim-coordinator"
+# ---- the stubs' fixture pull requests ---------------------------------------------------
+step "the stubs: fixture pull requests that verify-delivery confirms, refuses on a failed CI, and a moved head"
+FIX=/repos/operator/fixture
+REVIEW_THIS=$(forge GET "$FIX/labels" | python3 -c \
+  'import json,sys; print(next(l["id"] for l in json.load(sys.stdin) if l["name"]=="review-this"))')
+# The coordinator's own fixture token, beside its home, for its local
+# review comment and verify-delivery.
+gitea admin user generate-access-token --username sim-coordinator --token-name fixture --scopes all --raw |
+  into sim-coordinator member /home/member/fixture-forge.token
+coord() { dc exec -T -u member -e GITEA_TOKEN_FILE=/home/member/fixture-forge.token sim-coordinator "$@"; }
+# fixture_commit BRANCH NAME: a commit adding NAME on BRANCH (from main the first time).
+fixture_commit() {
+  local from=""
+  forge GET "$FIX/branches/$1" >/dev/null 2>&1 || from=',"branch":"main","new_branch":"'$1'"'
+  [ -n "$from" ] || from=',"branch":"'$1'"'
+  forge POST "$FIX/contents/$2" '{"content":"'"$(printf '%s\n' "$2" | base64 -w0)"'","message":"add '$2'"'"$from"'}' >/dev/null
+}
+# fixture_pr BRANCH: opens the pull request with one commit and asks for a review; prints its number.
+fixture_pr() {
+  fixture_commit "$1" "$1.txt"
+  local n
+  n=$(forge POST "$FIX/pulls" '{"head":"'$1'","base":"main","title":"fixture '$1'"}' | json_field number)
+  forge POST "$FIX/issues/$n/labels" '{"labels":['$REVIEW_THIS']}' >/dev/null
+  echo "$n"
+}
+# pr_field N KEY[.KEY]: one field of pull request N.
+pr_field() {
+  forge GET "$FIX/pulls/$1" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+for k in sys.argv[1].split("."):
+    v = v[k]
+print(v)' "$2"
+}
+labels_of() { forge GET "$FIX/pulls/$1" | python3 -c 'import json,sys; print(" ".join(sorted(l["name"] for l in json.load(sys.stdin)["labels"])))'; }
+# hands_comments N: the sim-hands review headers on pull request N, one per line.
+hands_comments() {
+  forge GET "$FIX/issues/$1/comments" | python3 -c '
+import json, sys
+for c in json.load(sys.stdin):
+    if c["user"]["login"] == "sim-hands":
+        print(c["body"].splitlines()[0])'
+}
+reviewed() { hands_comments "$1" | grep -qx "\[hands-bot review\] reviewed at head $2" && [ "$(labels_of "$1")" = hands-reviewed ]; }
+ci_state() { forge GET "$FIX/commits/$1/status" | python3 -c '
+import json, sys
+s = [x for x in json.load(sys.stdin)["statuses"] if x["context"] == "sim-ci"]
+print(s[0]["status"] if s else "none")'; }
+ci_is() { [ "$(ci_state "$1")" = "$2" ]; }
+# deliver N HEAD CI: the local review, both stubs' results, the operator's merge; prints the merge commit.
+deliver() {
+  waitfor "sim-hands's review of #$1" 120 reviewed "$1" "$2"
+  waitfor "sim-ci's $3 status on #$1" 120 ci_is "$2" "$3"
+  printf '[oh-code-review (high) review] reviewed at head %s\n\nVERDICT\nREADY_FOR_HUMAN_MERGE\n' "$2" |
+    python3 -c 'import json,sys; print(json.dumps({"body": sys.stdin.read()}))' |
+    coord sh -c 'curl -fsS --cacert /sim/tls/ca.pem -X POST -H "Authorization: token $(cat "$GITEA_TOKEN_FILE")" \
+      -H "Content-Type: application/json" -d @- "https://sim-gitea:3000/api/v1/repos/operator/fixture/issues/$1/comments"' sh "$1" >/dev/null
+  forge POST "$FIX/pulls/$1/merge" '{"Do":"merge"}' >/dev/null
+  local merge
+  merge=$(pr_field "$1" merge_commit_sha)
+  waitfor "sim-ci's $3 status on the merge commit of #$1" 120 ci_is "$merge" "$3"
+}
+# verify N: verify-delivery, unchanged, as the coordinator runs it; writes $OUT/verify-N.json, returns its exit code.
+verify() {
+  coord sh -c 'python3 "$HOME/.claude/skills/verify-delivery/verify_delivery.py" \
+    --pr "https://sim-gitea:3000/operator/fixture/pulls/$1" --api-base https://sim-gitea:3000/api/v1 \
+    --review-author local=sim-coordinator --review-author external=sim-hands' sh "$1" > "$OUT/verify-$1.json"
+}
+
+# 1. Served by both stubs and merged by the operator: confirmed, with the three evidence kinds.
+n=$(fixture_pr confirmed)
+deliver "$n" "$(pr_field "$n" head.sha)" success
+verify "$n" || fail "verify-delivery did not confirm fixture #$n ($OUT/verify-$n.json)"
+python3 - "$OUT/verify-$n.json" <<'PY' || fail "fixture #$n: the delivery record ($OUT/verify-$n.json)"
+import json, sys
+d = json.load(open(sys.argv[1]))
+kinds = sorted({e["kind"] for e in d.get("evidence", [])})
+assert d["verdict"] == "confirmed", d["verdict"]
+assert kinds == ["human_merge", "post_merge_ci", "reviewed_head"], kinds
+PY
+
+# 2. The scenario fails the CI: not_confirmed, on post_merge_ci.
+scenario "{$SCENARIO_REPOS,\"ci\":{\"state\":\"failure\"}}"
+n=$(fixture_pr failed-ci)
+deliver "$n" "$(pr_field "$n" head.sha)" failure
+code=0
+verify "$n" || code=$?
+[ "$code" = 3 ] || fail "verify-delivery exited $code, not 3 (not_confirmed), for fixture #$n ($OUT/verify-$n.json)"
+python3 - "$OUT/verify-$n.json" <<'PY' || fail "fixture #$n: the refusal ($OUT/verify-$n.json)"
+import json, sys
+d = json.load(open(sys.argv[1]))
+checks = {c["name"]: c["status"] for c in d["checks"]}
+assert d["verdict"] == "not_confirmed" and "evidence" not in d, d["verdict"]
+assert checks["post_merge_ci"] == "failed", checks
+PY
+scenario "{$SCENARIO_REPOS}"
+
+# 3. A push while hands-reviewing is on: no review for either head, the labels released; a new request is served.
+scenario "{$SCENARIO_REPOS,\"hands\":{\"review_seconds\":15}}"
+n=$(fixture_pr moved)
+first=$(pr_field "$n" head.sha)
+reviewing() { [ "$(labels_of "$1")" = hands-reviewing ]; }
+waitfor "sim-hands taking #$n" 60 reviewing "$n"
+fixture_commit moved moved-2.txt
+second=$(pr_field "$n" head.sha)
+[ "$first" != "$second" ] || fail "fixture #$n: the push did not move the head"
+released() { [ -z "$(labels_of "$1")" ]; }
+waitfor "sim-hands releasing #$n" 60 released "$n"
+[ -z "$(hands_comments "$n")" ] || fail "fixture #$n: sim-hands reviewed a moved head: $(hands_comments "$n")"
+scenario "{$SCENARIO_REPOS}"
+forge POST "$FIX/issues/$n/labels" '{"labels":['$REVIEW_THIS']}' >/dev/null
+waitfor "sim-hands's review of #$n at its new head" 120 reviewed "$n" "$second"
+[ "$(hands_comments "$n" | wc -l)" = 1 ] || fail "fixture #$n: more than one review: $(hands_comments "$n")"
+
 collect
-step "pilot-sim: green: both members checked, listed and serving (reports in $OUT)"
+step "pilot-sim: green: both members checked, listed and serving; the stubs' fixtures confirmed, refused and released (reports in $OUT)"

@@ -35,6 +35,9 @@ type fakeGitea struct {
 	// onGetPull runs before a single pull request is answered: a test moves
 	// the head there.
 	onGetPull func(p *pull)
+	// onBranches runs, unlocked, before the branches are listed: a test
+	// holds a poll there.
+	onBranches func()
 }
 
 func newFake(t *testing.T) *fakeGitea {
@@ -77,6 +80,9 @@ var (
 )
 
 func (f *fakeGitea) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" && reBranches.MatchString(r.URL.Path) && f.onBranches != nil {
+		f.onBranches()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if r.Header.Get("Authorization") != "token "+f.token {
@@ -437,5 +443,74 @@ func TestHandsWaitsTheReviewTime(t *testing.T) {
 	}
 	if waited != 1500*time.Millisecond || len(f.comments[1]) != 0 {
 		t.Errorf("waited %v, comments %q", waited, f.comments[1])
+	}
+}
+
+// A poll that read the old scenario may still be running when the runner
+// replaces it. The ack names the new generation only once that poll has
+// finished, so a head the runner creates after the ack gets the new state:
+// the interleaving the fixture with a failed CI depends on.
+func TestScenarioAckFencesAnOldPoll(t *testing.T) {
+	f, srv, tok, sc := setup(t, `{"generation":1,"repos":["`+repo+`"],"poll_seconds":0.01}`)
+	ack := filepath.Join(filepath.Dir(sc), "ci.ack")
+	f.branches["main"] = head1
+	entered, release := make(chan struct{}), make(chan struct{})
+	var held sync.Once
+	f.onBranches = func() {
+		held.Do(func() { close(entered); <-release })
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int)
+	go func() {
+		done <- run(ctx, []string{"ci", "-scenario", sc, "-token-file", tok, "-api", srv.URL + "/api/v1", "-ack", ack}, &bytes.Buffer{}, &bytes.Buffer{})
+	}()
+	defer func() { cancel(); <-done }()
+	readAck := func() string { b, _ := os.ReadFile(ack); return strings.TrimSpace(string(b)) }
+	waitAck := func(want string) {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			if readAck() == want {
+				return
+			}
+		}
+		t.Fatalf("ack %q, want %q", readAck(), want)
+	}
+
+	<-entered // the generation-1 poll is listing the branches
+	if got := readAck(); got != "1" {
+		t.Fatalf("ack during the first poll: %q", got)
+	}
+	if err := os.WriteFile(sc, []byte(`{"generation":2,"repos":["`+repo+`"],"poll_seconds":0.01,"ci":{"state":"failure"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := readAck(); got != "1" {
+		t.Fatalf("generation 2 acked while the generation-1 poll was still running: %q", got)
+	}
+	close(release)
+	waitAck("2")
+
+	// The runner creates the next head only now; it gets generation 2's state.
+	f.mu.Lock()
+	f.branches["fixture"] = head2
+	f.mu.Unlock()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		f.mu.Lock()
+		st := f.statuses[head2]
+		f.mu.Unlock()
+		if len(st) > 0 {
+			if len(st) != 1 || st[0]["state"] != "failure" {
+				t.Fatalf("the head made after the ack got %v", st)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no status on the new head")
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if st := f.statuses[head1]; len(st) != 1 || st[0]["state"] != "success" {
+		t.Errorf("the generation-1 poll's head: %v", st)
 	}
 }

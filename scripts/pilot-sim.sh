@@ -230,10 +230,18 @@ done
 # ---- the stubs: their tokens, the scenario, their start ------------------------------
 step "sim-hands and sim-ci: their tokens and the scenario"
 # scenario JSON: the stubs' scenario file, replaced by a rename so a stub
-# never reads half of it (DESIGN-PILOT-SIMULATION section 2.5).
+# never reads half of it (DESIGN-PILOT-SIMULATION section 2.5). It carries
+# the next generation, and returns once both stubs acknowledge it: a poll
+# that read the old scenario has finished by then, so what the runner does
+# next meets the new one.
+GENERATION=0
+acked() { [ "$(dc exec -T sim-hands cat "/sim/scenario/$1.ack" 2>/dev/null)" = "$GENERATION" ]; }
 scenario() {
-  printf '%s
-' "$1" | dc exec -T sim-hands sh -c     'cat > /sim/scenario/scenario.json.new && mv /sim/scenario/scenario.json.new /sim/scenario/scenario.json'
+  GENERATION=$((GENERATION + 1))
+  printf '{"generation":%d,%s\n' "$GENERATION" "${1#\{}" | dc exec -T sim-hands sh -c \
+    'cat > /sim/scenario/scenario.json.new && mv /sim/scenario/scenario.json.new /sim/scenario/scenario.json'
+  waitfor "sim-hands taking scenario $GENERATION" 120 acked hands
+  waitfor "sim-ci taking scenario $GENERATION" 120 acked ci
 }
 SCENARIO_REPOS='"repos":["operator/pilot","operator/fixture"],"poll_seconds":1'
 dc up -d sim-hands sim-ci >/dev/null

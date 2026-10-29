@@ -138,6 +138,13 @@ replacing it:
 Every field but `repos` has the default shown. `hands.verdict` may be
 `RETURN_TO_IMPLEMENTATION`; `ci.state` may be any Gitea commit state.
 
+The runner also writes a `generation`, one higher each time. A stub writes
+the generation it loads to `/sim/scenario/<mode>.ack` before the poll that
+uses it, and the runner waits for both acks before its next step. A stub
+polls one at a time, so by then no poll that read the old scenario is
+still running. Without that wait, a CI poll that started before the change
+could still post the old state on a head the runner creates after it.
+
 `sim-hands` follows the external-review label protocol:
 1. On an open pull request labelled `review-this`, it puts
    `hands-reviewing` on, then takes `review-this` off, so the pull request

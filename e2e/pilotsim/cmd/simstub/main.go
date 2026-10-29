@@ -2,8 +2,8 @@
 // sim-gitea (docs/DESIGN-PILOT-SIMULATION.md, section 2.5), one binary in
 // two containers:
 //
-//	simstub hands -scenario FILE -token-file FILE -api URL   (sim-hands)
-//	simstub ci    -scenario FILE -token-file FILE -api URL   (sim-ci)
+//	simstub hands -scenario FILE -token-file FILE -api URL [-ack FILE]   (sim-hands)
+//	simstub ci    -scenario FILE -token-file FILE -api URL [-ack FILE]   (sim-ci)
 //
 // hands speaks the external-review label protocol: on an open pull request
 // labelled review-this it puts hands-reviewing on, then takes review-this
@@ -19,6 +19,10 @@
 //
 // Both read the scenario file again on every poll, so the runner changes a
 // verdict or a CI state by rewriting it, and act only with their own token.
+// A stub writes the scenario's generation to its -ack file when it first
+// loads it, before the poll that uses it. A stub polls one at a time, so
+// once the ack names a generation, the poll that read an older scenario
+// has finished: the runner waits for it before it acts on the new one.
 package main
 
 import (
@@ -48,6 +52,7 @@ const (
 
 // scenario is the part of the scenario file the stubs read.
 type scenario struct {
+	Generation  int64    `json:"generation"`
 	Repos       []string `json:"repos"`
 	PollSeconds float64  `json:"poll_seconds"`
 	Hands       struct {
@@ -115,6 +120,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	scenarioFile := fs.String("scenario", "", "the scenario file")
 	tokenFile := fs.String("token-file", "", "this stub's own Gitea token")
 	api := fs.String("api", "", "Gitea's API base, https://HOST/api/v1")
+	ackFile := fs.String("ack", "", "where to write the generation of the scenario in use")
 	once := fs.Bool("once", false, "one poll, then exit (tests)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
@@ -134,8 +140,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if mode == "ci" {
 		poll = st.ciPoll
 	}
+	acked := int64(-1)
 	for {
 		s, err := loadScenario(*scenarioFile)
+		if err == nil && *ackFile != "" && s.Generation != acked {
+			if err = writeAck(*ackFile, s.Generation); err == nil {
+				acked = s.Generation
+			}
+		}
 		if err != nil {
 			fmt.Fprintln(stderr, "simstub:", err)
 			if *once {
@@ -159,6 +171,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return 0
 		}
 	}
+}
+
+// writeAck replaces path with the generation, by a rename, so a reader
+// never sees half of it.
+func writeAck(path string, gen int64) error {
+	tmp := path + ".new"
+	if err := os.WriteFile(tmp, []byte(fmt.Sprintf("%d\n", gen)), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

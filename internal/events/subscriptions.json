@@ -40,6 +40,15 @@
         {"role": "coordinator", "when": ["failed"]}
       ],
       "handler": "wake"
+    },
+    {
+      "name": "review-pickup-wake",
+      "description": "An attempt's pull request asked for the external review at its head and the reviewer has not picked it up within 30 minutes: the team's coordinators are woken once for that head and request. The worker's wait is unchanged.",
+      "kinds": ["timer.due"],
+      "to": [
+        {"role": "coordinator", "when": ["always"]}
+      ],
+      "handler": "wake"
     }
   ]
 }

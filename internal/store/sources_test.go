@@ -205,7 +205,7 @@ func TestTimerFiresOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := setTimer(ctx, tx, "review-pickup/attempt-1", "team-1", "attempt:attempt-1",
-			map[string]string{"why": "no review pickup"}, due); err != nil {
+			reviewPickup{Kind: timerReviewPickup, AttemptID: "attempt-1"}, due); err != nil {
 			t.Fatal(err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -244,7 +244,7 @@ func TestTimerFiresOnce(t *testing.T) {
 	}
 	var at, payload string
 	if err := s2.db.QueryRow(`SELECT at, payload FROM events WHERE source = 'timer'`).Scan(&at, &payload); err != nil ||
-		at != formatTime(due) || payload != `{"why":"no review pickup"}` {
+		at != formatTime(due) || !strings.Contains(payload, `"attempt_id":"attempt-1"`) {
 		t.Fatalf("the timer's event: %s %s %v", at, payload, err)
 	}
 	set(s2, later.Add(time.Minute))

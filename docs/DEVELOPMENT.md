@@ -836,7 +836,9 @@ event is data; the bus is core.
     is a worker's blocked report (increment 1d, below);
   - `automation-wake`: `automation.run` to the coordinators when the run
     failed, and to the worker when it asks for a turn (increment 2d-a,
-    "Workflow scripts").
+    "Workflow scripts");
+  - `review-pickup-wake`: `timer.due` to the coordinators, for the review
+    pickup below.
 
   These reproduce the routing from before the event core. The kinds, roles,
   conditions and handlers a file may name are this release's; a test
@@ -868,7 +870,7 @@ event is data; the bus is core.
     stopped or ended).
   - `timer.due`: a deadline stored in aicrewd (schema 34) passed. The
     delivery loop journals it once, on its first tick after the deadline,
-    and a restart keeps it. Increment 2's review pickup is its first user.
+    and a restart keeps it. The review pickup is its first user.
   - `budget.spent`: a member's attempt or daily budget is spent, as its
     launcher reported the hold (CREW-CONTRACT.md, "A member's hold"), once
     per hold. Its payload is the member and the hold.
@@ -879,9 +881,28 @@ event is data; the bus is core.
   count), so the coordinator can answer or escalate without reading the
   forge. The report's broadcast to the team then leaves the coordinators
   out, so they are woken once for it. No default subscription takes the
-  other attempt changes, member changes, timers or spent budgets yet; a
-  member's hold reaches the coordinators as aicrewd's own lifecycle
-  message.
+  other attempt changes, member changes or spent budgets yet; a member's
+  hold reaches the coordinators as aicrewd's own lifecycle message.
+- **The review pickup** (DESIGN-TURNS.md 4.2, `external-review`). A
+  worker whose pull request waits on its gates gets no turns and is never
+  stalled, so a reviewer that never picks the request up would leave it
+  waiting unseen. An observation of the attempt's pull request waits for
+  a pickup while the pull request is open, carries `review-this`, carries
+  no `hands-reviewing`, and the external review at its head has not
+  landed. The wait begins at the first such observation, and begins again
+  at a new head or a new pull request, or when the request is added again
+  after an observation without it; aicrewd keeps it in the pull request's
+  facts, so a restarted launcher's observations continue it. Each wait
+  sets the attempt's one timer (`review-pickup/ATTEMPT`) 30 minutes on,
+  which moves the deadline of a wait before it. When the timer is due, the
+  `review-pickup-wake` subscription's handler reads the attempt again: if
+  it is running and the same wait still holds, the team's coordinators
+  (not the worker) get one `action.needed` message with a `review_pickup`
+  subject naming the pull request, the attempt, the task, the head and the
+  wait, otherwise no one. A pickup, a failed run (hands swaps the request
+  for `hands-review-failed`), a review at the head, a new head and a merge
+  or close each end the wait. The worker's own wait is unchanged, and the
+  team state shows the wait as `review_wait`.
 - **Failures.** A handler that fails three times in a row parks the
   queue's events and sends the team's coordinators one message naming the
   subscription, the subject and the last error. Parked events are kept;
@@ -1423,7 +1444,11 @@ member:
   `block` gives the reason and when the block began; `hub_block` is the
   hub's own, when the team's project is no longer granted. The two are
   kept apart (schema 34), and a block reported before schema 34 shows no
-  `block` until the next report;
+  `block` until the next report. While its pull request asks for the
+  external review and the reviewer has not picked it up, `review_wait`
+  gives the pull request, its head, since when the request has waited
+  there, and `overdue: true` once that is 30 minutes or more (the review
+  pickup, "The event core");
 - its unacknowledged messages;
 - its `state`, derived as follows until the runner reports it (B2):
   - `paused`: the team or the member is paused;

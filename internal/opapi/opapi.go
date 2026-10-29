@@ -484,6 +484,21 @@ type MemberAttempt struct {
 	// is the hub's block, when the team's project is no longer granted.
 	Block    *AttemptBlock `json:"block,omitempty"`
 	HubBlock *AttemptBlock `json:"hub_block,omitempty"`
+	// ReviewWait is the attempt's pull request's review request waiting for
+	// the external reviewer to pick it up at the head; absent when none
+	// waits.
+	ReviewWait *ReviewWait `json:"review_wait,omitempty"`
+}
+
+// ReviewWait is a review request waiting at a pull request's head: since
+// when, and whether it has waited past the bound after which the team's
+// coordinators are told (Overdue).
+type ReviewWait struct {
+	Pull    int64     `json:"pull"`
+	URL     string    `json:"url"`
+	Head    string    `json:"head"`
+	Since   time.Time `json:"since"`
+	Overdue bool      `json:"overdue"`
 }
 
 // AttemptBlock is a block of an attempt: its reason and when it began.

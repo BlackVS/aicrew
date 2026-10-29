@@ -100,8 +100,9 @@ type message struct {
 	} `json:"offer"`
 	Action *struct {
 		Subjects []struct {
-			Kind string         `json:"kind"`
-			Task *agent.TaskRef `json:"task"`
+			Kind      string         `json:"kind"`
+			AttemptID string         `json:"attempt_id"`
+			Task      *agent.TaskRef `json:"task"`
 		} `json:"subjects"`
 	} `json:"action"`
 	Text string `json:"text"`
@@ -262,6 +263,12 @@ func (m *member) worker(ctx context.Context, b brief, msgs []message) error {
 		m.note("Attempt %s is %s/%s: nothing for the worker to do.", b.Attempt, b.State, b.Phase)
 		return nil
 	}
+	if b.Phase == "rework" {
+		if _, err := m.step(ctx, "work", b.Attempt, b.Task, map[string]string{"intent": "resume"}); err != nil {
+			return err
+		}
+		m.note("Resumed attempt %s for the coordinator's rework.", b.Attempt)
+	}
 	wt := filepath.Join(m.home, "worktrees", b.Attempt)
 	if _, err := os.Stat(wt); errors.Is(err, os.ErrNotExist) {
 		var out any
@@ -288,15 +295,8 @@ func (m *member) openPull(ctx context.Context, b brief, wt string) error {
 	if err := os.WriteFile(filepath.Join(wt, file), []byte("Task "+b.Task+", attempt "+b.Attempt+".\n"), 0o644); err != nil {
 		return err
 	}
-	for _, args := range [][]string{
-		{"add", filepath.ToSlash(file)},
-		{"-c", "user.name=sim-worker", "-c", "user.email=sim-worker@example.test", "-c", "commit.gpgsign=false",
-			"commit", "-q", "-m", "sim: task " + b.Task},
-		{"push", "-q", "origin", b.Branch},
-	} {
-		if out, code, err := m.run(ctx, wt, "", "git", args...); err != nil || code != 0 {
-			return fmt.Errorf("git %s exited %d: %v %s", args[len(args)-1], code, err, strings.TrimSpace(string(out)))
-		}
+	if err := m.commitAndPush(ctx, wt, b.Branch, file, "sim: task "+b.Task); err != nil {
+		return err
 	}
 	var opened agent.PullReport
 	body := "The pilot simulation's change for task " + b.Task + " (attempt " + b.Attempt + ").\n"
@@ -305,12 +305,57 @@ func (m *member) openPull(ctx context.Context, b brief, wt string) error {
 		return err
 	}
 	m.note("Pull request #%d: %s, opened at head %s.", opened.Pull.Number, opened.Pull.URL, opened.Pull.HeadCommit)
-	return m.requestReview(ctx, wt, opened.Pull.Number)
+	return m.requestReview(ctx, wt, opened.Pull.Number, false)
 }
 
-// requestReview asks for the external review: the review-this label.
-func (m *member) requestReview(ctx context.Context, wt string, n int64) error {
+// commitAndPush commits file in the worktree and pushes the branch with the
+// home's credential.
+func (m *member) commitAndPush(ctx context.Context, wt, branch, file, subject string) error {
+	for _, args := range [][]string{
+		{"add", filepath.ToSlash(file)},
+		{"-c", "user.name=sim-worker", "-c", "user.email=sim-worker@example.test", "-c", "commit.gpgsign=false",
+			"commit", "-q", "-m", subject},
+		{"push", "-q", "origin", branch},
+	} {
+		if out, code, err := m.run(ctx, wt, "", "git", args...); err != nil || code != 0 {
+			return fmt.Errorf("git %s exited %d: %v %s", args[len(args)-1], code, err, strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
+}
+
+// rework answers an external review that returned the head: a new commit,
+// then a new request.
+func (m *member) rework(ctx context.Context, b brief, wt string, n int64) error {
+	file := filepath.Join("sim", b.Task+".md")
+	f, err := os.OpenFile(filepath.Join(wt, file), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString("Reworked after the external review.\n")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if err := m.commitAndPush(ctx, wt, b.Branch, file, "sim: rework of task "+b.Task); err != nil {
+		return err
+	}
+	m.note("Reworked #%d: the external review returned it; pushed a new commit.", n)
+	return m.requestReview(ctx, wt, n, true)
+}
+
+// requestReview asks for the external review: the review-this label, with a
+// stale hands-reviewed taken off first.
+func (m *member) requestReview(ctx context.Context, wt string, n int64, stale bool) error {
 	var labelled agent.PullReport
+	if stale {
+		if err := m.agentJSON(ctx, wt, "", &labelled, "forge", "pr", "label", "remove", "--pr", fmt.Sprint(n), "--json",
+			"hands-reviewed"); err != nil {
+			return err
+		}
+	}
 	if err := m.agentJSON(ctx, wt, "", &labelled, "forge", "pr", "label", "add", "--pr", fmt.Sprint(n), "--json",
 		"review-this"); err != nil {
 		return err
@@ -328,15 +373,17 @@ func (m *member) followPull(ctx context.Context, b brief, wt string, n int64) er
 	}
 	p := shown.Pull
 	verdict, checks := pullGates(shown.Content)
+	asked := slices.Contains(p.Labels, "review-this") || slices.Contains(p.Labels, "hands-reviewing")
 	switch {
 	case p.State != forge.PullOpen:
 		m.note("Pull request #%d is %s.", n, p.State)
-	case verdict == "" && !slices.ContainsFunc(p.Labels, func(l string) bool {
-		return l == "review-this" || l == "hands-reviewing" || l == "hands-reviewed"
-	}):
-		return m.requestReview(ctx, wt, n)
-	case slices.Contains(p.Labels, "review-this") || slices.Contains(p.Labels, "hands-reviewing"):
+	case asked:
 		m.note("Waiting on the external review of #%d at %s (labels %s).", n, p.HeadCommit, strings.Join(p.Labels, ", "))
+	case verdict == "RETURN_TO_IMPLEMENTATION":
+		return m.rework(ctx, b, wt, n)
+	case verdict == "":
+		// No review at this head: a hands-reviewed label is an older head's.
+		return m.requestReview(ctx, wt, n, slices.Contains(p.Labels, "hands-reviewed"))
 	case verdict == "READY_FOR_HUMAN_MERGE" && checks == forge.ChecksSuccess:
 		if _, err := m.step(ctx, "work", b.Attempt, b.Task, map[string]string{"intent": "submit", "detail": p.URL}); err != nil {
 			return err
@@ -415,8 +462,8 @@ func candidates(msgs []message) []agent.TaskRef {
 }
 
 func (m *member) coordinator(ctx context.Context, msgs []message) error {
-	tasks := candidates(msgs)
-	if len(tasks) == 0 {
+	tasks, results, pulls := candidates(msgs), submits(msgs), pullActions(msgs)
+	if len(tasks) == 0 && len(results) == 0 && len(pulls) == 0 {
 		return nil
 	}
 	var ans agent.StepAnswer
@@ -426,6 +473,22 @@ func (m *member) coordinator(ctx context.Context, msgs []message) error {
 	var open agent.OpenAttempts
 	if err := json.Unmarshal(ans.Result, &open); err != nil {
 		return fmt.Errorf("attempts: %w", err)
+	}
+	phase := map[string]agent.OpenAttempt{}
+	for _, a := range open.Attempts {
+		phase[a.ID] = a
+	}
+	for _, r := range results {
+		if err := m.reviewResult(ctx, r, phase[r.attempt]); err != nil {
+			return err
+		}
+	}
+	for _, id := range pulls {
+		if a, ok := phase[id]; ok && a.Phase == "accepted" {
+			if err := m.deliver(ctx, a); err != nil {
+				return err
+			}
+		}
 	}
 	for _, t := range tasks {
 		if slices.ContainsFunc(open.Attempts, func(a agent.OpenAttempt) bool { return a.Task.TaskID == t.TaskID }) {
@@ -554,6 +617,279 @@ func (m *member) writer(ctx context.Context, repoURL string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no worker verified %s at write access (aicrew-agent members)", repoURL)
+}
+
+// ---- the coordinator: review and delivery ------------------------------------------
+
+// submitted is one submit announcement: the attempt, the message and the
+// pull request it names.
+type submitted struct {
+	attempt, message, pull string
+}
+
+var (
+	submitText = regexp.MustCompile(` submitted a result for task .*: (https://\S+/pulls/\d+)$`)
+	resultLine = regexp.MustCompile(`(?m)Result (\d+) of attempt (\S+) \(message (\S+)\): (\S+)\.$`)
+)
+
+// submits are the submit announcements among the messages.
+func submits(msgs []message) []submitted {
+	var out []submitted
+	for _, msg := range msgs {
+		if msg.Kind != "lifecycle" || msg.AttemptID == "" {
+			continue
+		}
+		if s := submitText.FindStringSubmatch(msg.Text); s != nil {
+			out = append(out, submitted{attempt: msg.AttemptID, message: msg.ID, pull: s[1]})
+		}
+	}
+	return out
+}
+
+// pullActions are the attempts whose pull request needs a decision, in the
+// order read.
+func pullActions(msgs []message) []string {
+	var out []string
+	for _, msg := range msgs {
+		if msg.Action == nil {
+			continue
+		}
+		for _, s := range msg.Action.Subjects {
+			if s.Kind == "pull" && s.AttemptID != "" && !slices.Contains(out, s.AttemptID) {
+				out = append(out, s.AttemptID)
+			}
+		}
+	}
+	return out
+}
+
+// result is a submitted result as the coordinator recorded it.
+type result struct {
+	seq           int64
+	message, pull string
+}
+
+// results are the attempt's results the handoff and this turn record, in
+// order. No member surface names a result's sequence number (task
+// 01a188f9-4d9a), so the coordinator counts the attempt's submit
+// announcements: the nth is result n.
+func (m *member) results(attempt string) []result {
+	raw, _ := os.ReadFile(m.handoffPath())
+	var out []result
+	for _, s := range resultLine.FindAllStringSubmatch(string(raw)+"\n"+strings.Join(m.did, "\n"), -1) {
+		if s[2] == attempt {
+			var n int64
+			fmt.Sscan(s[1], &n)
+			out = append(out, result{seq: n, message: s[3], pull: s[4]})
+		}
+	}
+	return out
+}
+
+// pullRef is a pull request URL's repository and number.
+func pullRef(url string) (repo, number string, err error) {
+	repo, number, ok := strings.Cut(url, "/pulls/")
+	if !ok || number == "" {
+		return "", "", fmt.Errorf("%s is not a pull request URL", url)
+	}
+	return repo + ".git", number, nil
+}
+
+func (m *member) showPull(ctx context.Context, url string) (agent.PullReport, error) {
+	var shown agent.PullReport
+	repo, n, err := pullRef(url)
+	if err == nil {
+		err = m.agentJSON(ctx, m.home, "", &shown, "forge", "pr", "show", "--repository", repo, "--pr", n)
+	}
+	return shown, err
+}
+
+// reviewResult records a submitted result, posts the local review at its
+// pull request's full head SHA and accepts it.
+func (m *member) reviewResult(ctx context.Context, r submitted, a agent.OpenAttempt) error {
+	rs := m.results(r.attempt)
+	seq := int64(len(rs)) + 1
+	if i := slices.IndexFunc(rs, func(x result) bool { return x.message == r.message }); i >= 0 {
+		seq = rs[i].seq
+	} else {
+		m.note("Result %d of attempt %s (message %s): %s.", seq, r.attempt, r.message, r.pull)
+	}
+	if a.Phase != "submitted" {
+		m.note("Attempt %s is %s/%s: result %d is not reviewed.", r.attempt, a.State, a.Phase, seq)
+		return nil
+	}
+	shown, err := m.showPull(ctx, r.pull)
+	if err != nil {
+		return err
+	}
+	head := shown.Pull.HeadCommit
+	repo, n, _ := pullRef(r.pull)
+	var posted agent.PullReport
+	if err := m.agentJSON(ctx, m.home, localReview(head), &posted, "forge", "pr", "comment", "--repository", repo,
+		"--pr", n, "--body-file", "-"); err != nil {
+		return err
+	}
+	m.note("Posted the local review of %s at head %s: READY_FOR_HUMAN_MERGE.", r.pull, head)
+	if _, err := m.step(ctx, "review", r.attempt, "", map[string]any{"result_seq": seq, "decision": "accept"}); err != nil {
+		return err
+	}
+	m.note("Accepted result %d of attempt %s.", seq, r.attempt)
+	return nil
+}
+
+// localReview is the coordinator's review in the oh-code-review format.
+func localReview(head string) string {
+	return "[oh-code-review (high) review] reviewed at head " + head + `
+
+CURRENT OBJECTIVE
+The pilot simulation's task: one file, added through a reviewed pull request.
+
+BLOCKERS
+- None
+
+CURRENT-SCOPE IMPROVEMENTS
+- None
+
+FOLLOW-UPS
+- None
+
+OBSERVATIONS
+- None
+
+REJECTED
+- None
+
+RISK ACCEPTED
+- None
+
+VERDICT
+READY_FOR_HUMAN_MERGE
+
+RISK
+LOW
+
+Review: oh-code-review (high) via the pilot simulation's scripted coordinator
+`
+}
+
+// externalReviewer is the account of the simulation's external reviewer,
+// whose reviews verify-delivery counts as the external one.
+const externalReviewer = "sim-hands"
+
+// deliver confirms the delivery of the accepted result once its pull
+// request is merged, with the evidence verify-delivery returns, and
+// finalizes it.
+func (m *member) deliver(ctx context.Context, a agent.OpenAttempt) error {
+	rs := m.results(a.ID)
+	if len(rs) == 0 {
+		return fmt.Errorf("attempt %s is accepted, but the handoff records no result of it", a.ID)
+	}
+	r := rs[len(rs)-1]
+	shown, err := m.showPull(ctx, r.pull)
+	if err != nil {
+		return err
+	}
+	if shown.Pull.State != forge.PullMerged {
+		m.note("Pull request %s is %s: no delivery to confirm yet.", r.pull, shown.Pull.State)
+		return nil
+	}
+	v, err := m.verifyDelivery(ctx, r.pull)
+	if err != nil {
+		return err
+	}
+	if v.Verdict != "confirmed" {
+		m.note("verify-delivery: %s for %s; the delivery is not confirmed.", v.Verdict, r.pull)
+		return nil
+	}
+	m.note("verify-delivery confirmed %s with %d evidence entries.", r.pull, len(v.Evidence))
+	if _, err := m.step(ctx, "confirm-delivery", a.ID, "", map[string]any{"result_seq": r.seq, "evidence": v.Evidence}); err != nil {
+		return err
+	}
+	m.note("Confirmed the delivery of result %d of attempt %s.", r.seq, a.ID)
+	if _, err := m.step(ctx, "finalize", a.ID, a.Task.TaskID, map[string]any{"result_seq": r.seq}); err != nil {
+		return err
+	}
+	m.note("Finalized attempt %s: task %s is DONE.", a.ID, a.Task.TaskID)
+	return nil
+}
+
+// delivery is what the coordinator reads of verify-delivery's answer.
+type delivery struct {
+	Verdict  string `json:"verdict"`
+	Evidence []struct {
+		Kind string `json:"kind"`
+		Ref  string `json:"ref"`
+	} `json:"evidence"`
+}
+
+// verifyDelivery runs the installed verify-delivery helper against the pull
+// request with the home's own forge credential, naming the coordinator's
+// account and the external reviewer's as the reviews' authors.
+func (m *member) verifyDelivery(ctx context.Context, url string) (delivery, error) {
+	var v delivery
+	host, _, ok := strings.Cut(strings.TrimPrefix(url, "https://"), "/")
+	if !ok {
+		return v, fmt.Errorf("%s is not an https URL", url)
+	}
+	cred, err := m.forgeCred(host)
+	if err != nil {
+		return v, err
+	}
+	helper, err := m.skillFile("verify-delivery", "verify_delivery.py")
+	if err != nil {
+		return v, err
+	}
+	out, code, err := m.run(ctx, m.home, "", "env", "GITEA_TOKEN_FILE="+cred.file, "python3", helper,
+		"--pr", url, "--api-base", "https://"+host+"/api/v1",
+		"--review-author", "local="+cred.account, "--review-author", "external="+externalReviewer)
+	if err != nil {
+		return v, fmt.Errorf("verify-delivery: %w", err)
+	}
+	if jerr := json.Unmarshal(out, &v); jerr != nil || v.Verdict == "" {
+		return v, fmt.Errorf("verify-delivery exited %d without a verdict: %.400s", code, strings.TrimSpace(string(out)))
+	}
+	return v, nil
+}
+
+// forgeCredential is the home's own credential for a forge host, as
+// join recorded it in agent.json.
+type forgeCredential struct{ file, account string }
+
+func (m *member) forgeCred(host string) (forgeCredential, error) {
+	raw, err := os.ReadFile(filepath.Join(m.home, "agent.json"))
+	if err != nil {
+		return forgeCredential{}, err
+	}
+	var doc struct {
+		Forge map[string]struct {
+			Account string `json:"account"`
+			File    string `json:"file"`
+		} `json:"forge"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return forgeCredential{}, fmt.Errorf("agent.json: %w", err)
+	}
+	e, ok := doc.Forge[host]
+	if !ok || e.File == "" || e.Account == "" {
+		return forgeCredential{}, fmt.Errorf("the home has no forge credential for %s", host)
+	}
+	return forgeCredential{file: filepath.Join(m.home, "creds", e.File), account: e.Account}, nil
+}
+
+// skillFile is a file of an installed skill, from the directories the
+// client reads skills in: the home's, then the user's.
+func (m *member) skillFile(skill, file string) (string, error) {
+	dirs := []string{filepath.Join(m.home, ".claude", "skills")}
+	if uh, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(uh, ".claude", "skills"))
+	}
+	for _, d := range dirs {
+		p := filepath.Join(d, skill, file)
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("no installed %s skill (%s)", skill, strings.Join(dirs, ", "))
 }
 
 // ---- the handoff -------------------------------------------------------------------

@@ -37,6 +37,8 @@ type fakeTools struct {
 	pull     *agent.PullReport  // what forge pr show answers
 	// labelFails makes forge pr label fail.
 	labelFails bool
+	verify     string // what verify-delivery prints
+	verifyCode int
 	tasks      map[string]map[string]any
 	calls      []string
 	bodies     map[string]map[string]any // step bodies by op
@@ -93,6 +95,9 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 	if name == "git" {
 		return nil, 0, nil
 	}
+	if name == "env" {
+		return []byte(f.verify), f.verifyCode, nil
+	}
 	switch {
 	case args[0] == "inbox" && len(args) > 1 && args[1] == "--ack":
 		return nil, 0, nil
@@ -118,6 +123,9 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 		return []byte("forge pr label: the forge refused"), 1, nil
 	case args[0] == "forge" && args[2] == "label":
 		out, _ := json.Marshal(agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, Labels: []string{"review-this"}}})
+		return out, 0, nil
+	case args[0] == "forge" && args[2] == "comment":
+		out, _ := json.Marshal(agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull}})
 		return out, 0, nil
 	case args[0] == "forge" && args[2] == "show":
 		out, _ := json.Marshal(f.pull)
@@ -536,5 +544,200 @@ func TestEditSectionAddsMissingHeadings(t *testing.T) {
 	want := "## CURRENT ATTEMPT\n\nAttempt `A`.\n\n### Done\n\n- did\n\n### Next\n\nnext\n"
 	if got != want {
 		t.Fatalf("editSection =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestWorkerAnswersAnExternalRework(t *testing.T) {
+	f := newFake(t)
+	writeSection(t, f.home)
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 1 = %d: %s", code, out.String())
+	}
+	// The external review returned the head: a new commit, the stale
+	// hands-reviewed off, review-this on; no step.
+	f.calls = nil
+	f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: "open", HeadCommit: tHead,
+		Labels: []string{"hands-reviewed"}}, Content: &forge.PullContent{
+		Checks: []forge.Check{{Name: "sim-ci", State: forge.ChecksSuccess}},
+		Comments: []forge.PullComment{{Author: "sim-hands", Review: &forge.ReviewHeader{Reviewer: forge.ReviewerExternal,
+			Head: tHead, AtHead: true, Verdict: "RETURN_TO_IMPLEMENTATION"}}}}}
+	out.Reset()
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 2 = %d: %s", code, out.String())
+	}
+	want := []string{
+		"git add sim/" + tTask + ".md",
+		"git -c user.name=sim-worker -c user.email=sim-worker@example.test -c commit.gpgsign=false commit -q -m sim: rework of task " + tTask,
+		"git push -q origin work/" + tTask,
+		"aicrew-agent forge pr label remove --pr 7 --json hands-reviewed",
+		"aicrew-agent forge pr label add --pr 7 --json review-this",
+	}
+	if len(f.calls) < len(want) || !slices.Equal(f.calls[len(f.calls)-len(want):], want) {
+		t.Fatalf("the rework's calls = %v", f.calls)
+	}
+	if f.called("aicrew-agent step") {
+		t.Fatalf("the rework made a step: %v", f.calls)
+	}
+	raw, err := os.ReadFile(filepath.Join(f.home, "worktrees", tAttempt, "sim", tTask+".md"))
+	if err != nil || !strings.HasSuffix(string(raw), "Reworked after the external review.\n") {
+		t.Fatalf("the reworked file: %q, %v", raw, err)
+	}
+	if doc := readHandoff(t, f.home); !strings.Contains(doc, "Reworked #7: the external review returned it") {
+		t.Fatalf("the handoff:\n%s", doc)
+	}
+}
+
+func TestWorkerResumesAfterTheCoordinatorsRework(t *testing.T) {
+	f := newFake(t)
+	writeSection(t, f.home)
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 1 = %d: %s", code, out.String())
+	}
+	f.calls = nil
+	f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: "open", HeadCommit: tHead,
+		Labels: []string{"review-this"}}, Content: &forge.PullContent{}}
+	out.Reset()
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "rework")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 2 = %d: %s", code, out.String())
+	}
+	if got := f.bodies["work"]; got["intent"] != "resume" {
+		t.Fatalf("work body = %v; calls %v", got, f.calls)
+	}
+}
+
+func submitMessage(id string) map[string]any {
+	return map[string]any{"id": id, "kind": "lifecycle", "attempt_id": tAttempt,
+		"text": "worker submitted a result for task Pilot simulation cycle task: " + tPull}
+}
+
+func TestCoordinatorReviewsASubmit(t *testing.T) {
+	f := newFake(t)
+	f.attempts = []agent.OpenAttempt{{ID: tAttempt, State: "running", Phase: "submitted", Task: agent.TaskRef{TaskID: tTask}}}
+	f.inbox = []map[string]any{submitMessage("m1")}
+	f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: "open", HeadCommit: tHead}}
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
+		t.Fatalf("turnRun = %d: %s", code, out.String())
+	}
+	comment := "aicrew-agent forge pr comment --repository https://sim-gitea:3000/operator/pilot.git --pr 7 --body-file - --json"
+	if !f.called("aicrew-agent forge pr show --repository https://sim-gitea:3000/operator/pilot.git --pr 7") || !f.called(comment) {
+		t.Fatalf("the pull request was not read and commented on: %v", f.calls)
+	}
+	if body := f.stdin[comment]; !strings.HasPrefix(body, "[oh-code-review (high) review] reviewed at head "+tHead+"\n") ||
+		!strings.Contains(body, "\nVERDICT\nREADY_FOR_HUMAN_MERGE\n") {
+		t.Fatalf("the local review:\n%s", body)
+	}
+	if got := f.bodies["review"]; got["result_seq"] != float64(1) || got["decision"] != "accept" {
+		t.Fatalf("review body = %v", got)
+	}
+	// The worker's second submit is result 2; the first message, delivered
+	// again, keeps its number and is not recorded twice.
+	f.calls, f.inbox = nil, []map[string]any{submitMessage("m1"), submitMessage("m2")}
+	f.bodies = map[string]map[string]any{}
+	out.Reset()
+	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
+		t.Fatalf("turn 2 = %d: %s", code, out.String())
+	}
+	if got := f.bodies["review"]; got["result_seq"] != float64(2) {
+		t.Fatalf("review body of the second result = %v; calls %v", got, f.calls)
+	}
+	if doc := readHandoff(t, f.home); strings.Count(doc, "Result 1 of attempt") != 1 || strings.Count(doc, "Result 2 of attempt") != 1 {
+		t.Fatalf("the results recorded:\n%s", doc)
+	}
+}
+
+func TestCoordinatorLeavesAResultNotSubmitted(t *testing.T) {
+	f := newFake(t)
+	f.attempts = []agent.OpenAttempt{{ID: tAttempt, State: "running", Phase: "accepted", Task: agent.TaskRef{TaskID: tTask}}}
+	f.inbox = []map[string]any{submitMessage("m1")}
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
+		t.Fatalf("turnRun = %d: %s", code, out.String())
+	}
+	if f.called("aicrew-agent forge") || f.called("aicrew-agent step") {
+		t.Fatalf("an accepted result was reviewed again: %v", f.calls)
+	}
+}
+
+// deliveryHome is a coordinator home with its recorded result, its forge
+// credential and the installed verify-delivery helper.
+func deliveryHome(t *testing.T, f *fakeTools) {
+	t.Helper()
+	for path, body := range map[string]string{
+		"docs/HANDOFF.md": "# Handoff\n- 2026-10-29T11:00:00Z Result 1 of attempt " + tAttempt + " (message m1): " + tPull + ".\n",
+		"agent.json": `{"forge": {"sim-gitea:3000": {"kind": "gitea", "account": "sim-coordinator", ` +
+			`"file": "sim-gitea-3000.sim-coordinator.forge"}}}`,
+		".claude/skills/verify-delivery/verify_delivery.py": "",
+	} {
+		p := filepath.Join(f.home, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.attempts = []agent.OpenAttempt{{ID: tAttempt, State: "running", Phase: "accepted", Task: agent.TaskRef{TaskID: tTask}}}
+	f.inbox = []map[string]any{{"id": "m3", "kind": "action.needed", "text": "Merged.",
+		"action": map[string]any{"subjects": []map[string]any{{"kind": "pull", "attempt_id": tAttempt}}}}}
+	f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: forge.PullMerged, HeadCommit: tHead}}
+}
+
+func TestCoordinatorConfirmsTheDelivery(t *testing.T) {
+	f := newFake(t)
+	deliveryHome(t, f)
+	f.verify = `{"verdict": "confirmed", "evidence": [{"kind": "reviewed_head", "ref": "R"}, ` +
+		`{"kind": "human_merge", "ref": "M"}, {"kind": "post_merge_ci", "ref": "C"}]}`
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
+		t.Fatalf("turnRun = %d: %s", code, out.String())
+	}
+	verify := "env GITEA_TOKEN_FILE=" + filepath.Join(f.home, "creds", "sim-gitea-3000.sim-coordinator.forge") + " python3 " +
+		filepath.Join(f.home, ".claude", "skills", "verify-delivery", "verify_delivery.py") + " --pr " + tPull +
+		" --api-base https://sim-gitea:3000/api/v1 --review-author local=sim-coordinator --review-author external=sim-hands"
+	if !f.called(verify) {
+		t.Fatalf("verify-delivery was not run as expected: %v", f.calls)
+	}
+	ev, _ := f.bodies["confirm-delivery"]["evidence"].([]any)
+	if f.bodies["confirm-delivery"]["result_seq"] != float64(1) || len(ev) != 3 {
+		t.Fatalf("confirm-delivery body = %v", f.bodies["confirm-delivery"])
+	}
+	if f.bodies["finalize"]["result_seq"] != float64(1) {
+		t.Fatalf("finalize body = %v; calls %v", f.bodies["finalize"], f.calls)
+	}
+	i, j := slices.Index(f.calls, "aicrew-agent step confirm-delivery"), slices.Index(f.calls, "aicrew-agent step finalize")
+	if i < 0 || j < i {
+		t.Fatalf("confirm-delivery does not come before finalize: %v", f.calls)
+	}
+}
+
+func TestCoordinatorWaitsOnAnUnconfirmedDelivery(t *testing.T) {
+	for _, verdict := range []string{"pending", "not_confirmed"} {
+		f := newFake(t)
+		deliveryHome(t, f)
+		f.verify, f.verifyCode = `{"verdict": "`+verdict+`"}`, 4
+		var out bytes.Buffer
+		if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
+			t.Fatalf("%s: turnRun = %d: %s", verdict, code, out.String())
+		}
+		if f.called("aicrew-agent step") {
+			t.Fatalf("%s: a step followed: %v", verdict, f.calls)
+		}
+		if doc := readHandoff(t, f.home); !strings.Contains(doc, "verify-delivery: "+verdict) {
+			t.Fatalf("%s: the handoff:\n%s", verdict, doc)
+		}
+	}
+	// An open pull request runs no verify-delivery.
+	f := newFake(t)
+	deliveryHome(t, f)
+	f.pull.Pull.State = forge.PullOpen
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
+		t.Fatalf("turnRun = %d: %s", code, out.String())
+	}
+	if f.called("env ") || f.called("aicrew-agent step") {
+		t.Fatalf("an open pull request was verified: %v", f.calls)
 	}
 }

@@ -8,7 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && useradd -m -u 2001 -s /bin/bash aimem
 COPY aimem-release/ /opt/aimem-release/
 COPY install-hub.sh /opt/aimem-install-hub.sh
-COPY process/ /opt/process/
 COPY hub.sh /usr/local/sbin/hub.sh
 EXPOSE 8440
 ENTRYPOINT ["bash", "/usr/local/sbin/hub.sh"]

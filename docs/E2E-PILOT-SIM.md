@@ -9,8 +9,10 @@ joined the way the operator installs and joins it, and a smoke check.
 **I3** (task `01a17d9a-bbff`) adds the stub reviewer and the stub CI, with
 fixture pull requests that verify-delivery reads. **I2a** (task
 `01a186ea-0457`) adds the scripted members' turns and the cycle up to the
-submitted pull request. The rest of the cycle comes in I2b, and the faults,
-the report and the CI workflow in I4 to I6.
+submitted pull request. **I2b** (task `01a17d9a-f147`) takes the cycle to
+DONE: the rework, the local review, the operator's merge and the delivery
+record, twice in a row. The faults, the report and the CI workflow come in
+I4 to I6.
 
 ## Running it
 
@@ -32,7 +34,8 @@ It needs Docker with Compose v2, Go 1.26 or later, Python 3, and network
 access: the images install aimem and ai-skills from their GitHub releases,
 as an operator's host does.
 
-The script exits 0 when the stack is healthy and the stubs' fixtures pass. Otherwise it exits non-zero
+The script exits 0 when the stack is healthy, the stubs' fixtures pass and
+two cycles reach DONE with their delivery records. Otherwise it exits non-zero
 and prints the last lines of every container's log; the full logs are in
 `DIR/logs/`.
 
@@ -72,24 +75,27 @@ TLS is real everywhere:
 
 `scripts/pilot-sim.sh` plays the operator, each step with the product's own
 command on the host it belongs to:
-1. On the hub: `aimem tasks on`, `aimem process select` (the b4 harness's
-   process repository: a local commit behind an https name),
-   `aimem project repo set`, and `aimem identity peer provision`. The
-   peer's credential directory is then copied to aicrewd's host.
-2. On aicrewd's host:
-   - `aicrew hub add`, then a restart of aicrewd;
-   - `aicrew team setup`, with the grant it prints run by the hub's admin,
-     then setup again;
-   - `aicrew hub-credential issue` for the hub's introspection credential.
-3. In Gitea:
+1. In Gitea:
    - the `operator` account, one account per member and one per stub
      (`sim-hands`, `sim-ci`), each with its own token;
    - the repositories `pilot` (the team's) and `fixture` (the stubs'
      fixtures), with the members and the stubs as collaborators and the
      labels `review-this`, `hands-reviewing` and `hands-reviewed`, as a
      real reviewer's site has them;
-   - each stub's token in its own `/sim/in`, then the scenario file.
-4. Per member:
+   - the public repository `process`, the project's process set
+     (`e2e/pilotsim/hub/process/`), from which the hub imports the set and
+     the members' automations read their points.
+2. On the hub: `aimem tasks on`, `aimem process select` (the `process`
+   repository's commit), `aimem project repo set`, and
+   `aimem identity peer provision`. The peer's credential directory is then
+   copied to aicrewd's host.
+3. On aicrewd's host:
+   - `aicrew hub add`, then a restart of aicrewd;
+   - `aicrew team setup`, with the grant it prints run by the hub's admin,
+     then setup again;
+   - `aicrew hub-credential issue` for the hub's introspection credential.
+4. Each stub's token in its own `/sim/in`, then the scenario file.
+5. Per member:
    - an aimem user and a user token, `aicrew invitation issue`;
    - the member's input files.
 
@@ -133,13 +139,16 @@ replacing it:
 {
   "repos": ["operator/pilot", "operator/fixture"],
   "poll_seconds": 1,
-  "hands": {"verdict": "READY_FOR_HUMAN_MERGE", "review_seconds": 0},
+  "hands": {"verdict": "READY_FOR_HUMAN_MERGE", "first_verdict": "", "review_seconds": 0},
   "ci": {"state": "success", "context": "sim-ci"}
 }
 ```
 
 Every field but `repos` has the default shown. `hands.verdict` may be
-`RETURN_TO_IMPLEMENTATION`; `ci.state` may be any Gitea commit state.
+`RETURN_TO_IMPLEMENTATION`. `hands.first_verdict`, when set, is the verdict
+of a pull request's first review, one with no `[hands-bot review]` comment
+yet; later reviews take `hands.verdict`. `ci.state` may be any Gitea commit
+state.
 
 The runner also writes a `generation`, one higher each time. A stub writes
 the generation it loads to `/sim/scenario/<mode>.ack` before the poll that
@@ -185,61 +194,100 @@ The verify-delivery results are kept as `DIR/verify-<number>.json`.
 
 ## The cycle
 
-After the fixtures, the script runs one task from the board to a submitted
-attempt, with no typed input. Each turn of a member is the client's turn
-mode (`e2e/pilotsim/cmd/aicrew-simclient/turn.go`). It reads the role and
-the attempt from the brief on standard input, and the messages from
-`aicrew-agent inbox --json`. It acts only through the product's surfaces:
-aicrew-agent's steps and its `clone` and `forge pr` commands, git in the
-worktree, and the home's aimem MCP server. It acks the messages it read,
-records what it did in `docs/HANDOFF.md`, and ends with one stream-json
-`result` line, an error result when its script fails.
+After the fixtures, the script runs the cycle twice on the same stack: each
+time one task from the board to DONE, with no typed input. Each turn of a
+member is the client's turn mode (`e2e/pilotsim/cmd/aicrew-simclient/turn.go`).
+It reads the role and the attempt from the brief on standard input, and the
+messages from `aicrew-agent inbox --json`. It acts only through the
+product's surfaces: aicrew-agent's steps and its `clone` and `forge pr`
+commands, git in the worktree, the home's aimem MCP server, and the
+installed verify-delivery helper. It acks the messages it read, records
+what it did in `docs/HANDOFF.md`, and ends with one stream-json `result`
+line, an error result when its script fails. It never sleeps: a turn with
+nothing to do ends, and the launcher's next message starts the next one.
 
-- **The coordinator** reads each task a board change or a READY list
-  names. It skips a task with an open attempt (`aicrew-agent attempts`).
-  It triages a BACKLOG or READY task to READY, with its next action and a
-  comment, through `triage_task` and `add_task_comment`. Then it offers the
-  task to the first worker that `aicrew-agent members` shows with the
-  project's repository verified at write access, with
-  `aicrew-agent step offer --repository URL --process`. The URL comes from
-  `project_repository`; `--process` fills the process pin and its
-  instruction digest from the hub's selection.
+- **The coordinator**:
+  - reads each task a board change or a READY list names. It skips a task
+    with an open attempt (`aicrew-agent attempts`). It triages a BACKLOG or
+    READY task to READY, with its next action and a comment, through
+    `triage_task` and `add_task_comment`. Then it offers the task to the
+    first worker that `aicrew-agent members` shows with the project's
+    repository verified at write access, with
+    `aicrew-agent step offer --repository URL --process`. The URL comes
+    from `project_repository`; `--process` fills the process pin and its
+    instruction digest from the hub's selection.
+  - on a submit announcement, records the result and its number in its
+    handoff, posts the local review at the pull request's full head SHA
+    (`forge pr comment`, headed `[oh-code-review (high) review]`), and
+    accepts the result with the `review` step. No member surface names a
+    result's number yet (task `01a188f9-4d9a`), so the coordinator counts
+    the attempt's submit announcements: the nth is result n.
+  - on a change of an accepted attempt's pull request, once it is merged,
+    runs verify-delivery from its skill directory with its home's own forge
+    credential, `--api-base` and
+    `--review-author local=<its account> --review-author external=sim-hands`.
+    On `confirmed` it confirms the delivery with the evidence returned
+    (`confirm-delivery`) and finalizes (`finalize`); otherwise it records
+    the verdict and waits.
 - **The worker** accepts an offer with the instruction digest the offer
   carries. In its running attempt it makes the worktree with
   `aicrew-agent clone`, commits one file, pushes with the home's own
   credential, opens the pull request with `aicrew-agent forge pr open`, and
   adds `review-this`. Later turns read the pull request with
   `forge pr show` and wait while `review-this` or `hands-reviewing` is on.
+  A `RETURN_TO_IMPLEMENTATION` from sim-hands at the head gets a new
+  commit, the stale `hands-reviewed` taken off and a new `review-this`.
   Once sim-hands's review at the head is READY and the checks passed, the
-  worker submits it through `work` (intent `submit`).
+  worker submits it through `work` (intent `submit`). In the `rework`
+  phase it resumes through `work` first.
 
-The coordinator reads everything an offer names from the product: the
-script gives it no input of its own. `--process` needs an aimem with
-`aimem process pin` that reads under the team session, 0.10.18 or later.
+The script gives the members no input of its own. `--process` needs an
+aimem with `aimem process pin` that reads under the team session, 0.10.18
+or later.
 
-A worker that waits on its pull request's gates gets no continuation turn
-and is never stalled (docs/DESIGN-CONTROL-PLANE.md, 1.8). The submit's check
-asserts that the attempt was never blocked.
+The scenario makes sim-hands return each pull request's first review and
+take 50 seconds over every review, more than three of the launcher's turn
+gaps: a worker waiting on its gates gets no continuation turn and is never
+stalled or blocked (docs/DESIGN-CONTROL-PLANE.md, 1.8).
 
 The operator files the task READY through the hub's API: a coordinator is
-woken by a change to READY, not by a new BACKLOG task. The script
-pauses the worker with `aicrew member pause` to hold each step's state,
-takes a read-only snapshot, checks it, and resumes the worker. The steps
-are the offer, the accept, the pull request and the submit. The worker
-can submit in the turn after it opened the pull request, before the
-pause takes hold, so the pull request's step accepts a submitted attempt
-and then checks it as the submit's.
-`e2e/pilotsim/cycle.py` checks each snapshot:
-- aicrewd's store (a copy): the attempt's state and phase, its steps
-  (`claim`, `transfer`, `update`, all committed, no `release`), receipts,
-  results, the watched pull request, and the messages about the attempt,
-  each acked once a turn read it;
-- aimem: the task's state (READY while the reservation holds it, REVIEW
-  with the pull request among its candidate refs after the submit), the
-  triage comment, and the reservation, held for the coordinator's offer
-  and then for the worker;
-- both homes: every turn in `logs/turns.jsonl` finished,
-  `logs/guard.jsonl` empty, and the worker's CURRENT ATTEMPT section with
-  its pull request and submit.
+woken by a change to READY, not by a new BACKLOG task. The script holds
+each step's state with `aicrew member pause`, waits until the paused
+member's turn has ended (`state/turns.json` names no running turn, and
+`logs/turns.jsonl` gains none over two seconds), takes a read-only
+snapshot, checks it, and resumes the member. The steps:
 
-The snapshots stay in `DIR/cycle/<step>/`.
+| Step | Held | What it shows |
+| --- | --- | --- |
+| offer | worker | the attempt offered, the reservation held for the coordinator |
+| accept | worker | the attempt running, the reservation transferred to the worker |
+| pull | worker | the watched pull request; the coordinator is held from here |
+| rework | worker | sim-hands returned an older head, and the worker pushed a new one |
+| submit | worker, coordinator | one result; the task in REVIEW with the pull request among its candidate refs |
+| review | coordinator | the local review READY at the head, the result accepted |
+| merge | coordinator | merged by `operator`, sim-ci's success on the merge commit |
+| done | none | the attempt closed and finalized, the task DONE, the reservation ended |
+
+The merge is the runner's, as the Gitea `operator` person account.
+`e2e/pilotsim/cycle.py` checks each snapshot against its step's row:
+- aicrewd's store (a copy): the attempt's state and phase, its steps (all
+  committed, no `release`), receipts, results, the accepted, delivered and
+  finalized result, the watched pull request, the messages about the task,
+  each acked once a turn read it, the members' turn reports, no member
+  hold and no escalation, and an audit in which the operator's calls are
+  the script's own and the members' are member operations;
+- aimem: the task's state, the triage comment, a history that never went
+  through BLOCKED or CANCELLED, and the reservation's holder;
+- the forge: sim-hands's RETURN of the older head and its READY at the
+  head, the coordinator's READY at the head, the merge and its CI;
+- both homes: every turn in `logs/turns.jsonl` finished, none running and
+  no hold in `state/turns.json`, `logs/guard.jsonl` empty, and the
+  handoffs recording the pull request, the rework, the submit, the
+  acceptance and the finalize.
+
+The last check is the delivery record. The script runs verify-delivery
+itself, as the coordinator ran it, and its `confirmed` evidence
+(`reviewed_head`, `human_merge`, `post_merge_ci`) must be the attempt's
+delivery and terminal evidence and among the task's evidence refs.
+
+The snapshots stay in `DIR/cycle-<n>/<step>/`.

@@ -9,11 +9,11 @@
 # and peer; aicrewd's hub and team; Gitea's accounts, labels and
 # repositories; each member's aimem user, token and invitation), hands each
 # member and stub its input files, and runs the smoke check, the stubs'
-# fixture pull requests and the cycle up to the submitted attempt, checking
+# fixture pull requests and two cycles from a filed task to DONE, checking
 # each step read-only (e2e/pilotsim/cycle.py). It brings the stack down and
 # removes its volumes unless -keep is given. Exit 0: a healthy stack whose
 # stubs serve the review protocol and CI that verify-delivery reads, and
-# whose scripted members take a filed task to a submitted attempt; otherwise
+# whose scripted members take a filed task to DONE with its delivery record; otherwise
 # non-zero with the containers' logs.
 #
 # No secret is printed or passed as an argument: tokens and codes go from
@@ -168,15 +168,50 @@ eval "$(hub cat /sim/tls/pins.env | grep -E '^PIN_[A-Z_]+=sha256-[A-Za-z0-9+/]+=
 set +a
 [ -n "${PIN_SIM_AIMEM:-}" ] && [ -n "${PIN_SIM_AICREWD:-}" ] || fail "sim-ca wrote no pins"
 
+# ---- Gitea: the accounts, their tokens, the repository -------------------------------
+step "Gitea: the operator, the members and the stubs, their tokens, the repositories, the labels and the process"
+for user in operator sim-coordinator sim-worker sim-hands sim-ci; do
+  admin=()
+  [ "$user" = operator ] && admin=(--admin)
+  gitea admin user create --username "$user" --email "$user@example.test" --random-password \
+    --must-change-password=false "${admin[@]}" >/dev/null
+done
+gitea admin user generate-access-token --username operator --token-name sim --scopes all --raw |
+  into sim-aicrewd sessiond $OPS_HOME/forge-operator.token
+forge() { # METHOD PATH [JSON]: the operator's Gitea API call, from aicrewd's host
+  op sh -c 'curl -fsS --cacert /sim/tls/ca.pem -X "$1" -H "Authorization: token $(cat "$HOME/forge-operator.token")" \
+    -H "Content-Type: application/json" ${3:+-d "$3"} "https://sim-gitea:3000/api/v1$2"' sh "$@"
+}
+# pilot is the team's repository; fixture holds the stubs' fixture pull
+# requests. The external-review labels exist on both, as a real reviewer's
+# site has them before anyone asks for a review.
+for repo in pilot fixture; do
+  forge POST /user/repos '{"name":"'$repo'","auto_init":true,"default_branch":"main"}' >/dev/null
+  for user in sim-coordinator sim-worker sim-hands sim-ci; do
+    forge PUT "/repos/operator/$repo/collaborators/$user" '{"permission":"write"}' >/dev/null
+  done
+  for label in review-this hands-reviewing hands-reviewed; do
+    forge POST "/repos/operator/$repo/labels" '{"name":"'$label'","color":"#0e8a16"}' >/dev/null
+  done
+done
+# process is the project's process repository, public as an operator
+# publishes one: the hub imports its set from it, the members' automations
+# read their points from it.
+forge POST /user/repos '{"name":"process","auto_init":true,"default_branch":"main","private":false}' >/dev/null
+for f in process/manifest.json process/HANDBOOK.md; do
+  forge POST "/repos/operator/process/contents/$f"     '{"content":"'"$(base64 -w0 < "$SIM/hub/process/$f")"'","message":"add '$f'","branch":"main"}' >/dev/null
+done
+PROCESS_URL=https://sim-gitea:3000/operator/process.git
+PROCESS_COMMIT=$(forge GET /repos/operator/process/branches/main | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"]["id"])')
+
 # ---- the hub: project, process, repository, peer ---------------------------------
 step "the hub: the project, its process and repository, and aicrewd's peer"
 PROJECT=pilot
 REPO_URL=https://sim-gitea:3000/operator/pilot.git
 hub aimem tasks on -p "$PROJECT" >/dev/null
-COMMIT=$(hub git -C /home/aimem/process rev-parse HEAD)
 # The sim's process repository has no tag, so the commit is selected with
 # --commit (aimem 0.10.17 takes a bare commit only with it).
-hub aimem process select https://git.example.test/sim/process.git "$COMMIT" process/manifest.json --commit -p "$PROJECT" >/dev/null
+hub aimem process select "$PROCESS_URL" "$PROCESS_COMMIT" process/manifest.json --commit -p "$PROJECT" >/dev/null
 hub aimem project repo set --project "$PROJECT" --kind gitea --url "$REPO_URL" --access write >/dev/null
 identity peer provision aicrew-service --endpoint https://sim-aicrewd:9443/v1/crew/introspect \
   --peer-trust-pin "$PIN_SIM_AICREWD" --output-dir /home/aimem/peer --expires 30d >/dev/null
@@ -203,33 +238,6 @@ TEAM_ID=$(op aicrew team show -team-name "$TEAM" | json_field id)
 op aicrew hub-credential issue -hub "$HUB_ID" --output $OPS_HOME/introspection.token >/dev/null
 op cat $OPS_HOME/introspection.token | into sim-aimem aimem /home/aimem/introspection.token
 op rm -f $OPS_HOME/introspection.token
-
-# ---- Gitea: the accounts, their tokens, the repository -------------------------------
-step "Gitea: the operator, the members and the stubs, their tokens, the repositories and the labels"
-for user in operator sim-coordinator sim-worker sim-hands sim-ci; do
-  admin=()
-  [ "$user" = operator ] && admin=(--admin)
-  gitea admin user create --username "$user" --email "$user@example.test" --random-password \
-    --must-change-password=false "${admin[@]}" >/dev/null
-done
-gitea admin user generate-access-token --username operator --token-name sim --scopes all --raw |
-  into sim-aicrewd sessiond $OPS_HOME/forge-operator.token
-forge() { # METHOD PATH [JSON]: the operator's Gitea API call, from aicrewd's host
-  op sh -c 'curl -fsS --cacert /sim/tls/ca.pem -X "$1" -H "Authorization: token $(cat "$HOME/forge-operator.token")" \
-    -H "Content-Type: application/json" ${3:+-d "$3"} "https://sim-gitea:3000/api/v1$2"' sh "$@"
-}
-# pilot is the team's repository; fixture holds the stubs' fixture pull
-# requests. The external-review labels exist on both, as a real reviewer's
-# site has them before anyone asks for a review.
-for repo in pilot fixture; do
-  forge POST /user/repos '{"name":"'$repo'","auto_init":true,"default_branch":"main"}' >/dev/null
-  for user in sim-coordinator sim-worker sim-hands sim-ci; do
-    forge PUT "/repos/operator/$repo/collaborators/$user" '{"permission":"write"}' >/dev/null
-  done
-  for label in review-this hands-reviewing hands-reviewed; do
-    forge POST "/repos/operator/$repo/labels" '{"name":"'$label'","color":"#0e8a16"}' >/dev/null
-  done
-done
 
 # ---- the stubs: their tokens, the scenario, their start ------------------------------
 step "sim-hands and sim-ci: their tokens and the scenario"
@@ -410,25 +418,53 @@ forge POST "$FIX/issues/$n/labels" '{"labels":['$REVIEW_THIS']}' >/dev/null
 waitfor "sim-hands's review of #$n at its new head" 120 reviewed "$n" "$second"
 [ "$(hands_comments "$n" | wc -l)" = 1 ] || fail "fixture #$n: more than one review: $(hands_comments "$n")"
 
-# ---- the cycle: from a filed task to a submitted attempt ---------------------------------
-step "the cycle: a filed task, triaged and offered by the scripted coordinator, accepted, opened and submitted by the scripted worker"
-CYC=$OUT/cycle
-rm -rf "$CYC"
-mkdir -p "$CYC"
+# ---- the cycle: from a filed task to its delivery record ---------------------------------
+step "the cycle, twice: a filed task carried to DONE by the scripted members, with a rework, the operator's merge and the delivery record"
 member_id() {
   python3 -c 'import json,sys; print(next(m["agent_id"] for t in json.load(open(sys.argv[1])) for m in t["members"] if m["label"] == sys.argv[2]))' \
     "$OUT/status.json" "$1"
 }
 WORKER_ID=$(member_id worker)
 COORD_ID=$(member_id coordinator)
-# hubapi METHOD PATH [JSON]: the hub's API as its admin, on the hub's host.
+# hubapi METHOD PATH [JSON]: the hub's API as its admin, on the hub's host;
+# a write's idempotency key names the cycle.
 hubapi() {
   hub sh -c 'curl -fsS --cacert /sim/tls/ca.pem -X "$1" -H "Authorization: Bearer $(cat "$HOME/admin.token")" \
-    -H "Content-Type: application/json" ${3:+-H "Idempotency-Key: sim-cycle-$1-$2"} ${3:+-d "$3"} "https://sim-aimem:8440$2"' sh "$@"
+    -H "Content-Type: application/json" ${3:+-H "Idempotency-Key: sim-cycle-$4-$1-$2"} ${3:+-d "$3"} "https://sim-aimem:8440$2"' \
+    sh "$1" "$2" "${3:-}" "${CYCLE:-0}"
 }
-worker() { op aicrew member "$1" --team "$TEAM_ID" --agent "$WORKER_ID" ${2:+--reason "$2"} >/dev/null; }
+# member pause|resume ROLE [REASON]: the operator's hold on a member's turns.
+member() {
+  local id=$WORKER_ID
+  [ "$2" = coordinator ] && id=$COORD_ID
+  op aicrew member "$1" --team "$TEAM_ID" --agent "$id" ${3:+--reason "$3"} >/dev/null
+}
+# turn_mark ROLE: "running N" or "idle N", N the turns the home recorded.
+turn_mark() {
+  dc exec -T -u member "sim-$1" python3 -c '
+import json, os
+h = "/home/member/agent"
+try:
+    st = json.load(open(h + "/state/turns.json"))
+except FileNotFoundError:
+    st = {}
+log = h + "/logs/turns.jsonl"
+n = sum(1 for _ in open(log)) if os.path.exists(log) else 0
+print("running" if st.get("running") else "idle", n)'
+}
+# idle ROLE: the member runs no turn, and recorded none, over two seconds:
+# a pause stops the next turn, not the current one (seq 678).
+idle() {
+  local a b
+  a=$(turn_mark "$1") && sleep 2 && b=$(turn_mark "$1") && [ "$a" = "$b" ] && [ "${a%% *}" = idle ]
+}
+# hold ROLE REASON: pauses the member and waits until its turn has ended.
+hold() {
+  member pause "$1" "$2"
+  waitfor "sim-$1's turn to end" 300 idle "$1"
+}
 # store_copy DIR: a copy of aicrewd's store in DIR. aicrewd keeps writing
-# while the worker is paused, and tar exits 1 when a file changed as it read
+# while a member is paused, and tar exits 1 when a file changed as it read
 # it: such a copy is taken again.
 store_copy() {
   local i
@@ -444,45 +480,118 @@ peek() {
   store_copy "$CYC/peek" && python3 "$SIM/cycle.py" state "$CYC/peek" "$TASK"
 }
 at() { [[ "$(peek)" == $1 ]]; }
-# snapshot STEP: the step's read-only copy of the three places (cycle.py), then its checks.
+PILOT=/repos/operator/pilot
+# pilot_field KEY[.KEY]: one field of the cycle's pull request.
+pilot_field() {
+  forge GET "$PILOT/pulls/$PULL" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+for k in sys.argv[1].split("."):
+    v = v[k]
+print(v)' "$1"
+}
+# reworked: sim-hands returned an older head, and the worker pushed a new one.
+# The head is read before the pipe: a docker exec inside the pipe's command
+# substitution would read the pipe, which is the comments' JSON.
+reworked() {
+  local head
+  head=$(pilot_field head.sha) || return 1
+  forge GET "$PILOT/issues/$PULL/comments" | python3 -c '
+import json, re, sys
+for c in json.load(sys.stdin):
+    m = re.match(r"\[hands-bot review\] reviewed at head (\S+)", c["body"])
+    if m and "\nRETURN_TO_IMPLEMENTATION" in c["body"] and m.group(1) != sys.argv[1]:
+        sys.exit(0)
+sys.exit(1)' "$head"
+}
+pilot_ci_is() { [ "$(forge GET "$PILOT/commits/$1/status" | json_field state)" = "$2" ]; }
+# snapshot STEP: the step's read-only copy of the four places (cycle.py), then its checks.
 snapshot() {
   local d=$CYC/$1 role f
-  mkdir -p "$d/aimem"
+  mkdir -p "$d/aimem" "$d/forge"
   printf '{"task":"%s","worker":"%s","coordinator":"%s"}\n' "$TASK" "$WORKER_ID" "$COORD_ID" > "$d/ids.json"
   store_copy "$d/store" || fail "no stable copy of aicrewd's store for the $1 step"
   hubapi GET "/v1/tasks/$TASK" > "$d/aimem/task.json"
   hubapi GET "/v1/tasks/$TASK/comments" > "$d/aimem/comments.json"
+  hubapi GET "/v1/tasks/$TASK/history" > "$d/aimem/history.json"
   hub aimem reservation recover status --task "$TASK" --hub https://sim-aimem:8440 \
     --admin-token-file /home/aimem/admin.token --hub-ca-file /sim/tls/ca.pem > "$d/aimem/reservation.json"
+  if [ -n "${PULL:-}" ]; then
+    forge GET "$PILOT/pulls/$PULL" > "$d/forge/pull.json"
+    forge GET "$PILOT/issues/$PULL/comments" > "$d/forge/comments.json"
+    [ -z "${MERGE:-}" ] || forge GET "$PILOT/commits/$MERGE/status" > "$d/forge/status.json"
+  fi
+  [ ! -f "$CYC/verify.json" ] || cp "$CYC/verify.json" "$d/verify.json"
   for role in coordinator worker; do
     mkdir -p "$d/homes/$role"
-    for f in logs/turns.jsonl logs/guard.jsonl docs/HANDOFF.md; do
+    for f in logs/turns.jsonl logs/guard.jsonl docs/HANDOFF.md state/turns.json; do
       dc exec -T -u member "sim-$role" sh -c '[ ! -f "$1" ] || cat "$1"' sh "/home/member/agent/$f" \
         > "$d/homes/$role/${f##*/}"
     done
   done
-  python3 "$SIM/cycle.py" check "$1" "$d" || fail "the cycle's checks after the $1 step (snapshot $d)"
+  python3 "$SIM/cycle.py" check "$1" "$d" || fail "cycle $CYCLE: the checks after the $1 step (snapshot $d)"
 }
-# Each step's state is held for its checks by pausing the worker, as the
-# operator can; the worker's turns resume after them.
-worker pause "the cycle's offer checks"
-TASK=$(hubapi POST "/v1/projects/$PROJECT/tasks" '{"title":"Pilot simulation cycle task","objective":"Add the file sim/TASK.md to the repository through a reviewed pull request.","acceptance_criteria":"The pull request adds one file, and the external review and CI pass at its head.","non_goals":"Everything else.","state":"READY","blocker":"","dependencies":[],"candidate_refs":[],"evidence_refs":[],"next_action":"Triage it.","archived":false}' |
-  json_field id)
-waitfor "the coordinator's triage and offer of task $TASK" 300 at 'offered/* 0'
-snapshot offer
-worker resume
-waitfor "the worker's accept" 300 at 'running/working *'
-worker pause "the cycle's accept checks"
-snapshot accept
-worker resume
-# A fast review lets the worker submit in its next turn, which may start
-# before the pause: the pull request's checks take either phase.
-waitfor "the worker's pull request" 300 at 'running/@(working|submitted) 1'
-worker pause "the cycle's pull request checks"
-snapshot pull
-worker resume
-waitfor "the worker's submit" 300 at 'running/submitted 1'
-snapshot submit
+# cycle N: one task from the board to DONE (docs/E2E-PILOT-SIM.md, "The cycle").
+# Each step's state is held for its checks by pausing a member, as the
+# operator can, until its turn has ended; its turns resume after them.
+cycle() {
+  CYCLE=$1 CYC=$OUT/cycle-$1 PULL= MERGE=
+  rm -rf "$CYC"
+  mkdir -p "$CYC"
+  # sim-hands returns a pull request's first review, and every review takes
+  # longer than three of the launcher's turn gaps: a waiting worker is
+  # neither stalled nor blocked (seq 676).
+  scenario "{$SCENARIO_REPOS,\"hands\":{\"first_verdict\":\"RETURN_TO_IMPLEMENTATION\",\"review_seconds\":50}}"
+  hold worker "the cycle's offer checks"
+  TASK=$(hubapi POST "/v1/projects/$PROJECT/tasks" '{"title":"Pilot simulation cycle task '"$1"'","objective":"Add the file sim/TASK.md to the repository through a reviewed pull request.","acceptance_criteria":"The pull request adds one file, and the external review and CI pass at its head.","non_goals":"Everything else.","state":"READY","blocker":"","dependencies":[],"candidate_refs":[],"evidence_refs":[],"next_action":"Triage it.","archived":false}' |
+    json_field id)
+  waitfor "the coordinator's triage and offer of task $TASK" 300 at 'offered/* 0'
+  snapshot offer
+  member resume worker
+  waitfor "the worker's accept" 300 at 'running/working *'
+  hold worker "the cycle's accept checks"
+  snapshot accept
+  member resume worker
+  waitfor "the worker's pull request" 300 at 'running/working 1'
+  hold worker "the cycle's pull request checks"
+  PULL=$(python3 "$SIM/cycle.py" pull "$CYC/peek" "$TASK")
+  snapshot pull
+  # The coordinator is held from here to the submit's checks.
+  hold coordinator "the cycle's submit checks"
+  member resume worker
+  waitfor "sim-hands's return and the worker's rework of #$PULL" 300 reworked
+  hold worker "the cycle's rework checks"
+  snapshot rework
+  member resume worker
+  waitfor "the worker's submit" 300 at 'running/submitted 1'
+  hold worker "the cycle's submit checks"
+  snapshot submit
+  member resume worker
+  member resume coordinator
+  waitfor "the coordinator's review" 300 at 'running/accepted 1'
+  hold coordinator "the operator's merge"
+  snapshot review
+  # The operator merges as a person once the gates are green, and sim-ci
+  # reports on the merge commit before the coordinator's next turn.
+  forge POST "$PILOT/pulls/$PULL/merge" '{"Do":"merge"}' >/dev/null
+  MERGE=$(pilot_field merge_commit_sha)
+  waitfor "sim-ci's status on the merge commit of #$PULL" 120 pilot_ci_is "$MERGE" success
+  snapshot merge
+  member resume coordinator
+  waitfor "the coordinator's delivery and finalize" 300 at 'closed/finalized *'
+  waitfor "sim-coordinator's turn to end" 120 idle coordinator
+  waitfor "sim-worker's turn to end" 120 idle worker
+  # The runner's own verify-delivery, as the coordinator ran it: the record
+  # the attempt and the task must carry.
+  coord sh -c 'python3 "$HOME/.claude/skills/verify-delivery/verify_delivery.py" \
+    --pr "https://sim-gitea:3000/operator/pilot/pulls/$1" --api-base https://sim-gitea:3000/api/v1 \
+    --review-author local=sim-coordinator --review-author external=sim-hands' sh "$PULL" > "$CYC/verify.json" ||
+    fail "cycle $1: verify-delivery did not confirm #$PULL ($CYC/verify.json)"
+  snapshot done
+}
+cycle 1
+cycle 2
+scenario "{$SCENARIO_REPOS}"
 
 collect
-step "pilot-sim: green: both members checked, listed and serving; the stubs' fixtures confirmed, refused and released; the cycle reached the submit (reports in $OUT)"
+step "pilot-sim: green: both members checked, listed and serving; the stubs' fixtures confirmed, refused and released; two cycles from a filed task to DONE with the delivery record (reports in $OUT)"

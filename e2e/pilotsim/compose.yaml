@@ -37,6 +37,7 @@ services:
     volumes: [tls:/sim/tls:ro]
     environment:
       SSL_CERT_FILE: /sim/tls/ca.pem
+      GIT_SSL_CAINFO: /sim/tls/ca.pem
     healthcheck:
       test: ["CMD", "curl", "-fs", "--cacert", "/sim/tls/ca.pem", "https://sim-aimem:8440/v1/status"]
       interval: 2s

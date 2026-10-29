@@ -3,7 +3,7 @@
 # installs the hub in its install-only mode (AIMEM_NO_SERVICE=1), from the
 # staged release asset, which it checks against SHA256SUMS
 # (AIMEM_PREBUILT_DIR); a later start finds it installed. The process
-# repository is the b4 harness's (a local commit behind an https name).
+# repository is served by sim-gitea (scripts/pilot-sim.sh).
 # The installer's last line is the serve command, which this script execs.
 set -euo pipefail
 home=/home/aimem
@@ -29,17 +29,6 @@ if [ ! -x "$aimem" ]; then
   (umask 077 && sed -n 's/^AIMEM_HTTP_TOKEN=//p' "$env_file" > "$home/admin.token")
   chown aimem:aimem "$home/admin.token"
   [ -s "$home/admin.token" ] || { echo "ERROR: the installer's env file names no AIMEM_HTTP_TOKEN" >&2; exit 1; }
-fi
-
-if [ ! -d "$home/process/.git" ]; then
-  cp -r /opt/process "$home/process"
-  chown -R aimem:aimem "$home/process"
-  runuser -u aimem -- env HOME="$home" sh -c '
-    cd "$HOME/process" &&
-    git init -q &&
-    git add process &&
-    git -c user.name=sim -c user.email=sim@example.test -c commit.gpgsign=false commit -q -m process &&
-    git config --global url."file://$HOME/process".insteadOf https://git.example.test/sim/process.git'
 fi
 
 serve=$(tail -n 1 /opt/aimem-install.log)

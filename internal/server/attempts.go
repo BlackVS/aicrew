@@ -30,6 +30,9 @@ const (
 	// 20 steps of a kibibyte, 4 KiB of turn content, 2 KiB of error and a
 	// command of 32 arguments, as the launcher bounds them.
 	maxReportBody = 48 << 10
+	// maxAnswerBody is an answer's body: its text, at most
+	// store.MaxAnswerText as JSON encodes it, in {"text": ...}.
+	maxAnswerBody = store.MaxAnswerText + 256
 )
 
 // The actions on one attempt, at AttemptsPath/{id}/{action}. Every one is a
@@ -423,7 +426,7 @@ type answerBody struct {
 func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	id, _, _ := attemptPath(requestPath(r))
 	var in answerBody
-	token, key, ok := s.stepRequest(w, r, true, &in)
+	token, key, ok := s.stepRequestMax(w, r, true, &in, maxAnswerBody)
 	if !ok {
 		return
 	}

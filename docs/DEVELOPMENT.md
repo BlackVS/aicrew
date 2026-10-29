@@ -874,7 +874,7 @@ event is data; the bus is core.
     worker's blocked report (`aicrew-agent step answer`, CREW-CONTRACT.md,
     "Answer"), keyed by the request's idempotency key. Its payload is the
     attempt, the task, the worker, the coordinator and the answer's text,
-    at most 12 KiB.
+    at most 12 KiB as JSON encodes it.
   - `timer.due`: a deadline stored in aicrewd (schema 34) passed. The
     delivery loop journals it once, on its first tick after the deadline,
     and a restart keeps it. The review pickup is its first user.

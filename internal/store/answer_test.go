@@ -112,7 +112,8 @@ func TestAnswerRefusals(t *testing.T) {
 		"another worker":        {e.workerTok, "Not mine to answer.", ErrForbidden},
 		"another team":          {ls2.Token.Reveal(), "Not my team.", ErrNotFound},
 		"blank":                 {e.leadTok, "  \n", ErrInvalid},
-		"larger than an answer": {e.leadTok, strings.Repeat("x", maxAnswerText+1), ErrInvalid},
+		"larger than an answer": {e.leadTok, strings.Repeat("x", MaxAnswerText-1), ErrInvalid},
+		"larger once encoded":   {e.leadTok, strings.Repeat(`"`, MaxAnswerText/2), ErrInvalid},
 	} {
 		if _, err := e.s.AnswerWithToken(ctx, "refused-"+name, c.token, a.ID, c.text); !errors.Is(err, c.want) {
 			t.Errorf("%s: %v, want %v", name, err, c.want)
@@ -121,5 +122,29 @@ func TestAnswerRefusals(t *testing.T) {
 	var n int
 	if err := e.s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = 'attempt.answered'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("%d answer events after refusals, %v", n, err)
+	}
+}
+
+// An answer at the bound, as JSON encodes it, is journaled and reaches the
+// worker whole: plain text, and text that escaping doubles.
+func TestAnswerAtTheBound(t *testing.T) {
+	ctx := context.Background()
+	e := newClaimStopEnv(t)
+	a, _ := e.runningClaim(t, "task-1")
+	a = e.blocked(t, a, "Waiting on the schema decision.")
+	settle(t, e.s, e.now)
+	answers(t, e.s, e.leadTok)
+	for i, text := range []string{strings.Repeat("x", MaxAnswerText-2), strings.Repeat(`"`, (MaxAnswerText-2)/2)} {
+		if answerSize(text) != MaxAnswerText {
+			t.Fatalf("answer %d encodes in %d bytes, want %d", i, answerSize(text), MaxAnswerText)
+		}
+		if _, err := e.s.AnswerWithToken(ctx, "bound-"+string(rune('a'+i)), e.leadTok, a.ID, text); err != nil {
+			t.Fatalf("answer %d at the bound: %v", i, err)
+		}
+		settle(t, e.s, e.now)
+		w := answers(t, e.s, e.indepTk)
+		if len(w) != 1 || !strings.Contains(w[0].Text, text) {
+			t.Fatalf("answer %d did not reach the worker whole: %d subjects", i, len(w))
+		}
 	}
 }

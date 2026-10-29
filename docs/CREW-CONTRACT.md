@@ -594,8 +594,10 @@ begin needs an `Idempotency-Key`; settle does not.
     worker never answers its own report. Any other caller, another team's
     coordinator included, is refused `attempt_forbidden`, and an attempt in
     another phase `attempt_state`.
-  - `text` is non-blank UTF-8 of at most 12 KiB, so that the event and the
-    worker's message carry it whole (`invalid_request` otherwise).
+  - `text` is non-blank UTF-8 of at most 12 KiB as JSON encodes it (its
+    escapes counted), so that the event and the worker's message carry it
+    whole (`invalid_request` otherwise). The route's body may be that plus
+    256 bytes.
   - aicrewd journals it as an `attempt.answered` event in the same
     transaction. Its key is the request's idempotency key, so a replay
     journals nothing more. The default `answer-wake` subscription wakes the

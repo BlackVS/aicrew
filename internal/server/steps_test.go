@@ -799,8 +799,9 @@ func TestSupersedeThroughTheRoutes(t *testing.T) {
 }
 
 // The answer route takes the team's coordinator's answer to a blocked
-// attempt; it refuses the worker, a working attempt, a body without text
-// and a call without a session token.
+// attempt, up to the bound as JSON encodes it; it refuses the worker, a
+// working attempt, a body without text, a text past the bound and a call
+// without a session token.
 func TestAnswerRoute(t *testing.T) {
 	e := setupCoordination(t)
 	id := e.runningOffer(t)
@@ -820,7 +821,10 @@ func TestAnswerRoute(t *testing.T) {
 		http.StatusForbidden, "attempt_forbidden")
 	refused(t, e.call(t, e.lead.token, path, "answer-x", map[string]string{}), http.StatusBadRequest, "invalid_request")
 	refused(t, e.call(t, "", path, "answer-y", map[string]string{"text": "x"}), http.StatusUnauthorized, "invalid_token")
-	if got := e.call(t, e.lead.token, path, "answer-1", map[string]string{"text": "The schema is settled: use v2."}); got.status != http.StatusOK {
+	refused(t, e.call(t, e.lead.token, path, "answer-z", map[string]string{"text": strings.Repeat("x", store.MaxAnswerText-1)}),
+		http.StatusBadRequest, "invalid_request")
+	// An answer at the bound, as JSON encodes it, fits the route's body.
+	if got := e.call(t, e.lead.token, path, "answer-1", map[string]string{"text": strings.Repeat(`"`, (store.MaxAnswerText-2)/2)}); got.status != http.StatusOK {
 		t.Fatalf("the answer: %d %s", got.status, got.raw)
 	}
 }

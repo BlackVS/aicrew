@@ -16,9 +16,16 @@ import (
 
 const opAnswer = "attempt.answer"
 
-// maxAnswerText bounds an answer, so that the event and the worker's message
-// carry it whole beside their other fields.
-const maxAnswerText = 12 << 10
+// MaxAnswerText bounds an answer as JSON encodes it, so that the event
+// (which holds it encoded) and the worker's message (which holds it as it
+// is, never longer) carry it whole beside their other fields.
+const MaxAnswerText = 12 << 10
+
+// answerSize is the bytes JSON encodes text in.
+func answerSize(text string) int {
+	b, _ := json.Marshal(text)
+	return len(b)
+}
 
 // BlockedAnswer is the team's current coordinator's answer to a worker's
 // blocked report, from its session.
@@ -60,8 +67,9 @@ func answerCommand(c Caller, key, attemptID string, in BlockedAnswer) command {
 		}{attemptID, in},
 		authorize: requireAgent,
 		validate: func() error {
-			if !utf8.ValidString(in.Text) || strings.TrimSpace(in.Text) == "" || len(in.Text) > maxAnswerText {
-				return fmt.Errorf("%w: an answer must be non-blank UTF-8 of at most %d bytes", ErrInvalid, maxAnswerText)
+			if !utf8.ValidString(in.Text) || strings.TrimSpace(in.Text) == "" || answerSize(in.Text) > MaxAnswerText {
+				return fmt.Errorf("%w: an answer must be non-blank UTF-8 of at most %d bytes as JSON encodes it",
+					ErrInvalid, MaxAnswerText)
 			}
 			return nil
 		},

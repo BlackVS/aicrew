@@ -526,6 +526,17 @@ func (h *harness) s1OfferFlow(t *testing.T) {
 
 	got = h.readTask(sc, task.ID)
 	sc.check("aimem: the task is DONE", got.State == "DONE", got.State)
+	// The finalize's content named no evidence: the launcher filled it from
+	// the confirmed delivery, in its order, typed by its delivery kind and
+	// noted with it and the attempt.
+	kinds := map[string]string{"reviewed_head": "commit", "human_merge": "pr", "post_merge_ci": "ci"}
+	match := len(got.EvidenceRefs) == len(deliveryEvidence)
+	for i := 0; match && i < len(deliveryEvidence); i++ {
+		e, r := deliveryEvidence[i], got.EvidenceRefs[i]
+		match = r["kind"] == kinds[e["kind"]] && r["ref"] == e["ref"] &&
+			r["note"] == e["kind"]+": delivery evidence of "+identityRef(id, worker)
+	}
+	sc.check("aimem: the task's evidence refs are the confirmed delivery's", match, got.EvidenceRefs)
 	for _, op := range []string{"claim", "transfer", "update", "finalize"} {
 		sc.check("aimem: the "+op+"'s receipt is committed under aicrew's request key", keys[op] != "" &&
 			h.receiptCommitted(sc, task.ID, op, keys[op]), keys[op])

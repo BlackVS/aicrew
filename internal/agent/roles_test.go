@@ -73,6 +73,23 @@ func TestRoleGuidanceContent(t *testing.T) {
 	if !strings.Contains(accept.What, blockAfterAccept) || !strings.Contains(md, "- **Credentials and connections.** "+credentialRule) {
 		t.Error("ROLES.md's accept step or credential rule does not teach the block after accepting")
 	}
+	// Both roles' finalize steps say what the finalize writes on the task's
+	// evidence_refs (78c9).
+	finalizes := 0
+	for _, r := range guideRoles {
+		for _, s := range r.Steps {
+			if s.Op != "finalize" {
+				continue
+			}
+			finalizes++
+			if !strings.Contains(s.What, finalizeEvidence) {
+				t.Errorf("the %s's finalize step does not teach the delivery evidence: %s", r.Role, s.What)
+			}
+		}
+	}
+	if finalizes != 2 {
+		t.Errorf("%d finalize steps in ROLES.md, want the coordinator's and the worker's", finalizes)
+	}
 }
 
 // The block after accepting is taught as the work step's own form, and the

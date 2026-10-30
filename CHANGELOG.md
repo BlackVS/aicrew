@@ -33,6 +33,19 @@ section, and the release workflow refuses a tag that has none
   is green at its head, and the operator merges sensitive-surface and
   release-preparation pull requests.
 
+### Fixed
+
+- **A finalized task records its delivery evidence** (01a18919-78c9).
+  aicrewd: a finalize's begin response adds `evidence`, the terminal
+  evidence with its kinds in the same order (docs/CREW-CONTRACT.md). The
+  launcher: a finalize whose task names no `evidence_refs` writes the
+  confirmed delivery's references there, the reviewed head, merge and CI
+  run as `commit`, `pr` and `ci`, each noted with its delivery kind and the
+  attempt, and without the attempt's identity reference. It refuses a
+  response whose evidence does not match the terminal evidence before it
+  calls aimem, and falls back to `url` or `text` against an aicrewd without
+  the field. ROLES.md's finalize steps say so.
+
 ## [0.9.0] - 2026-10-28
 
 Fifteen pull requests since 0.8.0 (#213 to #227). Three of them close

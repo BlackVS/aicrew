@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -250,7 +251,8 @@ func TestDriverClaimSubmitFinalize(t *testing.T) {
 	if a := s.attempt(t, id); a.State != store.AttemptClosed || a.CloseReason != "finalized" {
 		t.Fatalf("attempt after finalize: %+v", a)
 	}
-	if ft := s.fakeTask(t); contentString(t, ft, "state") != "DONE" {
+	if ft := s.fakeTask(t); contentString(t, ft, "state") != "DONE" ||
+		!strings.Contains(string(ft.Content["evidence_refs"]), "https://forge.example/commit/merge-7") {
 		t.Fatalf("the task after finalize: %v", ft.Content)
 	}
 	if m := s.mismatches(t); len(m) != 0 {
@@ -597,6 +599,133 @@ func TestComposeNeverAcceptedRelease(t *testing.T) {
 	if body["reason"] != "offer released" || string(c["state"]) != `"READY"` || string(c["title"]) != `"T"` ||
 		string(c["next_action"]) != `"N"` || c["id"] != nil || body["coordination_proof"] != "acp1_x" {
 		t.Fatalf("a never-accepted release: %v", body)
+	}
+}
+
+// A finalize fills a task that names no evidence with the confirmed
+// delivery's references, in order, without the attempt's identity that ends
+// them; a task that names its own evidence keeps it as written.
+func TestComposeFinalizeEvidence(t *testing.T) {
+	st := &Step{Operation: "finalize", ExpectedRevision: 5, ReservationID: "r-1", Fence: "2", Reason: "reviewed delivery",
+		TerminalEvidence: []string{"https://forge.example/pull/7#review-1", "merge 7 by the operator",
+			"aicrew attempt A1 by member M1"}}
+	note := resultNote("A1", "M1")
+	for _, empty := range []string{"", "null", "[]"} {
+		task := &TaskDoc{Revision: 5, Fields: map[string]json.RawMessage{"title": json.RawMessage(`"T"`)}}
+		if empty != "" {
+			task.Fields["evidence_refs"] = json.RawMessage(empty)
+		}
+		body, err := composeBody(st, "acp1_x", task, note)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var refs []map[string]string
+		if err := json.Unmarshal(body["content"].(map[string]json.RawMessage)["evidence_refs"], &refs); err != nil {
+			t.Fatal(err)
+		}
+		want := []map[string]string{
+			{"kind": "url", "ref": "https://forge.example/pull/7#review-1", "note": "delivery evidence of " + note},
+			{"kind": "text", "ref": "merge 7 by the operator", "note": "delivery evidence of " + note},
+		}
+		if !reflect.DeepEqual(refs, want) {
+			t.Fatalf("evidence_refs from %q = %v", empty, refs)
+		}
+		if got := body["terminal_evidence"].([]string); len(got) != 3 {
+			t.Fatalf("terminal_evidence = %v", got)
+		}
+	}
+	own := json.RawMessage(`[{"kind":"ci","ref":"https://ci.example/run/1"}]`)
+	task := &TaskDoc{Revision: 5, Fields: map[string]json.RawMessage{"evidence_refs": own}}
+	body, err := composeBody(st, "acp1_x", task, note)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := body["content"].(map[string]json.RawMessage)["evidence_refs"]; string(got) != string(own) {
+		t.Fatalf("a task's own evidence_refs became %s", got)
+	}
+	// Other operations never touch them.
+	task = &TaskDoc{Revision: 5, Fields: map[string]json.RawMessage{}}
+	body, err = composeBody(&Step{Operation: "update", Intent: "submit", ResultRef: "https://forge.example/pull/7",
+		ExpectedRevision: 5, ReservationID: "r-1", Fence: "2", TerminalEvidence: st.TerminalEvidence}, "", task, note)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, has := body["content"].(map[string]json.RawMessage)["evidence_refs"]; has {
+		t.Fatalf("an update named evidence_refs: %v", body["content"])
+	}
+}
+
+// With typed evidence, a finalize keeps a reviewed head, merge and CI run
+// that are URLs as commit, pr and ci, any other entry as a url or text, and
+// names each entry's delivery kind in its note.
+func TestComposeFinalizeTypedEvidence(t *testing.T) {
+	st := &Step{Operation: "finalize", ExpectedRevision: 5, ReservationID: "r-1", Fence: "2", Reason: "reviewed delivery",
+		TerminalEvidence: []string{"https://forge.example/commit/abc", "https://forge.example/pull/7",
+			"https://forge.example/actions/runs/7", "merge 7 by the operator", "aicrew attempt A1 by member M1"},
+		Evidence: []StepEvidence{{"reviewed_head", "https://forge.example/commit/abc"}, {"human_merge", "https://forge.example/pull/7"},
+			{"post_merge_ci", "https://forge.example/actions/runs/7"}, {"human_merge", "merge 7 by the operator"},
+			{"text", "aicrew attempt A1 by member M1"}}}
+	note := resultNote("A1", "M1")
+	if err := st.checkEvidence(); err != nil {
+		t.Fatal(err)
+	}
+	body, err := composeBody(st, "acp1_x", &TaskDoc{Revision: 5, Fields: map[string]json.RawMessage{}}, note)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refs []map[string]string
+	if err := json.Unmarshal(body["content"].(map[string]json.RawMessage)["evidence_refs"], &refs); err != nil {
+		t.Fatal(err)
+	}
+	want := []map[string]string{
+		{"kind": "commit", "ref": "https://forge.example/commit/abc", "note": "reviewed_head: delivery evidence of " + note},
+		{"kind": "pr", "ref": "https://forge.example/pull/7", "note": "human_merge: delivery evidence of " + note},
+		{"kind": "ci", "ref": "https://forge.example/actions/runs/7", "note": "post_merge_ci: delivery evidence of " + note},
+		{"kind": "text", "ref": "merge 7 by the operator", "note": "human_merge: delivery evidence of " + note},
+	}
+	if !reflect.DeepEqual(refs, want) {
+		t.Fatalf("evidence_refs = %v", refs)
+	}
+	// Evidence that is not the terminal evidence, in value or order, is
+	// refused.
+	for _, bad := range [][]StepEvidence{st.Evidence[:4], append([]StepEvidence{st.Evidence[1], st.Evidence[0]}, st.Evidence[2:]...)} {
+		if err := (&Step{Operation: "finalize", TerminalEvidence: st.TerminalEvidence, Evidence: bad}).checkEvidence(); err == nil {
+			t.Fatalf("evidence %v passed", bad)
+		}
+	}
+}
+
+// tamperedCrew changes a finalize's typed evidence in its begin response.
+type tamperedCrew struct{ StepAPI }
+
+func (c tamperedCrew) BeginStep(ctx context.Context, key, token, path string, body []byte) (Step, string, error) {
+	st, id, err := c.StepAPI.BeginStep(ctx, key, token, path, body)
+	if err == nil && len(st.Evidence) > 1 {
+		st.Evidence[0], st.Evidence[1] = st.Evidence[1], st.Evidence[0]
+	}
+	return st, id, err
+}
+
+// A finalize whose typed evidence differs from its terminal evidence is
+// refused before the driver reads or writes anything in aimem.
+func TestDriverRefusesMismatchedEvidence(t *testing.T) {
+	s := setupSteps(t, store.RoleIndependent)
+	id := s.claimed(t)
+	if r, err := s.work(t, id, "submit", "https://forge.example/pull/7"); err != nil || !r.Settled {
+		t.Fatalf("submit: %+v %v", r, err)
+	}
+	seq := s.reviewAndConfirm(t, id)
+	before := len(fakeCalls(t, s.root))
+	s.d.Crew = tamperedCrew{s.d.Crew}
+	_, err := s.run(t, attemptsPath+"/"+id+"/finalize", map[string]any{"result_seq": seq})
+	if err == nil || !strings.Contains(err.Error(), "does not match its terminal evidence") {
+		t.Fatalf("finalize: %v", err)
+	}
+	if calls := fakeCalls(t, s.root); len(calls) != before {
+		t.Fatalf("aimem was called: %v", calls[before:])
+	}
+	if ft := s.fakeTask(t); contentString(t, ft, "state") != "REVIEW" {
+		t.Fatalf("the task after a refused finalize: %v", ft.Content)
 	}
 }
 

@@ -43,7 +43,9 @@ const (
 // values the member sends aimem with the step (D-b1b-2): a stopped attempt's
 // release carries the target, reason and blocker; a finalize its target,
 // reason and the confirmed delivery's references; a work update its intent,
-// target and blocker or result reference. No other step carries them. An
+// target and blocker or result reference. No other step carries them. A
+// finalize's Evidence is TerminalEvidence with its kinds: the confirmed
+// delivery's entries in the same order, then the attempt's identity. An
 // update has no coordination fact, so it has no proof.
 type Step struct {
 	Operation         ReservationOp      `json:"operation"`
@@ -56,6 +58,7 @@ type Step struct {
 	Reason            string             `json:"reason,omitempty"`
 	Blocker           string             `json:"blocker,omitempty"`
 	TerminalEvidence  []string           `json:"terminal_evidence,omitempty"`
+	Evidence          []Evidence         `json:"evidence,omitempty"`
 	Intent            string             `json:"intent,omitempty"`
 	ResultRef         string             `json:"result_ref,omitempty"`
 	CoordinationProof string             `json:"coordination_proof,omitempty"`
@@ -69,7 +72,7 @@ func stepFor(a Attempt, proof string) Step {
 	case a.PendingOp == ReservationRelease && a.Stop == StopConfirmed:
 		st.TargetState, st.Reason, st.Blocker = req.Owned.State, req.Reason, req.Owned.Blocker
 	case a.PendingOp == ReservationFinalize:
-		st.TargetState, st.Reason, st.TerminalEvidence = req.Owned.State, req.Reason, req.TerminalEvidence
+		st.TargetState, st.Reason, st.TerminalEvidence, st.Evidence = req.Owned.State, req.Reason, req.TerminalEvidence, req.Owned.Evidence
 	case a.PendingOp == ReservationUpdate:
 		st.Intent, st.TargetState, st.Blocker, st.ResultRef = req.Intent, req.Owned.State, req.Owned.Blocker, req.Owned.ResultRef
 	}

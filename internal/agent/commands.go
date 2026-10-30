@@ -115,11 +115,11 @@ var crewCommands = []crewCommand{
 			"`aicrew-agent forge pr comment --pr N --body-file FILE`, and request an external review with " +
 			"`aicrew-agent forge pr label add --pr N LABEL` where the project's process asks for one. " +
 			pullRequestNever + "\n" +
-			"3. Decide with the review step below: `accept`, or `rework` to send it back. Before you accept a pull " +
+			"3. Decide with the review step below: `accept`, or `rework` to send it back. " + resultSeqSource + " Before you accept a pull " +
 			"request that is still a draft, when the project's process marks it ready once its gates are green, mark " +
 			"it with `aicrew-agent forge pr ready --pr N`: it needs no person.\n" +
 			"4. Stop there. A person merges the pull request; only after that, record the delivery evidence " +
-			"(`aicrew-agent forge pr show --pr N` names the merge commit).",
+			"(`aicrew-agent forge pr show --pr N` names the merge commit) with the same `result_seq`.",
 		Ops: []string{"review", "confirm-delivery"}},
 	{Name: "crew-escalate", Role: "coordinator", Hint: "<task id>",
 		Desc: "Coordinator: escalate a question you cannot settle to the architect",

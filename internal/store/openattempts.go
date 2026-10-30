@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -32,6 +34,27 @@ type OpenAttempt struct {
 	// HandoffUpdatedAt is when the worker's launcher last pushed the
 	// attempt's handoff; zero when it has none.
 	HandoffUpdatedAt time.Time `json:"handoff_updated_at,omitzero"`
+	// LatestResult is the attempt's latest submitted result, the one the
+	// review, confirm-delivery and finalize steps name; nil before a submit.
+	LatestResult *LatestResult `json:"latest_result,omitempty"`
+}
+
+// The kinds of a result's reference.
+const (
+	// ResultPull is the attempt's watched pull request.
+	ResultPull = "pull_request"
+	// ResultRef is any other reference the worker submitted.
+	ResultRef = "reference"
+)
+
+// LatestResult is an attempt's latest submitted result: its sequence number,
+// what its reference is, and, for the watched pull request, the head aicrewd
+// last observed on it.
+type LatestResult struct {
+	ResultSeq int64  `json:"result_seq"`
+	Kind      string `json:"kind"`
+	Ref       string `json:"ref"`
+	Head      string `json:"head,omitempty"`
 }
 
 // OpenAttempts is the team's open attempts and its current coordinator
@@ -99,6 +122,9 @@ func (s *Store) OpenAttemptsWithToken(ctx context.Context, token string) (OpenAt
 			if o.HandoffUpdatedAt, err = handoffTime(ctx, q, a.ID); err != nil {
 				return err
 			}
+			if o.LatestResult, err = latestResultOf(ctx, q, a.ID); err != nil {
+				return err
+			}
 			out.Attempts = append(out.Attempts, o)
 		}
 		return nil
@@ -124,4 +150,25 @@ func openAttempt(a Attempt, workerLabel string, coordGen int64, now time.Time) O
 		o.NextAction = nextSettlePending
 	}
 	return o
+}
+
+// latestResultOf is attempt id's latest result; nil when it has none.
+func latestResultOf(ctx context.Context, q querier, id string) (*LatestResult, error) {
+	var r LatestResult
+	var pullURL, head sql.NullString
+	err := q.QueryRowContext(ctx,
+		`SELECT r.seq, r.result_ref, p.url, p.head_commit FROM attempt_results r
+		 LEFT JOIN attempt_pulls p ON p.attempt_id = r.attempt_id
+		 WHERE r.attempt_id = ? ORDER BY r.seq DESC LIMIT 1`, id).Scan(&r.ResultSeq, &r.Ref, &pullURL, &head)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("read the latest result: %w", err)
+	}
+	r.Kind = ResultRef
+	if pullURL.Valid && pullURL.String == r.Ref {
+		r.Kind, r.Head = ResultPull, head.String
+	}
+	return &r, nil
 }

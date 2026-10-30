@@ -12,6 +12,17 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+### Added
+
+- **A coordinator reads the result's number instead of guessing it**
+  (01a188f9-4d9a). The submit announcement names it:
+  `<worker> submitted a result for task <task> (result_seq <n>): <ref>`.
+  `aicrew-agent attempts` names each open attempt's `latest_result`: its
+  `result_seq`, its reference and kind, and the pull request's last observed
+  head. The field is optional, so older clients keep working. The role
+  guidance's review, confirm-delivery and finalize steps and `/crew-review`
+  say where the number comes from: after a rework the next result is 2.
+
 ### Changed
 
 - **The real-aimem e2e runs on a pull request labelled `e2e-real-aimem`**

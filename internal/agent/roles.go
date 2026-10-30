@@ -105,6 +105,15 @@ const finalizeEvidence = "The task's `evidence_refs` get the confirmed delivery'
 	"request and CI run and each noted with its delivery kind and the attempt, unless the task already names evidence " +
 	"of its own: do not write them a second time."
 
+// resultSeqSource says where a coordinator's step reads the result's number.
+const resultSeqSource = "`result_seq` is the latest result's number: the worker's submit announcement names it " +
+	"(`(result_seq N)`), and `aicrew-agent attempts` shows it as the attempt's `latest_result`. Never guess it: " +
+	"a rework makes the next submit result 2."
+
+// workerResultSeq says where a worker's finalize reads the result's number.
+const workerResultSeq = "`result_seq` is the number in the coordinator's \"confirmed the delivery of result N\" message; " +
+	"never guess it."
+
 var guideRoles = []guideRole{
 	{Role: "coordinator", Heading: sectionCoordinator, Intro: "You plan the team's work: you offer tasks to workers, review their results, and " +
 		"finalize them once their delivery is confirmed.\n\n" +
@@ -146,13 +155,13 @@ var guideRoles = []guideRole{
 			{"withdraw", "--attempt ATTEMPT_ID --task TASK_ID", "", "Release an offer that was declined, expired or is no " +
 				"longer wanted, before it was accepted."},
 			{"review", "--attempt ATTEMPT_ID", `{"result_seq": 1, "decision": "accept"}`, "Decide on the worker's latest " +
-				"submitted result: `accept`, or `rework` to send it back."},
+				"submitted result: `accept`, or `rework` to send it back. " + resultSeqSource},
 			{"confirm-delivery", "--attempt ATTEMPT_ID", `{"result_seq": 1, "evidence": [` +
 				`{"kind": "reviewed_head", "ref": "REVIEW_URL"}, {"kind": "human_merge", "ref": "MERGE_COMMIT_URL"}, ` +
 				`{"kind": "post_merge_ci", "ref": "CI_RUN_URL"}]}`, "After a person merged the accepted result, " +
-				"record the evidence the project's process requires, each kind with its link."},
+				"record the evidence the project's process requires, each kind with its link. " + resultSeqSource},
 			{"finalize", "--attempt ATTEMPT_ID --task TASK_ID", `{"result_seq": 1}`, "Finalize the accepted, delivered " +
-				"result as DONE, if the worker has not. " + finalizeEvidence},
+				"result as DONE, if the worker has not. " + resultSeqSource + " " + finalizeEvidence},
 			{"answer", "--attempt ATTEMPT_ID", `{"text": "Retry with the cache cleared: the runner disk was full."}`,
 				"Answer a worker's blocked report whose question is yours (see \"A worker's blocked report\" above). " +
 					"aicrew wakes the worker with the answer. Only the team's coordinator may, and only while the " +
@@ -189,7 +198,7 @@ var guideRoles = []guideRole{
 				"or `resume` after a block or a rework decision. The coordinator's answer to a block arrives in " +
 				"your inbox as an `action.needed` message: act on it, then `resume`."},
 			{"finalize", "--attempt ATTEMPT_ID --task TASK_ID", `{"result_seq": 1}`, "Finalize your accepted result " +
-				"as DONE once the coordinator confirmed its delivery. " + finalizeEvidence},
+				"as DONE once the coordinator confirmed its delivery. " + workerResultSeq + " " + finalizeEvidence},
 			{"confirm-stop", "--attempt ATTEMPT_ID", "", "Confirm that you stopped, after the coordinator asked."},
 			{"release", "--attempt ATTEMPT_ID --task TASK_ID", `{"target": "BLOCKED", "blocker": "Waiting on the schema decision."}`,
 				"After confirming a stop, release the task: `READY`, or `BLOCKED` with a blocker."},

@@ -367,7 +367,7 @@ trusts a caller it is given, and a test enforces that.
 | `POST /v1/crew/attempts` | `Authorization: Bearer` session token | Begin an offer ("Attempt steps"). |
 | `POST /v1/crew/attempts/{id}/accept`, `/decline`, `/withdraw` | `Authorization: Bearer` session token | Begin an acceptance or a withdrawal, or record a decline. |
 | `POST /v1/crew/attempts/claim` | `Authorization: Bearer` session token | Begin an independent claim. |
-| `GET /v1/crew/attempts` | `Authorization: Bearer` session token | The team's open attempts (every state but `closed`), oldest first, for its current coordinator to reconcile when its session starts; any other member is refused `role_forbidden`. Each: `id`, `state`, `phase`, `task`, `worker_agent_id`, `worker_label`, the `coordinator_generation` an offer was made under, `offer_expires_at`, `stale` (an offer made under an earlier coordinator generation), `expired`, `declined`, `next_action`, and `handoff_updated_at`, when the worker last pushed the attempt's handoff (absent when it has none). Reply: `coordinator_generation`, `attempts`. |
+| `GET /v1/crew/attempts` | `Authorization: Bearer` session token | The team's open attempts (every state but `closed`), oldest first, for its current coordinator to reconcile when its session starts; any other member is refused `role_forbidden`. Each: `id`, `state`, `phase`, `task`, `worker_agent_id`, `worker_label`, the `coordinator_generation` an offer was made under, `offer_expires_at`, `stale` (an offer made under an earlier coordinator generation), `expired`, `declined`, `next_action`, `handoff_updated_at`, when the worker last pushed the attempt's handoff (absent when it has none), and `latest_result`, the attempt's latest submitted result (absent before a submit): its `result_seq`, which the review, confirm-delivery and finalize steps take, its `ref`, its `kind` (`pull_request` when the reference is the attempt's watched pull request, else `reference`), and for a pull request the `head` aicrewd last observed on it. Reply: `coordinator_generation`, `attempts`. |
 | `POST /v1/crew/attempts/{id}/stop`, `/confirm-stop`, `/release` | `Authorization: Bearer` session token | Request or confirm a stop, or begin the stopped attempt's release. |
 | `POST /v1/crew/attempts/{id}/answer`, JSON `{"text"}` | `Authorization: Bearer` session token | The team's current coordinator answers the worker's blocked report ("Answer"). |
 | `POST /v1/crew/attempts/{id}/review`, `/confirm-delivery`, `/finalize` | `Authorization: Bearer` session token | Review the latest result, confirm its delivery, or begin finalizing it as `DONE`. |
@@ -514,6 +514,11 @@ begin needs an `Idempotency-Key`; settle does not.
   - `/{id}/work`, with `{intent, detail?}`: the holder's work update.
     - `intent` is `block` (with the blocker as `detail`), `submit` (with
       the result reference) or `resume`.
+    - A committed `submit` records the attempt's next result, numbered from
+      1, and its lifecycle message names that number and the reference:
+      `<worker> submitted a result for task <task> (result_seq <n>): <ref>`.
+      The number is fixed when the step begins, since an attempt has one
+      pending step at a time.
     - A committed `block` keeps its blocker on the attempt until the
       attempt leaves the blocked phase; the operator's team state shows
       it. It wakes the team's coordinators with one message that names the

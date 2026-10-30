@@ -535,7 +535,14 @@ func workMessage(ctx context.Context, q querier, a Attempt, intent WorkIntent, d
 	case IntentBlock:
 		return fmt.Sprintf("%s blocked task %s: %s", worker.Label, taskName(a.Task), detail), nil
 	case IntentSubmit:
-		return fmt.Sprintf("%s submitted a result for task %s: %s", worker.Label, taskName(a.Task), detail), nil
+		// The result's number is fixed here: an attempt has one pending
+		// step at a time, and applyWorkOutcome records it as the next.
+		seq, err := latestResult(ctx, q, a.ID)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s submitted a result for task %s (result_seq %d): %s", worker.Label, taskName(a.Task),
+			seq+1, detail), nil
 	default:
 		return fmt.Sprintf("%s resumed work on task %s.", worker.Label, taskName(a.Task)), nil
 	}

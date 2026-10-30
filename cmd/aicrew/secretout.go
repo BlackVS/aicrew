@@ -17,8 +17,9 @@ import (
 // standard output is one, and the command's metadata then goes to stderr,
 // so standard output carries the secret alone.
 
-// outputFlags is --output and the flag name it replaces, which still works,
-// with a notice, until 0.6.0 removes it.
+// outputFlags is --output and the flag name it replaces, which still works
+// with a notice: it is kept until every member runs a release past it,
+// then removed in a later minor release the CHANGELOG announces.
 type outputFlags struct {
 	output, old *string
 	oldName     string
@@ -39,7 +40,7 @@ func (o *outputFlags) value(set map[string]bool, stderr io.Writer) (string, bool
 		return "", false
 	}
 	if set[o.oldName] {
-		fmt.Fprintf(stderr, "aicrew: -%s is now --output; the old name is removed in 0.6.0\n", o.oldName)
+		fmt.Fprintf(stderr, "aicrew: -%s is now --output; the old name is kept until every member runs a release past it, then removed in a later minor release the CHANGELOG announces\n", o.oldName)
 		return *o.old, true
 	}
 	return *o.output, true

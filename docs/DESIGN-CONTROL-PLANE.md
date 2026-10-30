@@ -631,7 +631,7 @@ The TUI, then a web UI, are built only on an API that meets all of these:
 - within `/v1`, changes are additive only: new routes, and new optional
   fields;
 - a removal is announced in a release's notes and served with a notice for
-  at least one minor release, as the 0.6.0 removals are;
+  at least one minor release, as the names before 0.3.0 are;
 - lists share one shape for paging and filtering;
 - one full release has passed in which the CLI was the only client and no
   route changed incompatibly.

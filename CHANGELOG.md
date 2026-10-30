@@ -45,6 +45,18 @@ section, and the release workflow refuses a tag that has none
   is green at its head, and the operator merges sensitive-surface and
   release-preparation pull requests.
 
+### Deprecated
+
+- **The names before 0.3.0 name no removal release any more**
+  (01a17737-4268). The command `introspection-credential` (now
+  `hub-credential`), its `/v1/admin/introspection-credentials` routes, the
+  flags `-secret-file`, `-code-file` and `-file` (now `--output`), and
+  aicrewd.json's single `aimem` block are kept until every member runs a
+  release past them, then removed in a later minor release the CHANGELOG
+  announces. Their notices, comments and DEVELOPMENT.md said "until 0.6.0
+  removes it", which 0.7.0 to 0.9.0 did not. Nothing changes in what they
+  do.
+
 ### Fixed
 
 - **A finalized task records its delivery evidence** (01a18919-78c9).

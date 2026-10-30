@@ -29,8 +29,9 @@ const (
 	InvitationsPath      = "/v1/admin/invitations"            // GET list (?team=), POST issue
 	InvitationRevokePath = "/v1/admin/invitations/revoke"     // POST
 
-	// The credential routes' names before 0.3.0, served the same until
-	// 0.6.0 removes them.
+	// The credential routes' names before 0.3.0, served the same: they are
+	// kept until every member runs a release past them, then removed in a
+	// later minor release the CHANGELOG announces.
 	LegacyCredentialsPath      = "/v1/admin/introspection-credentials"
 	LegacyCredentialRotatePath = "/v1/admin/introspection-credentials/rotate"
 	LegacyCredentialRevokePath = "/v1/admin/introspection-credentials/revoke"

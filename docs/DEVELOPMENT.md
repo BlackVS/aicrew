@@ -306,8 +306,10 @@ an address; it holds no secret itself:
   coordinators on board changes ("Board wake", below). Without it, aicrewd
   logs a warning at start and the hub's board changes wake no one.
 - The single `aimem` block of earlier releases, without `name` or
-  `hub_id`, is still read until 0.6.0 removes it, as the hub `default`,
-  and logs a warning; a configuration with both forms is refused. Move it into
+  `hub_id`, is still read as the hub `default` and logs a warning: it is
+  kept until every member runs a release past it, then removed in a later
+  minor release the CHANGELOG announces. A configuration with both forms is
+  refused. Move it into
   `aimem_hubs` with `aicrewd config migrate` (below): a team cannot name
   that hub (`--hub`) because it has no hub ID.
 - Keep the TLS key readable only by the service's account.
@@ -573,8 +575,9 @@ in `internal/opapi`:
 | `POST /v1/admin/member/nudge` | `{"team_id", "agent_id", "note"}`: the operator's note to one member; answers the message's ID |
 
 The credential routes are also served under their names before 0.3.0,
-`/v1/admin/introspection-credentials` (and `/rotate`, `/revoke`), until
-0.6.0 removes them.
+`/v1/admin/introspection-credentials` (and `/rotate`, `/revoke`). They are
+kept until every member runs a release past them, then removed in a later
+minor release the CHANGELOG announces.
 
 **The operator credential.**
 - **Required on every route.** Every route requires
@@ -673,7 +676,8 @@ The output is checked before anything is issued, so a refused output issues
 nothing; if the secret cannot be written, what was just issued is revoked.
 
 **Names before 0.3.0.** These keep working, each with a one-line notice,
-until 0.6.0 removes them: the command
+and are kept until every member runs a release past them, then removed in a
+later minor release the CHANGELOG announces: the command
 `introspection-credential` (now `hub-credential`), its API routes (above),
 and the flags `-secret-file`, `-code-file` and `-file` (now `--output`).
 

@@ -108,7 +108,7 @@ const finalizeEvidence = "The task's `evidence_refs` get the confirmed delivery'
 // resultSeqSource says where a coordinator's step reads the result's number.
 const resultSeqSource = "`result_seq` is the latest result's number: the worker's submit announcement names it " +
 	"(`(result_seq N)`), and `aicrew-agent attempts` shows it as the attempt's `latest_result`. Never guess it: " +
-	"a rework makes the next submit result 2."
+	"each submit after a rework is a new result with the next number."
 
 // workerResultSeq says where a worker's finalize reads the result's number.
 const workerResultSeq = "`result_seq` is the number in the coordinator's \"confirmed the delivery of result N\" message; " +

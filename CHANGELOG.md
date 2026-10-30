@@ -21,7 +21,8 @@ section, and the release workflow refuses a tag that has none
   `result_seq`, its reference and kind, and the pull request's last observed
   head. The field is optional, so older clients keep working. The role
   guidance's review, confirm-delivery and finalize steps and `/crew-review`
-  say where the number comes from: after a rework the next result is 2.
+  say where the number comes from: each submit after a rework is a new
+  result with the next number.
 
 ### Changed
 

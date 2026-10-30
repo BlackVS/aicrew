@@ -1,6 +1,6 @@
 """The cycle's checks after each step (docs/DESIGN-PILOT-SIMULATION.md, section 5).
 
-    cycle.py check STEP DIR
+    cycle.py check STEP DIR [CASE]
     cycle.py state STORE_DIR TASK   (the attempt's STATE/PHASE and pull requests)
     cycle.py pull STORE_DIR TASK    (the number of the attempt's pull request)
 
@@ -17,7 +17,10 @@ DIR is the step's snapshot, which scripts/pilot-sim.sh takes read-only:
   verify.json            verify-delivery's answer for the pull request, at the step done
   homes/ROLE/            turns.jsonl, guard.jsonl, turns.json and HANDOFF.md of each home
 
-STEP is one of STEPS. Prints each failed expectation and exits 1 when there
+STEP is one of STEPS. CASE names the pilot case (cases.py) whose cycle the
+snapshot is, at the step done only: its own checks are in cases.py, and here
+it drops the plain cycle's external RETURN and its rework, and for P4 allows
+the block the case caused. Prints each failed expectation and exits 1 when there
 is one; the snapshot stays for the report.
 """
 import json
@@ -44,7 +47,7 @@ EXPECT = {
 
 # The operator's own calls in the audit: the runner's setup and its pauses.
 # Any other operator operation, or a member's call of one, fails the check.
-OPERATOR_OPS = {"control.pause", "control.resume", "introspection.credential.issue", "invitation.issue",
+OPERATOR_OPS = {"control.nudge", "control.pause", "control.resume", "introspection.credential.issue", "invitation.issue",
                 "team.create", "team.record_registration"}
 REVIEW_HEAD = re.compile(r"^\[(oh-code-review \(high\) review|hands-bot review)\] reviewed at head ([0-9a-f]{40})$", re.M)
 VERDICT = re.compile(r"^VERDICT\n(\S+)$", re.M)
@@ -79,7 +82,7 @@ def reviews(comments):
     return out
 
 
-def check(step, d):
+def check(step, d, case=""):
     errs = []
     expect = lambda ok, what: ok or errs.append(what)
     at = STEPS.index(step)
@@ -101,7 +104,8 @@ def check(step, d):
            "aicrewd: the attempt is %s/%s, not %s/%s" % ((a["state"], a["phase"]) + want["attempt"]))
     expect(a["worker_agent_id"] == ids["worker"], "aicrewd: the attempt's worker is %s" % a["worker_agent_id"])
     expect(a["branch"] == "work/" + task, "aicrewd: the attempt's branch is %s" % a["branch"])
-    expect(a["blocked_reason"] == "", "aicrewd: the attempt was blocked: %s" % a["blocked_reason"])
+    if case != "P4":
+        expect(a["blocked_reason"] == "", "aicrewd: the attempt was blocked: %s" % a["blocked_reason"])
     steps = q("SELECT operation, outcome, refusal FROM attempt_steps WHERE attempt_id = ? ORDER BY settled_at", a["id"])
     ops = [s["operation"] for s in steps]
     for s in steps:
@@ -165,7 +169,8 @@ def check(step, d):
            "aimem: no triage comment")
     states = [(h.get("task") or {}).get("state") for h in items(loadj(d, "aimem/history.json", []), "changes")]
     expect(states and None not in states, "aimem: the task's history has no states: %s" % states)
-    expect(not {"BLOCKED", "CANCELLED"} & set(states), "aimem: the task's history went through %s" % states)
+    expect(not ({"BLOCKED", "CANCELLED"} if case != "P4" else {"CANCELLED"}) & set(states),
+           "aimem: the task's history went through %s" % states)
     hold = loadj(d, "aimem/reservation.json")
     if want["holder"]:
         expect(hold.get("state") == "held", "aimem: the reservation is %s, not held" % hold.get("state"))
@@ -180,7 +185,7 @@ def check(step, d):
         revs = reviews(loadj(d, "forge/comments.json", []))
         head = (pr.get("head") or {}).get("sha", "")
         external = [r for r in revs if r[0] == "external"]
-        if after("rework"):
+        if after("rework") and not case:
             expect(external and external[0][2] == "RETURN_TO_IMPLEMENTATION" and external[0][1] != head,
                    "forge: no external RETURN of an older head before the rework: %s (head %s)" % (revs, head))
         if after("submit"):
@@ -228,7 +233,7 @@ def check(step, d):
     if after("accept") and not after("done"):
         expect("## CURRENT ATTEMPT" in handoff and a["id"] in handoff, "worker: no CURRENT ATTEMPT section for the attempt")
     for s, text in (("pull", "Pull request #"), ("rework", "Reworked #"), ("submit", "Submitted #")):
-        if after(s):
+        if after(s) and not (case and s == "rework"):
             expect(text in handoff, "worker: the handoff does not record %r" % text)
     coordinator = load(d, "homes/coordinator/HANDOFF.md", "") or ""
     for s, text in (("review", "Accepted result 1 of attempt " + a["id"]),
@@ -261,10 +266,11 @@ def main(argv):
         n = pull(argv[1], argv[2])
         print(n or "")
         return 0 if n else 1
-    if len(argv) != 3 or argv[0] != "check" or argv[1] not in STEPS:
+    if len(argv) not in (3, 4) or argv[0] != "check" or argv[1] not in STEPS or \
+            (len(argv) == 4 and (argv[1] != "done" or argv[3] not in ("P1", "P2", "P4", "P5"))):
         print(__doc__, file=sys.stderr)
         return 2
-    errs = check(argv[1], argv[2])
+    errs = check(argv[1], argv[2], argv[3] if len(argv) == 4 else "")
     for e in errs:
         print("cycle %s: %s" % (argv[1], e), file=sys.stderr)
     return 1 if errs else 0

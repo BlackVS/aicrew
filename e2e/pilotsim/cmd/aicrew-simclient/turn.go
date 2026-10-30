@@ -121,7 +121,54 @@ type member struct {
 	run  runFunc
 	mcp  mcpFunc
 	now  func() time.Time
-	did  []string // what the turn did, in order
+	sc   scenario
+	// scErr is an unreadable scenario, which fails the turn rather than
+	// running the plain cycle in its place.
+	scErr error
+	did   []string // what the turn did, in order
+}
+
+// scenarioFile is where the runner puts the member's scenario, outside the
+// home: what a model would do differently in a pilot case
+// (docs/DESIGN-PILOT-SIMULATION.md, 6.2). The runner changes it only while
+// the member is paused and its turn has ended.
+const scenarioFile = "/sim/scenario/member.json"
+
+// scenario is the member's behaviour in the pilot cases; the zero scenario
+// is the plain cycle.
+type scenario struct {
+	// NeverAck leaves every message unacknowledged (P1).
+	NeverAck bool `json:"never_ack"`
+	// PushDuringReview makes the worker push one more commit while
+	// hands-reviewing is on its pull request (P2).
+	PushDuringReview bool `json:"push_during_review"`
+	// Stall makes the worker's turns in a working attempt do nothing: no
+	// step, no commit and no handoff change (P4).
+	Stall bool `json:"stall"`
+	// Result ends every turn with a client error instead of the script:
+	// "login" (the provider's 401) or "model" (its 404) (P3).
+	Result string `json:"result"`
+	// CostUSD is the client's running total the result reports (P3).
+	CostUSD float64 `json:"cost_usd"`
+}
+
+// readScenario reads path; a missing file is the zero scenario.
+func readScenario(path string) (scenario, error) {
+	var sc scenario
+	raw, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return sc, nil
+	case err != nil:
+		return sc, err
+	}
+	if err := json.Unmarshal(raw, &sc); err != nil {
+		return sc, fmt.Errorf("%s: %w", path, err)
+	}
+	if sc.Result != "" && sc.Result != "login" && sc.Result != "model" {
+		return sc, fmt.Errorf("%s: result %q is neither login nor model", path, sc.Result)
+	}
+	return sc, nil
 }
 
 func (m *member) note(format string, a ...any) { m.did = append(m.did, fmt.Sprintf(format, a...)) }
@@ -215,6 +262,9 @@ func (m *member) ack(ctx context.Context, msgs []message) error {
 
 // turn runs one turn: the role's script, the acks and the handoff.
 func (m *member) turn(ctx context.Context, b brief) error {
+	if m.sc.Stall && b.Role == "worker" && b.State == "running" && b.Phase == "working" {
+		return nil // no step, no commit, the handoff as it was (P4)
+	}
 	msgs, err := m.inbox(ctx)
 	if err != nil {
 		return err
@@ -227,7 +277,10 @@ func (m *member) turn(ctx context.Context, b brief) error {
 	default:
 		err = fmt.Errorf("no script for the role %q", b.Role)
 	}
-	if err == nil {
+	switch {
+	case err == nil && m.sc.NeverAck && len(msgs) > 0:
+		m.note("Left %d message(s) unacknowledged.", len(msgs))
+	case err == nil:
 		err = m.ack(ctx, msgs)
 	}
 	if err == nil && len(m.did) == 0 {
@@ -259,7 +312,16 @@ func (m *member) worker(ctx context.Context, b brief, msgs []message) error {
 		}
 		return nil
 	}
-	if b.State != "running" || (b.Phase != "working" && b.Phase != "rework") {
+	if b.State == "running" && b.Phase == "blocked" {
+		if !answered(msgs, b.Attempt) {
+			m.note("Attempt %s is blocked: waiting for the coordinator's answer.", b.Attempt)
+			return nil
+		}
+		if _, err := m.step(ctx, "work", b.Attempt, b.Task, map[string]string{"intent": "resume"}); err != nil {
+			return err
+		}
+		m.note("Resumed attempt %s on the coordinator's answer.", b.Attempt)
+	} else if b.State != "running" || (b.Phase != "working" && b.Phase != "rework") {
 		m.note("Attempt %s is %s/%s: nothing for the worker to do.", b.Attempt, b.State, b.Phase)
 		return nil
 	}
@@ -283,6 +345,22 @@ func (m *member) worker(ctx context.Context, b brief, msgs []message) error {
 		return m.openPull(ctx, b, wt)
 	}
 	return m.followPull(ctx, b, wt, n)
+}
+
+// answered says whether the messages hold the coordinator's answer to the
+// attempt's blocked report.
+func answered(msgs []message, attempt string) bool {
+	for _, msg := range msgs {
+		if msg.Action == nil {
+			continue
+		}
+		for _, s := range msg.Action.Subjects {
+			if s.Kind == "answer" && s.AttemptID == attempt {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // openPull commits the task's change, pushes it with the home's credential,
@@ -324,15 +402,15 @@ func (m *member) commitAndPush(ctx context.Context, wt, branch, file, subject st
 	return nil
 }
 
-// rework answers an external review that returned the head: a new commit,
-// then a new request.
-func (m *member) rework(ctx context.Context, b brief, wt string, n int64) error {
+// rework answers why the head cannot be submitted: a new commit, then a
+// new request for the external review unless one is still running.
+func (m *member) rework(ctx context.Context, b brief, wt string, n int64, why string) error {
 	file := filepath.Join("sim", b.Task+".md")
 	f, err := os.OpenFile(filepath.Join(wt, file), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
-	_, err = f.WriteString("Reworked after the external review.\n")
+	_, err = f.WriteString("Reworked: " + why + ".\n")
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -342,7 +420,12 @@ func (m *member) rework(ctx context.Context, b brief, wt string, n int64) error 
 	if err := m.commitAndPush(ctx, wt, b.Branch, file, "sim: rework of task "+b.Task); err != nil {
 		return err
 	}
-	m.note("Reworked #%d: the external review returned it; pushed a new commit.", n)
+	m.note("Reworked #%d: %s; pushed a new commit.", n, why)
+	if why == pushedInReview {
+		// The reviewer is reading the old head: the request for the new
+		// one waits until its label is off (P2).
+		return nil
+	}
 	return m.requestReview(ctx, wt, n, true)
 }
 
@@ -377,10 +460,15 @@ func (m *member) followPull(ctx context.Context, b brief, wt string, n int64) er
 	switch {
 	case p.State != forge.PullOpen:
 		m.note("Pull request #%d is %s.", n, p.State)
+	case m.sc.PushDuringReview && slices.Contains(p.Labels, "hands-reviewing") &&
+		!strings.Contains(m.section(), pushedInReview):
+		return m.rework(ctx, b, wt, n, pushedInReview) // once per attempt
 	case asked:
 		m.note("Waiting on the external review of #%d at %s (labels %s).", n, p.HeadCommit, strings.Join(p.Labels, ", "))
+	case checks == forge.ChecksFailure:
+		return m.rework(ctx, b, wt, n, "the checks failed at "+p.HeadCommit)
 	case verdict == "RETURN_TO_IMPLEMENTATION":
-		return m.rework(ctx, b, wt, n)
+		return m.rework(ctx, b, wt, n, "the external review returned it")
 	case verdict == "":
 		// No review at this head: a hands-reviewed label is an older head's.
 		return m.requestReview(ctx, wt, n, slices.Contains(p.Labels, "hands-reviewed"))
@@ -462,10 +550,7 @@ func candidates(msgs []message) []agent.TaskRef {
 }
 
 func (m *member) coordinator(ctx context.Context, msgs []message) error {
-	tasks, results, pulls := candidates(msgs), submits(msgs), pullActions(msgs)
-	if len(tasks) == 0 && len(results) == 0 && len(pulls) == 0 {
-		return nil
-	}
+	tasks, results, blocked := candidates(msgs), submits(msgs), blockedReports(msgs)
 	var ans agent.StepAnswer
 	if err := m.agentJSON(ctx, m.home, "", &ans, "attempts"); err != nil {
 		return err
@@ -483,8 +568,19 @@ func (m *member) coordinator(ctx context.Context, msgs []message) error {
 			return err
 		}
 	}
-	for _, id := range pulls {
-		if a, ok := phase[id]; ok && a.Phase == "accepted" {
+	for _, id := range blocked {
+		if a, ok := phase[id]; ok && a.Phase == "blocked" {
+			if _, err := m.step(ctx, "answer", id, "", map[string]string{"text": stallAnswer}); err != nil {
+				return err
+			}
+			m.note("Answered the blocked report of attempt %s.", id)
+		}
+	}
+	// Every accepted attempt is checked each turn, not only on a pull
+	// request's wake: a delivery verify-delivery left pending is confirmed
+	// on a later turn.
+	for _, a := range open.Attempts {
+		if a.Phase == "accepted" {
 			if err := m.deliver(ctx, a); err != nil {
 				return err
 			}
@@ -646,16 +742,23 @@ func submits(msgs []message) []submitted {
 	return out
 }
 
-// pullActions are the attempts whose pull request needs a decision, in the
-// order read.
-func pullActions(msgs []message) []string {
+// pushedInReview is the rework of P2: one commit pushed while the external
+// review runs.
+const pushedInReview = "pushed while the external review ran"
+
+// stallAnswer is the coordinator's answer to a blocked report.
+const stallAnswer = "Go on with the task as offered; nothing else blocks it."
+
+// blockedReports are the attempts whose worker reported them blocked, in
+// the order read.
+func blockedReports(msgs []message) []string {
 	var out []string
 	for _, msg := range msgs {
 		if msg.Action == nil {
 			continue
 		}
 		for _, s := range msg.Action.Subjects {
-			if s.Kind == "pull" && s.AttemptID != "" && !slices.Contains(out, s.AttemptID) {
+			if s.Kind == "blocked" && s.AttemptID != "" && !slices.Contains(out, s.AttemptID) {
 				out = append(out, s.AttemptID)
 			}
 		}
@@ -998,17 +1101,29 @@ func turnRun(ctx context.Context, dir string, stdin io.Reader, stdout io.Writer,
 		b, err = parseBrief(strings.TrimSpace(string(raw)))
 	}
 	if err == nil {
+		err = m.scErr
+	}
+	// A client error the scenario names ends the turn before the script, as
+	// the provider's answer would (P3).
+	status := map[string]int{"login": 401, "model": 404}[m.sc.Result]
+	if err == nil && status == 0 {
 		err = m.turn(ctx, b)
 	}
 	emit(stdout, map[string]any{"type": "system", "subtype": "init", "cwd": dir, "model": simModel,
 		"mcp_servers": []mcpEntry{}, "skills": []string{}})
-	if err != nil {
+	switch {
+	case err != nil:
 		emit(stdout, map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true,
-			"result": strings.Join(m.did, " "), "errors": []string{err.Error()}, "total_cost_usd": 0})
+			"result": strings.Join(m.did, " "), "errors": []string{err.Error()}, "total_cost_usd": m.sc.CostUSD})
+		return 1
+	case status != 0:
+		emit(stdout, map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true,
+			"result": "", "api_error_status": status, "errors": []string{"the scenario's " + m.sc.Result + " error"},
+			"total_cost_usd": m.sc.CostUSD})
 		return 1
 	}
 	emit(stdout, map[string]any{"type": "result", "subtype": "success", "is_error": false,
-		"result": strings.Join(m.did, " "), "total_cost_usd": 0})
+		"result": strings.Join(m.did, " "), "total_cost_usd": m.sc.CostUSD})
 	return 0
 }
 
@@ -1019,7 +1134,8 @@ func newMember(dir string) *member {
 	if home == "" {
 		home = dir
 	}
-	return &member{home: home, run: execRun, now: time.Now,
+	sc, scErr := readScenario(scenarioFile)
+	return &member{home: home, sc: sc, scErr: scErr, run: execRun, now: time.Now,
 		mcp: func(ctx context.Context, tool string, args map[string]any) (string, error) {
 			s, ok, err := aimemServer(home)
 			if err != nil || !ok {

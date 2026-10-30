@@ -44,6 +44,21 @@ type OpenAttempt struct {
 	// HandoffUpdatedAt is when the worker last pushed the attempt's
 	// handoff; zero when it has none, or when aicrewd is older than 280c.
 	HandoffUpdatedAt time.Time `json:"handoff_updated_at,omitzero"`
+	// LatestResult is the attempt's latest submitted result, whose
+	// result_seq the review, confirm-delivery and finalize steps take; nil
+	// before a submit, or when aicrewd is older than 4d9a.
+	LatestResult *LatestResult `json:"latest_result,omitempty"`
+}
+
+// LatestResult is an attempt's latest submitted result: its sequence
+// number, its reference's kind (pull_request for the attempt's watched pull
+// request, else reference), the reference, and the pull request's head as
+// aicrewd last observed it.
+type LatestResult struct {
+	ResultSeq int64  `json:"result_seq"`
+	Kind      string `json:"kind"`
+	Ref       string `json:"ref"`
+	Head      string `json:"head,omitempty"`
 }
 
 // TaskRef names an aimem task.
@@ -103,6 +118,12 @@ func (a OpenAttempt) Line() string {
 		state += ", handoff pushed " + a.HandoffUpdatedAt.UTC().Format(time.RFC3339)
 	case a.State == "running":
 		state += ", no handoff pushed"
+	}
+	if r := a.LatestResult; r != nil {
+		state += fmt.Sprintf(", latest result_seq %d: %s", r.ResultSeq, r.Ref)
+		if r.Head != "" {
+			state += " at head " + r.Head
+		}
 	}
 	return fmt.Sprintf("- Attempt `%s`: task `%s/%s/%s`, worker %s, %s. Next: %s", a.ID, a.Task.HubID,
 		a.Task.ProjectID, a.Task.TaskID, a.WorkerLabel, state, a.NextAction)

@@ -148,7 +148,7 @@ func TestWorkLifecycle(t *testing.T) {
 	want := []string{
 		"builder accepted task hub-a/project-a/task-1 and started work.",
 		"builder resumed work on task hub-a/project-a/task-1.",
-		"builder submitted a result for task hub-a/project-a/task-1: https://example.invalid/pull/1",
+		"builder submitted a result for task hub-a/project-a/task-1 (result_seq 1): https://example.invalid/pull/1",
 		"Task hub-a/project-a/task-1 was finalized as done with result 1.",
 	}
 	if !reflect.DeepEqual(texts, want) {
@@ -517,4 +517,56 @@ func TestBlockerFitsItsTeamMessage(t *testing.T) {
 		t.Fatalf("the settled message was rebuilt: %d bytes, want the checked %d", len(last.Text), len(prefix+longest))
 	}
 	e.mustWork(t, "w-resume", a, IntentResume, "")
+}
+
+// The coordinator reads a result's number from the surfaces it already has:
+// the submit announcement names it, and the open attempt's latest_result
+// names it with its reference, and the watched pull request's head when the
+// reference is that pull request (task 01a188f9-4d9a). After a rework the
+// next submit is result 2 on both.
+func TestLatestResultOnTheSubmitAndTheOpenAttempt(t *testing.T) {
+	ctx := context.Background()
+	e, a := running(t)
+	latest := func() *LatestResult {
+		t.Helper()
+		r, err := latestResultOf(ctx, e.s.db, a.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	if r := latest(); r != nil {
+		t.Fatalf("latest result before a submit = %+v, want none", r)
+	}
+	a = e.mustWork(t, "w1", a, IntentSubmit, "https://example.invalid/pull/1")
+	if r := latest(); r == nil || *r != (LatestResult{ResultSeq: 1, Kind: ResultRef, Ref: "https://example.invalid/pull/1"}) {
+		t.Fatalf("latest result of an unwatched reference = %+v", r)
+	}
+	if _, err := e.review(t, "r1", a, e.lead, 1, ReviewRework); err != nil {
+		t.Fatal(err)
+	}
+	a = e.mustWork(t, "w2", a, IntentResume, "")
+	// aicrewd watches the pull request the worker submits next.
+	const pull = "https://example.invalid/owner/repo/pulls/2"
+	if _, err := e.s.db.ExecContext(ctx, `INSERT INTO attempt_pulls (attempt_id, number, url, state, head_commit, labels,
+		checks, comments, observed_at) VALUES (?, 2, ?, 'open', 'abc123', '[]', '', 0, '2026-10-30T00:00:00Z')`, a.ID, pull); err != nil {
+		t.Fatal(err)
+	}
+	a = e.mustWork(t, "w3", a, IntentSubmit, pull)
+	if r := latest(); r == nil || *r != (LatestResult{ResultSeq: 2, Kind: ResultPull, Ref: pull, Head: "abc123"}) {
+		t.Fatalf("latest result of the watched pull request = %+v", r)
+	}
+	var submits []string
+	for _, it := range read(t, e.s, e.lead, 20) {
+		if strings.Contains(it.Text, " submitted a result ") {
+			submits = append(submits, it.Text)
+		}
+	}
+	want := []string{
+		"builder submitted a result for task hub-a/project-a/task-1 (result_seq 1): https://example.invalid/pull/1",
+		"builder submitted a result for task hub-a/project-a/task-1 (result_seq 2): " + pull,
+	}
+	if !reflect.DeepEqual(submits, want) {
+		t.Fatalf("the coordinator's submit announcements = %q, want %q", submits, want)
+	}
 }

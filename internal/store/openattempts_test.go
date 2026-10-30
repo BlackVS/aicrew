@@ -43,6 +43,9 @@ func TestOpenAttemptsWithToken(t *testing.T) {
 		o.WorkerLabel != "worker" || o.Task.TaskID != "task-1" || o.CoordinatorGeneration != got.CoordinatorGeneration {
 		t.Errorf("a fresh offer = %+v", o)
 	}
+	if o.LatestResult != nil || c.LatestResult != nil {
+		t.Errorf("attempts without a submit name a latest result: %+v, %+v", o.LatestResult, c.LatestResult)
+	}
 	if c.State != AttemptRunning || c.NextAction != nextFollowRunning || c.WorkerLabel != "indep" || c.Stale {
 		t.Errorf("a running claim = %+v", c)
 	}

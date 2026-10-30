@@ -90,6 +90,28 @@ func TestRoleGuidanceContent(t *testing.T) {
 	if finalizes != 2 {
 		t.Errorf("%d finalize steps in ROLES.md, want the coordinator's and the worker's", finalizes)
 	}
+	// Every step that names a result says where its number comes from, never
+	// a guess (4d9a): the coordinator's from the submit announcement or
+	// `aicrew-agent attempts`, the worker's from the delivery confirmation.
+	for _, r := range guideRoles {
+		for _, s := range r.Steps {
+			if !strings.Contains(s.Body, "result_seq") {
+				continue
+			}
+			want := resultSeqSource
+			if r.Role == "worker" {
+				want = workerResultSeq
+			}
+			if !strings.Contains(s.What, want) {
+				t.Errorf("the %s's %s step does not say where result_seq comes from: %s", r.Role, s.Op, s.What)
+			}
+		}
+	}
+	for _, c := range crewCommands {
+		if c.Name == "crew-review" && !strings.Contains(c.Body, resultSeqSource) {
+			t.Error("/crew-review does not say where result_seq comes from")
+		}
+	}
 }
 
 // The block after accepting is taught as the work step's own form, and the

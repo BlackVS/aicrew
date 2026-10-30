@@ -66,6 +66,12 @@ func TestWorkUpdateSettlesFromTheReadScope(t *testing.T) {
 	if res, err := e.s.AttemptResults(ctx, a.ID); err != nil || len(res) != 1 || res[0].ResultRef != "https://forge.example/pull/7" {
 		t.Fatalf("results: %+v %v", res, err)
 	}
+	// The coordinator's open attempts name the result it reviews next.
+	open, err := e.s.OpenAttemptsWithToken(ctx, e.leadTok)
+	if r := byID(open, a.ID).LatestResult; err != nil || r == nil ||
+		*r != (LatestResult{ResultSeq: 1, Kind: ResultRef, Ref: "https://forge.example/pull/7"}) {
+		t.Fatalf("the open attempt's latest result: %+v %v", r, err)
+	}
 	if _, _, err := e.s.BeginWorkWithToken(ctx, "block-l", e.leadTok, a.ID, IntentBlock, "x"); !errors.Is(err, ErrForbidden) && !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an update by another member: %v", err)
 	}

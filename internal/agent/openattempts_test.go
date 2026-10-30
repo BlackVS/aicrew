@@ -181,3 +181,19 @@ func TestOpenAttemptLineHandoff(t *testing.T) {
 		t.Errorf("an offer names a handoff: %q", got)
 	}
 }
+
+// A submitted attempt's line names its latest result: the result_seq the
+// coordinator's steps take, the reference and the pull request's head
+// (4d9a).
+func TestOpenAttemptLineLatestResult(t *testing.T) {
+	a := OpenAttempt{ID: "att-1", State: "running", Phase: "submitted", Task: TaskRef{HubID: "h", ProjectID: "p", TaskID: "t"},
+		WorkerLabel: "worker", NextAction: "Review it.",
+		LatestResult: &LatestResult{ResultSeq: 2, Kind: "pull_request", Ref: "https://forge.example/o/r/pulls/7", Head: "abc123"}}
+	if got := a.Line(); !strings.Contains(got, ", latest result_seq 2: https://forge.example/o/r/pulls/7 at head abc123. Next:") {
+		t.Errorf("a pull request result: %q", got)
+	}
+	a.LatestResult = &LatestResult{ResultSeq: 1, Kind: "reference", Ref: "https://example.invalid/r"}
+	if got := a.Line(); !strings.Contains(got, ", latest result_seq 1: https://example.invalid/r. Next:") {
+		t.Errorf("another reference: %q", got)
+	}
+}

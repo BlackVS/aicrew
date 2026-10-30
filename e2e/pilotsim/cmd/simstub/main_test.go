@@ -152,6 +152,12 @@ func (f *fakeGitea) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			q.Labels = slices.Delete(q.Labels, i, i+1)
 			w.WriteHeader(http.StatusNoContent)
 		}
+	case r.Method == "GET" && reComments.MatchString(p):
+		out := []map[string]string{}
+		for _, b := range f.comments[num(reComments.FindStringSubmatch(p)[1])] {
+			out = append(out, map[string]string{"body": b})
+		}
+		reply(200, out)
 	case r.Method == "POST" && reComments.MatchString(p):
 		n := num(reComments.FindStringSubmatch(p)[1])
 		var in struct {
@@ -273,6 +279,24 @@ func TestHandsReturnVerdict(t *testing.T) {
 	body := f.comments[1][0]
 	if !regexp.MustCompile(`(?m)^VERDICT\n`+verdictReturn+`$`).MatchString(body) || !strings.Contains(body, "[BLOCKER]") {
 		t.Errorf("return verdict body:\n%s", body)
+	}
+}
+
+func TestHandsFirstVerdict(t *testing.T) {
+	f, srv, tok, sc := setup(t, `{"repos":["`+repo+`"],"hands":{"first_verdict":"RETURN_TO_IMPLEMENTATION"}}`)
+	f.addPull(1, head1, labelRequest)
+	once(t, "hands", srv.URL+"/api/v1", tok, sc)
+	// The second request, at a new head, gets the scenario's verdict.
+	f.addPull(1, head2, labelRequest)
+	once(t, "hands", srv.URL+"/api/v1", tok, sc)
+	verdict := regexp.MustCompile(`(?m)^VERDICT\n(\S+)$`)
+	if len(f.comments[1]) != 2 {
+		t.Fatalf("comments: %q", f.comments[1])
+	}
+	for i, want := range []string{verdictReturn, verdictReady} {
+		if m := verdict.FindStringSubmatch(f.comments[1][i]); m == nil || m[1] != want {
+			t.Errorf("review %d: want %s:\n%s", i+1, want, f.comments[1][i])
+		}
 	}
 }
 

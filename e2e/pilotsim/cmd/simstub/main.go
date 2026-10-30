@@ -48,6 +48,8 @@ const (
 
 	verdictReady  = "READY_FOR_HUMAN_MERGE"
 	verdictReturn = "RETURN_TO_IMPLEMENTATION"
+
+	reviewHeader = "[hands-bot review]"
 )
 
 // scenario is the part of the scenario file the stubs read.
@@ -56,7 +58,10 @@ type scenario struct {
 	Repos       []string `json:"repos"`
 	PollSeconds float64  `json:"poll_seconds"`
 	Hands       struct {
-		Verdict       string  `json:"verdict"`
+		Verdict string `json:"verdict"`
+		// FirstVerdict, when set, is the verdict of a pull request's
+		// first review: one with no review of this stub's yet.
+		FirstVerdict  string  `json:"first_verdict"`
 		ReviewSeconds float64 `json:"review_seconds"`
 	} `json:"hands"`
 	CI struct {
@@ -80,8 +85,10 @@ func loadScenario(path string) (scenario, error) {
 	if s.Hands.Verdict == "" {
 		s.Hands.Verdict = verdictReady
 	}
-	if s.Hands.Verdict != verdictReady && s.Hands.Verdict != verdictReturn {
-		return s, fmt.Errorf("%s: hands.verdict %q is neither %s nor %s", path, s.Hands.Verdict, verdictReady, verdictReturn)
+	for _, v := range []string{s.Hands.Verdict, s.Hands.FirstVerdict} {
+		if v != "" && v != verdictReady && v != verdictReturn {
+			return s, fmt.Errorf("%s: hands verdict %q is neither %s nor %s", path, v, verdictReady, verdictReturn)
+		}
 	}
 	if s.CI.State == "" {
 		s.CI.State = "success"
@@ -273,7 +280,17 @@ func (st *stub) review(ctx context.Context, s scenario, repo string, p pull) err
 			repo, p.Number, head, now.Head.SHA)
 		return st.g.do(ctx, "DELETE", fmt.Sprintf("%s/%d", issue, ids[labelReviewing]), nil, nil)
 	}
-	body := map[string]string{"body": reviewBody(head, s.Hands.Verdict)}
+	verdict := s.Hands.Verdict
+	if s.Hands.FirstVerdict != "" {
+		first, err := st.firstReview(ctx, repo, p.Number)
+		if err != nil {
+			return err
+		}
+		if first {
+			verdict = s.Hands.FirstVerdict
+		}
+	}
+	body := map[string]string{"body": reviewBody(head, verdict)}
 	if err := st.g.do(ctx, "POST", fmt.Sprintf("/repos/%s/issues/%d/comments", repo, p.Number), body, nil); err != nil {
 		return err
 	}
@@ -283,8 +300,25 @@ func (st *stub) review(ctx context.Context, s scenario, repo string, p pull) err
 	if err := st.g.do(ctx, "DELETE", fmt.Sprintf("%s/%d", issue, ids[labelReviewing]), nil, nil); err != nil {
 		return err
 	}
-	fmt.Fprintf(st.out, "hands: %s#%d: %s at %s\n", repo, p.Number, s.Hands.Verdict, head)
+	fmt.Fprintf(st.out, "hands: %s#%d: %s at %s\n", repo, p.Number, verdict, head)
 	return nil
+}
+
+// firstReview reports whether pull request n of repo has no review of this
+// stub's yet.
+func (st *stub) firstReview(ctx context.Context, repo string, n int64) (bool, error) {
+	var comments []struct {
+		Body string `json:"body"`
+	}
+	if err := st.g.do(ctx, "GET", fmt.Sprintf("/repos/%s/issues/%d/comments?limit=50", repo, n), nil, &comments); err != nil {
+		return false, err
+	}
+	for _, c := range comments {
+		if strings.HasPrefix(c.Body, reviewHeader) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // labelIDs maps the protocol's labels to their ids in repo; all three must
@@ -312,7 +346,7 @@ func reviewBody(head, verdict string) string {
 	if verdict == verdictReturn {
 		blockers = "- [BLOCKER] [CONFIRMED] the scenario asks for a rework (pilot simulation)"
 	}
-	return fmt.Sprintf(`[hands-bot review] reviewed at head %s
+	return fmt.Sprintf(reviewHeader+` reviewed at head %s
 
 CURRENT OBJECTIVE
 The pilot simulation's stub review of this pull request.

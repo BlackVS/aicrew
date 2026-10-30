@@ -2,15 +2,20 @@
 # The pilot simulation (docs/E2E-PILOT-SIM.md; design
 # docs/DESIGN-PILOT-SIMULATION.md). On Linux with Docker:
 #
-#   scripts/pilot-sim.sh [-keep] [-out DIR]
+#   [AICREW_SIM_SKIP_FAULT=CASE] scripts/pilot-sim.sh [-keep] [-out DIR]
 #
 # It builds this tree's binaries, stages the image contexts, brings the
 # compose stack up, does the operator's steps (the hub's project, process
 # and peer; aicrewd's hub and team; Gitea's accounts, labels and
 # repositories; each member's aimem user, token and invitation), hands each
 # member and stub its input files, and runs the smoke check, the stubs'
-# fixture pull requests and two cycles from a filed task to DONE, checking
-# each step read-only (e2e/pilotsim/cycle.py). It brings the stack down and
+# fixture pull requests, two cycles from a filed task to DONE, checking
+# each step read-only (e2e/pilotsim/cycle.py), and the pilot cases P1 to P5
+# (e2e/pilotsim/cases.py), each a fault on a cycle of its own. A case the
+# board tracks as a gap is checked expected-to-fail, and its outcome is
+# listed in OUT/expected-to-fail.txt. AICREW_SIM_SKIP_FAULT=CASE runs only
+# that case, without its fault, and is green only when the case's checks
+# fail where its absence should show. It brings the stack down and
 # removes its volumes unless -keep is given. Exit 0: a healthy stack whose
 # stubs serve the review protocol and CI that verify-delivery reads, and
 # whose scripted members take a filed task to DONE with its delivery record; otherwise
@@ -34,6 +39,12 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+SKIP=${AICREW_SIM_SKIP_FAULT:-}
+case "$SKIP" in
+  "" | P1 | P2 | P3 | P4 | P5) ;;
+  *) echo "pilot-sim: AICREW_SIM_SKIP_FAULT=$SKIP is not one of P1 to P5" >&2; exit 2 ;;
+esac
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${OUT:-$ROOT/.work/pilotsim}
@@ -433,11 +444,16 @@ hubapi() {
     -H "Content-Type: application/json" ${3:+-H "Idempotency-Key: sim-cycle-$4-$1-$2"} ${3:+-d "$3"} "https://sim-aimem:8440$2"' \
     sh "$1" "$2" "${3:-}" "${CYCLE:-0}"
 }
-# member pause|resume ROLE [REASON]: the operator's hold on a member's turns.
+# member pause|resume ROLE [REASON]: the operator's hold on a member's
+# turns; member nudge ROLE NOTE: the operator's wake of a member.
 member() {
   local id=$WORKER_ID
   [ "$2" = coordinator ] && id=$COORD_ID
-  op aicrew member "$1" --team "$TEAM_ID" --agent "$id" ${3:+--reason "$3"} >/dev/null
+  if [ "$1" = nudge ]; then
+    op aicrew member nudge --team "$TEAM_ID" --agent "$id" --note "$3" >/dev/null
+  else
+    op aicrew member "$1" --team "$TEAM_ID" --agent "$id" ${3:+--reason "$3"} >/dev/null
+  fi
 }
 # turn_mark ROLE: "running N" or "idle N", N the turns the home recorded.
 turn_mark() {
@@ -505,12 +521,18 @@ for c in json.load(sys.stdin):
 sys.exit(1)' "$head"
 }
 pilot_ci_is() { [ "$(forge GET "$PILOT/commits/$1/status" | json_field state)" = "$2" ]; }
-# snapshot STEP: the step's read-only copy of the four places (cycle.py), then its checks.
-snapshot() {
+# take STEP: the step's read-only copy of the four places (cycle.py) in
+# D=CYC/STEP.
+take() {
   local d=$CYC/$1 role f
+  D=$d
+  rm -rf "$d"
   mkdir -p "$d/aimem" "$d/forge"
-  printf '{"task":"%s","worker":"%s","coordinator":"%s"}\n' "$TASK" "$WORKER_ID" "$COORD_ID" > "$d/ids.json"
+  printf '{"task":"%s","worker":"%s","coordinator":"%s","first_head":"%s"}\n' "$TASK" "$WORKER_ID" "$COORD_ID" \
+    "${FIRST:-}" > "$d/ids.json"
   store_copy "$d/store" || fail "no stable copy of aicrewd's store for the $1 step"
+  op aicrew status --team "$TEAM_ID" > "$d/status.json" || fail "aicrew status for the $1 step"
+  [ -n "$TASK" ] || { take_homes "$d"; return 0; }
   hubapi GET "/v1/tasks/$TASK" > "$d/aimem/task.json"
   hubapi GET "/v1/tasks/$TASK/comments" > "$d/aimem/comments.json"
   hubapi GET "/v1/tasks/$TASK/history" > "$d/aimem/history.json"
@@ -519,9 +541,17 @@ snapshot() {
   if [ -n "${PULL:-}" ]; then
     forge GET "$PILOT/pulls/$PULL" > "$d/forge/pull.json"
     forge GET "$PILOT/issues/$PULL/comments" > "$d/forge/comments.json"
+    forge GET "$PILOT/pulls/$PULL/commits" > "$d/forge/commits.json"
+    forge GET "$PILOT/commits/$(pilot_field head.sha)/status" > "$d/forge/head-status.json"
+    [ -z "${FIRST:-}" ] || forge GET "$PILOT/commits/$FIRST/status" > "$d/forge/first-status.json"
     [ -z "${MERGE:-}" ] || forge GET "$PILOT/commits/$MERGE/status" > "$d/forge/status.json"
   fi
   [ ! -f "$CYC/verify.json" ] || cp "$CYC/verify.json" "$d/verify.json"
+  take_homes "$d"
+}
+# take_homes DIR: each home's turn records, guard log, turn state and handoff.
+take_homes() {
+  local d=$1 role f
   for role in coordinator worker; do
     mkdir -p "$d/homes/$role"
     for f in logs/turns.jsonl logs/guard.jsonl docs/HANDOFF.md state/turns.json; do
@@ -529,13 +559,41 @@ snapshot() {
         > "$d/homes/$role/${f##*/}"
     done
   done
-  python3 "$SIM/cycle.py" check "$1" "$d" || fail "cycle $CYCLE: the checks after the $1 step (snapshot $d)"
+}
+# snapshot STEP [CASE]: take the step, then its cycle checks (for a case's
+# cycle, at the step done).
+snapshot() {
+  take "$1"
+  python3 "$SIM/cycle.py" check "$1" "$D" ${2:+"$2"} || fail "cycle $CYCLE: the checks after the $1 step (snapshot $D)"
+}
+# file_task: the cycle's task, READY on the board as the operator files it.
+file_task() {
+  TASK=$(hubapi POST "/v1/projects/$PROJECT/tasks" '{"title":"Pilot simulation cycle task '"$CYCLE"'","objective":"Add the file sim/TASK.md to the repository through a reviewed pull request.","acceptance_criteria":"The pull request adds one file, and the external review and CI pass at its head.","non_goals":"Everything else.","state":"READY","blocker":"","dependencies":[],"candidate_refs":[],"evidence_refs":[],"next_action":"Triage it.","archived":false}' |
+    json_field id)
+}
+# merge: the operator merges the pull request as a person once its gates
+# are green; MERGE is its merge commit.
+merge() {
+  forge POST "$PILOT/pulls/$PULL/merge" '{"Do":"merge"}' >/dev/null
+  MERGE=$(pilot_field merge_commit_sha)
+}
+# delivered: the members are done with the finalized attempt, and the
+# runner's own verify-delivery, as the coordinator ran it, is the record the
+# attempt and the task must carry.
+delivered() {
+  waitfor "the coordinator's delivery and finalize" 300 at 'closed/finalized *'
+  waitfor "sim-coordinator's turn to end" 120 idle coordinator
+  waitfor "sim-worker's turn to end" 120 idle worker
+  coord sh -c 'python3 "$HOME/.claude/skills/verify-delivery/verify_delivery.py" \
+    --pr "https://sim-gitea:3000/operator/pilot/pulls/$1" --api-base https://sim-gitea:3000/api/v1 \
+    --review-author local=sim-coordinator --review-author external=sim-hands' sh "$PULL" > "$CYC/verify.json" ||
+    fail "cycle $CYCLE: verify-delivery did not confirm #$PULL ($CYC/verify.json)"
 }
 # cycle N: one task from the board to DONE (docs/E2E-PILOT-SIM.md, "The cycle").
 # Each step's state is held for its checks by pausing a member, as the
 # operator can, until its turn has ended; its turns resume after them.
 cycle() {
-  CYCLE=$1 CYC=$OUT/cycle-$1 PULL= MERGE=
+  CYCLE=$1 CYC=$OUT/cycle-$1 PULL= MERGE= FIRST=
   rm -rf "$CYC"
   mkdir -p "$CYC"
   # sim-hands returns a pull request's first review, and every review takes
@@ -543,8 +601,7 @@ cycle() {
   # neither stalled nor blocked (seq 676).
   scenario "{$SCENARIO_REPOS,\"hands\":{\"first_verdict\":\"RETURN_TO_IMPLEMENTATION\",\"review_seconds\":50}}"
   hold worker "the cycle's offer checks"
-  TASK=$(hubapi POST "/v1/projects/$PROJECT/tasks" '{"title":"Pilot simulation cycle task '"$1"'","objective":"Add the file sim/TASK.md to the repository through a reviewed pull request.","acceptance_criteria":"The pull request adds one file, and the external review and CI pass at its head.","non_goals":"Everything else.","state":"READY","blocker":"","dependencies":[],"candidate_refs":[],"evidence_refs":[],"next_action":"Triage it.","archived":false}' |
-    json_field id)
+  file_task
   waitfor "the coordinator's triage and offer of task $TASK" 300 at 'offered/* 0'
   snapshot offer
   member resume worker
@@ -573,25 +630,18 @@ cycle() {
   snapshot review
   # The operator merges as a person once the gates are green, and sim-ci
   # reports on the merge commit before the coordinator's next turn.
-  forge POST "$PILOT/pulls/$PULL/merge" '{"Do":"merge"}' >/dev/null
-  MERGE=$(pilot_field merge_commit_sha)
+  merge
   waitfor "sim-ci's status on the merge commit of #$PULL" 120 pilot_ci_is "$MERGE" success
   snapshot merge
   member resume coordinator
-  waitfor "the coordinator's delivery and finalize" 300 at 'closed/finalized *'
-  waitfor "sim-coordinator's turn to end" 120 idle coordinator
-  waitfor "sim-worker's turn to end" 120 idle worker
-  # The runner's own verify-delivery, as the coordinator ran it: the record
-  # the attempt and the task must carry.
-  coord sh -c 'python3 "$HOME/.claude/skills/verify-delivery/verify_delivery.py" \
-    --pr "https://sim-gitea:3000/operator/pilot/pulls/$1" --api-base https://sim-gitea:3000/api/v1 \
-    --review-author local=sim-coordinator --review-author external=sim-hands' sh "$PULL" > "$CYC/verify.json" ||
-    fail "cycle $1: verify-delivery did not confirm #$PULL ($CYC/verify.json)"
+  delivered
   snapshot done
 }
-cycle 1
-cycle 2
-scenario "{$SCENARIO_REPOS}"
+if [ -z "$SKIP" ]; then
+  cycle 1
+  cycle 2
+fi
 
-collect
-step "pilot-sim: green: both members checked, listed and serving; the stubs' fixtures confirmed, refused and released; two cycles from a filed task to DONE with the delivery record (reports in $OUT)"
+# ---- the pilot cases (DESIGN-PILOT-SIMULATION section 6) --------------------------------
+. "$SIM/cases.sh"
+

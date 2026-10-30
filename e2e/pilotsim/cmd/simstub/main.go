@@ -15,7 +15,9 @@
 //
 // ci posts a commit status under its context on every branch head that has
 // none yet: the pull requests' heads and, after a merge, the merge commit.
-// Its state is the scenario's, success unless the scenario says otherwise.
+// Its state is the scenario's, success unless the scenario says otherwise. A
+// pending status of its own completes with the scenario's state once that
+// is no longer pending, as a CI run ends.
 //
 // Both read the scenario file again on every poll, so the runner changes a
 // verdict or a CI state by rewriting it, and act only with their own token.
@@ -402,16 +404,22 @@ func (st *stub) ciPoll(ctx context.Context, s scenario) error {
 			var combined struct {
 				Statuses []struct {
 					Context string `json:"context"`
+					State   string `json:"state"`
 				} `json:"statuses"`
 			}
 			if err := st.g.do(ctx, "GET", fmt.Sprintf("/repos/%s/commits/%s/status", repo, sha), nil, &combined); err != nil {
 				return err
 			}
-			found := false
+			mine := "" // this stub's latest state on the head
 			for _, c := range combined.Statuses {
-				found = found || c.Context == s.CI.Context
+				if c.Context == s.CI.Context {
+					mine = c.State
+				}
 			}
-			if !found {
+			// A head with none gets the scenario's state, and a pending one
+			// completes with it once the scenario's state is final, as a CI
+			// run ends.
+			if mine == "" || (mine == "pending" && s.CI.State != "pending") {
 				status := map[string]string{
 					"state":       s.CI.State,
 					"context":     s.CI.Context,
@@ -422,8 +430,9 @@ func (st *stub) ciPoll(ctx context.Context, s scenario) error {
 					return err
 				}
 				fmt.Fprintf(st.out, "ci: %s %s (%s): %s\n", repo, sha, b.Name, s.CI.State)
+				mine = s.CI.State
 			}
-			st.seen[key] = true
+			st.seen[key] = mine != "pending"
 		}
 	}
 	return nil

@@ -11,8 +11,9 @@ fixture pull requests that verify-delivery reads. **I2a** (task
 `01a186ea-0457`) adds the scripted members' turns and the cycle up to the
 submitted pull request. **I2b** (task `01a17d9a-f147`) takes the cycle to
 DONE: the rework, the local review, the operator's merge and the delivery
-record, twice in a row. The faults, the report and the CI workflow come in
-I4 to I6.
+record, twice in a row. **I4a** (task `01a17d9b-3a68`) adds the pilot
+cases P1 to P5 and the skip-the-fault matrix. b4's faults, the report and
+the CI workflow come in I4b to I6.
 
 ## Running it
 
@@ -20,7 +21,7 @@ On Linux with Docker (on a Windows host: WSL with Docker Desktop's WSL
 integration switched on for the distribution):
 
 ```sh
-scripts/pilot-sim.sh [-keep] [-out DIR]
+[AICREW_SIM_SKIP_FAULT=CASE] scripts/pilot-sim.sh [-keep] [-out DIR]
 ```
 
 - `-out` is where the staged image contexts, the logs and the reports go
@@ -29,13 +30,15 @@ scripts/pilot-sim.sh [-keep] [-out DIR]
   `docker compose` command, with its environment, to look inside. Without
   it the stack and its volumes are removed at the end, green or not. Every
   run starts by removing a stack an earlier `-keep` left.
+- `AICREW_SIM_SKIP_FAULT=CASE`, CASE one of `P1` to `P5`, runs only that
+  pilot case, without its fault (see "The pilot cases").
 
-It needs Docker with Compose v2, Go 1.26 or later, Python 3, and network
+It needs Docker with Compose v2, the Go that `go.mod` declares or later, Python 3, and network
 access: the images install aimem and ai-skills from their GitHub releases,
 as an operator's host does.
 
-The script exits 0 when the stack is healthy, the stubs' fixtures pass and
-two cycles reach DONE with their delivery records. Otherwise it exits non-zero
+The script exits 0 when the stack is healthy, the stubs' fixtures pass,
+two cycles reach DONE with their delivery records and the pilot cases pass. Otherwise it exits non-zero
 and prints the last lines of every container's log; the full logs are in
 `DIR/logs/`.
 
@@ -222,24 +225,27 @@ nothing to do ends, and the launcher's next message starts the next one.
     accepts the result with the `review` step. No member surface names a
     result's number yet (task `01a188f9-4d9a`), so the coordinator counts
     the attempt's submit announcements: the nth is result n.
-  - on a change of an accepted attempt's pull request, once it is merged,
+  - in every turn, for each accepted attempt whose pull request is merged,
     runs verify-delivery from its skill directory with its home's own forge
     credential, `--api-base` and
     `--review-author local=<its account> --review-author external=sim-hands`.
     On `confirmed` it confirms the delivery with the evidence returned
     (`confirm-delivery`) and finalizes (`finalize`); otherwise it records
-    the verdict and waits.
+    the verdict and waits for a later turn.
+  - answers a worker's blocked report with the `answer` step.
 - **The worker** accepts an offer with the instruction digest the offer
   carries. In its running attempt it makes the worktree with
   `aicrew-agent clone`, commits one file, pushes with the home's own
   credential, opens the pull request with `aicrew-agent forge pr open`, and
   adds `review-this`. Later turns read the pull request with
   `forge pr show` and wait while `review-this` or `hands-reviewing` is on.
-  A `RETURN_TO_IMPLEMENTATION` from sim-hands at the head gets a new
-  commit, the stale `hands-reviewed` taken off and a new `review-this`.
-  Once sim-hands's review at the head is READY and the checks passed, the
-  worker submits it through `work` (intent `submit`). In the `rework`
-  phase it resumes through `work` first.
+  A `RETURN_TO_IMPLEMENTATION` from sim-hands at the head, or failed
+  checks once the review is done, gets a new commit, the stale
+  `hands-reviewed` taken off and a new `review-this`. Once sim-hands's
+  review at the head is READY and the checks passed, the worker submits it
+  through `work` (intent `submit`). In the `rework` phase it resumes
+  through `work` first, and in the `blocked` phase it waits for the
+  coordinator's answer and then resumes the same way.
 
 The script gives the members no input of its own. `--process` needs an
 aimem with `aimem process pin` that reads under the team session, 0.10.18
@@ -291,3 +297,60 @@ itself, as the coordinator ran it, and its `confirmed` evidence
 delivery and terminal evidence and among the task's evidence refs.
 
 The snapshots stay in `DIR/cycle-<n>/<step>/`.
+
+## The pilot cases
+
+After the two cycles, `e2e/pilotsim/cases.sh` runs the pilot cases of
+[DESIGN-PILOT-SIMULATION.md](DESIGN-PILOT-SIMULATION.md), section 6.2, in
+the order P2, P5, P4, P1, P3. Each is one fault on a cycle of its own, set
+through the stubs' scenario or the member's: `/sim/scenario/member.json`
+in each member's container, which only the script writes, and only while
+the member is paused and its turn has ended. The member's scenario
+(`e2e/pilotsim/cmd/aicrew-simclient`) can leave the messages unacked
+(`never_ack`), push once while `hands-reviewing` is on
+(`push_during_review`), do nothing in a working attempt (`stall`), end
+every turn with the provider's 401 or 404 (`result`: `login` or `model`),
+and report a client cost (`cost_usd`). In the cases sim-hands reviews READY
+the first time: the plain cycles already run the rework after a
+`RETURN_TO_IMPLEMENTATION`.
+
+`e2e/pilotsim/cases.py` checks each case at the points below, on a snapshot
+laid out as the cycle's, and each case that reaches DONE ends with the
+cycle's checks at the step done, without the plain cycle's external RETURN.
+
+| Case | Fault | Point | What it shows |
+| --- | --- | --- | --- |
+| P2 | the worker pushes while `hands-reviewing` is on; a worker waiting on its gates gets no turn, so the operator's nudge gives it one during the review | submit | two commits; no review of the first head counts; sim-hands's READY at the second head after the renewed request |
+| P5 | sim-ci fails the first head | submit | the worker reworked for the failed checks; READY and CI success at the second head, the head aicrewd watches |
+| P5 | sim-ci leaves the merge commit pending | pending | verify-delivery answered pending, and the attempt has no delivery, no finalize and no `confirm-delivery` step; the task stays in REVIEW |
+| P4 | the worker stalls after its accept | blocked | the launcher's stall rule blocked the attempt; the coordinator's blocked report; the task BLOCKED in aimem |
+| P4 | | answered | the coordinator's `answer` step and its handoff; the worker then resumes and the cycle reaches DONE |
+| P1 | the worker never acks | unacked | the offer delivered to the worker and not acked |
+| P3 | the coordinator's turn costs 60 USD; the worker's ends with a 401 | held | the coordinator's `daily_budget` hold and the worker's `needs_login` hold in aicrewd, in `aicrew status` and in both launchers' turn state; the coordinator told of the worker's hold |
+
+A hold's message goes to the team's coordinators other than the held
+member, so only the worker's hold can reach a coordinator here. For the
+coordinator's own daily-budget hold, "reaches the coordinators" does not
+apply in a team with one coordinator: there is no other coordinator to
+tell. That hold is checked in aicrewd's record, in `aicrew status` and in
+the launcher's backoff. P3 comes
+last: both members stay held after it, the coordinator until the next day
+and the worker for its backoff.
+
+Three parts of the cases are gaps the board tracks, and the script checks
+them expected-to-fail: it waits for what the case asks for, and records in
+`DIR/expected-to-fail.txt` that it did not happen. When it does happen, the
+gap is closed and the run fails until the case is updated.
+
+| Case | Expected to fail | Task |
+| --- | --- | --- |
+| P1 | the coordinator's follow-up on the unacked offer within 120 seconds; no bound exists for an unacked message | `01a18ce5-334e` |
+| P3 | the login hold ending within 120 seconds once the login is back; the launcher re-checks only after its backoff | `01a18ce5-335f` |
+| P3 | an unserved model (404) reported as a hold; the launcher backs off and reports nothing. Not run: a member's backoff leaves one held outcome per run. Its reproducer is the member scenario `{"result":"model"}` | `01a176ba-db7d` |
+| P5 | the delivery once the merge commit's CI succeeds, with no wake: the pull watch reads only the head's checks. The operator's nudge then wakes the coordinator, and the cycle ends with its delivery record | `01a18ce5-336d` |
+
+`AICREW_SIM_SKIP_FAULT=CASE` runs the stack and that case only, without its
+fault. The run is green only when the case then fails where its absence
+should show: P2, P1 and P5's first part at their first check, P4 and P3
+when the block or the hold never comes. A case that passes without its
+fault fails the run. The snapshots stay in `DIR/case-<case>/<point>/`.

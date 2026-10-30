@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -139,6 +140,9 @@ func stepOf(t *testing.T, got reply) store.Step {
 	var st store.Step
 	if err := strictDecode([]byte(got.raw), &st); err != nil || st.CoordinationProof == "" || st.RequestKey == "" {
 		t.Fatalf("begin reply %s: %v", got.raw, err)
+	}
+	if st.Operation != store.ReservationFinalize && strings.Contains(got.raw, `"evidence"`) {
+		t.Fatalf("a %s begin carries evidence: %s", st.Operation, got.raw)
 	}
 	return st
 }
@@ -670,6 +674,12 @@ func TestReviewDeliveryFinalizeEndToEnd(t *testing.T) {
 		strings.Join(st.TerminalEvidence, "|") != strings.Join(want, "|") {
 		t.Fatalf("finalize begin %+v", st)
 	}
+	// The evidence is the terminal evidence with its kinds, in its order.
+	wantTyped := append(append([]store.Evidence{}, confirmedEvidence...),
+		store.Evidence{Kind: "text", Ref: "aicrew attempt " + id + " by member " + e.worker.agent.ID})
+	if !reflect.DeepEqual(st.Evidence, wantTyped) {
+		t.Fatalf("finalize begin evidence %+v, want %+v", st.Evidence, wantTyped)
+	}
 	if code := e.aimem.send(t, e.task("task-1"), st); code != "" {
 		t.Fatalf("aimem refused the finalize: %s %v", code, e.aimem.refused)
 	}
@@ -711,7 +721,7 @@ func updateStepOf(t *testing.T, got reply) store.Step {
 	}
 	var st store.Step
 	if err := strictDecode([]byte(got.raw), &st); err != nil || st.RequestKey == "" || st.Operation != store.ReservationUpdate ||
-		st.CoordinationProof != "" || strings.Contains(got.raw, "coordination_proof") {
+		st.CoordinationProof != "" || strings.Contains(got.raw, "coordination_proof") || strings.Contains(got.raw, `"evidence"`) {
 		t.Fatalf("update begin reply %s: %v", got.raw, err)
 	}
 	return st

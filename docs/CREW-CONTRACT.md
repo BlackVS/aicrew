@@ -540,7 +540,18 @@ begin needs an `Idempotency-Key`; settle does not.
         `blocker?`;
       - a finalize carries `target_state: DONE`, `reason` and
         `terminal_evidence` (the confirmed delivery's references, then the
-        attempt's identity reference);
+        attempt's identity reference), and `evidence?`: the same entries as
+        `{kind, ref}`, in the same order, the identity reference as `text`.
+        `evidence` is not sent to aimem. The launcher refuses a finalize
+        whose `evidence` refs differ from `terminal_evidence` in value or
+        order, before it calls aimem. When the task's content names no
+        `evidence_refs`, the launcher writes the delivery's entries there,
+        without the identity reference: a URL `reviewed_head`,
+        `human_merge` or `post_merge_ci` as a `commit`, `pr` or `ci`
+        reference, any other entry as `url` or `text` by its shape, each
+        noted with its delivery kind and the attempt. A response without
+        `evidence` (an older aicrewd) gives every entry `url` or `text` by
+        its shape. A task that names evidence of its own keeps it;
       - a work update carries `intent`, `target_state`, and `blocker` or
         `result_ref`.
     - A work update's answer has no `coordination_proof`.

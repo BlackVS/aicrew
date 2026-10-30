@@ -65,9 +65,34 @@ type Step struct {
 	Reason            string          `json:"reason,omitempty"`
 	Blocker           string          `json:"blocker,omitempty"`
 	TerminalEvidence  []string        `json:"terminal_evidence,omitempty"`
+	Evidence          []StepEvidence  `json:"evidence,omitempty"`
 	Intent            string          `json:"intent,omitempty"`
 	ResultRef         string          `json:"result_ref,omitempty"`
 	CoordinationProof string          `json:"coordination_proof,omitempty"`
+}
+
+// StepEvidence is one entry of a finalize's typed terminal evidence: the
+// delivery kind verify-delivery named it with, and its reference.
+type StepEvidence struct {
+	Kind string `json:"kind"`
+	Ref  string `json:"ref"`
+}
+
+// checkEvidence refuses a finalize whose typed evidence is not its terminal
+// evidence: the same references in the same order. A response without it
+// (an older aicrewd) passes.
+func (st *Step) checkEvidence() error {
+	if len(st.Evidence) == 0 {
+		return nil
+	}
+	ok := len(st.Evidence) == len(st.TerminalEvidence)
+	for i := 0; ok && i < len(st.Evidence); i++ {
+		ok = st.Evidence[i].Ref == st.TerminalEvidence[i]
+	}
+	if !ok {
+		return fmt.Errorf("the %s step's evidence does not match its terminal evidence", st.Operation)
+	}
+	return nil
 }
 
 // StepRequest is one step to drive: its begin route (relative to aicrewd's
@@ -400,6 +425,9 @@ var contentOps = map[string]bool{"update": true, "release": true, "finalize": tr
 // answer to a report.
 func (d *Driver) send(ctx context.Context, p *pendingStep, proof string) (StepReport, error) {
 	st, file := p.Step, d.Session.stepAimemFile()
+	if err := st.checkEvidence(); err != nil {
+		return StepReport{}, err
+	}
 	var task *TaskDoc
 	if contentOps[st.Operation] {
 		t, err := d.Aimem.GetTask(ctx, file, p.Request.TaskID)
@@ -555,8 +583,70 @@ func composeBody(st *Step, proof string, task *TaskDoc, note string) (map[string
 		}
 		content["candidate_refs"] = refs
 	}
+	if st.Operation == "finalize" && noRefs(content["evidence_refs"]) {
+		refs, err := deliveryRefs(st, note)
+		if err != nil {
+			return nil, err
+		}
+		if refs != nil {
+			content["evidence_refs"] = refs
+		}
+	}
 	body["content"] = content
 	return body, nil
+}
+
+// noRefs reports whether a task's evidence_refs name none.
+func noRefs(raw json.RawMessage) bool {
+	var refs []json.RawMessage
+	return len(raw) == 0 || string(raw) == "null" || (json.Unmarshal(raw, &refs) == nil && len(refs) == 0)
+}
+
+// deliveryRefs are a finalize's terminal evidence as the task's
+// evidence_refs: the confirmed delivery's references in their order, without
+// the attempt's identity reference that ends them (docs/CREW-CONTRACT.md,
+// "Confirmed delivery"), which note already names. With typed evidence, a
+// reviewed head, merge and CI run that are URLs keep their kind as commit,
+// pr and ci, and each note names the delivery kind; without it, every
+// reference is a url or text. nil for none.
+func deliveryRefs(st *Step, note string) (json.RawMessage, error) {
+	evidence := st.Evidence
+	if len(evidence) == 0 {
+		for _, ref := range st.TerminalEvidence {
+			evidence = append(evidence, StepEvidence{Ref: ref})
+		}
+	}
+	if n := len(evidence); n > 0 && strings.HasPrefix(evidence[n-1].Ref, "aicrew attempt ") {
+		evidence = evidence[:n-1]
+	}
+	if len(evidence) == 0 {
+		return nil, nil
+	}
+	refs := make([]map[string]any, 0, len(evidence))
+	for _, e := range evidence {
+		kind, why := refKind(e.Ref), "delivery evidence of "+note
+		if e.Kind != "" {
+			why = e.Kind + ": " + why
+			if k, ok := deliveryKinds[e.Kind]; ok && kind == "url" {
+				kind = k
+			}
+		}
+		refs = append(refs, map[string]any{"kind": kind, "ref": e.Ref, "note": why})
+	}
+	return json.Marshal(refs)
+}
+
+// deliveryKinds are aimem's reference kinds for verify-delivery's evidence
+// kinds; aimem takes them for an http(s) URL only.
+var deliveryKinds = map[string]string{"reviewed_head": "commit", "human_merge": "pr", "post_merge_ci": "ci"}
+
+// refKind is aimem's kind for a reference: url for an http(s) link, text
+// otherwise.
+func refKind(ref string) string {
+	if strings.HasPrefix(ref, "https://") || strings.HasPrefix(ref, "http://") {
+		return "url"
+	}
+	return "text"
 }
 
 // withRef appends a result reference with its note to candidate_refs
@@ -573,10 +663,6 @@ func withRef(raw json.RawMessage, ref, note string) (json.RawMessage, error) {
 			return json.Marshal(refs)
 		}
 	}
-	kind := "text"
-	if strings.HasPrefix(ref, "https://") || strings.HasPrefix(ref, "http://") {
-		kind = "url"
-	}
-	refs = append(refs, map[string]any{"kind": kind, "ref": ref, "note": note})
+	refs = append(refs, map[string]any{"kind": refKind(ref), "ref": ref, "note": note})
 	return json.Marshal(refs)
 }

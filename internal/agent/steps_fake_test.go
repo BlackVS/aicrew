@@ -292,6 +292,7 @@ func checkPayload(root string, f *fakeReservations, op, task, key string, body m
 		return s
 	}
 	var wantState, wantBlocker string
+	ownedEvidence := false
 	switch op {
 	case "update":
 		if str("intent") != intent {
@@ -342,12 +343,32 @@ func checkPayload(root string, f *fakeReservations, op, task, key string, body m
 		if str("reason") == "" {
 			return "no reason"
 		}
+		// A task that names no evidence gets the confirmed delivery's
+		// references, noted with the attempt; one that names its own keeps it.
+		var had []json.RawMessage
+		if json.Unmarshal(t.Content["evidence_refs"], &had); len(had) == 0 {
+			var refs []map[string]string
+			json.Unmarshal(content["evidence_refs"], &refs)
+			// The terminal evidence ends with the attempt's identity, which the
+			// note names instead; each note names the delivery kind, and a
+			// reviewed head, merge and CI run keep it as commit, pr and ci.
+			kinds := map[string]string{"reviewed_head": "commit", "human_merge": "pr", "post_merge_ci": "ci"}
+			var wantRefs []map[string]string
+			for _, e := range ev[:len(ev)-1] {
+				wantRefs = append(wantRefs, map[string]string{"kind": kinds[e.Kind], "ref": e.Ref,
+					"note": e.Kind + ": delivery evidence of aicrew attempt " + id + " by member " + worker})
+			}
+			if !reflect.DeepEqual(refs, wantRefs) {
+				return fmt.Sprintf("evidence_refs %v, want %v", refs, wantRefs)
+			}
+			ownedEvidence = true
+		}
 	}
 	if cstr("state") != wantState || cstr("blocker") != wantBlocker {
 		return fmt.Sprintf("state %q blocker %q, want %q %q", cstr("state"), cstr("blocker"), wantState, wantBlocker)
 	}
 	for field, v := range t.Content {
-		if field == "state" || field == "blocker" || field == "candidate_refs" {
+		if field == "state" || field == "blocker" || field == "candidate_refs" || (field == "evidence_refs" && ownedEvidence) {
 			continue
 		}
 		if string(content[field]) != string(v) {

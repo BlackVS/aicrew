@@ -17,11 +17,13 @@ the CI workflow come in I4b to I6.
 
 ## Running it
 
-On Linux with Docker (on a Windows host: WSL with Docker Desktop's WSL
-integration switched on for the distribution):
+On Linux with Docker, best on a host of its own (see "A dedicated host"
+below). A Windows desktop works too, through WSL with Docker Desktop's
+WSL integration switched on for the distribution, but there the run
+competes with everything else on the desktop for memory.
 
 ```sh
-[AICREW_SIM_SKIP_FAULT=CASE] scripts/pilot-sim.sh [-keep] [-out DIR]
+[AICREW_SIM_SKIP_FAULT=CASE] [AICREW_SIM_IGNORE_MEMORY=1] scripts/pilot-sim.sh [-keep] [-out DIR]
 ```
 
 - `-out` is where the staged image contexts, the logs and the reports go
@@ -32,6 +34,10 @@ integration switched on for the distribution):
   run starts by removing a stack an earlier `-keep` left.
 - `AICREW_SIM_SKIP_FAULT=CASE`, CASE one of `P1` to `P5`, runs only that
   pilot case, without its fault (see "The pilot cases").
+- Before it builds anything, the script removes a leftover stack and
+  checks the host's available memory (`MemAvailable` in `/proc/meminfo`)
+  against the 3072 MiB a run needs. With less it exits 2, naming both
+  amounts. `AICREW_SIM_IGNORE_MEMORY=1` runs it anyway, deliberately.
 
 It needs Docker with Compose v2, the Go that `go.mod` declares or later, Python 3, and network
 access: the images install aimem and ai-skills from their GitHub releases,
@@ -41,6 +47,57 @@ The script exits 0 when the stack is healthy, the stubs' fixtures pass,
 two cycles reach DONE with their delivery records and the pilot cases pass. Otherwise it exits non-zero
 and prints the last lines of every container's log; the full logs are in
 `DIR/logs/`.
+
+### A dedicated host
+
+A host that runs nothing else keeps the simulation from competing with an
+operator's desktop. On a desktop, the agent harness running the
+simulation can be stopped for low host memory while the stack itself
+stays small.
+
+**What it needs.** A Linux host (a VM is fine), with at least 2 vCPU and
+4 GB of memory; 6 vCPU and 16 GB leave ample room. About 10 GB of free
+disk covers the images, the Go build cache and the reports. Full runs
+measured, sampled every 5 seconds:
+
+| Phase | Memory |
+| --- | --- |
+| idle host | about 0.6 GB used |
+| the Go build of this tree's binaries (the run's peak) | about 1.3 GB used on the host; one `compile` process up to 335 MiB |
+| the stack, during the cycles and the cases | Gitea up to 301 MiB, each member up to 64 MiB, aimem up to 56 MiB, aicrewd up to 30 MiB, each stub up to 15 MiB |
+
+Every compose service has a memory limit of at least twice its peak:
+Gitea 768 MiB, each member 512 MiB, aimem and aicrewd 256 MiB each, and
+the stubs and sim-ca 128 MiB each, 2.7 GiB in all. The 3072 MiB the
+script asks for is those limits plus the build beside them. A full run
+takes about 45 minutes.
+
+**Setup.** On the host, as an ordinary user in the `docker` group:
+- Docker Engine with the Compose v2 plugin (and buildx, which Compose
+  builds with);
+- git, Python 3 and curl;
+- Go, the version `go.mod` declares or later. A distribution's Go is
+  enough when it is recent enough; `GOTOOLCHAIN=auto` fetches a newer one
+  when `go.mod` asks for it;
+- outbound HTTPS to GitHub (the aimem and ai-skills releases, Go modules)
+  and to Docker Hub (the base images and Gitea).
+
+**Running there.** The script runs on the host from a checkout there, so
+the build, the stack and the checks all stay off the desktop.
+`DOCKER_HOST=ssh://` would leave the Go build and the checks on the
+desktop, so it is not the way to use such a host. Over ssh, with a key
+made for this host only:
+
+```sh
+ssh -i <key> <user>@<host> 'cd aicrew && git fetch -q && git checkout -q <branch> && git pull -q --ff-only'
+ssh -i <key> <user>@<host> 'cd aicrew && mkdir -p ~/runs && setsid nohup sh -c "scripts/pilot-sim.sh -out ~/runs/out-<name>; echo exit=\$?" > ~/runs/pilotsim-<name>.log 2>&1 < /dev/null &'
+ssh -i <key> <user>@<host> 'tail -n 3 ~/runs/pilotsim-<name>.log'
+scp -r -i <key> <user>@<host>:runs/out-<name> .
+```
+
+`setsid nohup` keeps the run going when the ssh session ends. The last
+line of the log is the exit code, and the reports, the snapshots and the
+containers' logs are in `out-<name>`.
 
 ## What I1 builds
 

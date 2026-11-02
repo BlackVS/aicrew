@@ -2,10 +2,12 @@
 # The pilot simulation (docs/E2E-PILOT-SIM.md; design
 # docs/DESIGN-PILOT-SIMULATION.md). On Linux with Docker:
 #
-#   [AICREW_SIM_SKIP_FAULT=CASE] scripts/pilot-sim.sh [-keep] [-out DIR]
+#   [AICREW_SIM_SKIP_FAULT=CASE] [AICREW_SIM_IGNORE_MEMORY=1] scripts/pilot-sim.sh [-keep] [-out DIR]
 #
-# It builds this tree's binaries, stages the image contexts, brings the
-# compose stack up, does the operator's steps (the hub's project, process
+# It removes a leftover stack, checks the host's available memory against
+# what a run needs (AICREW_SIM_IGNORE_MEMORY=1 runs anyway), builds this
+# tree's binaries, stages the image contexts, brings the compose stack up,
+# does the operator's steps (the hub's project, process
 # and peer; aicrewd's hub and team; Gitea's accounts, labels and
 # repositories; each member's aimem user, token and invitation), hands each
 # member and stub its input files, and runs the smoke check, the stubs'
@@ -132,6 +134,26 @@ finish() {
   exit "$code"
 }
 
+# memory_check: the host's available memory against what a run needs
+# (docs/E2E-PILOT-SIM.md, "A dedicated host"): the compose services' limits
+# and the Go build beside them. AICREW_SIM_IGNORE_MEMORY=1 runs anyway.
+SIM_MIN_AVAILABLE_MIB=3072
+memory_check() {
+  local avail
+  avail=$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null || true)
+  if [ -n "$avail" ] && [ "$avail" -ge "$SIM_MIN_AVAILABLE_MIB" ]; then
+    return 0
+  fi
+  local what="no MemAvailable in /proc/meminfo"
+  [ -z "$avail" ] || what="$avail MiB available"
+  if [ "${AICREW_SIM_IGNORE_MEMORY:-}" = 1 ]; then
+    step "the host has $what; a run needs $SIM_MIN_AVAILABLE_MIB MiB, and AICREW_SIM_IGNORE_MEMORY=1 runs it anyway"
+    return 0
+  fi
+  echo "pilot-sim: the host has $what; a run needs $SIM_MIN_AVAILABLE_MIB MiB (AICREW_SIM_IGNORE_MEMORY=1 runs it anyway)" >&2
+  exit 2
+}
+
 # waitfor WHAT SECONDS CMD...: runs CMD until it succeeds, at most SECONDS.
 waitfor() {
   local what=$1 limit=$2 i
@@ -167,8 +189,10 @@ json_field() { python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[
 
 trap finish EXIT
 trap 'fail "line $LINENO exited $?"' ERR
-# A stack an earlier -keep run left up would refuse this run's accounts.
+# A stack an earlier -keep run left up would refuse this run's accounts,
+# and holds memory the check below counts.
 dc down -v --remove-orphans >/dev/null 2>&1 || true
+memory_check
 stage
 step "building the images"
 dc build --quiet || fail "the images did not build"

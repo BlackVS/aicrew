@@ -12,8 +12,10 @@ fixture pull requests that verify-delivery reads. **I2a** (task
 submitted pull request. **I2b** (task `01a17d9a-f147`) takes the cycle to
 DONE: the rework, the local review, the operator's merge and the delivery
 record, twice in a row. **I4a** (task `01a17d9b-3a68`) adds the pilot
-cases P1 to P5 and the skip-the-fault matrix. b4's faults, the report and
-the CI workflow come in I4b to I6.
+cases P1 to P5 and the skip-the-fault matrix. **I4b-1** (task
+`01a18ccf-d95c`) adds the fault proxies and b4's fault cases F1, F2-begin,
+F3, F6 and F7 on the compose stack. b4's other faults, the report and the
+CI workflow come in I4b-2 to I6.
 
 ## Running it
 
@@ -32,8 +34,10 @@ competes with everything else on the desktop for memory.
   `docker compose` command, with its environment, to look inside. Without
   it the stack and its volumes are removed at the end, green or not. Every
   run starts by removing a stack an earlier `-keep` left.
-- `AICREW_SIM_SKIP_FAULT=CASE`, CASE one of `P1` to `P5`, runs only that
-  pilot case, without its fault (see "The pilot cases").
+- `AICREW_SIM_SKIP_FAULT=CASE` runs only the case CASE belongs to, without
+  CASE's fault. CASE is one of `P1` to `P5` (see "The pilot cases") or a
+  part of a fault case, such as `F1-claim-request` (see "The fault
+  cases", which lists them).
 - Before it builds anything, the script removes a leftover stack and
   checks the host's available memory (`MemAvailable` in `/proc/meminfo`)
   against the 3072 MiB a run needs. With less it exits 2, naming both
@@ -44,7 +48,7 @@ access: the images install aimem and ai-skills from their GitHub releases,
 as an operator's host does.
 
 The script exits 0 when the stack is healthy, the stubs' fixtures pass,
-two cycles reach DONE with their delivery records and the pilot cases pass. Otherwise it exits non-zero
+two cycles reach DONE with their delivery records and the pilot and fault cases pass. Otherwise it exits non-zero
 and prints the last lines of every container's log; the full logs are in
 `DIR/logs/`.
 
@@ -112,6 +116,7 @@ containers' logs are in `out-<name>`.
 | `sim-aicrewd` | `aicrewd -config …` | `install-aicrewd.sh` with `AICREW_NO_SERVICE=1` and `AICREW_PREBUILT_DIR`, from this tree's binaries; the container runs the command it prints |
 | `sim-gitea` | Gitea 1.27 with TLS from the run's CA | the pinned image, configured by its own CLI and API |
 | `sim-hands`, `sim-ci` | the stub reviewer and the stub CI ([below](#the-stub-reviewer-and-the-stub-ci)) | `simstub` (`e2e/pilotsim/cmd/simstub`) in one image, `e2e/pilotsim/stub/` |
+| `sim-px-aimem`, `sim-px-crew`, `sim-px-peer` | the fault proxies ([below](#the-fault-cases)), from I4b-1 | `simproxy` (`e2e/pilotsim/cmd/simproxy`) in one image, `e2e/pilotsim/proxy/` |
 | `sim-coordinator`, `sim-worker` | one member home each, `aicrew-agent serve` | `boot.sh` with `AICREW_PREBUILT_DIR`; aimem's verifying boot script and the ai-skills release archive checked against `SHA256SUMS`, both as `aicrew-agent check` instructs; then `aicrew-agent join … --wake turns --no-service --code-file …` |
 
 The member's client is `aicrew-simclient` (`e2e/pilotsim/cmd/aicrew-simclient`),
@@ -129,7 +134,11 @@ Anything else exits 2 ("not simulated").
 
 TLS is real everywhere:
 - aicrewd and the hub pin each other's SPKI;
-- the members trust aicrewd by `spki_sha256`;
+- the members trust aicrewd by `spki_sha256`; they and the hub reach
+  aicrewd through a fault proxy that presents aicrewd's own key;
+- the members' aimem checks the hub's certificate against the run's CA
+  and its name: it reaches the hub through `sim-px-aimem`, which presents
+  the hub's certificate, issued with `sim-px-aimem` as a second name;
 - Gitea's certificate chains to the run's CA, which every container trusts
   through `SSL_CERT_FILE`, and the members' git through `GIT_SSL_CAINFO`.
 
@@ -361,7 +370,7 @@ The snapshots stay in `DIR/cycle-<n>/<step>/`.
 
 After the two cycles, `e2e/pilotsim/cases.sh` runs the pilot cases of
 [DESIGN-PILOT-SIMULATION.md](DESIGN-PILOT-SIMULATION.md), section 6.2, in
-the order P2, P5, P4, P1, P3. Each is one fault on a cycle of its own, set
+the order P2, P5, P4, P1 and, after the fault cases below, P3. Each is one fault on a cycle of its own, set
 through the stubs' scenario or the member's: `/sim/scenario/member.json`
 in each member's container, which only the script writes, and only while
 the member is paused and its turn has ended. The member's scenario
@@ -413,3 +422,94 @@ fault. The run is green only when the case then fails where its absence
 should show: P2 and P1 at their first check, and P5, P4 and P3 when the
 first head's CI failure, the block or the hold never comes. A case that passes without its
 fault fails the run. The snapshots stay in `DIR/case-<case>/<point>/`.
+
+## The fault cases
+
+After P1, `e2e/pilotsim/faults.sh` runs b4's fault cases on the stack, in
+the order F1, F2, F3, F6, F7, before P3. They adapt the b4 harness's
+(`e2e/realaimem`) cases to the containers: where b4 runs a proxy in the
+test process and kills processes, the simulation arms a rule on a fault
+proxy and kills containers.
+
+### The fault proxies
+
+`simproxy` (`e2e/pilotsim/cmd/simproxy`) stands on three of the TLS links
+of [DESIGN-PILOT-SIMULATION.md](DESIGN-PILOT-SIMULATION.md), section 6.1:
+
+| Proxy | The link | Its certificate |
+| --- | --- | --- |
+| `sim-px-aimem` | the members' aimem to the hub | the hub's, issued for `sim-aimem` and `sim-px-aimem`: the members name `sim-px-aimem` as their hub, and their aimem checks the name against the run's CA |
+| `sim-px-crew` | the members to aicrewd | aicrewd's, which the members pin by key |
+| `sim-px-peer` | the hub to aicrewd, its peer endpoint | aicrewd's, which the hub pins by key |
+
+Each terminates its clients' TLS with its target's own certificate and
+key, opens its own TLS to the target trusting only the run's CA, and
+forwards each HTTP/1.1 request unchanged. The runner arms a rule with
+`simproxy arm` in the proxy's container, whose control API listens on the
+container's loopback only. A rule fires on the next request that matches
+its method and path, and is then removed, unless `-persist` keeps it until
+`simproxy disarm`:
+- `drop_request` closes the connection before forwarding, so the target
+  never sees the request;
+- `drop_reply` forwards the request, reads the whole answer, then closes
+  the connection without a byte of it;
+- `delay_reply` holds the answer for a time.
+
+`simproxy fired` says whether a rule fired, and `simproxy log` prints the
+request log: method, path, the target's status and what the proxy did,
+never a header, query or body. Each snapshot keeps the three logs in
+`proxy/`. `sim-px-crew` also keeps the coordination proofs it sees, owner
+only, for F7.
+
+### The scripted member's recovery
+
+The scripted member recovers from what the cases fault as a model would,
+on its next turn:
+- a step aimem did not commit, or one still pending, ends the turn without
+  acknowledging its messages, so the next turn reads them again and begins
+  the step again;
+- a submit aimem left undecided is recorded in the worker's handoff with
+  its request key, and the next submit supersedes it;
+- a step that failed on its way to aicrewd is finished by
+  `aicrew-agent step recover`, which replays it under its recorded key.
+
+The runner pauses a member as soon as its request is dropped, so it does
+not begin the step again under the rule. Once aicrewd has settled the
+step, the runner disarms the rule, arms the next one and nudges the
+member.
+
+### The cases
+
+Each part is a skip-the-fault case of its own. `cases.py` checks it at
+its point:
+
+| Case | Fault | Point | What it shows |
+| --- | --- | --- | --- |
+| F1-claim-request | `sim-px-aimem` drops the coordinator's claim before the hub | request | the hub saw no claim; aicrewd closed the attempt, not committed; nothing is held |
+| F1-claim-reply | `sim-px-aimem` drops the claim's reply after the hub committed it | reply | the coordinator offered again; its driver read aimem's receipt after the lost reply and settled the claim committed; the coordinator holds the task |
+| F1-transfer-request | the same for the worker's transfer | request | the transfer settled not committed; the attempt is still offered, and the coordinator holds the task |
+| F1-transfer-reply | | reply | the worker accepted again; the receipt reconciled the transfer; the worker holds the task |
+| F1-update-request | the same for the worker's submit | request | the update stays pending, undecided; the task is still READY; the worker's handoff records the request key |
+| F1-update-reply | | reply | the worker's next submit superseded the pending one; the receipt reconciled it; the task is in REVIEW |
+| F1-finalize-request | the same for the coordinator's finalize | request | the finalize settled not committed; the attempt is still accepted, the task in REVIEW |
+| F1-finalize-reply | | reply | the coordinator delivered again; the receipt reconciled the finalize; the task is DONE |
+| F2-begin | `sim-px-crew` drops the reply to the offer's begin | begin | the coordinator saw the step fail, and `step recover` replayed the begin to the one attempt the lost reply began |
+| F3-aicrewd | `sim-px-aimem` holds the hub's answer to the claim for 20 seconds while `sim-aicrewd` is killed and started | restart | aicrewd's container started again, and the claim settled committed after the start |
+| F3-hub | `sim-aimem` is killed and started between steps | restart | the hub's container started again, with its hold as it was; the cycle's next steps then reach DONE |
+| F6-release | the hub's admin recovers the running attempt's hold (`aimem reservation recover release`) | recovered | aicrewd closed the attempt as recovered by `recovery_release`, with the closing fence; the task is READY (the operator then cancels it, so that no turn offers it again) |
+| F6-cancel | the same with `recover cancel` | recovered | the same by `recovery_cancel`; the task is CANCELLED |
+| F7-leak | (the check itself) | scan | none of the run's secrets appears in the containers' logs, the run's reports and snapshots, or aicrewd's audit |
+
+F1, F2 and F3 end with the cycle's checks at the step done. For F1 these
+accept the attempt its lost claim closed and the steps its lost requests
+left not committed. F7 knows the secrets the runner moved into the
+containers, the hub's admin token, the coordination proofs and the
+members' aimem session handles, at least 12 in all. The runner keeps them
+in `DIR/.known`, owner only, and removes them when the run ends. Without
+its fault, F7 plants one in a scanned log, and the scan must find it.
+
+Without its fault, a request case fails where the lost request's effect
+never comes; a reply case and F2-begin fail their checks, for want of the
+dropped reply and the recovery; F3's parts fail for want of a restart, and
+F6's when the attempt is never closed. Each such run first runs the parts
+of its case before the skipped one, with their faults.

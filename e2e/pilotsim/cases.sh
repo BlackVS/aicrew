@@ -1,9 +1,10 @@
 # shellcheck shell=bash
-# The pilot cases P1 to P5 (docs/DESIGN-PILOT-SIMULATION.md, section 6),
-# sourced by scripts/pilot-sim.sh after its two cycles: each case is one
-# fault on a cycle of its own, checked by e2e/pilotsim/cases.py at the
-# points it names, and the cycle's own checks at its end. P3 leaves both
-# members held past the run, so it comes last.
+# The pilot cases P1 to P5 and the fault cases F1 to F7 (faults.sh)
+# (docs/DESIGN-PILOT-SIMULATION.md, section 6), sourced by
+# scripts/pilot-sim.sh after its two cycles: each case is one fault, or a
+# sequence of them, on a cycle of its own, checked by e2e/pilotsim/cases.py
+# at the points it names, and the cycle's own checks at its end. P3 leaves
+# both members held past the run, so it comes last.
 #
 # A part of a case that the board tracks as a product gap is checked
 # expected-to-fail: xfail waits for what the case asks for, records that it
@@ -41,15 +42,17 @@ skipped() {
   exit 0
 }
 # reach CASE POINT SECONDS WHAT CMD...: waitfor, except that a run without
-# the case's fault expects WHAT not to happen.
+# the case's fault expects WHAT not to happen. SECONDS is elapsed time, the
+# predicate's own runs included.
 reach() {
-  local c=$1 p=$2 limit=$3 what=$4 i
+  local c=$1 p=$2 limit=$3 what=$4 end=$((SECONDS + $3))
   shift 4
-  for ((i = 0; i < limit; i += 2)); do
+  while :; do
     if "$@" >/dev/null 2>&1; then
       [ "$SKIP" != "$c" ] || fail "AICREW_SIM_SKIP_FAULT=$c: $what happened without the case's fault"
       return 0
     fi
+    [ "$SECONDS" -lt "$end" ] || break
     sleep 2
   done
   [ "$SKIP" != "$c" ] || skipped "$c" "$p"
@@ -68,14 +71,15 @@ check_case() {
   [ "$code" = 0 ] || fail "case $1: the checks at $2 (snapshot $D)"
 }
 # xfail TASK WHAT SECONDS CMD...: the gap TASK tracks: WHAT is expected not
-# to happen within SECONDS.
+# to happen within SECONDS, elapsed time as reach counts it.
 xfail() {
-  local task=$1 what=$2 limit=$3 i
+  local task=$1 what=$2 end=$((SECONDS + $3))
   shift 3
-  for ((i = 0; i < limit; i += 2)); do
+  while :; do
     if "$@" >/dev/null 2>&1; then
       fail "case $CYCLE: expected to fail ($task), but $what happened: the gap is closed, so update the case"
     fi
+    [ "$SECONDS" -lt "$end" ] || break
     sleep 2
   done
   printf '%s\t%s\texpected to fail, and failed: %s\n' "$CYCLE" "$task" "$what" >> "$XFAIL"
@@ -89,7 +93,8 @@ pilot_reviewing() {
   forge GET "$PILOT/pulls/$PULL" |
     python3 -c 'import json,sys; sys.exit("hands-reviewing" not in [l["name"] for l in json.load(sys.stdin)["labels"]])'
 }
-coordinator_noted() { dc exec -T -u member sim-coordinator grep -qF "$1" /home/member/agent/docs/HANDOFF.md; }
+# noted ROLE TEXT: the member's handoff has TEXT.
+noted() { dc exec -T -u member "sim-$1" grep -qF "$2" /home/member/agent/docs/HANDOFF.md; }
 # nudged_hold ROLE KIND: the operator nudges the member, and its hold in
 # aicrewd is KIND ("none" for no hold) a few seconds later.
 nudged_hold() {
@@ -248,7 +253,7 @@ case_p5() {
   waitfor "sim-ci's pending status on the merge commit of #$PULL" 120 pilot_ci_is "$MERGE" pending
   member resume coordinator
   waitfor "the coordinator's verify-delivery of the pending merge" 300 \
-    coordinator_noted "verify-delivery: pending for https://sim-gitea:3000/operator/pilot/pulls/$PULL"
+    noted coordinator "verify-delivery: pending for https://sim-gitea:3000/operator/pilot/pulls/$PULL"
   hold coordinator "case P5: the pending delivery's checks"
   check_case P5 pending
   # The merge commit's CI completes. The pull watch reads only the head's
@@ -264,12 +269,15 @@ case_p5() {
   snapshot done P5
 }
 
-for c in P2 P5 P4 P1 P3; do
-  [ -z "$SKIP" ] || [ "$SKIP" = "$c" ] || continue
+. "$SIM/faults.sh"
+
+# A skipped fault runs only its case: F1-claim-request runs F1.
+for c in P2 P5 P4 P1 F1 F2 F3 F6 F7 P3; do
+  [ -z "$SKIP" ] || [ "${SKIP%%-*}" = "$c" ] || continue
   "case_${c,,}"
 done
 [ -z "$SKIP" ] || fail "AICREW_SIM_SKIP_FAULT=$SKIP: the case passed without its fault"
 scenario "{$SCENARIO_REPOS}"
 
 collect
-step "pilot-sim: green: both members checked, listed and serving; the stubs' fixtures confirmed, refused and released; two cycles from a filed task to DONE with the delivery record; the pilot cases P1 to P5, expected-to-fail parts in $XFAIL (reports in $OUT)"
+step "pilot-sim: green: both members checked, listed and serving; the stubs' fixtures confirmed, refused and released; two cycles from a filed task to DONE with the delivery record; the pilot cases P1 to P5 and the fault cases F1 to F7, expected-to-fail parts in $XFAIL (reports in $OUT)"

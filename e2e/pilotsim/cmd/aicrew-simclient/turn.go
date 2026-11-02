@@ -195,8 +195,94 @@ func (m *member) agentJSON(ctx context.Context, dir, stdin string, out any, args
 	return nil
 }
 
-// step runs one attempt step.
+// retryLater is a step whose outcome the turn cannot build on: aimem did
+// not commit it, or it is pending, undecided. The turn ends without
+// acknowledging its messages, so a later turn reads them again and begins
+// the step again (cases F1 and F2, docs/E2E-PILOT-SIM.md).
+type retryLater struct {
+	op, why string
+	pending bool
+}
+
+func (e *retryLater) Error() string { return "step " + e.op + " " + e.why }
+
+// reservationOp is the aimem operation a member's step sends.
+var reservationOp = map[string]string{"offer": "claim", "claim": "claim", "accept": "transfer", "work": "update",
+	"finalize": "finalize", "withdraw": "release", "release": "release"}
+
+// step runs one attempt step. A step that did not commit, or is pending, is
+// a *retryLater with its answer. A step the channel failed (aicrewd's or
+// the launcher's answer lost) is finished with `step recover`, which
+// replays it under its recorded key.
 func (m *member) step(ctx context.Context, op, attempt, task string, body any, extra ...string) (agent.StepAnswer, error) {
+	ans, code, err := m.stepOnce(ctx, op, attempt, task, body, extra...)
+	if err != nil {
+		return ans, err
+	}
+	var res agent.StepResult
+	_ = json.Unmarshal(ans.Result, &res)
+	switch {
+	case code == 0:
+		return ans, nil
+	case code == 4:
+		return ans, &retryLater{op: op, why: "is pending, undecided", pending: true}
+	case code == 3 && ans.Status == agent.StepRefused && res.Settled && res.Outcome != "committed":
+		return ans, &retryLater{op: op, why: fmt.Sprintf("did not commit (%s %s)", res.Outcome, res.Report.Code)}
+	case code == 1 && ans.Error != nil && ans.Error.Retryable:
+		return m.recoverStep(ctx, op, ans)
+	}
+	why := ans.Status
+	if ans.Error != nil {
+		why = ans.Error.Code + ": " + ans.Error.Message
+	}
+	return ans, fmt.Errorf("step %s exited %d: %s", op, code, why)
+}
+
+// recoverStep finishes the recorded steps after op failed on the channel,
+// and answers for op's own: the recovered step of its operation.
+func (m *member) recoverStep(ctx context.Context, op string, failed agent.StepAnswer) (agent.StepAnswer, error) {
+	ans, code, err := m.stepOnce(ctx, "recover", "", "", nil)
+	if err != nil {
+		return ans, err
+	}
+	var results []agent.StepResult
+	_ = json.Unmarshal(ans.Result, &results)
+	// Recover finishes every recorded step: an older one of the same
+	// operation that did not commit may be among them, so a committed
+	// result is the failed step's, then a pending one.
+	rank := func(r agent.StepResult) int {
+		switch {
+		case r.Settled && r.Outcome == "committed":
+			return 3
+		case !r.Settled:
+			return 2
+		}
+		return 1
+	}
+	var best *agent.StepResult
+	for i, r := range results {
+		if r.Operation == reservationOp[op] && (best == nil || rank(r) > rank(*best)) {
+			best = &results[i]
+		}
+	}
+	if best == nil {
+		return ans, fmt.Errorf("step %s failed (%s), and step recover (exit %d) finished no %s step", op, failed.Error.Code,
+			code, reservationOp[op])
+	}
+	raw, _ := json.Marshal(best)
+	one := agent.StepAnswer{OK: true, Status: agent.StepDone, Result: raw}
+	switch rank(*best) {
+	case 3:
+		m.note("Step %s failed (%s); step recover finished it: committed.", op, failed.Error.Code)
+		return one, nil
+	case 2:
+		return one, &retryLater{op: op, why: "is pending after step recover", pending: true}
+	}
+	return one, &retryLater{op: op, why: fmt.Sprintf("did not commit after step recover (%s %s)", best.Outcome, best.Report.Code)}
+}
+
+// stepOnce runs `aicrew-agent step OP` and decodes its answer.
+func (m *member) stepOnce(ctx context.Context, op, attempt, task string, body any, extra ...string) (agent.StepAnswer, int, error) {
 	args := []string{"step", op}
 	if attempt != "" {
 		args = append(args, "--attempt", attempt)
@@ -211,20 +297,13 @@ func (m *member) step(ctx context.Context, op, attempt, task string, body any, e
 	args = append(args, extra...)
 	raw, code, err := m.run(ctx, m.home, "", "aicrew-agent", args...)
 	if err != nil {
-		return agent.StepAnswer{}, fmt.Errorf("step %s: %w", op, err)
+		return agent.StepAnswer{}, code, fmt.Errorf("step %s: %w", op, err)
 	}
 	var ans agent.StepAnswer
 	if err := json.Unmarshal(raw, &ans); err != nil {
-		return ans, fmt.Errorf("step %s: the answer is not JSON (exit %d): %.400s", op, code, strings.TrimSpace(string(raw)))
+		return ans, code, fmt.Errorf("step %s: the answer is not JSON (exit %d): %.400s", op, code, strings.TrimSpace(string(raw)))
 	}
-	if code != 0 && code != 4 {
-		why := ans.Status
-		if ans.Error != nil {
-			why = ans.Error.Code + ": " + ans.Error.Message
-		}
-		return ans, fmt.Errorf("step %s exited %d: %s", op, code, why)
-	}
-	return ans, nil
+	return ans, code, nil
 }
 
 // inbox reads the member's unacknowledged messages.
@@ -277,7 +356,11 @@ func (m *member) turn(ctx context.Context, b brief) error {
 	default:
 		err = fmt.Errorf("no script for the role %q", b.Role)
 	}
+	var later *retryLater
 	switch {
+	case errors.As(err, &later):
+		m.note("The %s; %d message(s) left unacknowledged, for a later turn to begin it again.", later.Error(), len(msgs))
+		err = nil
 	case err == nil && m.sc.NeverAck && len(msgs) > 0:
 		m.note("Left %d message(s) unacknowledged.", len(msgs))
 	case err == nil:
@@ -473,10 +556,29 @@ func (m *member) followPull(ctx context.Context, b brief, wt string, n int64) er
 		// No review at this head: a hands-reviewed label is an older head's.
 		return m.requestReview(ctx, wt, n, slices.Contains(p.Labels, "hands-reviewed"))
 	case verdict == "READY_FOR_HUMAN_MERGE" && checks == forge.ChecksSuccess:
-		if _, err := m.step(ctx, "work", b.Attempt, b.Task, map[string]string{"intent": "submit", "detail": p.URL}); err != nil {
+		body := map[string]string{"intent": "submit", "detail": p.URL}
+		key := pendingSubmit(m.section())
+		if key != "" {
+			// An update aimem never decided stays pending while the hold has
+			// not moved: the holder supersedes it (case F1).
+			body["supersedes"] = key
+		}
+		ans, err := m.step(ctx, "work", b.Attempt, b.Task, body)
+		var later *retryLater
+		if errors.As(err, &later) && later.pending {
+			var res agent.StepResult
+			if json.Unmarshal(ans.Result, &res) == nil && res.RequestKey != "" {
+				m.note("Submit of #%d is pending, undecided: request key %s.", n, res.RequestKey)
+				return nil
+			}
+		}
+		if err != nil {
 			return err
 		}
 		m.note("Submitted #%d (%s): the external review is READY at %s and the checks passed.", n, p.URL, p.HeadCommit)
+		if key != "" {
+			m.note("The submit superseded the pending one, request key %s.", key)
+		}
 	default:
 		m.note("Pull request #%d at %s: external verdict %q, checks %q; waiting.", n, p.HeadCommit, verdict, checks)
 	}
@@ -507,7 +609,20 @@ func pullGates(c *forge.PullContent) (verdict, checks string) {
 	return verdict, checks
 }
 
-var pullLine = regexp.MustCompile(`(?m)^- \S+ Pull request #(\d+): `)
+var (
+	pullLine    = regexp.MustCompile(`(?m)^- \S+ Pull request #(\d+): `)
+	submitLines = regexp.MustCompile(`(?m)^- \S+ (?:Submit of #\d+ is pending, undecided: request key (\S+)\.|Submitted #\d+ )`)
+)
+
+// pendingSubmit is the request key of the worker's last submit when the
+// section records it pending and no submit after it; "" otherwise.
+func pendingSubmit(section string) string {
+	all := submitLines.FindAllStringSubmatch(section, -1)
+	if len(all) == 0 {
+		return ""
+	}
+	return all[len(all)-1][1]
+}
 
 // recordedPull is the pull request number the worker recorded in its
 // section's Done, 0 for none.

@@ -12,11 +12,13 @@
 # repositories; each member's aimem user, token and invitation), hands each
 # member and stub its input files, and runs the smoke check, the stubs'
 # fixture pull requests, two cycles from a filed task to DONE, checking
-# each step read-only (e2e/pilotsim/cycle.py), and the pilot cases P1 to P5
-# (e2e/pilotsim/cases.py), each a fault on a cycle of its own. A case the
+# each step read-only (e2e/pilotsim/cycle.py), the pilot cases P1 to P5
+# and the fault cases F1 to F7 through the fault proxies (e2e/pilotsim/cases.py,
+# faults.sh), each a fault on a cycle of its own. A case the
 # board tracks as a gap is checked expected-to-fail, and its outcome is
 # listed in OUT/expected-to-fail.txt. AICREW_SIM_SKIP_FAULT=CASE runs only
-# that case, without its fault, and is green only when the case's checks
+# that case (for a fault case's part, its case up to that part), without its
+# fault, and is green only when the case's checks
 # fail where its absence should show. It brings the stack down and
 # removes its volumes unless -keep is given. Exit 0: a healthy stack whose
 # stubs serve the review protocol and CI that verify-delivery reads, and
@@ -42,10 +44,14 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# The skip-the-fault cases (docs/E2E-PILOT-SIM.md, "The pilot cases" and
+# "The fault cases").
+SKIP_CASES="P1 P2 P3 P4 P5 F1-claim-request F1-claim-reply F1-transfer-request F1-transfer-reply F1-update-request
+F1-update-reply F1-finalize-request F1-finalize-reply F2-begin F3-aicrewd F3-hub F6-release F6-cancel F7-leak"
 SKIP=${AICREW_SIM_SKIP_FAULT:-}
-case "$SKIP" in
-  "" | P1 | P2 | P3 | P4 | P5) ;;
-  *) echo "pilot-sim: AICREW_SIM_SKIP_FAULT=$SKIP is not one of P1 to P5" >&2; exit 2 ;;
+case " $(echo $SKIP_CASES) " in
+  *" $SKIP "*) [ "$SKIP" = "${SKIP%%[[:space:]]*}" ] || { echo "pilot-sim: AICREW_SIM_SKIP_FAULT names one case" >&2; exit 2; } ;;
+  *) [ -z "$SKIP" ] || { echo "pilot-sim: AICREW_SIM_SKIP_FAULT=$SKIP is not one of:" $SKIP_CASES >&2; exit 2; } ;;
 esac
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -76,7 +82,7 @@ step() { printf '==> %s\n' "$*"; }
 stage() {
   rm -rf "$STAGE"
   mkdir -p "$STAGE"
-  cp -r "$SIM/ca" "$SIM/hub" "$SIM/aicrewd" "$SIM/member" "$SIM/stub" "$STAGE/"
+  cp -r "$SIM/ca" "$SIM/hub" "$SIM/aicrewd" "$SIM/member" "$SIM/stub" "$SIM/proxy" "$STAGE/"
   mkdir -p "$STAGE/aicrewd/prebuilt" "$STAGE/member/prebuilt" "$STAGE/hub/aimem-release"
   local arch
   arch=$(docker version --format '{{.Server.Arch}}')
@@ -89,6 +95,7 @@ stage() {
   build "$STAGE/member/claude" ./e2e/pilotsim/cmd/aicrew-simclient
   build "$STAGE/ca/simca" ./e2e/pilotsim/cmd/simca
   build "$STAGE/stub/simstub" ./e2e/pilotsim/cmd/simstub
+  build "$STAGE/proxy/simproxy" ./e2e/pilotsim/cmd/simproxy
   (cd "$STAGE/member/prebuilt" && sha256sum aicrew-agent aicrew > SHA256SUMS)
   cp "$ROOT/install-aicrewd.sh" "$STAGE/aicrewd/"
   cp "$ROOT/boot.sh" "$STAGE/member/"
@@ -124,6 +131,7 @@ fail() {
 }
 finish() {
   local code=$?
+  rm -rf "$KNOWN_DIR"
   if [ -z "$KEEP" ]; then
     dc down -v --remove-orphans >/dev/null 2>&1 || true
   else
@@ -180,10 +188,22 @@ op() {
     -e AICREW_TLS_TRUST_MODE=spki_sha256 -e "AICREW_TLS_TRUST_VALUE=$PIN_SIM_AICREWD" \
     -e AICREW_OPERATOR_TOKEN_FILE=$OPS_HOME/aicrew/etc/operator.token sim-aicrewd "$@"
 }
-# into SERVICE USER PATH: standard input into an owner-only file there.
+# into SERVICE USER PATH: standard input into an owner-only file there. The
+# runner keeps what it moves in KNOWN_DIR, owner only, for case F7's scan of
+# the run for its secrets, and removes it when the run ends.
+KNOWN_DIR=$OUT/.known
+rm -rf "$KNOWN_DIR"
+(umask 077 && mkdir -p "$KNOWN_DIR" && : > "$KNOWN_DIR/secrets")
 into() {
-  dc exec -T -u "$2" "$1" sh -c 'umask 077 && cat > "$1"' sh "$3"
+  local f
+  f=$(mktemp "$KNOWN_DIR/in.XXXXXX")
+  cat > "$f"
+  { cat "$f"; echo; } >> "$KNOWN_DIR/secrets"
+  dc exec -T -u "$2" "$1" sh -c 'umask 077 && cat > "$1"' sh "$3" < "$f"
+  rm -f "$f"
 }
+# px PROXY ARGS...: simproxy in sim-px-PROXY, where its control API listens.
+px() { dc exec -T "sim-px-$1" simproxy "${@:2}"; }
 gitea() { dc exec -T -u git sim-gitea gitea --config /data/gitea/conf/app.ini "$@"; }
 json_field() { python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
 
@@ -196,8 +216,8 @@ memory_check
 stage
 step "building the images"
 dc build --quiet || fail "the images did not build"
-step "starting sim-ca, sim-aimem, sim-aicrewd and sim-gitea"
-dc up -d --wait --wait-timeout 300 sim-aimem sim-aicrewd sim-gitea || fail "the services did not become healthy"
+step "starting sim-ca, sim-aimem, sim-aicrewd, sim-gitea and the fault proxies"
+dc up -d --wait --wait-timeout 300 sim-aimem sim-aicrewd sim-gitea sim-px-aimem sim-px-crew sim-px-peer || fail "the services did not become healthy"
 set -a
 eval "$(hub cat /sim/tls/pins.env | grep -E '^PIN_[A-Z_]+=sha256-[A-Za-z0-9+/]+=*$')"
 set +a
@@ -248,7 +268,7 @@ hub aimem tasks on -p "$PROJECT" >/dev/null
 # --commit (aimem 0.10.17 takes a bare commit only with it).
 hub aimem process select "$PROCESS_URL" "$PROCESS_COMMIT" process/manifest.json --commit -p "$PROJECT" >/dev/null
 hub aimem project repo set --project "$PROJECT" --kind gitea --url "$REPO_URL" --access write >/dev/null
-identity peer provision aicrew-service --endpoint https://sim-aicrewd:9443/v1/crew/introspect \
+identity peer provision aicrew-service --endpoint https://sim-px-peer:9443/v1/crew/introspect \
   --peer-trust-pin "$PIN_SIM_AICREWD" --output-dir /home/aimem/peer --expires 30d >/dev/null
 # The peer's credentials move to aicrewd's host as the operator moves them.
 hub tar -C /home/aimem -cf - peer |
@@ -556,7 +576,7 @@ take() {
     "${FIRST:-}" > "$d/ids.json"
   store_copy "$d/store" || fail "no stable copy of aicrewd's store for the $1 step"
   op aicrew status --team "$TEAM_ID" > "$d/status.json" || fail "aicrew status for the $1 step"
-  [ -n "$TASK" ] || { take_homes "$d"; return 0; }
+  [ -n "$TASK" ] || { take_proxies "$d"; take_homes "$d"; return 0; }
   hubapi GET "/v1/tasks/$TASK" > "$d/aimem/task.json"
   hubapi GET "/v1/tasks/$TASK/comments" > "$d/aimem/comments.json"
   hubapi GET "/v1/tasks/$TASK/history" > "$d/aimem/history.json"
@@ -571,7 +591,17 @@ take() {
     [ -z "${MERGE:-}" ] || forge GET "$PILOT/commits/$MERGE/status" > "$d/forge/status.json"
   fi
   [ ! -f "$CYC/verify.json" ] || cp "$CYC/verify.json" "$d/verify.json"
+  [ ! -f "$CYC/facts.json" ] || cp "$CYC/facts.json" "$d/facts.json"
+  take_proxies "$d"
   take_homes "$d"
+}
+# take_proxies DIR: each fault proxy's request log.
+take_proxies() {
+  local p
+  mkdir -p "$1/proxy"
+  for p in aimem crew peer; do
+    px "$p" log > "$1/proxy/$p.jsonl" || fail "sim-px-$p's request log"
+  done
 }
 # take_homes DIR: each home's turn records, guard log, turn state and handoff.
 take_homes() {

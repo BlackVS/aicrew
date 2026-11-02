@@ -104,8 +104,7 @@ def check(step, d, case=""):
            "aicrewd: the attempt is %s/%s, not %s/%s" % ((a["state"], a["phase"]) + want["attempt"]))
     expect(a["worker_agent_id"] == ids["worker"], "aicrewd: the attempt's worker is %s" % a["worker_agent_id"])
     expect(a["branch"] == "work/" + task, "aicrewd: the attempt's branch is %s" % a["branch"])
-    if case != "P4":
-        expect(a["blocked_reason"] == "", "aicrewd: the attempt was blocked: %s" % a["blocked_reason"])
+    expect(a["blocked_reason"] == "", "aicrewd: the attempt was blocked: %s" % a["blocked_reason"])
     steps = q("SELECT operation, outcome, refusal FROM attempt_steps WHERE attempt_id = ? ORDER BY settled_at", a["id"])
     ops = [s["operation"] for s in steps]
     for s in steps:

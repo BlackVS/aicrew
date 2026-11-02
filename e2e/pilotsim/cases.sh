@@ -84,6 +84,7 @@ xfail() {
 
 followup() { store_copy "$CYC/peek" && python3 "$SIM/cases.py" followup "$CYC/peek" "$TASK" "$COORD_ID"; }
 has_op() { store_copy "$CYC/peek" && python3 "$SIM/cases.py" has_op "$CYC/peek" "$TASK" "$1"; }
+blocked_report() { store_copy "$CYC/peek" && python3 "$SIM/cases.py" blocked_report "$CYC/peek" "$TASK" "$COORD_ID"; }
 pilot_reviewing() {
   forge GET "$PILOT/pulls/$PULL" |
     python3 -c 'import json,sys; sys.exit("hands-reviewing" not in [l["name"] for l in json.load(sys.stdin)["labels"]])'
@@ -208,9 +209,11 @@ case_p4() {
   reach P4 blocked 300 "the launcher's block of the stalled attempt" at 'running/blocked *'
   hold worker "case P4: the block's checks"
   member_scenario worker '{}'
+  # The blocked-wake subscription delivers the report on a later tick.
+  waitfor "the coordinator's blocked report" 120 blocked_report
   check_case P4 blocked
   member resume coordinator
-  waitfor "the coordinator's answer" 300 has_op answer
+  waitfor "the coordinator's answer" 300 has_op attempt.answer
   waitfor "sim-coordinator's turn to end" 120 idle coordinator
   check_case P4 answered
   case_done P4

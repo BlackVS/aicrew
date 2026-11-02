@@ -3,7 +3,8 @@
     cases.py check CASE POINT DIR
     cases.py followup STORE_DIR TASK COORDINATOR   (P1: a message to the coordinator about an unacked one)
     cases.py hold STORE_DIR AGENT KIND             (the member's hold in aicrewd is KIND; "none" for no hold)
-    cases.py has_op STORE_DIR TASK OP              (the task's attempt has a committed OP step)
+    cases.py has_op STORE_DIR TASK OP              (aicrewd audited OP, e.g. attempt.answer, on the task's attempt)
+    cases.py blocked_report STORE_DIR TASK COORDINATOR  (P4: the coordinator has the stall's blocked report)
 
 DIR is the snapshot scripts/pilot-sim.sh takes at the case's POINT, laid out
 as cycle.py's (its docstring), with ids.json also naming "first_head" for
@@ -47,7 +48,9 @@ def messages_to(q, agent, attempt, task):
 
 
 def ops_of(q, attempt):
-    return [r["operation"] for r in q("SELECT operation FROM attempt_steps WHERE attempt_id = ? AND outcome = 'committed'",
+    """The attempt's operations in aicrewd's audit (attempt.answer, ...); attempt_steps holds only
+    the aimem reservation steps."""
+    return [r["operation"] for r in q("SELECT operation FROM audit WHERE scope = ? AND operation LIKE 'attempt.%'",
                                       attempt)]
 
 
@@ -94,19 +97,33 @@ def p3_held(d, q, ids, a, expect):
         expect(st.get("hold"), "%s: the launcher holds no turn" % role)
 
 
+# The launcher's reason for blocking a stalled attempt.
+STALLED = "The turn loop stalled this attempt"
+
+
+def blocked_reports(q, coordinator, a, task):
+    """The coordinator's blocked-wake messages about the attempt."""
+    return [r["text"] for r in messages_to(q, coordinator, a["id"], task)
+            if STALLED in (r["text"] or "") and "reported task" in r["text"]]
+
+
 def p4_blocked(d, q, ids, a, expect):
     expect((a["state"], a["phase"]) == ("running", "blocked"), "aicrewd: the attempt is %s/%s" % (a["state"], a["phase"]))
-    expect("The turn loop stalled this attempt" in a["blocked_reason"],
-           "aicrewd: the attempt's blocked reason is %r" % a["blocked_reason"])
-    told = [r["text"] for r in messages_to(q, ids["coordinator"], a["id"], ids["task"])]
-    expect(any("reported task" in t and "blocked" in t for t in told),
-           "aicrewd: the coordinator has no blocked report: %s" % told)
+    # A worker's blocked report is kept apart from the hub's grant block
+    # (attempts.blocked_reason).
+    block = q("SELECT reason FROM attempt_blocks WHERE attempt_id = ?", a["id"])
+    expect(block and STALLED in block[0]["reason"], "aicrewd: the attempt's blocked report is %s" %
+           [r["reason"] for r in block])
+    expect(blocked_reports(q, ids["coordinator"], a, ids["task"]),
+           "aicrewd: the coordinator has no blocked report: %s" %
+           [r["text"] for r in messages_to(q, ids["coordinator"], a["id"], ids["task"])])
     t = loadj(d, "aimem/task.json", {})
     expect(t.get("state") == "BLOCKED", "aimem: the task is %s, not BLOCKED" % t.get("state"))
+    expect(STALLED in (t.get("blocker") or ""), "aimem: the task's blocker is %r" % t.get("blocker"))
 
 
 def p4_answered(d, q, ids, a, expect):
-    expect("answer" in ops_of(q, a["id"]), "aicrewd: no answer step among %s" % ops_of(q, a["id"]))
+    expect("attempt.answer" in ops_of(q, a["id"]), "aicrewd: no attempt.answer among %s" % ops_of(q, a["id"]))
     expect("Answered the blocked report of attempt " + a["id"] in (load(d, "homes/coordinator/HANDOFF.md", "") or ""),
            "coordinator: the handoff does not record the answer")
 
@@ -133,7 +150,7 @@ def p5_pending(d, q, ids, a, expect):
     expect((a["state"], a["phase"]) == ("running", "accepted"), "aicrewd: the attempt is %s/%s" % (a["state"], a["phase"]))
     expect(a["delivery_result"] == 0 and a["finalized_result"] == 0,
            "aicrewd: a pending delivery was recorded: delivered %s, finalized %s" % (a["delivery_result"], a["finalized_result"]))
-    expect("confirm-delivery" not in ops_of(q, a["id"]), "aicrewd: a confirm-delivery step on a pending CI")
+    expect("attempt.confirm_delivery" not in ops_of(q, a["id"]), "aicrewd: an attempt.confirm_delivery on a pending CI")
     expect((loadj(d, "forge/status.json", {}) or {}).get("state") == "pending", "forge: the merge commit's CI is not pending")
     t = loadj(d, "aimem/task.json", {})
     expect(t.get("state") == "REVIEW", "aimem: the task is %s, not REVIEW" % t.get("state"))
@@ -173,6 +190,10 @@ def main(argv):
     if len(argv) == 4 and argv[0] == "hold":
         rows = db_of(argv[1])("SELECT kind FROM member_holds WHERE agent_id = ?", argv[2])
         return 0 if (rows[0]["kind"] if rows else "none") == argv[3] else 1
+    if len(argv) == 4 and argv[0] == "blocked_report":
+        q = db_of(argv[1])
+        a = attempt_of(q, argv[2])
+        return 0 if a and blocked_reports(q, argv[3], a, argv[2]) else 1
     if len(argv) == 4 and argv[0] == "has_op":
         q = db_of(argv[1])
         a = attempt_of(q, argv[2])

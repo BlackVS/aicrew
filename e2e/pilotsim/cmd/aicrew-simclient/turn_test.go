@@ -580,7 +580,7 @@ func TestWorkerAnswersAnExternalRework(t *testing.T) {
 		t.Fatalf("the rework made a step: %v", f.calls)
 	}
 	raw, err := os.ReadFile(filepath.Join(f.home, "worktrees", tAttempt, "sim", tTask+".md"))
-	if err != nil || !strings.HasSuffix(string(raw), "Reworked after the external review.\n") {
+	if err != nil || !strings.HasSuffix(string(raw), "Reworked: the external review returned it.\n") {
 		t.Fatalf("the reworked file: %q, %v", raw, err)
 	}
 	if doc := readHandoff(t, f.home); !strings.Contains(doc, "Reworked #7: the external review returned it") {
@@ -656,7 +656,9 @@ func TestCoordinatorLeavesAResultNotSubmitted(t *testing.T) {
 	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
 		t.Fatalf("turnRun = %d: %s", code, out.String())
 	}
-	if f.called("aicrew-agent forge") || f.called("aicrew-agent step") {
+	// The accepted attempt's pull request is read for its delivery, which
+	// is no review.
+	if f.called("aicrew-agent step") {
 		t.Fatalf("an accepted result was reviewed again: %v", f.calls)
 	}
 }

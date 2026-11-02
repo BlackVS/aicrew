@@ -414,6 +414,27 @@ func TestCILeavesAHeadWithItsStatus(t *testing.T) {
 	}
 }
 
+// A pending status of the stub's own stays while the scenario says pending,
+// and completes with the scenario's state once it does not: the merge
+// commit's CI that verify-delivery first finds pending (I4a, P5).
+func TestCICompletesAPendingStatus(t *testing.T) {
+	f, srv, tok, sc := setup(t, `{"repos":["`+repo+`"],"ci":{"state":"pending"}}`)
+	f.branches["main"] = head1
+	once(t, "ci", srv.URL+"/api/v1", tok, sc)
+	once(t, "ci", srv.URL+"/api/v1", tok, sc)
+	if s := f.statuses[head1]; len(s) != 1 || s[0]["state"] != "pending" {
+		t.Fatalf("while pending: %v", s)
+	}
+	if err := os.WriteFile(sc, []byte(`{"repos":["`+repo+`"],"ci":{"state":"success"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	once(t, "ci", srv.URL+"/api/v1", tok, sc)
+	once(t, "ci", srv.URL+"/api/v1", tok, sc)
+	if s := f.statuses[head1]; len(s) != 2 || s[1]["state"] != "success" {
+		t.Errorf("after the scenario's success: %v", s)
+	}
+}
+
 func TestScenarioValidation(t *testing.T) {
 	dir := t.TempDir()
 	for _, bad := range []string{

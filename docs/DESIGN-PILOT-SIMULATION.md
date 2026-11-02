@@ -303,6 +303,10 @@ New cases, each a scenario setting of the scripted member or the stubs:
 - **P5:** a failing review (`RETURN_TO_IMPLEMENTATION`) and a failing CI
   status. The rework loop runs to a second head, and the gates follow it.
 
+How the simulation runs each case, and which parts are expected to fail
+while a product gap stays open, is in [E2E-PILOT-SIM.md](E2E-PILOT-SIM.md),
+"The pilot cases".
+
 ### 6.3 The matrix
 
 The skip-the-fault matrix carries over: `AICREW_SIM_SKIP_FAULT=<case>`

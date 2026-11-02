@@ -88,7 +88,7 @@ services:
 
   sim-coordinator:
     <<: *member
-    volumes: [tls:/sim/tls:ro, in-coordinator:/sim/in]
+    volumes: [tls:/sim/tls:ro, in-coordinator:/sim/in, scenario-coordinator:/sim/scenario]
     environment:
       SSL_CERT_FILE: /sim/tls/ca.pem
       GIT_SSL_CAINFO: /sim/tls/ca.pem
@@ -96,7 +96,7 @@ services:
 
   sim-worker:
     <<: *member
-    volumes: [tls:/sim/tls:ro, in-worker:/sim/in]
+    volumes: [tls:/sim/tls:ro, in-worker:/sim/in, scenario-worker:/sim/scenario]
     environment:
       SSL_CERT_FILE: /sim/tls/ca.pem
       GIT_SSL_CAINFO: /sim/tls/ca.pem
@@ -125,3 +125,7 @@ volumes:
   in-hands:
   in-ci:
   scenario:
+  # Each member's scenario (e2e/pilotsim/cmd/aicrew-simclient, scenario),
+  # which only the runner writes.
+  scenario-coordinator:
+  scenario-worker:

@@ -328,7 +328,9 @@ def f3_hub(d, q, ids, a, expect):
     restarted(facts, "hub", expect)
     was, now = facts.get("hold_before") or {}, loadj(d, "aimem/reservation.json", {}) or {}
     expect(now.get("state") == "held", "aimem: the hold is %s after the hub's restart" % now.get("state"))
-    expect(now == was, "aimem: the hold changed across the hub's restart: %s, then %s" % (was, now))
+    # The hold itself, not when the status was read.
+    kept = lambda h: {k: v for k, v in h.items() if not k.endswith("_at")}
+    expect(kept(now) == kept(was), "aimem: the hold changed across the hub's restart: %s, then %s" % (was, now))
 
 
 def f6_recovered(verb):

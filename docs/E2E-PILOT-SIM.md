@@ -502,7 +502,8 @@ its point:
 
 F1, F2 and F3 end with the cycle's checks at the step done. For F1 these
 accept the attempt its lost claim closed and the steps its lost requests
-left not committed. F7 knows the secrets the runner moved into the
+left not committed. F6 files a task for each verb and keeps its snapshots
+in `DIR/case-F6/<verb>/`. F7 knows the secrets the runner moved into the
 containers, the hub's admin token, the coordination proofs and the
 members' aimem session handles, at least 12 in all. The runner keeps them
 in `DIR/.known`, owner only, and removes them when the run ends. Without

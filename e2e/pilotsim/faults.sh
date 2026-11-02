@@ -205,6 +205,10 @@ case_f6() {
   scenario "{$CASE_SCENARIO}"
   local verb
   for verb in release cancel; do
+    # Each verb files its own task (hubapi's idempotency key names CYCLE)
+    # and keeps its own snapshots.
+    CYCLE=F6-$verb CYC=$OUT/case-F6/$verb
+    mkdir -p "$CYC"
     hold worker "case F6-$verb: the offer"
     file_task
     waitfor "the coordinator's triage and offer of task $TASK" 300 at 'offered/* 0'

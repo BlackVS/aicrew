@@ -2,6 +2,10 @@
 # docs/E2E-PILOT-SIM.md). scripts/pilot-sim.sh stages the build contexts
 # under PILOTSIM_STAGE and drives it; it is not meant for a bare
 # `docker compose up`.
+#
+# Every service has a memory limit of at least twice its peak over full
+# runs (docs/E2E-PILOT-SIM.md, "A dedicated host"); the members get more,
+# since each turn runs git and verify-delivery.
 name: pilotsim
 
 x-member: &member
@@ -12,6 +16,7 @@ x-member: &member
       AISKILLS_VERSION: ${PILOTSIM_AISKILLS_VERSION:?}
       AISKILLS: oh-code-review,verify-delivery
   image: pilotsim-member
+  mem_limit: 512m
   depends_on:
     sim-ca: {condition: service_completed_successfully}
   environment:
@@ -21,6 +26,7 @@ x-member: &member
 x-stub: &stub
   build: ${PILOTSIM_STAGE:?}/stub
   image: pilotsim-stub
+  mem_limit: 128m
   depends_on:
     sim-ca: {condition: service_completed_successfully}
   restart: "no"
@@ -28,10 +34,12 @@ x-stub: &stub
 services:
   sim-ca:
     build: ${PILOTSIM_STAGE:?}/ca
+    mem_limit: 128m
     volumes: [tls:/sim/tls]
 
   sim-aimem:
     build: ${PILOTSIM_STAGE:?}/hub
+    mem_limit: 256m
     depends_on:
       sim-ca: {condition: service_completed_successfully}
     volumes: [tls:/sim/tls:ro]
@@ -45,6 +53,7 @@ services:
 
   sim-aicrewd:
     build: ${PILOTSIM_STAGE:?}/aicrewd
+    mem_limit: 256m
     depends_on:
       sim-ca: {condition: service_completed_successfully}
     volumes: [tls:/sim/tls:ro]
@@ -57,6 +66,7 @@ services:
 
   sim-gitea:
     image: gitea/gitea:1.27.3@sha256:87a67ee09d3ae0d1df5fda5dcda3e2a1f9236a45b0a59025d6e00e46adc43bef
+    mem_limit: 768m
     depends_on:
       sim-ca: {condition: service_completed_successfully}
     volumes: [tls:/sim/tls:ro]

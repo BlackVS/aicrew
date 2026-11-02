@@ -337,7 +337,7 @@ the launcher's backoff. P3 comes
 last: both members stay held after it, the coordinator until the next day
 and the worker for its backoff.
 
-Three parts of the cases are gaps the board tracks, and the script checks
+Four parts of the cases are gaps the board tracks, and the script checks
 them expected-to-fail: it waits for what the case asks for, and records in
 `DIR/expected-to-fail.txt` that it did not happen. When it does happen, the
 gap is closed and the run fails until the case is updated.
@@ -351,6 +351,6 @@ gap is closed and the run fails until the case is updated.
 
 `AICREW_SIM_SKIP_FAULT=CASE` runs the stack and that case only, without its
 fault. The run is green only when the case then fails where its absence
-should show: P2, P1 and P5's first part at their first check, P4 and P3
-when the block or the hold never comes. A case that passes without its
+should show: P2 and P1 at their first check, and P5, P4 and P3 when the
+first head's CI failure, the block or the hold never comes. A case that passes without its
 fault fails the run. The snapshots stay in `DIR/case-<case>/<point>/`.

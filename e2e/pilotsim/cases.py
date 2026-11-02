@@ -462,8 +462,8 @@ def main(argv):
     if len(argv) >= 4 and argv[0] == "scan":
         secrets, sources, leaks = scan(argv[1], argv[2], argv[3], argv[4:])
         print("F7: %d secrets known, %d sources scanned" % (len(secrets), len(sources)))
-        if len(secrets) < 12:
-            print("F7: the run knows %d secrets, fewer than the 12 it made" % len(secrets), file=sys.stderr)
+        if len(secrets) < 18:
+            print("F7: the run knows %d secrets, fewer than the 18 it made at least" % len(secrets), file=sys.stderr)
             return 1
         for leak in leaks:
             print("F7: " + leak, file=sys.stderr)

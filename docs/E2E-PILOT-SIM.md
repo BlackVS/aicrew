@@ -503,11 +503,17 @@ its point:
 F1, F2 and F3 end with the cycle's checks at the step done. For F1 these
 accept the attempt its lost claim closed and the steps its lost requests
 left not committed. F6 files a task for each verb and keeps its snapshots
-in `DIR/case-F6/<verb>/`. F7 knows the secrets the runner moved into the
-containers, the hub's admin token, the coordination proofs and the
-members' aimem session handles, at least 12 in all. The runner keeps them
-in `DIR/.known`, owner only, and removes them when the run ends. Without
-its fault, F7 plants one in a scanned log, and the scan must find it.
+in `DIR/case-F6/<verb>/`. F7 knows these secrets, at least 18 in all:
+- the secrets the runner moved into the containers;
+- the hub's admin token;
+- aicrewd's operator token, and every peer credential the hub provisioned
+  for aicrewd;
+- the coordination proofs;
+- the members' aimem session handles.
+
+The runner keeps them in `DIR/.known`, owner only, and removes them when
+the run ends. Without its fault, F7 plants every known secret in a
+scanned log, and the scan must find each one there.
 
 Without its fault, a request case fails where the lost request's effect
 never comes; a reply case and F2-begin fail their checks, for want of the

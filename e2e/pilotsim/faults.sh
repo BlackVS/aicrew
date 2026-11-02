@@ -229,13 +229,25 @@ case_f6() {
 
 # F7-leak: none of the secrets the run made appears in the containers' logs,
 # the run's reports or aicrewd's audit. The run knows the secrets the
-# runner moved (into), the hub's admin token, the coordination proofs
-# sim-px-crew saw and the members' aimem session handles. Without its fault
-# the case plants one in a scanned log, and the scan must find it.
+# runner moved (into), the hub's admin token, aicrewd's operator token and
+# peer credentials, the coordination proofs sim-px-crew saw and the members'
+# aimem session handles. Without its fault the case plants every one in a
+# scanned log, and the scan must find each.
 case_f7() {
   case_start F7
-  local known=$KNOWN_DIR/secrets code=0
+  local known=$KNOWN_DIR/secrets code=0 f
   { hub cat /home/aimem/admin.token; echo; } >> "$known"
+  # aicrewd's credentials, as b4 knows them: the operator's token, and every
+  # peer credential the hub provisioned (moved to aicrewd's host by archive,
+  # not through into), at least the five b4 names.
+  for f in aicrew/etc/operator.token $(op sh -c 'cd "$1/peer" && ls *.token' sh "$OPS_HOME"); do
+    case $f in aicrew/*) ;; *) f=peer/$f ;; esac
+    op sh -c 'test -s "$1" && cat "$1"' sh "$OPS_HOME/$f" >> "$known" || fail "case F7: no $OPS_HOME/$f to know"
+    echo >> "$known"
+  done
+  for f in redeem read team-register team-read board-read; do
+    op test -s "$OPS_HOME/peer/aimem-$f.token" || fail "case F7: no peer credential aimem-$f.token to know"
+  done
   dc exec -T sim-px-crew sh -c 'cat /var/lib/simproxy/proofs 2>/dev/null || true' >> "$known"
   for role in coordinator worker; do
     dc exec -T -u member "sim-$role" sh -c 'cat /home/member/agent/aimem/aicrew-sessions/*.json 2>/dev/null || true' |
@@ -244,13 +256,21 @@ case_f7() {
   collect
   store_copy "$CYC/store" || fail "no stable copy of aicrewd's store for F7"
   if [ "$SKIP" = F7-leak ]; then
-    step "case F7-leak: a secret is planted in a scanned log"
-    { printf 'planted '; sed -n 1p "$known"; } > "$LOGS/planted.log"
+    step "case F7-leak: every known secret is planted in a scanned log"
+    sed 's/^/planted /' "$known" > "$LOGS/planted.log"
   fi
-  python3 "$SIM/cases.py" scan "$known" "$OUT" "$CYC/store" "$STAGE" "$KNOWN_DIR" || code=$?
+  python3 "$SIM/cases.py" scan "$known" "$OUT" "$CYC/store" "$STAGE" "$KNOWN_DIR" \
+    > "$KNOWN_DIR/scan.out" 2> "$KNOWN_DIR/scan.err" || code=$?
+  cat "$KNOWN_DIR/scan.out"
   if [ "$SKIP" = F7-leak ]; then
-    [ "$code" = 1 ] || fail "AICREW_SIM_SKIP_FAULT=F7-leak: the scan did not find the planted secret"
+    # Each secret, of every kind the run knows, is found where it was planted.
+    local n found
+    n=$(sed -n 's/^F7: \([0-9]*\) secrets known.*/\1/p' "$KNOWN_DIR/scan.out")
+    found=$(grep -c ' in logs/planted\.log$' "$KNOWN_DIR/scan.err")
+    [ "$code" = 1 ] && [ -n "$n" ] && [ "$found" = "$n" ] ||
+      fail "AICREW_SIM_SKIP_FAULT=F7-leak: the scan found $found of the ${n:-?} planted secrets"
     skipped F7-leak scan
   fi
+  cat "$KNOWN_DIR/scan.err" >&2
   [ "$code" = 0 ] || fail "case F7-leak: the secret scan"
 }

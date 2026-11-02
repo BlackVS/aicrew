@@ -90,12 +90,14 @@ made for this host only:
 
 ```sh
 ssh -i <key> <user>@<host> 'cd aicrew && git fetch -q && git checkout -q <branch> && git pull -q --ff-only'
-ssh -i <key> <user>@<host> 'cd aicrew && mkdir -p ~/runs && setsid nohup sh -c "scripts/pilot-sim.sh -out ~/runs/out-<name>; echo exit=\$?" > ~/runs/pilotsim-<name>.log 2>&1 < /dev/null &'
+ssh -i <key> <user>@<host> 'cd aicrew && mkdir -p ~/runs && setsid -f sh -c "scripts/pilot-sim.sh -out ~/runs/out-<name>; echo exit=\$?" > ~/runs/pilotsim-<name>.log 2>&1 < /dev/null'
 ssh -i <key> <user>@<host> 'tail -n 3 ~/runs/pilotsim-<name>.log'
 scp -r -i <key> <user>@<host>:runs/out-<name> .
 ```
 
-`setsid nohup` keeps the run going when the ssh session ends. The last
+`setsid -f` starts the run in a session of its own and returns at once,
+so the run goes on when the ssh session ends. A trailing `&` instead
+keeps the ssh session open until the run ends. The last
 line of the log is the exit code, and the reports, the snapshots and the
 containers' logs are in `out-<name>`.
 

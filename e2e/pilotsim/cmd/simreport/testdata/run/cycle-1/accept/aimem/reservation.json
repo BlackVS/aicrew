@@ -1,0 +1,19 @@
+{
+  "task_id": "01a1a14b-ce61-7000-bcf1-af14fcd18627",
+  "task_revision": 2,
+  "state": "held",
+  "reservation_id": "01a1a14c-6459-7000-bfc4-67115dbf1d6e",
+  "fence": "2",
+  "holder_mode": "external",
+  "holder_ref": "aicrew-attempt-01a1a14c-6431-78ce-a2a4-5ca29d0ea180",
+  "binding": {
+    "user_id": "01a1a14b-0a93-7000-85ae-d2c30aea8ac3",
+    "mode": "team",
+    "service_id": "aicrew-service",
+    "profile_id": "01a1a14a-ee04-7000-8107-56c290f1a204",
+    "team_id": "01a1a14a-edfc-7f72-a66a-406144e485e5",
+    "role": "worker",
+    "session_id": "01a1a14b-11ea-7f1e-90a5-ef4b75970b92",
+    "generation": "1"
+  }
+}

@@ -2,7 +2,8 @@
 # The pilot simulation (docs/E2E-PILOT-SIM.md; design
 # docs/DESIGN-PILOT-SIMULATION.md). On Linux with Docker:
 #
-#   [AICREW_SIM_SKIP_FAULT=CASE] [AICREW_SIM_IGNORE_MEMORY=1] scripts/pilot-sim.sh [-keep] [-out DIR]
+#   [AICREW_SIM_SKIP_FAULT=CASE] [AICREW_SIM_IGNORE_MEMORY=1] [AICREW_SIM_BOUND_MINUTES=N]
+#   [AICREW_SIM_HANG=SCENARIO[:SECONDS]] scripts/pilot-sim.sh [-keep] [-out DIR]
 #
 # It removes a leftover stack, checks the host's available memory against
 # what a run needs (AICREW_SIM_IGNORE_MEMORY=1 runs anyway), builds this
@@ -24,6 +25,15 @@
 # stubs serve the review protocol and CI that verify-delivery reads, and
 # whose scripted members take a filed task to DONE with its delivery record; otherwise
 # non-zero with the containers' logs.
+#
+# Every scenario (the setup, the smoke check, the fixtures, each cycle and
+# each case) has a bound, and so has the whole run (AICREW_SIM_BOUND_MINUTES,
+# 90 by default): a watchdog stops the run's commands at either bound, and
+# the run fails. AICREW_SIM_HANG=SCENARIO[:SECONDS] hangs a scenario after
+# the setup, with its bound set to SECONDS if given, to test the bound. Each
+# run writes OUT/report.jsonl from its events (e2e/pilotsim/cmd/simreport)
+# and copies the containers' logs and the member homes' docs, logs and
+# state beside it.
 #
 # No secret is printed or passed as an argument: tokens and codes go from
 # the container that makes them to the one that reads them through a pipe,
@@ -62,9 +72,27 @@ STAGE=$OUT/stage
 COMPOSE=$ROOT/e2e/pilotsim/compose.yaml
 LOGS=$OUT/logs
 SIM=$ROOT/e2e/pilotsim
-for tool in docker go python3; do
+for tool in docker go python3 ps; do
   command -v "$tool" >/dev/null || { echo "pilot-sim: $tool is required" >&2; exit 2; }
 done
+BOUND_MINUTES=${AICREW_SIM_BOUND_MINUTES:-90}
+case $BOUND_MINUTES in
+  '' | *[!0-9]* | 0*) echo "pilot-sim: AICREW_SIM_BOUND_MINUTES is a whole number of minutes" >&2; exit 2 ;;
+esac
+HANG=${AICREW_SIM_HANG:-}
+case $HANG in
+  *:*) case ${HANG#*:} in
+         '' | *[!0-9]* | 0*) echo "pilot-sim: AICREW_SIM_HANG is SCENARIO[:SECONDS]" >&2; exit 2 ;;
+       esac ;;
+esac
+# TOOLS holds the host's report tool and the watchdog's files for this run.
+TOOLS=$(mktemp -d)
+SIMREPORT=$TOOLS/simreport
+(cd "$ROOT" && go build -trimpath -o "$SIMREPORT" ./e2e/pilotsim/cmd/simreport) ||
+  { echo "pilot-sim: the report tool did not build" >&2; rm -rf "$TOOLS"; exit 2; }
+rm -rf "$OUT/events.jsonl" "$OUT/report.jsonl" "$OUT/homes"
+# ev TYPE KEY=VALUE...: one event of the run's report.
+ev() { "$SIMREPORT" event "$OUT" "$@" || echo "pilot-sim: the report's $1 event was not recorded" >&3; }
 
 # The tested releases, from aicrew's supported set.
 tested() {
@@ -119,7 +147,12 @@ fail() {
   # In a command substitution, leave the report to the script itself.
   [ "$BASHPID" = "$$" ] || exit 1
   trap - ERR
-  echo "pilot-sim: FAILED: $*" >&3
+  trap '' TERM
+  stop_watchdog
+  local what="$*"
+  [ ! -s "$STOPPED" ] || what="the run was stopped at $(cat "$STOPPED")"
+  ev fail scenario="$SCENARIO" what="$what"
+  echo "pilot-sim: FAILED: $what" >&3
   collect
   dc ps -a >&3 2>&1 || true
   local s
@@ -129,9 +162,29 @@ fail() {
   done
   exit 1
 }
+# homes: each member home's docs, logs and state (no credential lives there).
+homes() {
+  local role
+  for role in coordinator worker; do
+    mkdir -p "$OUT/homes/$role"
+    dc exec -T -u member "sim-$role" sh -c 'cd /home/member/agent && find docs logs state -type f 2>/dev/null | tar -cf - -T -' \
+      2>/dev/null | tar -C "$OUT/homes/$role" -xf - 2>/dev/null || true
+  done
+}
 finish() {
   local code=$?
-  rm -rf "$KNOWN_DIR"
+  set +e
+  trap - ERR
+  trap '' TERM
+  stop_watchdog
+  collect
+  homes
+  ev end code="$code"
+  if ! "$SIMREPORT" write "$OUT" "$KNOWN_DIR/secrets"; then
+    echo "pilot-sim: the report ($OUT/report.jsonl) could not be written" >&3
+    [ "$code" != 0 ] || code=1
+  fi
+  rm -rf "$KNOWN_DIR" "$TOOLS"
   if [ -z "$KEEP" ]; then
     dc down -v --remove-orphans >/dev/null 2>&1 || true
   else
@@ -160,6 +213,68 @@ memory_check() {
   fi
   echo "pilot-sim: the host has $what; a run needs $SIM_MIN_AVAILABLE_MIB MiB (AICREW_SIM_IGNORE_MEMORY=1 runs it anyway)" >&2
   exit 2
+}
+
+# ---- the bounds ------------------------------------------------------------------
+# begin NAME SECONDS: the scenario NAME starts, bounded to SECONDS, and the
+# one before it ended green. The watchdog reads the bound from BOUND.
+SCENARIO=
+BOUND=$TOOLS/bound
+STOPPED=$TOOLS/stopped
+RUN_END=$(($(date +%s) + BOUND_MINUTES * 60))
+begin() {
+  local name=$1 secs=$2 hang=
+  case $HANG in "$name") hang=1 ;; "$name":*) hang=1 secs=${HANG#*:} ;; esac
+  [ -z "$SCENARIO" ] || ev scenario_end name="$SCENARIO" result=PASS
+  SCENARIO=$name
+  echo "$(($(date +%s) + secs)) $name $secs" > "$BOUND"
+  ev scenario_start name="$name" bound_seconds="$secs"
+  if [ -n "$hang" ]; then
+    step "AICREW_SIM_HANG=$HANG: scenario $name hangs in sim-aicrewd until its bound of ${secs}s"
+    dc exec -T sim-aicrewd sleep 86400
+  fi
+}
+# descendants PID SKIP: the processes under PID, except SKIP and those under it.
+descendants() {
+  local c
+  for c in $(ps -o pid= --ppid "$1" 2>/dev/null); do
+    [ "$c" = "$2" ] && continue
+    echo "$c"
+    descendants "$c" "$2"
+  done
+}
+# watchdog: at the run's bound or the open scenario's, it names the bound in
+# STOPPED and stops the runner's commands; the runner then fails. Compose
+# is left to the runner's teardown, which keeps it under -keep.
+watchdog() {
+  trap - ERR EXIT TERM
+  set +eE
+  local now end name secs why pids
+  while sleep 2; do
+    kill -0 "$MAIN" 2>/dev/null || exit 0
+    now=$(date +%s) why=
+    if [ "$now" -ge "$RUN_END" ]; then
+      why="the run's bound of $BOUND_MINUTES minutes (AICREW_SIM_BOUND_MINUTES)"
+    elif read -r end name secs < "$BOUND" 2>/dev/null && [ "$now" -ge "$end" ]; then
+      why="scenario $name's bound of ${secs}s"
+    fi
+    [ -n "$why" ] || continue
+    echo "$why" > "$STOPPED"
+    kill -TERM "$MAIN" 2>/dev/null
+    pids=$(descendants "$MAIN" "$BASHPID")
+    # shellcheck disable=SC2086 # one PID per word
+    [ -z "$pids" ] || kill -TERM $pids 2>/dev/null
+    sleep 5
+    pids=$(descendants "$MAIN" "$BASHPID")
+    # shellcheck disable=SC2086 # one PID per word
+    [ -z "$pids" ] || kill -KILL $pids 2>/dev/null
+    exit 0
+  done
+}
+WATCHDOG=
+stop_watchdog() {
+  [ -z "$WATCHDOG" ] || kill "$WATCHDOG" 2>/dev/null || true
+  WATCHDOG=
 }
 
 # waitfor WHAT SECONDS CMD...: runs CMD until it succeeds, at most SECONDS.
@@ -207,8 +322,17 @@ px() { dc exec -T "sim-px-$1" simproxy "${@:2}"; }
 gitea() { dc exec -T -u git sim-gitea gitea --config /data/gitea/conf/app.ini "$@"; }
 json_field() { python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
 
+MAIN=$$
 trap finish EXIT
 trap 'fail "line $LINENO exited $?"' ERR
+trap 'fail "a TERM signal"' TERM
+watchdog &
+WATCHDOG=$!
+ev run aicrew_commit="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)" \
+  aimem_version="$PILOTSIM_AIMEM_VERSION" aiskills_version="$PILOTSIM_AISKILLS_VERSION" \
+  os="$(uname -s)" arch="$(uname -m)" docker="$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)" \
+  bound_minutes="$BOUND_MINUTES" skip="$SKIP" hang="$HANG"
+begin setup 1800
 # A stack an earlier -keep run left up would refuse this run's accounts,
 # and holds memory the check below counts.
 dc down -v --remove-orphans >/dev/null 2>&1 || true
@@ -339,6 +463,7 @@ for role in coordinator worker; do
 done
 
 # ---- the smoke check -------------------------------------------------------------------
+begin smoke 900
 step "the smoke check"
 # served SERVICE: its serve passed the model probe; a member that exited
 # (a failed join) fails the run at once.
@@ -360,6 +485,7 @@ dc exec -T -u member sim-coordinator sh -c \
   'python3 "$HOME/.claude/skills/verify-delivery/verify_delivery.py" --help >/dev/null' ||
   fail "verify_delivery.py --help does not run in sim-coordinator"
 # ---- the stubs' fixture pull requests ---------------------------------------------------
+begin fixtures 600
 step "the stubs: fixture pull requests that verify-delivery confirms, refuses on a failed CI, and a moved head"
 FIX=/repos/operator/fixture
 REVIEW_THIS=$(forge GET "$FIX/labels" | python3 -c \
@@ -576,6 +702,7 @@ take() {
     "${FIRST:-}" > "$d/ids.json"
   store_copy "$d/store" || fail "no stable copy of aicrewd's store for the $1 step"
   op aicrew status --team "$TEAM_ID" > "$d/status.json" || fail "aicrew status for the $1 step"
+  ev step scenario="$SCENARIO" step="$1" snapshot="${d#"$OUT"/}"
   [ -n "$TASK" ] || { take_proxies "$d"; take_homes "$d"; return 0; }
   hubapi GET "/v1/tasks/$TASK" > "$d/aimem/task.json"
   hubapi GET "/v1/tasks/$TASK/comments" > "$d/aimem/comments.json"
@@ -618,7 +745,12 @@ take_homes() {
 # cycle, at the step done).
 snapshot() {
   take "$1"
-  python3 "$SIM/cycle.py" check "$1" "$D" ${2:+"$2"} || fail "cycle $CYCLE: the checks after the $1 step (snapshot $D)"
+  if python3 "$SIM/cycle.py" check "$1" "$D" ${2:+"$2"}; then
+    ev check snapshot="${D#"$OUT"/}" result=passed
+  else
+    ev check snapshot="${D#"$OUT"/}" result=failed
+    fail "cycle $CYCLE: the checks after the $1 step (snapshot $D)"
+  fi
 }
 # file_task: the cycle's task, READY on the board as the operator files it.
 file_task() {
@@ -647,6 +779,7 @@ delivered() {
 # Each step's state is held for its checks by pausing a member, as the
 # operator can, until its turn has ended; its turns resume after them.
 cycle() {
+  begin "cycle-$1" 900
   CYCLE=$1 CYC=$OUT/cycle-$1 PULL= MERGE= FIRST=
   rm -rf "$CYC"
   mkdir -p "$CYC"

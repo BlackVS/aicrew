@@ -14,8 +14,9 @@ DONE: the rework, the local review, the operator's merge and the delivery
 record, twice in a row. **I4a** (task `01a17d9b-3a68`) adds the pilot
 cases P1 to P5 and the skip-the-fault matrix. **I4b-1** (task
 `01a18ccf-d95c`) adds the fault proxies and b4's fault cases F1, F2-begin,
-F3, F6 and F7 on the compose stack. b4's other faults, the report and the
-CI workflow come in I4b-2 to I6.
+F3, F6 and F7 on the compose stack. **I5** (task `01a17d9b-3a78`) adds
+the run's report, its bounds and the CI workflow. b4's other faults and the
+upgrade scenario come in I4b-2 and I6.
 
 ## Running it
 
@@ -25,7 +26,8 @@ WSL integration switched on for the distribution, but there the run
 competes with everything else on the desktop for memory.
 
 ```sh
-[AICREW_SIM_SKIP_FAULT=CASE] [AICREW_SIM_IGNORE_MEMORY=1] scripts/pilot-sim.sh [-keep] [-out DIR]
+[AICREW_SIM_SKIP_FAULT=CASE] [AICREW_SIM_IGNORE_MEMORY=1] [AICREW_SIM_BOUND_MINUTES=N]
+[AICREW_SIM_HANG=SCENARIO[:SECONDS]] scripts/pilot-sim.sh [-keep] [-out DIR]
 ```
 
 - `-out` is where the staged image contexts, the logs and the reports go
@@ -42,15 +44,19 @@ competes with everything else on the desktop for memory.
   checks the host's available memory (`MemAvailable` in `/proc/meminfo`)
   against the 3072 MiB a run needs. With less it exits 2, naming both
   amounts. `AICREW_SIM_IGNORE_MEMORY=1` runs it anyway, deliberately.
+- `AICREW_SIM_BOUND_MINUTES=N` is the whole run's bound (90 minutes by
+  default), and `AICREW_SIM_HANG=SCENARIO[:SECONDS]` hangs one scenario to
+  test the bounds (see "The bounds").
 
-It needs Docker with Compose v2, the Go that `go.mod` declares or later, Python 3, and network
+It needs Docker with Compose v2, the Go that `go.mod` declares or later, Python 3, `ps`, and network
 access: the images install aimem and ai-skills from their GitHub releases,
 as an operator's host does.
 
 The script exits 0 when the stack is healthy, the stubs' fixtures pass,
 two cycles reach DONE with their delivery records and the pilot and fault cases pass. Otherwise it exits non-zero
-and prints the last lines of every container's log; the full logs are in
-`DIR/logs/`.
+and prints the last lines of every container's log. Either way the full
+logs are in `DIR/logs/` and the report in `DIR/report.jsonl` (see "The
+report").
 
 ### A dedicated host
 
@@ -74,7 +80,8 @@ Every compose service has a memory limit of at least twice its peak:
 Gitea 768 MiB, each member 512 MiB, aimem and aicrewd 256 MiB each, and
 the stubs and sim-ca 128 MiB each, 2.7 GiB in all. The 3072 MiB the
 script asks for is those limits plus the build beside them. A full run
-takes about 45 minutes.
+takes about 55 minutes (54 min 51 s and 54 min 34 s on a 6 vCPU host,
+2026-11-03).
 
 **Setup.** On the host, as an ordinary user in the `docker` group:
 - Docker Engine with the Compose v2 plugin (and buildx, which Compose
@@ -104,6 +111,86 @@ so the run goes on when the ssh session ends. A trailing `&` instead
 keeps the ssh session open until the run ends. The last
 line of the log is the exit code, and the reports, the snapshots and the
 containers' logs are in `out-<name>`.
+
+## The report
+
+Each run writes `DIR/report.jsonl`, one JSON object per line in b4's
+record shape (docs/E2E-REAL-AIMEM.md, "The report"), each with its `type`
+and its time `at`:
+
+- `run`: the aicrew commit, the aimem and ai-skills versions, the OS, the
+  architecture, Docker's version, the Go of the report tool, the run's
+  bound in minutes, and the skipped fault or hung scenario if any.
+- `scenario`: one per scenario (`setup`, `smoke`, `fixtures`, `cycle-1`,
+  `cycle-2`, then `case-P2` and on in the order the cases run), with its
+  `result` (`PASS` or `FAIL`), its duration, its bound, and for a failure
+  the reason.
+- `step`: one per step snapshot, with its scenario, its name, its
+  directory under `DIR` and its checks (`passed`, `failed`, or `none` for a
+  snapshot no check reads).
+- `store_diff`: one per step, beside it. `aicrewd` holds each table of
+  aicrewd's store that changed since the step before (`against` names it):
+  the rows it `gained` and `lost`, and the `changed` ones by their key,
+  with each changed field before and after. `aimem` holds the same for
+  aimem's reads of the step's task, against the last step that read the
+  same task (`aimem_against`): the task's and the reservation's fields,
+  and the comments and history entries. A list longer than 100 rows is cut
+  there, with the rest counted in `gained_more`, `lost_more` or
+  `changed_more`, and a text value longer than 300 bytes is cut with its
+  length.
+- `fault`: each fault, `armed` or (under `AICREW_SIM_SKIP_FAULT`)
+  `left_out`, with its case and what it does.
+- `observation`: each part checked expected-to-fail, with the gap's task.
+- `skip_verdict`: under `AICREW_SIM_SKIP_FAULT`, `failed_as_expected` with
+  the point where the case's absence showed, or `not_as_expected` with the
+  reason.
+- `summary`: the scenarios passed and failed, the steps, the exit code,
+  `green`, the run's duration and bound, the failure if any, and
+  `secrets_redacted`.
+
+A run is green when its exit code is 0: every scenario `PASS`, and under
+`AICREW_SIM_SKIP_FAULT` the case's own scenario `FAIL` with the verdict
+`failed_as_expected`. A red run's report ends at the failing scenario,
+and the step before the failure carries its checks and its store diff.
+
+The runner records events in `DIR/events.jsonl` as the run goes, and the
+report tool, `e2e/pilotsim/cmd/simreport`, writes the report from them
+and the step snapshots when the run ends, green or not. It checks every
+record against this shape before it writes the report, and replaces any
+of the run's known secrets (case F7's inventory) in a value with its
+number. Its test runs it on a recorded red run: two step snapshots from
+the lab host and the events of a scenario that failed at its second step.
+Beside the report, the run copies every container's log to `DIR/logs/`
+and each member home's `docs/`, `logs/` and `state/` to `DIR/homes/`; no
+credential lives there.
+
+## The bounds
+
+Every wait has its own timeout. Each scenario has a bound: the setup 30
+minutes (it builds the binaries and the images), the smoke check 15, the
+fixtures 10, each cycle 15 and each case 20. The whole run has a bound of
+its own, `AICREW_SIM_BOUND_MINUTES` (90 by default; it is to be set from
+the first green nightly runs). A watchdog beside the runner checks both
+every 2 seconds. At either bound it stops the runner's commands, a hung
+`docker compose exec` included, and the run fails with the bound it
+crossed; the report and the logs are written as on any failure, and the
+stack is removed unless `-keep` is given.
+
+`AICREW_SIM_HANG=SCENARIO[:SECONDS]` tests this: the scenario (any after
+the setup) starts with a command in sim-aicrewd that never returns, and
+SECONDS, if given, is its bound. With `AICREW_SIM_HANG=cycle-1:60`, the
+run fails about a minute into the first cycle, at "scenario cycle-1's
+bound of 60s", and no container or volume is left.
+
+## In CI
+
+`.github/workflows/pilot-sim.yml` runs the simulation nightly on main, by
+hand (`workflow_dispatch`) on any branch, and on a pull request that
+carries the label `pilot-sim`, the gate the e2e (real aimem) workflow
+uses. It never runs on every push. The job's timeout is 120 minutes, a
+backstop behind the run's own bound. It keeps `DIR` as the artifact
+`pilot-sim` for 14 days: the report, the events, the step snapshots, the
+logs and the homes, without the staged binaries.
 
 ## What I1 builds
 

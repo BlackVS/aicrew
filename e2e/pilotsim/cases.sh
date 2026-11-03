@@ -30,13 +30,18 @@ fault() {
   shift
   if [ "$SKIP" = "$c" ]; then
     step "case $c: its fault is left out ($*)"
+    ev fault case="$c" fault="$*" state=left_out
     return 0
   fi
+  ev fault case="$c" fault="$*" state=armed
   "$@"
 }
 # skipped CASE POINT: a run that left out the case's fault ends here,
 # green: the case's absence showed at POINT.
 skipped() {
+  ev skip_verdict case="$1" verdict=failed_as_expected point="$2"
+  ev scenario_end name="$SCENARIO" result=FAIL reason="without its fault, case $1 failed at $2, as expected"
+  SCENARIO=
   collect
   step "pilot-sim: green: without its fault, case $1 failed at $2, where its absence should show (reports in $OUT)"
   exit 0
@@ -58,12 +63,21 @@ reach() {
   [ "$SKIP" != "$c" ] || skipped "$c" "$p"
   fail "$what did not happen within ${limit}s"
 }
-# check_case CASE POINT: the case's checks at POINT on its snapshot; a run
-# without the case's fault expects them to fail.
+# check_case CASE POINT: the case's checks at POINT on its snapshot, named
+# by the subcase where the case has them (F1-claim-request), else by the
+# point; a run without the case's fault expects them to fail.
 check_case() {
   local code=0
-  take "$2"
+  case $1 in
+  *-*) take "$1" ;;
+  *) take "$2" ;;
+  esac
   python3 "$SIM/cases.py" check "$1" "$2" "$D" || code=$?
+  if [ "$code" = 0 ]; then
+    ev check snapshot="${D#"$OUT"/}" result=passed
+  else
+    ev check snapshot="${D#"$OUT"/}" result=failed
+  fi
   if [ "$SKIP" = "$1" ]; then
     [ "$code" = 1 ] || fail "AICREW_SIM_SKIP_FAULT=$1: the case's checks at $2 passed without its fault (snapshot $D)"
     skipped "$1" "$2"
@@ -83,6 +97,7 @@ xfail() {
     sleep 2
   done
   printf '%s\t%s\texpected to fail, and failed: %s\n' "$CYCLE" "$task" "$what" >> "$XFAIL"
+  ev observation task="$task" what="expected to fail, and failed: $what"
   step "case $CYCLE: expected to fail ($task), and failed: $what"
 }
 
@@ -106,6 +121,7 @@ nudged_hold() {
 
 # case_start CASE: the case's own directory, with no task yet.
 case_start() {
+  begin "case-$1" 1200
   CYCLE=$1 CYC=$OUT/case-$1 TASK= PULL= MERGE= FIRST=
   rm -rf "$CYC"
   mkdir -p "$CYC"
@@ -278,6 +294,8 @@ for c in P2 P5 P4 P1 F1 F2 F3 F6 F7 P3; do
 done
 [ -z "$SKIP" ] || fail "AICREW_SIM_SKIP_FAULT=$SKIP: the case passed without its fault"
 scenario "{$SCENARIO_REPOS}"
+ev scenario_end name="$SCENARIO" result=PASS
+SCENARIO=
 
 collect
 step "pilot-sim: green: both members checked, listed and serving; the stubs' fixtures confirmed, refused and released; two cycles from a filed task to DONE with the delivery record; the pilot cases P1 to P5 and the fault cases F1 to F7, expected-to-fail parts in $XFAIL (reports in $OUT)"

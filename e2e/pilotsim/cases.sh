@@ -63,11 +63,15 @@ reach() {
   [ "$SKIP" != "$c" ] || skipped "$c" "$p"
   fail "$what did not happen within ${limit}s"
 }
-# check_case CASE POINT: the case's checks at POINT on its snapshot; a run
-# without the case's fault expects them to fail.
+# check_case CASE POINT: the case's checks at POINT on its snapshot, named
+# by the subcase where the case has them (F1-claim-request), else by the
+# point; a run without the case's fault expects them to fail.
 check_case() {
   local code=0
-  take "$2"
+  case $1 in
+  *-*) take "$1" ;;
+  *) take "$2" ;;
+  esac
   python3 "$SIM/cases.py" check "$1" "$2" "$D" || code=$?
   if [ "$code" = 0 ]; then
     ev check snapshot="${D#"$OUT"/}" result=passed

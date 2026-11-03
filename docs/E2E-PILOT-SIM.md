@@ -508,7 +508,9 @@ gap is closed and the run fails until the case is updated.
 fault. The run is green only when the case then fails where its absence
 should show: P2 and P1 at their first check, and P5, P4 and P3 when the
 first head's CI failure, the block or the hold never comes. A case that passes without its
-fault fails the run. The snapshots stay in `DIR/case-<case>/<point>/`.
+fault fails the run. The snapshots stay in `DIR/case-<case>/<point>/`, or
+`DIR/case-<case>/<subcase>/` for a subcase such as F1-claim-request: no
+snapshot is taken twice, so the report's diff of each step is its own.
 
 ## The fault cases
 

@@ -137,6 +137,7 @@ func build(out string, evs []event) ([]record, error) {
 	passed, failed, steps := 0, 0, 0
 	verdict := false
 	snaps := map[string]record{} // the latest step record of each snapshot
+	diffs := map[string]record{} // the first store diff of each snapshot
 	var prev *snapshot           // the step before, for aicrewd's store
 	prevTask := map[string]*snapshot{}
 
@@ -184,10 +185,22 @@ func build(out string, evs []event) ([]record, error) {
 			steps++
 			rec := record{"type": "step", "at": ev["at"], "scenario": ev["scenario"], "step": ev["step"],
 				"snapshot": ev["snapshot"], "checks": "none"}
+			_, again := snaps[ev["snapshot"]]
 			snaps[ev["snapshot"]] = rec
 			diff := record{"type": "store_diff", "at": ev["at"], "scenario": ev["scenario"], "step": ev["step"],
 				"snapshot": ev["snapshot"]}
-			cur, err := readSnapshot(out, ev["snapshot"])
+			// A directory taken again holds the later step only: neither
+			// step's diff can be told.
+			var cur *snapshot
+			err := fmt.Errorf("the snapshot %s is an earlier step's directory, taken again", ev["snapshot"])
+			if again {
+				first := diffs[ev["snapshot"]]
+				first["error"] = fmt.Sprintf("the snapshot %s was taken again by a later step", ev["snapshot"])
+				first["aicrewd"], first["aimem"] = record{}, record{}
+			} else {
+				diffs[ev["snapshot"]] = diff
+				cur, err = readSnapshot(out, ev["snapshot"])
+			}
 			if err != nil {
 				// A snapshot the run left unfinished (it failed while taking
 				// it) has no diff; the next step compares with the one before.
@@ -196,9 +209,9 @@ func build(out string, evs []event) ([]record, error) {
 				recs = append(recs, rec, diff)
 				continue
 			}
-			diff["against"], diff["aicrewd"] = "", tablesDiff(nil, cur.tables)
+			diff["against"], diff["aicrewd"] = "", shorten(tablesDiff(nil, cur.tables))
 			if prev != nil {
-				diff["against"], diff["aicrewd"] = prev.rel, tablesDiff(prev.tables, cur.tables)
+				diff["against"], diff["aicrewd"] = prev.rel, shorten(tablesDiff(prev.tables, cur.tables))
 			}
 			before := prevTask[cur.task]
 			diff["aimem_against"] = ""
@@ -443,7 +456,7 @@ func readTable(db *sql.DB, table string) (map[string]record, error) {
 		}
 		row := record{}
 		for i, c := range cols {
-			row[c] = value(vals[i])
+			row[c] = column(vals[i])
 		}
 		var key []any
 		if byRowid {
@@ -460,15 +473,37 @@ func readTable(db *sql.DB, table string) (map[string]record, error) {
 	return out, rows.Err()
 }
 
-// value is a column value as the report writes it: text cut at maxValue
-// bytes, a blob that is not UTF-8 by its length only.
-func value(v any) any {
+// column is a column's value, whole, for the comparison: a blob that is
+// UTF-8 as text, any other blob as its bytes.
+func column(v any) any {
+	if x, ok := v.([]byte); ok && utf8.Valid(x) {
+		return string(x)
+	}
+	return v
+}
+
+// shorten is a diff as the report writes it, once compared: text cut at
+// maxValue bytes, a blob that is not UTF-8 by its length only.
+func shorten(r record) record {
+	return shortenValue(r).(record)
+}
+
+func shortenValue(v any) any {
 	switch x := v.(type) {
-	case []byte:
-		if !utf8.Valid(x) {
-			return fmt.Sprintf("<%d bytes>", len(x))
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[k] = shortenValue(e)
 		}
-		return cut(string(x))
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = shortenValue(e)
+		}
+		return out
+	case []byte:
+		return fmt.Sprintf("<%d bytes>", len(x))
 	case string:
 		return cut(x)
 	}

@@ -90,7 +90,8 @@ TOOLS=$(mktemp -d)
 SIMREPORT=$TOOLS/simreport
 (cd "$ROOT" && go build -trimpath -o "$SIMREPORT" ./e2e/pilotsim/cmd/simreport) ||
   { echo "pilot-sim: the report tool did not build" >&2; rm -rf "$TOOLS"; exit 2; }
-rm -rf "$OUT/events.jsonl" "$OUT/report.jsonl" "$OUT/homes"
+# An earlier run's report and snapshots go: each snapshot is taken once.
+rm -rf "$OUT/events.jsonl" "$OUT/report.jsonl" "$OUT/homes" "$OUT"/cycle-* "$OUT"/case-*
 # ev TYPE KEY=VALUE...: one event of the run's report.
 ev() { "$SIMREPORT" event "$OUT" "$@" || echo "pilot-sim: the report's $1 event was not recorded" >&3; }
 
@@ -696,7 +697,8 @@ pilot_ci_is() { [ "$(forge GET "$PILOT/commits/$1/status" | json_field state)" =
 take() {
   local d=$CYC/$1 role f
   D=$d
-  rm -rf "$d"
+  # A snapshot is never taken twice: the report compares each with the one before.
+  [ ! -e "$d" ] || fail "the $1 step's snapshot $d is taken already"
   mkdir -p "$d/aimem" "$d/forge"
   printf '{"task":"%s","worker":"%s","coordinator":"%s","first_head":"%s"}\n' "$TASK" "$WORKER_ID" "$COORD_ID" \
     "${FIRST:-}" > "$d/ids.json"

@@ -252,6 +252,99 @@ func TestUnfinishedSnapshot(t *testing.T) {
 	}
 }
 
+// store makes the snapshot rel's store from SQL statements.
+func store(t *testing.T, out, rel string, stmts ...string) {
+	t.Helper()
+	dir := filepath.Join(out, rel, "store")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "aicrew.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, q := range stmts {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// steps records a run of the given step snapshots, in order, and writes its report.
+func steps(t *testing.T, out string, snapshots ...string) []record {
+	t.Helper()
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	evs := [][]string{
+		{"run", "aicrew_commit=x", "aimem_version=0.10.21", "os=linux", "arch=amd64", "bound_minutes=90", "skip="},
+		{"scenario_start", "name=case-F1", "bound_seconds=1200"},
+	}
+	for _, snap := range snapshots {
+		evs = append(evs, []string{"step", "scenario=case-F1", "step=" + filepath.Base(snap), "snapshot=" + snap})
+	}
+	evs = append(evs, []string{"scenario_end", "name=case-F1", "result=PASS"}, []string{"end", "code=0"})
+	for _, ev := range evs {
+		if err := appendEvent(out, ev[0], ev[1:], now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := write(out, ""); err != nil {
+		t.Fatal(err)
+	}
+	var diffs []record
+	for _, r := range readReport(t, out) {
+		if r["type"] == "store_diff" {
+			diffs = append(diffs, r)
+		}
+	}
+	return diffs
+}
+
+// Two values that differ only past the cut, a text and a blob that is not
+// UTF-8, are still a change: the diff compares them whole and cuts only what
+// it writes.
+func TestChangePastTheCut(t *testing.T) {
+	out := t.TempDir()
+	long := strings.Repeat("a", maxValue)
+	schema := `CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT, b BLOB, same TEXT)`
+	store(t, out, "case-F1/one", schema,
+		`INSERT INTO t VALUES (1, '`+long+`x', X'FF00', '`+long+`z')`)
+	store(t, out, "case-F1/two", schema,
+		`INSERT INTO t VALUES (1, '`+long+`y', X'FF01', '`+long+`z')`)
+	diffs := steps(t, out, "case-F1/one", "case-F1/two")
+	changed, _ := path(diffs[1], "aicrewd", "t", "changed").([]any)
+	if len(changed) != 1 {
+		t.Fatalf("the change past the cut is not in the diff: %v", diffs[1]["aicrewd"])
+	}
+	fields, _ := path(changed[0], "fields").(map[string]any)
+	if len(fields) != 2 || fields["v"] == nil || fields["b"] == nil {
+		t.Fatalf("the changed fields: %v", fields)
+	}
+	if v := path(fields, "v", "after"); v != long+"…(301 bytes)" {
+		t.Errorf("the written value is not cut: %v", v)
+	}
+	if b := path(fields, "b", "before"); b != "<2 bytes>" {
+		t.Errorf("the written blob: %v", b)
+	}
+}
+
+// A step that takes an earlier step's snapshot directory again leaves only
+// the later state there, so neither step's diff is told, and each says so.
+func TestSnapshotTakenAgain(t *testing.T) {
+	out := t.TempDir()
+	store(t, out, "case-F1/request", `CREATE TABLE t (id INTEGER PRIMARY KEY)`, `INSERT INTO t VALUES (1)`)
+	store(t, out, "case-F1/done", `CREATE TABLE t (id INTEGER PRIMARY KEY)`, `INSERT INTO t VALUES (1), (2)`)
+	diffs := steps(t, out, "case-F1/request", "case-F1/request", "case-F1/done")
+	for i, d := range diffs[:2] {
+		if d["error"] == nil || len(d["aicrewd"].(map[string]any)) != 0 {
+			t.Errorf("diff %d of the directory taken twice: %v", i, d)
+		}
+	}
+	if diffs[2]["error"] != nil || diffs[2]["against"] != "case-F1/request" {
+		t.Errorf("the next step's diff: %v", diffs[2])
+	}
+}
+
 func TestEventRefusesBadFields(t *testing.T) {
 	out := t.TempDir()
 	for _, kv := range []string{"novalue", "=x", "type=run", "at=now"} {

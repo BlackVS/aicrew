@@ -19,6 +19,8 @@ x-member: &member
   mem_limit: 512m
   depends_on:
     sim-ca: {condition: service_completed_successfully}
+    sim-px-aimem: {condition: service_healthy}
+    sim-px-crew: {condition: service_healthy}
   environment:
     SSL_CERT_FILE: /sim/tls/ca.pem
   restart: "no"
@@ -31,7 +33,42 @@ x-stub: &stub
     sim-ca: {condition: service_completed_successfully}
   restart: "no"
 
+# The fault proxies (DESIGN-PILOT-SIMULATION section 6.1), one per TLS
+# boundary the cases fault: each presents its target's certificate and key
+# and forwards to it. The runner arms them through `simproxy` in their
+# containers; their control API listens on the container's loopback only.
+x-proxy: &proxy
+  build: ${PILOTSIM_STAGE:?}/proxy
+  image: pilotsim-proxy
+  mem_limit: 64m
+  depends_on:
+    sim-ca: {condition: service_completed_successfully}
+  volumes: [tls:/sim/tls:ro]
+  healthcheck:
+    test: ["CMD", "simproxy", "log"]
+    interval: 2s
+    retries: 30
+  restart: "no"
+
 services:
+  # The members' aimem to the hub. The members name it as their hub: the
+  # hub's certificate carries sim-px-aimem as an alias.
+  sim-px-aimem:
+    <<: *proxy
+    command: [-listen, ":8440", -cert, /sim/tls/sim-aimem.pem, -key, /sim/tls/sim-aimem.key, -target, "https://sim-aimem:8440"]
+
+  # The members to aicrewd, which they pin by key; it keeps the coordination
+  # proofs it sees for the secret scan (case F7).
+  sim-px-crew:
+    <<: *proxy
+    command: [-listen, ":9443", -cert, /sim/tls/sim-aicrewd.pem, -key, /sim/tls/sim-aicrewd.key,
+      -target, "https://sim-aicrewd:9443", -proofs, /var/lib/simproxy/proofs]
+
+  # The hub to aicrewd: the peer endpoint the hub pins by key.
+  sim-px-peer:
+    <<: *proxy
+    command: [-listen, ":9443", -cert, /sim/tls/sim-aicrewd.pem, -key, /sim/tls/sim-aicrewd.key, -target, "https://sim-aicrewd:9443"]
+
   sim-ca:
     build: ${PILOTSIM_STAGE:?}/ca
     mem_limit: 128m

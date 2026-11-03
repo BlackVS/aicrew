@@ -43,11 +43,13 @@ type fakeTools struct {
 	calls      []string
 	bodies     map[string]map[string]any // step bodies by op
 	stdin      map[string]string         // stdin by command
+	// steps are scripted answers to a step, in order, before the default one.
+	steps map[string][]stepReply
 }
 
 func newFake(t *testing.T) *fakeTools {
 	return &fakeTools{t: t, home: t.TempDir(), tasks: map[string]map[string]any{},
-		bodies: map[string]map[string]any{}, stdin: map[string]string{}}
+		bodies: map[string]map[string]any{}, stdin: map[string]string{}, steps: map[string][]stepReply{}}
 }
 
 func (f *fakeTools) member() *member {
@@ -107,6 +109,10 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 		return answer(agent.OpenAttempts{Attempts: f.attempts}), 0, nil
 	case args[0] == "members":
 		return answer(agent.TeamMembers{Members: f.members}), 0, nil
+	case args[0] == "step" && len(f.steps[args[1]]) > 0:
+		r := f.steps[args[1]][0]
+		f.steps[args[1]] = f.steps[args[1]][1:]
+		return r.out, r.code, nil
 	case args[0] == "step" && args[1] == "offer":
 		return answer(map[string]string{"attempt_id": tAttempt, "request_key": "k1"}), 0, nil
 	case args[0] == "step":

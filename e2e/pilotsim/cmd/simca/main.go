@@ -4,7 +4,8 @@
 // (docs/DESIGN-PILOT-SIMULATION.md, section 3):
 //
 //	ca.pem          the CA, which SSL_CERT_FILE and --aimem-ca-file name
-//	NAME.pem        the service's certificate, for the DNS name NAME
+//	NAME.pem        the service's certificate, for the DNS name NAME and
+//	                the aliases -leaf NAME,ALIAS,... gives it
 //	NAME.key        its key, owner only; the service's container installs it
 //	pins.env        PIN_NAME=sha256-… per service (NAME upper-cased, - as _)
 //
@@ -41,12 +42,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	out := fs.String("out", "", "the directory to write into")
 	var leaves names
-	fs.Var(&leaves, "leaf", "a service's DNS name (repeatable)")
+	fs.Var(&leaves, "leaf", "a service's DNS name, then its aliases, comma-separated (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *out == "" || len(leaves) == 0 || fs.NArg() > 0 {
-		fmt.Fprintln(stderr, "usage: simca -out DIR -leaf NAME [-leaf NAME ...]")
+		fmt.Fprintln(stderr, "usage: simca -out DIR -leaf NAME[,ALIAS...] [-leaf ...]")
 		return 2
 	}
 	if _, err := os.Stat(filepath.Join(*out, "ca.pem")); err == nil {
@@ -70,11 +71,15 @@ func issue(out string, leaves []string) error {
 		return err
 	}
 	var pins strings.Builder
-	for _, name := range leaves {
-		if name == "" || strings.ContainsAny(name, "/\\ =") {
-			return fmt.Errorf("%q is not a DNS name", name)
+	for _, leaf := range leaves {
+		dns := strings.Split(leaf, ",")
+		for _, n := range dns {
+			if n == "" || strings.ContainsAny(n, "/\\ =") {
+				return fmt.Errorf("%q is not a DNS name", n)
+			}
 		}
-		l, err := ca.Leaf(name, []string{name}, nil, validity)
+		name := dns[0]
+		l, err := ca.Leaf(name, dns, nil, validity)
 		if err != nil {
 			return err
 		}

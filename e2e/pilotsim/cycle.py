@@ -19,9 +19,10 @@ DIR is the step's snapshot, which scripts/pilot-sim.sh takes read-only:
 
 STEP is one of STEPS. CASE names the pilot case (cases.py) whose cycle the
 snapshot is, at the step done only: its own checks are in cases.py, and here
-it drops the plain cycle's external RETURN and its rework, and for P4 allows
-the block the case caused. Prints each failed expectation and exits 1 when there
-is one; the snapshot stays for the report.
+it drops the plain cycle's external RETURN and its rework, allows the
+operator's nudges, for P4 the block the case caused, and for F1 the attempts
+and steps its lost requests left not committed. Prints each failed
+expectation and exits 1 when there is one; the snapshot stays for the report.
 """
 import json
 import os
@@ -45,10 +46,14 @@ EXPECT = {
     "done":   dict(attempt=("closed", "finalized"), op="finalize", results=1, task="DONE", holder=None),
 }
 
-# The operator's own calls in the audit: the runner's setup and its pauses.
-# Any other operator operation, or a member's call of one, fails the check.
-OPERATOR_OPS = {"control.nudge", "control.pause", "control.resume", "introspection.credential.issue", "invitation.issue",
+# The operator's own calls in the audit: the runner's setup and its pauses,
+# and in a case's cycle its nudges. Any other operator operation, or a
+# member's call of one, fails the check.
+OPERATOR_OPS = {"control.pause", "control.resume", "introspection.credential.issue", "invitation.issue",
                 "team.create", "team.record_registration"}
+CASE_OPS = {"control.nudge"}
+# The cases whose cycle cycle.py checks at the step done.
+CASES = ("P1", "P2", "P4", "P5", "F1", "F2", "F3")
 REVIEW_HEAD = re.compile(r"^\[(oh-code-review \(high\) review|hands-bot review)\] reviewed at head ([0-9a-f]{40})$", re.M)
 VERDICT = re.compile(r"^VERDICT\n(\S+)$", re.M)
 
@@ -94,12 +99,15 @@ def check(step, d, case=""):
     db.row_factory = sqlite3.Row
     q = lambda sql, *a: db.execute(sql, a).fetchall()
 
-    # aicrewd: the task's attempt, its steps, results and pull request.
-    attempts = q("SELECT * FROM attempts WHERE task_id = ?", task)
-    expect(len(attempts) == 1, "aicrewd: %d attempts of the task, not 1" % len(attempts))
-    if len(attempts) != 1:
+    # aicrewd: the task's attempt, its steps, results and pull request. F1's
+    # lost claim request closed an attempt before it, not committed.
+    attempts = q("SELECT * FROM attempts WHERE task_id = ? ORDER BY created_at, id", task)
+    earlier = attempts[:-1]
+    expect(len(attempts) == 1 or (case == "F1" and all(e["state"] == "closed" for e in earlier)),
+           "aicrewd: %d attempts of the task, not 1" % len(attempts))
+    if not attempts:
         return errs
-    a = attempts[0]
+    a = attempts[-1]
     expect((a["state"], a["phase"]) == want["attempt"],
            "aicrewd: the attempt is %s/%s, not %s/%s" % ((a["state"], a["phase"]) + want["attempt"]))
     expect(a["worker_agent_id"] == ids["worker"], "aicrewd: the attempt's worker is %s" % a["worker_agent_id"])
@@ -108,7 +116,8 @@ def check(step, d, case=""):
     steps = q("SELECT operation, outcome, refusal FROM attempt_steps WHERE attempt_id = ? ORDER BY settled_at", a["id"])
     ops = [s["operation"] for s in steps]
     for s in steps:
-        expect(s["outcome"] == "committed", "aicrewd: step %s settled %s %s" % (s["operation"], s["outcome"], s["refusal"]))
+        expect(s["outcome"] == "committed" or case == "F1",
+               "aicrewd: step %s settled %s %s" % (s["operation"], s["outcome"], s["refusal"]))
     expect(want["op"] in ops, "aicrewd: no %s step among %s" % (want["op"], ops))
     expect("release" not in ops, "aicrewd: the reservation was released: %s" % ops)
     expect(len(q("SELECT operation FROM receipts")) > 0, "aicrewd: no receipts")
@@ -138,11 +147,12 @@ def check(step, d, case=""):
                    "aicrewd: the %s's turn reports %s" % (role, [r["cost_usd"] for r in reports]))
     # The audit: the operator's calls are the runner's own, and a member
     # calls only member operations.
+    allowed = OPERATOR_OPS | (CASE_OPS if case else set())
     for r in q("SELECT caller_kind, caller_id, operation FROM audit"):
         if r["caller_kind"] == "operator":
-            expect(r["operation"] in OPERATOR_OPS, "aicrewd: the audit has the operator call %s" % r["operation"])
+            expect(r["operation"] in allowed, "aicrewd: the audit has the operator call %s" % r["operation"])
         elif r["caller_id"] in (ids["coordinator"], ids["worker"]):
-            expect(r["caller_kind"] == "agent" and r["operation"] not in OPERATOR_OPS,
+            expect(r["caller_kind"] == "agent" and r["operation"] not in OPERATOR_OPS | CASE_OPS,
                    "aicrewd: a member called %s as %s" % (r["operation"], r["caller_kind"]))
 
     # Messages: what each member was sent about this attempt or task. One a
@@ -243,18 +253,19 @@ def check(step, d, case=""):
 
 
 def state(store, task):
-    """The task's attempt as STATE/PHASE PULLS, or none."""
+    """The task's latest attempt as STATE/PHASE PULLS, or none."""
     db = sqlite3.connect(os.path.join(store, "aicrew.db"))
     rows = db.execute("""SELECT a.state, a.phase, (SELECT COUNT(*) FROM attempt_pulls p WHERE p.attempt_id = a.id)
-                         FROM attempts a WHERE a.task_id = ?""", (task,)).fetchall()
-    return "%s/%s %d" % rows[0] if len(rows) == 1 else "none"
+                         FROM attempts a WHERE a.task_id = ? ORDER BY a.created_at, a.id""", (task,)).fetchall()
+    return "%s/%s %d" % rows[-1] if rows else "none"
 
 
 def pull(store, task):
+    """The number of the pull request of the task's latest attempt."""
     db = sqlite3.connect(os.path.join(store, "aicrew.db"))
     rows = db.execute("""SELECT p.number FROM attempt_pulls p JOIN attempts a ON a.id = p.attempt_id
-                         WHERE a.task_id = ?""", (task,)).fetchall()
-    return rows[0][0] if len(rows) == 1 else None
+                         WHERE a.task_id = ? ORDER BY a.created_at, a.id""", (task,)).fetchall()
+    return rows[-1][0] if rows else None
 
 
 def main(argv):
@@ -266,7 +277,7 @@ def main(argv):
         print(n or "")
         return 0 if n else 1
     if len(argv) not in (3, 4) or argv[0] != "check" or argv[1] not in STEPS or \
-            (len(argv) == 4 and (argv[1] != "done" or argv[3] not in ("P1", "P2", "P4", "P5"))):
+            (len(argv) == 4 and (argv[1] != "done" or argv[3] not in CASES)):
         print(__doc__, file=sys.stderr)
         return 2
     errs = check(argv[1], argv[2], argv[3] if len(argv) == 4 else "")

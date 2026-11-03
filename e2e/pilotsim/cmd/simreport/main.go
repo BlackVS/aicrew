@@ -185,12 +185,17 @@ func build(out string, evs []event) ([]record, error) {
 			rec := record{"type": "step", "at": ev["at"], "scenario": ev["scenario"], "step": ev["step"],
 				"snapshot": ev["snapshot"], "checks": "none"}
 			snaps[ev["snapshot"]] = rec
-			cur, err := readSnapshot(out, ev["snapshot"])
-			if err != nil {
-				return nil, fmt.Errorf("step %s: %v", ev["snapshot"], err)
-			}
 			diff := record{"type": "store_diff", "at": ev["at"], "scenario": ev["scenario"], "step": ev["step"],
 				"snapshot": ev["snapshot"]}
+			cur, err := readSnapshot(out, ev["snapshot"])
+			if err != nil {
+				// A snapshot the run left unfinished (it failed while taking
+				// it) has no diff; the next step compares with the one before.
+				diff["error"] = err.Error()
+				diff["against"], diff["aicrewd"], diff["aimem_against"], diff["aimem"] = "", record{}, "", record{}
+				recs = append(recs, rec, diff)
+				continue
+			}
 			diff["against"], diff["aicrewd"] = "", tablesDiff(nil, cur.tables)
 			if prev != nil {
 				diff["against"], diff["aicrewd"] = prev.rel, tablesDiff(prev.tables, cur.tables)

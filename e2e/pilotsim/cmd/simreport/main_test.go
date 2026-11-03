@@ -220,6 +220,38 @@ func TestRunWithoutEnd(t *testing.T) {
 	}
 }
 
+// A snapshot the run left unfinished (here a store copy that is no
+// database) gives its diff an error, and the report is still written.
+func TestUnfinishedSnapshot(t *testing.T) {
+	out := t.TempDir()
+	store := filepath.Join(out, "cycle-1", "offer", "store")
+	if err := os.MkdirAll(store, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "aicrew.db"), []byte("half a copy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	for _, ev := range [][]string{
+		{"run", "aicrew_commit=x", "aimem_version=0.10.21", "os=linux", "arch=amd64", "bound_minutes=90", "skip="},
+		{"scenario_start", "name=cycle-1", "bound_seconds=900"},
+		{"step", "scenario=cycle-1", "step=offer", "snapshot=cycle-1/offer"},
+		{"fail", "what=no stable copy of aicrewd's store for the offer step"},
+		{"end", "code=1"},
+	} {
+		if err := appendEvent(out, ev[0], ev[1:], now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := write(out, ""); err != nil {
+		t.Fatal(err)
+	}
+	recs := readReport(t, out)
+	if d := recs[3]; d["type"] != "store_diff" || d["error"] == nil {
+		t.Errorf("the unfinished snapshot's diff: %v", d)
+	}
+}
+
 func TestEventRefusesBadFields(t *testing.T) {
 	out := t.TempDir()
 	for _, kv := range []string{"novalue", "=x", "type=run", "at=now"} {

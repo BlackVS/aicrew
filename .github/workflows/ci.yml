@@ -5,7 +5,10 @@ on:
     branches: [main]
   pull_request:
   # The full set nightly on main, beside every push to it: a pull request
-  # skips the slow tests its change cannot reach (scripts/ci-gate.sh).
+  # skips the slow tests its change cannot reach (scripts/ci-gate.sh). The
+  # macOS legs of go-test and release-build run only here and at a release
+  # tag (release.yml): the hosted macOS runners starve jobs for hours, and
+  # a merge must not wait on them (DEVELOPMENT, "What runs where").
   schedule:
     - cron: '41 3 * * *'
 
@@ -61,7 +64,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'schedule' && '["ubuntu-latest","windows-latest","macos-latest"]' || '["ubuntu-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -146,7 +149,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'schedule' && '["ubuntu-latest","windows-latest","macos-latest"]' || '["ubuntu-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

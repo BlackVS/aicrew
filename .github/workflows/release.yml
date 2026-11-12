@@ -34,6 +34,7 @@ jobs:
     outputs:
       tag: ${{ steps.resolve.outputs.TAG }}
       dry_run: ${{ steps.resolve.outputs.DRY_RUN }}
+      commit: ${{ steps.commit.outputs.COMMIT }}
     env:
       INPUT_TAG: ${{ inputs.tag }}
       INPUT_DRY_RUN: ${{ inputs.dry_run }}
@@ -58,6 +59,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}   # read-only here: gh release view
           GH_REPO: ${{ github.repository }}
         run: bash "$RUNNER_TEMP/release.sh" check "$TAG" $([ "$DRY_RUN" = true ] && echo --dry-run)
+      - name: The commit checked, for the macOS job
+        id: commit
+        run: echo "COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Test before building
         run: go test -count=1 ./...
       - name: Build, stamp and sum
@@ -77,8 +81,44 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  publish:
+  # The same commit tested and built on macOS, the one place besides the
+  # nightly CI run where the macOS legs run (DEVELOPMENT, "What runs
+  # where"): a Mac-only failure stops the release. It publishes nothing; the
+  # assets are the build job's.
+  macos:
     needs: build
+    runs-on: macos-latest
+    env:
+      TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          persist-credentials: false
+      # The commit may predate the script, as in the build job: this
+      # workflow's copy runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .workflow
+          persist-credentials: false
+      - name: This workflow's release script
+        run: |
+          cp .workflow/scripts/release.sh "$RUNNER_TEMP/release.sh"
+          rm -rf .workflow
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25'
+          cache: true
+      - name: Test
+        run: go test -count=1 ./...
+      - name: Build, stamp and sum
+        run: bash "$RUNNER_TEMP/release.sh" build "$TAG"
+      - name: Verify the sums
+        working-directory: dist
+        run: shasum -a 256 --ignore-missing -c SHA256SUMS
+
+  publish:
+    needs: [build, macos]
     if: needs.build.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
     permissions:

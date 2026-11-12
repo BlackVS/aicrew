@@ -71,8 +71,8 @@ bash scripts/release_test.sh           # the release script's refusals
 CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,
 `go-test (windows-latest)`, `go-race (agent)`, `go-race (server)`,
 `go-race (store)`, `go-build`, and `release-build` on Linux and Windows.
-A pull request shows 10 checks, these nine and the repository's secret
-scan; a push to main shows the nine. The nightly run adds
+A pull request shows 11 checks, these ten and the repository's secret
+scan; a push to main shows the ten. The nightly run adds
 `go-test (macos-latest)` and `release-build (macos-latest)`. A head is
 green when all of its checks pass, and the three `go-race` jobs are
 required beside the two `go-test` jobs.

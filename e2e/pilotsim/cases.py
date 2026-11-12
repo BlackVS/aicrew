@@ -345,6 +345,150 @@ def f6_recovered(verb):
     return check
 
 
+# ---- the direct steps' answers (F2-settle, F3-launcher, F4, F5) ---------------------------
+
+def answer_of(facts, name):
+    """The fact NAME the runner recorded for a step: (exit, answer), the answer {} when there was none."""
+    f = facts.get(name) or {}
+    return f.get("exit"), f.get("answer") or {}
+
+
+def result_of(ans):
+    return ans.get("result") if isinstance(ans.get("result"), dict) else {}
+
+
+def committed(code, ans):
+    r = result_of(ans)
+    return code == 0 and ans.get("ok") is True and r.get("settled") is True and r.get("outcome") == "committed"
+
+
+def refused_at_begin(ans, *codes):
+    """aicrew's refusal at the step's begin, with one of CODES (process_faults_test.go, refusedAtBegin)."""
+    return ans.get("status") == "refused" and not ans.get("ok") and (ans.get("error") or {}).get("code") in codes
+
+
+# aimem's own refusals of a mutation that lost to another (b4's aimemConflictCodes). The driver's
+# not_committed, made from a receipt after a lost reply, is none of them: it proves no commit, not a conflict.
+AIMEM_CONFLICT = ("reservation_conflict", "revision_conflict", "stale_fence")
+
+
+def refused_by_aimem(ans):
+    r = result_of(ans)
+    return (ans.get("status") in ("refused", "pending") and (r.get("report") or {}).get("outcome") == "refused" and
+            (r.get("report") or {}).get("code") in AIMEM_CONFLICT and r.get("outcome") != "committed")
+
+
+# A step lost before its commit, as the driver settles it.
+LOST = {"ok": False, "status": "refused",
+        "result": {"report": {"outcome": "refused", "code": "not_committed"}, "settled": True, "outcome": "not_committed"}}
+
+
+def open_work(q, agent):
+    return q("SELECT count(*) AS n FROM attempts WHERE worker_agent_id = ? AND state != 'closed'", agent)[0]["n"]
+
+
+def f2_settle(d, q, ids, a, expect):
+    facts = loadj(d, "facts.json", {}) or {}
+    code, ans = answer_of(facts, "settle-claim")
+    expect(code not in (None, 0) and not ans.get("ok"), "indep: the claim did not see its settle fail: exit %s, %s" % (code, ans))
+    drops = [e for e in proxy_log(d, "crew") if e.get("case") == "F2-settle" and e["outcome"] == "dropped_reply"]
+    expect(drops and all(e["method"] == "POST" and e["path"].endswith("/settle") and 200 <= e["status"] < 300
+                         for e in drops),
+           "sim-px-crew: no settle aicrewd answered and the proxy dropped: %s" % drops)
+    claims = steps_of(q, a["id"], "claim") if a else []
+    expect(a and a["state"] == "running" and a["pending_key"] == "" and claims == ["committed"],
+           "aicrewd: the retried settle did not leave the claim running, settled once: %s, steps %s" %
+           (dict(a) if a else None, claims))
+    _, pending = answer_of(facts, "settle-pending")
+    expect(pending.get("ok") and pending.get("result") is None, "indep: a step is left recorded: %s" % pending)
+
+
+def f3_launcher(d, q, ids, a, expect):
+    facts = loadj(d, "facts.json", {}) or {}
+    restarted(facts, "launcher", expect)
+    expect(a and a["state"] == "running" and a["pending_key"] == "",
+           "aicrewd: the claim is not settled, running: %s" % (dict(a) if a else None))
+    n = q("""SELECT count(*) AS n FROM audit WHERE operation = 'attempt.settle' AND caller_kind = 'reconciler'
+             AND scope = ?""", a["id"] if a else "")[0]["n"]
+    expect(n > 0, "aicrewd: the reconciler did not settle the claim (the launcher was down)")
+    _, pending = answer_of(facts, "launcher-pending")
+    expect(pending.get("ok") and pending.get("result") is None, "indep: the restarted launcher has a recorded step: %s" %
+           pending)
+
+
+def f4_second(d, q, ids, a, expect):
+    code, ans = answer_of(loadj(d, "facts.json", {}) or {}, "second-claim")
+    expect(code == 3 and refused_at_begin(ans, "task_busy"),
+           "indep: the claim of the task with an open attempt was not refused task_busy at begin: exit %s, %s" % (code, ans))
+    expect(len(attempts_of(q, ids["task"])) == 1, "aicrewd: the task has %d attempts, not 1" %
+           len(attempts_of(q, ids["task"])))
+
+
+def f4_busy(d, q, ids, a, expect):
+    code, ans = answer_of(loadj(d, "facts.json", {}) or {}, "busy-offer")
+    expect(code == 3 and refused_at_begin(ans, "agent_busy"),
+           "coordinator: the offer to the busy worker was not refused agent_busy at begin: exit %s, %s" % (code, ans))
+
+
+def f4_race(d, q, ids, a, expect):
+    facts = loadj(d, "facts.json", {}) or {}
+    steps = [answer_of(facts, "race-offer"), answer_of(facts, "race-claim")]
+    wins = [s for s in steps if committed(*s)]
+    losers = [s for s in steps if not committed(*s)]
+    loser_refused = len(losers) == 1 and (refused_at_begin(losers[0][1], "task_busy", "agent_busy") or
+                                          refused_by_aimem(losers[0][1]))
+    expect(not refused_by_aimem(LOST) and not refused_at_begin(LOST, "task_busy", "agent_busy") and
+           not refused_by_aimem({"status": "failed"}),
+           "the race's check takes a lost step, or a failure, for a conflict refusal")
+    still = [r for r in attempts_of(q, ids["task"]) if r["state"] != "closed"]
+    expect(len(wins) == 1 and loser_refused and len(still) == 1 and holder_of(d)[0] == "held",
+           "of the racing offer and claim, not exactly one committed and the other refused, one attempt open: %s, open %d" %
+           (steps, len(still)))
+
+
+def f5_stale(d, q, ids, a, expect):
+    facts = loadj(d, "facts.json", {}) or {}
+    expect(facts.get("held_edit") == 409, "aimem: a plain edit of a held task answered %s, not 409" % facts.get("held_edit"))
+    expect(facts.get("stale_edit") == 200, "aimem: the edit of the unheld task mid-step answered %s, not 200" %
+           facts.get("stale_edit"))
+    calls = facts.get("stale_calls") or []
+    expect("reservation claim 3" in calls, "aimem did not refuse the claim begun at the old revision: %s" % calls)
+
+
+def f5_replay(d, q, ids, a, expect):
+    r = (loadj(d, "facts.json", {}) or {}).get("replay") or {}
+    expect(r.get("exit") == 3 and r.get("code"), "aimem did not refuse the settled step's proof replayed under a new key: %s" % r)
+
+
+def f5_resume(d, q, ids, a, expect):
+    facts = loadj(d, "facts.json", {}) or {}
+    restarted(facts, "launcher", expect)
+    r = facts.get("resume_replay") or {}
+    expect(r.get("exit") == 3 and r.get("code"), "aimem did not refuse the old generation's proof: %s" % r)
+    _, rec = answer_of(facts, "resume-recover")
+    expect(not rec.get("ok"), "coordinator: the new generation continued the old generation's offer: %s" % rec)
+    expect(holder_of(d)[0] != "held", "aimem holds the task for the old generation's offer")
+    expect(a and a["state"] == "closed" and a["close_reason"] == "claim not_committed",
+           "aicrewd: the never-sent offer is not settled not committed: %s" % (dict(a) if a else None))
+    expect(open_work(q, ids["worker"]) == 0, "aicrewd: the worker's capacity is not free after the resumed offer")
+
+
+def f5_delay(d, q, ids, a, expect):
+    facts = loadj(d, "facts.json", {}) or {}
+    delayed = [e for e in proxy_log(d, "peer") if e.get("case") == "F5-delay" and e["outcome"] == "delayed_reply"]
+    expect(delayed, "sim-px-peer: aicrewd's coordination answer was not delayed")
+    calls = facts.get("delay_calls") or []
+    expect("reservation claim 4" in calls and "reservation claim 0" in calls,
+           "aimem did not refuse the slow claim as retryable, then commit its retry: %s" % calls)
+
+
+def f6_unreachable(d, q, ids, a, expect):
+    drops = [e for e in proxy_log(d, "hub") if e.get("case") == "F6-unreachable" and e["outcome"] == "dropped_request"]
+    expect(drops, "sim-px-hub: no read of the hub's peers was dropped")
+    expect(a and a["state"] != "closed", "aicrewd closed the attempt while the hub was unreachable: %s" %
+           (dict(a) if a else None))
+
+
 CHECKS = {
     ("P1", "unacked"): p1_unacked,
     ("P2", "submit"): p2_submit,
@@ -358,7 +502,21 @@ CHECKS = {
     ("F3-hub", "restart"): f3_hub,
     ("F6-release", "recovered"): f6_recovered("release"),
     ("F6-cancel", "recovered"): f6_recovered("cancel"),
+    ("F2-settle", "settle"): f2_settle,
+    ("F3-launcher", "launcher"): f3_launcher,
+    ("F4-second", "second"): f4_second,
+    ("F4-busy", "busy"): f4_busy,
+    ("F4-race", "race"): f4_race,
+    ("F4-lost", "race"): f4_race,
+    ("F5-stale", "stale"): f5_stale,
+    ("F5-replay", "replay"): f5_replay,
+    ("F5-resume", "resume"): f5_resume,
+    ("F5-delay", "delay"): f5_delay,
+    ("F6-unreachable", "unreachable"): f6_unreachable,
 }
+# The cases whose checks read the steps' answers: their task may have no attempt (F4-busy's offer is
+# refused at its begin).
+NO_ATTEMPT_NEEDED = ("F2-settle", "F3-launcher", "F4-", "F5-")
 for _op in ("claim", "transfer", "update", "finalize"):
     CHECKS[("F1-%s-request" % _op, "request")] = f1_request("F1-%s-request" % _op, _op)
     CHECKS[("F1-%s-reply" % _op, "reply")] = f1_reply("F1-%s-reply" % _op, _op)
@@ -412,6 +570,70 @@ def scan(secrets_file, root, store, skip):
     return secrets, sources, leaks
 
 
+# ---- the runner's helpers for the direct steps ------------------------------------------
+
+def step_body(kind, store, task_file, hub, worker):
+    """An offer to the worker, or a claim, of the task at its current revision. The process pin is the
+    one the cycles' offers carried (aicrewd's store); the step's --repository fills the rest."""
+    q = db_of(store)
+    pin = q("""SELECT process_repository, process_commit, process_manifest, instruction_digest FROM attempts
+               WHERE process_commit != '' ORDER BY created_at DESC LIMIT 1""")
+    if not pin:
+        raise SystemExit("cases.py: aicrewd's store has no attempt with a process pin")
+    with open(task_file) as f:
+        t = json.load(f)
+    body = {"task": {"hub_id": hub, "project_id": t["project"], "task_id": t["id"]}, "expected_revision": t["revision"],
+            "repository": {"access": "write", "branch": "work/" + t["id"]},
+            "process": {"repo": pin[0]["process_repository"], "commit": pin[0]["process_commit"],
+                        "manifest": pin[0]["process_manifest"]},
+            "instruction_digest": pin[0]["instruction_digest"]}
+    if kind == "offer":
+        body["worker_agent_id"] = worker
+        expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=2)
+        body["expires_at"] = expires.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return body
+
+
+def edit_body(task, text):
+    body = {f: task.get(f) for f in CONTENT}
+    body.update(state=task["state"], expected_revision=task["revision"], next_action=text)
+    return body
+
+
+def open_attempts(store, task, worker, indep):
+    """The task's open attempts as "ID STATE HOLDER", HOLDER the role whose capacity it holds."""
+    role = {worker: "worker", indep: "indep"}
+    return ["%s %s %s" % (r["id"], r["state"], role.get(r["worker_agent_id"], "coordinator"))
+            for r in attempts_of(db_of(store), task) if r["state"] != "closed"]
+
+
+def json_objects(text):
+    """The JSON objects in TEXT, one after another (files concatenated)."""
+    dec, i, out = json.JSONDecoder(), 0, []
+    while True:
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i >= len(text):
+            return out
+        try:
+            obj, i = dec.raw_decode(text, i)
+        except ValueError:
+            return out
+        out.append(obj)
+
+
+def lose(facts_file):
+    """F4-lost's control: the race's loser answers as a step lost before its commit."""
+    with open(facts_file) as f:
+        facts = json.load(f)
+    for name in ("race-offer", "race-claim"):
+        if not committed(*answer_of(facts, name)):
+            facts[name] = {"exit": 3, "answer": LOST}
+            break
+    with open(facts_file, "w") as f:
+        json.dump(facts, f, indent=1)
+
+
 def check(case, point, d):
     errs = []
     expect = lambda ok, what: ok or errs.append(what)
@@ -419,13 +641,70 @@ def check(case, point, d):
     q = db_of(os.path.join(d, "store"))
     # A fault case reads the task's latest attempt: F1's lost claim closed one before it.
     a = latest(q, ids.get("task", "")) if case.startswith("F") else attempt_of(q, ids.get("task", ""))
-    if a is None and case != "P3":
+    if a is None and case != "P3" and not case.startswith(NO_ATTEMPT_NEEDED):
         return ["aicrewd: the task %s has no single attempt" % ids.get("task")]
     CHECKS[(case, point)](d, q, ids, a, expect)
     return errs
 
 
 def main(argv):
+    if len(argv) == 3 and argv[0] == "answer":
+        try:
+            with open(argv[1]) as f:
+                ans = json.load(f)
+        except (OSError, ValueError):
+            ans = None
+        print(json.dumps({"exit": int(argv[2]), "answer": ans}))
+        return 0
+    if len(argv) == 3 and argv[0] in ("succeeded", "attempt_id"):
+        with open(argv[1]) as f:
+            code, ans = answer_of(json.load(f), argv[2])
+        if argv[0] == "attempt_id":
+            print(result_of(ans).get("attempt_id", ""))
+            return 0 if result_of(ans).get("attempt_id") else 1
+        settles = "settled" in result_of(ans)
+        return 0 if code == 0 and ans.get("ok") and (not settles or committed(code, ans)) else 1
+    if len(argv) == 3 and argv[0] == "attempt_of":
+        a = latest(db_of(argv[1]), argv[2])
+        print(a["id"] if a else "")
+        return 0 if a else 1
+    if len(argv) == 4 and argv[0] == "settled":
+        a = latest(db_of(argv[1]), argv[2])
+        return 0 if a and a["state"] == argv[3] and a["pending_key"] == "" else 1
+    if len(argv) == 6 and argv[0] == "step_body":
+        print(json.dumps(step_body(*argv[1:])))
+        return 0
+    if len(argv) == 3 and argv[0] == "edit_body":
+        with open(argv[1]) as t:
+            print(json.dumps(edit_body(json.load(t), argv[2])))
+        return 0
+    if len(argv) == 5 and argv[0] == "open_attempts":
+        for line in open_attempts(*argv[1:]):
+            print(line)
+        return 0
+    if len(argv) == 1 and argv[0] == "calls":
+        print(json.dumps(["%s %s %s" % (e.get("cmd"), e.get("op"), e.get("exit")) for e in json_objects(sys.stdin.read())]))
+        return 0
+    if len(argv) == 2 and argv[0] == "pending_key":
+        for rec in json_objects(sys.stdin.read()):
+            if (rec.get("request") or {}).get("task_id") == argv[1] and rec.get("step"):
+                print(rec["step"].get("request_key", ""))
+                return 0
+        print("cases.py: no recorded step on task %s" % argv[1], file=sys.stderr)
+        return 1
+    if len(argv) == 2 and argv[0] == "lose":
+        lose(argv[1])
+        return 0
+    if len(argv) == 2 and argv[0] == "held":
+        return 0 if holder_of(argv[1])[0] == "held" else 1
+    if len(argv) == 3 and argv[0] == "recovered":
+        errs = []
+        q = db_of(os.path.join(argv[1], "store"))
+        f6_recovered(argv[2])(argv[1], q, loadj(argv[1], "ids.json"), latest(q, loadj(argv[1], "ids.json")["task"]),
+                              lambda ok, what: ok or errs.append(what))
+        for e in errs:
+            print("cases.py recovered:", e, file=sys.stderr)
+        return 1 if errs else 0
     if len(argv) == 4 and argv[0] == "followup":
         q = db_of(argv[1])
         a = attempt_of(q, argv[2])

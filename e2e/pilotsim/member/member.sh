@@ -4,7 +4,8 @@
 # owner only, then "ready"), join once with them, and run serve. Nothing is
 # typed: join reads the code with --code-file. The member reaches aicrewd
 # and the hub through the fault proxies sim-px-crew and sim-px-aimem
-# (e2e/pilotsim/compose.yaml).
+# (e2e/pilotsim/compose.yaml), and runs aimem through aimem-timed, whose
+# gates the fault cases set.
 set -euo pipefail
 : "${SIM_ROLE:?}" "${SIM_WAIT:=900}"
 home=$HOME/agent
@@ -20,7 +21,7 @@ set +a
 if [ ! -f "$home/agent.json" ] || ! grep -q '"agent_id"' "$home/agent.json"; then
   aicrew-agent join --label "$SIM_ROLE" --home "$home" --url https://sim-px-crew:9443 \
     --tls-trust-mode spki_sha256 --tls-trust-value "$PIN_SIM_AICREWD" --aimem-hub sim --client claude \
-    --wake turns --no-service --code-file "$in/invite" \
+    --wake turns --no-service --code-file "$in/invite" --aimem-command /usr/local/bin/aimem-timed \
     --aimem-url https://sim-px-aimem:8440 --aimem-token-file "$in/aimem.token" --aimem-ca-file /sim/tls/ca.pem \
     --cred "sim-gitea:3000=$in/forge.token"
   rm -f "$in/invite" "$in/aimem.token" "$in/forge.token"

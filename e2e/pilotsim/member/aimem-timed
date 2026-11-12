@@ -1,0 +1,47 @@
+#!/bin/sh
+# aimem-timed: the aimem a member home runs, joined with the real
+# --aimem-command flag (member.sh). It is b4's wrapper (e2e/realaimem,
+# writeAimemWrapper) in the member image: it runs the real aimem and logs
+# each command, its leading two arguments and its exit, which hold no
+# secret, to /home/member/gate/timing.jsonl. The runner sets its gates with
+# files in /home/member/gate, through docker compose exec (docs/E2E-PILOT-SIM.md,
+# "The fault cases"), for a command named CMD-OP (reservation-claim):
+#   capture-NAME   keep the next such command's standard input in
+#                  captured-NAME, owner only: a coordination proof is a
+#                  secret, and the runner reads it only for case F5;
+#   hold-NAME      pause the next one before it runs (paused-NAME), until
+#                  go-NAME;
+#   hold-after-NAME  pause it after it ran (paused-after-NAME), until
+#                  go-after-NAME.
+umask 077
+gate=/home/member/gate
+mkdir -p "$gate"
+name="$1-$2"
+input=""
+if [ -e "$gate/capture-$name" ]; then
+  rm -f "$gate/capture-$name"
+  cat > "$gate/captured-$name"
+  input="$gate/captured-$name"
+fi
+if [ -e "$gate/hold-$name" ]; then
+  rm -f "$gate/hold-$name"
+  : > "$gate/paused-$name"
+  while [ ! -e "$gate/go-$name" ]; do sleep 0.05; done
+  rm -f "$gate/go-$name"
+fi
+start=$(date +%s%N)
+if [ -n "$input" ]; then
+  aimem "$@" < "$input"
+else
+  aimem "$@"
+fi
+rc=$?
+if [ -e "$gate/hold-after-$name" ]; then
+  rm -f "$gate/hold-after-$name"
+  : > "$gate/paused-after-$name"
+  while [ ! -e "$gate/go-after-$name" ]; do sleep 0.05; done
+  rm -f "$gate/go-after-$name"
+fi
+end=$(date +%s%N)
+printf '{"cmd":"%s","op":"%s","start_ns":%s,"end_ns":%s,"exit":%s}\n' "$1" "$2" "$start" "$end" "$rc" >> "$gate/timing.jsonl"
+exit $rc

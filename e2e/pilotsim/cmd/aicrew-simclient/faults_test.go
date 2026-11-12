@@ -173,6 +173,27 @@ func TestRecoverTakesTheStepsOwnAttempt(t *testing.T) {
 	}
 }
 
+// The independent member's turn takes no step: the runner drives its steps.
+// It acknowledges what reached it.
+func TestIndependentTurnOnlyAcknowledges(t *testing.T) {
+	f := newFake(t)
+	f.inbox = []map[string]any{{"id": "m1", "kind": "attempt.lifecycle", "text": "Attempt stopped."}}
+	brief := "/crew-turn No open attempt.\n\n## Who and where\n\n- Role: independent; team T1; agent A9.\n" +
+		"- Home: /home/member/agent.\n\n## The task\n\nNo task: no open attempt.\n"
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(brief), &out, f.member()); code != 0 {
+		t.Fatalf("turn = %d: %s", code, out.String())
+	}
+	if !f.called("aicrew-agent inbox --ack m1") {
+		t.Fatalf("calls %v", f.calls)
+	}
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, "aicrew-agent step") {
+			t.Fatalf("the independent turn took a step: %v", f.calls)
+		}
+	}
+}
+
 // A submit aimem leaves undecided is recorded with its request key; the next
 // turn's submit supersedes it (case F1, update).
 func TestWorkerSupersedesAPendingSubmit(t *testing.T) {

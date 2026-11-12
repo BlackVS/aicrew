@@ -354,6 +354,10 @@ func (m *member) turn(ctx context.Context, b brief) error {
 		err = m.worker(ctx, b, msgs)
 	case "coordinator":
 		err = m.coordinator(ctx, msgs)
+	case "independent":
+		// The runner drives the independent member's steps, as b4's
+		// harness does (cases F2-settle, F3-launcher, F4 and F5): its turns
+		// only acknowledge what reached it.
 	default:
 		err = fmt.Errorf("no script for the role %q", b.Role)
 	}

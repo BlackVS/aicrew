@@ -69,6 +69,12 @@ services:
     <<: *proxy
     command: [-listen, ":9443", -cert, /sim/tls/sim-aicrewd.pem, -key, /sim/tls/sim-aicrewd.key, -target, "https://sim-aicrewd:9443"]
 
+  # aicrewd to the hub, which aicrewd pins by key: its reads of the hub's
+  # peers and holds (case F6-unreachable).
+  sim-px-hub:
+    <<: *proxy
+    command: [-listen, ":8440", -cert, /sim/tls/sim-aimem.pem, -key, /sim/tls/sim-aimem.key, -target, "https://sim-aimem:8440"]
+
   sim-ca:
     build: ${PILOTSIM_STAGE:?}/ca
     mem_limit: 128m
@@ -149,6 +155,17 @@ services:
       GIT_SSL_CAINFO: /sim/tls/ca.pem
       SIM_ROLE: worker
 
+  # The independent member: it claims, works and releases tasks of its own.
+  # The fault cases F2-settle, F3-launcher, F4 and F5 drive its steps, as
+  # b4's harness drives its independent member; its turns only acknowledge.
+  sim-indep:
+    <<: *member
+    volumes: [tls:/sim/tls:ro, in-indep:/sim/in, scenario-indep:/sim/scenario]
+    environment:
+      SSL_CERT_FILE: /sim/tls/ca.pem
+      GIT_SSL_CAINFO: /sim/tls/ca.pem
+      SIM_ROLE: indep
+
   # The stub reviewer and the stub CI (DESIGN-PILOT-SIMULATION section
   # 2.5): each reads its own forge token and the shared scenario file.
   sim-hands:
@@ -169,6 +186,7 @@ volumes:
   tls:
   in-coordinator:
   in-worker:
+  in-indep:
   in-hands:
   in-ci:
   scenario:
@@ -176,3 +194,4 @@ volumes:
   # which only the runner writes.
   scenario-coordinator:
   scenario-worker:
+  scenario-indep:

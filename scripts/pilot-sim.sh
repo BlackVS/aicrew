@@ -166,7 +166,7 @@ fail() {
 # homes: each member home's docs, logs and state (no credential lives there).
 homes() {
   local role
-  for role in coordinator worker; do
+  for role in coordinator worker indep; do
     mkdir -p "$OUT/homes/$role"
     dc exec -T -u member "sim-$role" sh -c 'cd /home/member/agent && find docs logs state -type f 2>/dev/null | tar -cf - -T -' \
       2>/dev/null | tar -C "$OUT/homes/$role" -xf - 2>/dev/null || true
@@ -199,7 +199,7 @@ finish() {
 # memory_check: the host's available memory against what a run needs
 # (docs/E2E-PILOT-SIM.md, "A dedicated host"): the compose services' limits
 # and the Go build beside them. AICREW_SIM_IGNORE_MEMORY=1 runs anyway.
-SIM_MIN_AVAILABLE_MIB=3072
+SIM_MIN_AVAILABLE_MIB=4096
 memory_check() {
   local avail
   avail=$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null || true)
@@ -342,7 +342,8 @@ stage
 step "building the images"
 dc build --quiet || fail "the images did not build"
 step "starting sim-ca, sim-aimem, sim-aicrewd, sim-gitea and the fault proxies"
-dc up -d --wait --wait-timeout 300 sim-aimem sim-aicrewd sim-gitea sim-px-aimem sim-px-crew sim-px-peer || fail "the services did not become healthy"
+dc up -d --wait --wait-timeout 300 sim-aimem sim-aicrewd sim-gitea sim-px-aimem sim-px-crew sim-px-peer sim-px-hub ||
+  fail "the services did not become healthy"
 set -a
 eval "$(hub cat /sim/tls/pins.env | grep -E '^PIN_[A-Z_]+=sha256-[A-Za-z0-9+/]+=*$')"
 set +a
@@ -350,7 +351,7 @@ set +a
 
 # ---- Gitea: the accounts, their tokens, the repository -------------------------------
 step "Gitea: the operator, the members and the stubs, their tokens, the repositories, the labels and the process"
-for user in operator sim-coordinator sim-worker sim-hands sim-ci; do
+for user in operator sim-coordinator sim-worker sim-indep sim-hands sim-ci; do
   admin=()
   [ "$user" = operator ] && admin=(--admin)
   gitea admin user create --username "$user" --email "$user@example.test" --random-password \
@@ -367,7 +368,7 @@ forge() { # METHOD PATH [JSON]: the operator's Gitea API call, from aicrewd's ho
 # site has them before anyone asks for a review.
 for repo in pilot fixture; do
   forge POST /user/repos '{"name":"'$repo'","auto_init":true,"default_branch":"main"}' >/dev/null
-  for user in sim-coordinator sim-worker sim-hands sim-ci; do
+  for user in sim-coordinator sim-worker sim-indep sim-hands sim-ci; do
     forge PUT "/repos/operator/$repo/collaborators/$user" '{"permission":"write"}' >/dev/null
   done
   for label in review-this hands-reviewing hands-reviewed; do
@@ -403,7 +404,8 @@ HUB_ID=$(op cat $OPS_HOME/peer/aimem-hub-id)
 
 # ---- aicrewd: the hub, the team, the introspection credential ----------------------
 step "aicrewd: aicrew hub add, team setup and the hub's introspection credential"
-op aicrew hub add sim --config $OPS_HOME/aicrew/etc/aicrewd.json --base-url https://sim-aimem:8440 \
+# aicrewd reaches the hub through sim-px-hub (case F6-unreachable).
+op aicrew hub add sim --config $OPS_HOME/aicrew/etc/aicrewd.json --base-url https://sim-px-hub:8440 \
   --tls-trust-mode spki_sha256 --tls-trust-value "$PIN_SIM_AIMEM" --cred-dir $OPS_HOME/peer >/dev/null
 dc restart sim-aicrewd >/dev/null
 waitfor "aicrewd's restart" 60 op curl -fs --cacert /sim/tls/ca.pem https://sim-aicrewd:9443/healthz
@@ -445,8 +447,11 @@ scenario "{$SCENARIO_REPOS}"
 
 # ---- the members ---------------------------------------------------------------------
 step "the members: aimem users and tokens, invitations, and their input files"
-dc up -d sim-coordinator sim-worker >/dev/null
-for role in coordinator worker; do
+# The roles' services and their aicrew roles: sim-indep is the team's
+# independent member.
+declare -A AICREW_ROLE=([coordinator]=coordinator [worker]=worker [indep]=independent)
+dc up -d sim-coordinator sim-worker sim-indep >/dev/null
+for role in coordinator worker indep; do
   svc=sim-$role
   uid=$(hub aimem access user-add --user-name "sim-$role" | json_field id)
   expiry=$(date -u -d '+30 days' +%Y-%m-%dT%H:%M:%SZ)
@@ -456,7 +461,7 @@ for role in coordinator worker; do
   hub rm -f "/home/aimem/member-$role.token"
   gitea admin user generate-access-token --username "sim-$role" --token-name sim --scopes all --raw |
     into "$svc" member /sim/in/forge.token
-  op aicrew invitation issue -team "$TEAM_ID" -role "$role" -hub "$HUB_ID" -label "$role" -expect-user "$uid" \
+  op aicrew invitation issue -team "$TEAM_ID" -role "${AICREW_ROLE[$role]}" -hub "$HUB_ID" -label "$role" -expect-user "$uid" \
     --output "$OPS_HOME/invite-$role" >/dev/null
   op cat "$OPS_HOME/invite-$role" | into "$svc" member /sim/in/invite
   op rm -f "$OPS_HOME/invite-$role"
@@ -474,14 +479,14 @@ served() {
   fi
   dc logs --no-color "$1" 2>&1 | grep -q 'the turn model is available'
 }
-for role in coordinator worker; do
+for role in coordinator worker indep; do
   waitfor "sim-$role's serve and its model probe" 600 served "sim-$role"
   dc exec -T -u member "sim-$role" aicrew-agent check --home /home/member/agent --json > "$OUT/check-$role.json" ||
     fail "aicrew-agent check is not green in sim-$role (report: $OUT/check-$role.json)"
   python3 "$SIM/smoke.py" check "$OUT/check-$role.json" "$PILOTSIM_AISKILLS_VERSION" || fail "sim-$role's check report ($OUT/check-$role.json)"
 done
 op aicrew status --team "$TEAM_ID" > "$OUT/status.json" || fail "aicrew status"
-python3 "$SIM/smoke.py" status "$OUT/status.json" coordinator worker || fail "aicrew status ($OUT/status.json)"
+python3 "$SIM/smoke.py" status "$OUT/status.json" coordinator worker indep || fail "aicrew status ($OUT/status.json)"
 dc exec -T -u member sim-coordinator sh -c \
   'python3 "$HOME/.claude/skills/verify-delivery/verify_delivery.py" --help >/dev/null' ||
   fail "verify_delivery.py --help does not run in sim-coordinator"
@@ -608,6 +613,7 @@ member_id() {
 }
 WORKER_ID=$(member_id worker)
 COORD_ID=$(member_id coordinator)
+INDEP_ID=$(member_id indep)
 # hubapi METHOD PATH [JSON]: the hub's API as its admin, on the hub's host;
 # a write's idempotency key names the cycle.
 hubapi() {
@@ -620,6 +626,7 @@ hubapi() {
 member() {
   local id=$WORKER_ID
   [ "$2" = coordinator ] && id=$COORD_ID
+  [ "$2" = indep ] && id=$INDEP_ID
   if [ "$1" = nudge ]; then
     op aicrew member nudge --team "$TEAM_ID" --agent "$id" --note "$3" >/dev/null
   else
@@ -700,8 +707,8 @@ take() {
   # A snapshot is never taken twice: the report compares each with the one before.
   [ ! -e "$d" ] || fail "the $1 step's snapshot $d is taken already"
   mkdir -p "$d/aimem" "$d/forge"
-  printf '{"task":"%s","worker":"%s","coordinator":"%s","first_head":"%s"}\n' "$TASK" "$WORKER_ID" "$COORD_ID" \
-    "${FIRST:-}" > "$d/ids.json"
+  printf '{"task":"%s","worker":"%s","coordinator":"%s","indep":"%s","first_head":"%s"}\n' "$TASK" "$WORKER_ID" \
+    "$COORD_ID" "${INDEP_ID:-}" "${FIRST:-}" > "$d/ids.json"
   store_copy "$d/store" || fail "no stable copy of aicrewd's store for the $1 step"
   op aicrew status --team "$TEAM_ID" > "$d/status.json" || fail "aicrew status for the $1 step"
   ev step scenario="$SCENARIO" step="$1" snapshot="${d#"$OUT"/}"
@@ -728,14 +735,14 @@ take() {
 take_proxies() {
   local p
   mkdir -p "$1/proxy"
-  for p in aimem crew peer; do
+  for p in aimem crew peer hub; do
     px "$p" log > "$1/proxy/$p.jsonl" || fail "sim-px-$p's request log"
   done
 }
 # take_homes DIR: each home's turn records, guard log, turn state and handoff.
 take_homes() {
   local d=$1 role f
-  for role in coordinator worker; do
+  for role in coordinator worker indep; do
     mkdir -p "$d/homes/$role"
     for f in logs/turns.jsonl logs/guard.jsonl docs/HANDOFF.md state/turns.json; do
       dc exec -T -u member "sim-$role" sh -c '[ ! -f "$1" ] || cat "$1"' sh "/home/member/agent/$f" \

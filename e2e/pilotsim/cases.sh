@@ -288,7 +288,7 @@ case_p5() {
 . "$SIM/faults.sh"
 
 # A skipped fault runs only its case: F1-claim-request runs F1.
-for c in P2 P5 P4 P1 F1 F2 F3 F6 F7 P3; do
+for c in P2 P5 P4 P1 F1 F2 F3 F4 F5 F6 F7 P3; do
   [ -z "$SKIP" ] || [ "${SKIP%%-*}" = "$c" ] || continue
   "case_${c,,}"
 done

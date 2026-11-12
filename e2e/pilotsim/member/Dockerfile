@@ -1,5 +1,6 @@
-# A member home (sim-coordinator, sim-worker): git and Python 3, the
-# client stand-in as `claude` on PATH, then each component by its own
+# A member home (sim-coordinator, sim-worker, sim-indep): git and Python 3,
+# the client stand-in as `claude` on PATH, b4's aimem-timed wrapper that
+# the home joins with as its aimem command, then each component by its own
 # installer, as aicrew-agent check instructs (DESIGN-PILOT-SIMULATION
 # section 3): aicrew's boot.sh from this tree's binaries, aimem's
 # verifying boot script at the tested release, ai-skills from its release
@@ -16,6 +17,8 @@ COPY claude /usr/local/bin/claude
 COPY prebuilt/ /opt/aicrew-prebuilt/
 COPY boot.sh /opt/aicrew-boot.sh
 COPY member.sh /usr/local/bin/member.sh
+COPY aimem-timed /usr/local/bin/aimem-timed
+RUN chmod 755 /usr/local/bin/aimem-timed
 USER member
 WORKDIR /home/member
 ENV PATH=/home/member/.local/bin:/usr/local/bin:/usr/bin:/bin

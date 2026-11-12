@@ -16,9 +16,11 @@ arm() {
   RULE= RULE_PX=$p
   if [ "$SKIP" = "$c" ]; then
     step "case $c: its fault is left out (sim-px-$p: $*)"
+    ev fault case="$c" fault="sim-px-$p $*" state=left_out
     return 0
   fi
   RULE=$(px "$p" arm -case "$c" -action "$1" -method "$2" -path "$3" "${@:4}") || fail "case $c: arming sim-px-$p"
+  ev fault case="$c" fault="sim-px-$p $*" state=armed
 }
 disarm() {
   [ -z "$RULE" ] || px "$RULE_PX" disarm "$RULE" >/dev/null || fail "disarming rule $RULE on sim-px-$RULE_PX"

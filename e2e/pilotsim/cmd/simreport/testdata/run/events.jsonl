@@ -1,0 +1,11 @@
+{"type":"run","at":"2026-11-03T12:03:03.120000000Z","aicrew_commit":"de8974bfc537e889b57f4184cf78540e1cec1c27","aimem_version":"0.10.21","aiskills_version":"1.32.1","os":"linux","arch":"amd64","docker":"28.5.1","bound_minutes":"90","skip":""}
+{"type":"scenario_start","at":"2026-11-03T12:03:03.500000000Z","name":"setup","bound_seconds":"1800"}
+{"type":"scenario_start","at":"2026-11-03T12:04:20.000000000Z","name":"cycle-1","bound_seconds":"900"}
+{"type":"step","at":"2026-11-03T12:05:01.000000000Z","scenario":"cycle-1","step":"offer","snapshot":"cycle-1/offer"}
+{"type":"check","at":"2026-11-03T12:05:01.400000000Z","snapshot":"cycle-1/offer","result":"passed"}
+{"type":"fault","at":"2026-11-03T12:05:02.000000000Z","case":"F1-claim-reply","fault":"sim-px-crew drop-reply POST ^/v1/crew/steps/begin$","state":"armed"}
+{"type":"step","at":"2026-11-03T12:05:07.000000000Z","scenario":"cycle-1","step":"accept","snapshot":"cycle-1/accept"}
+{"type":"check","at":"2026-11-03T12:05:07.300000000Z","snapshot":"cycle-1/accept","result":"failed"}
+{"type":"observation","at":"2026-11-03T12:05:07.400000000Z","task":"01a18ce5-336d-7000-9bef-5146088e9805","what":"expected to fail, and failed: the coordinator's delivery within 120s"}
+{"type":"fail","at":"2026-11-03T12:05:07.500000000Z","scenario":"cycle-1","what":"cycle 1: the checks after the accept step (snapshot cycle-1/accept)"}
+{"type":"end","at":"2026-11-03T12:05:20.000000000Z","code":"1"}

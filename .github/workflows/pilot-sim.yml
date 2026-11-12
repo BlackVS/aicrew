@@ -1,0 +1,75 @@
+name: pilot simulation
+
+# The pilot simulation (docs/E2E-PILOT-SIM.md): nightly on main, by hand on
+# any branch, and on a pull request that carries the label pilot-sim. The
+# stack is too heavy for every push, so it is kept out of the ordinary
+# pull-request run.
+#
+# The label gate is e2e-real-aimem.yml's: a pull request event runs the job
+# only while the label is on the pull request, and a labeled event only
+# when that label is the one added, so another label on a labelled pull
+# request starts no second run. Every other pull request event is skipped,
+# under a concurrency group and a job name of its own, so that its skipped
+# check never stands for a real run at the same head.
+on:
+  schedule:
+    - cron: '41 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: >-
+    ${{ github.workflow }}-${{ github.ref }}${{
+    github.event_name == 'pull_request' &&
+    !(contains(github.event.pull_request.labels.*.name, 'pilot-sim') &&
+    (github.event.action != 'labeled' || github.event.label.name == 'pilot-sim')) &&
+    format('-skipped-{0}', github.run_id) || '' }}
+  cancel-in-progress: false
+
+jobs:
+  pilot-sim:
+    name: >-
+      ${{ (github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'pilot-sim') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'pilot-sim')))
+      && 'pilot-sim' || 'pilot-sim (not requested)' }}
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'pilot-sim') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'pilot-sim'))
+    runs-on: ubuntu-latest
+    # The run's own bound (AICREW_SIM_BOUND_MINUTES, 90 by default) stops
+    # it first and still writes the report; this is the backstop.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25'
+          cache: true
+      - name: pilot simulation
+        run: bash scripts/pilot-sim.sh -out "$RUNNER_TEMP/pilotsim"
+      - name: the report's summary
+        if: always()
+        run: tail -n 1 "$RUNNER_TEMP/pilotsim/report.jsonl" || echo "no report"
+      # The report, the step snapshots, the containers' logs and the member
+      # homes. Left out: the staged binaries and image contexts, and the
+      # run's known secrets, which a run cut off by the job's timeout
+      # leaves behind.
+      - name: keep the report and the logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pilot-sim
+          path: |
+            ${{ runner.temp }}/pilotsim
+            !${{ runner.temp }}/pilotsim/stage
+            !${{ runner.temp }}/pilotsim/.known
+          if-no-files-found: warn
+          retention-days: 14

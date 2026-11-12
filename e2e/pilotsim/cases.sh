@@ -298,4 +298,4 @@ ev scenario_end name="$SCENARIO" result=PASS
 SCENARIO=
 
 collect
-step "pilot-sim: green: both members checked, listed and serving; the stubs' fixtures confirmed, refused and released; two cycles from a filed task to DONE with the delivery record; the pilot cases P1 to P5 and the fault cases F1 to F7, expected-to-fail parts in $XFAIL (reports in $OUT)"
+step "pilot-sim: green: the three members checked, listed and serving; the stubs' fixtures confirmed, refused and released; two cycles from a filed task to DONE with the delivery record; the pilot cases P1 to P5 and the fault cases F1 to F7, expected-to-fail parts in $XFAIL (reports in $OUT)"

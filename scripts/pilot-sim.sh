@@ -57,7 +57,8 @@ done
 # The skip-the-fault cases (docs/E2E-PILOT-SIM.md, "The pilot cases" and
 # "The fault cases").
 SKIP_CASES="P1 P2 P3 P4 P5 F1-claim-request F1-claim-reply F1-transfer-request F1-transfer-reply F1-update-request
-F1-update-reply F1-finalize-request F1-finalize-reply F2-begin F3-aicrewd F3-hub F6-release F6-cancel F7-leak"
+F1-update-reply F1-finalize-request F1-finalize-reply F2-begin F2-settle F3-launcher F3-aicrewd F3-hub F4-second
+F4-busy F4-race F4-lost F5-stale F5-replay F5-resume F5-delay F6-release F6-cancel F6-unreachable F7-leak"
 SKIP=${AICREW_SIM_SKIP_FAULT:-}
 case " $(echo $SKIP_CASES) " in
   *" $SKIP "*) [ "$SKIP" = "${SKIP%%[[:space:]]*}" ] || { echo "pilot-sim: AICREW_SIM_SKIP_FAULT names one case" >&2; exit 2; } ;;

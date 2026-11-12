@@ -18,6 +18,7 @@ The direct steps of F2-settle, F3-launcher, F4 and F5 (faults.sh):
     cases.py succeeded FACTS NAME                  (the step NAME succeeded; a reservation step committed)
     cases.py attempt_id FACTS NAME                 (the attempt the step NAME's answer names)
     cases.py attempt_of STORE_DIR TASK             (the task's latest attempt)
+    cases.py pinned STORE_DIR                      (an attempt carries the process pin step_body copies)
     cases.py settled STORE_DIR TASK STATE          (the latest attempt is STATE, with no step pending)
     cases.py step_body offer|claim STORE_DIR TASK_FILE HUB WORKER  (a step's body at the task's revision)
     cases.py edit_body TASK_FILE TEXT              (F5: the admin's edit of the task's next action)
@@ -711,6 +712,8 @@ def main(argv):
     if len(argv) == 2 and argv[0] == "lose":
         lose(argv[1])
         return 0
+    if len(argv) == 2 and argv[0] == "pinned":
+        return 0 if db_of(argv[1])("SELECT id FROM attempts WHERE process_commit != '' LIMIT 1") else 1
     if len(argv) == 2 and argv[0] == "held":
         return 0 if holder_of(argv[1])[0] == "held" else 1
     if len(argv) == 3 and argv[0] == "recovered":

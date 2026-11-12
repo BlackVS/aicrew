@@ -270,7 +270,7 @@ the container that makes it to the one that reads it through a pipe.
 
 - Each member's serve logs that the turn model is available: the model
   probe passed, and no turn has run.
-- `aicrew-agent check --json` exits 0 in both homes, and
+- `aicrew-agent check --json` exits 0 in each home, and
   `e2e/pilotsim/smoke.py` reads its report. It requires:
   - aimem supported;
   - the client supported, with its aimem MCP server connected and no
@@ -282,7 +282,7 @@ the container that makes it to the one that reads it through a pipe.
     client reads it.
 
   The reports are kept as `DIR/check-<role>.json`.
-- `aicrew status` lists both members, each holding a session
+- `aicrew status` lists the three members, each holding a session
   (`DIR/status.json`).
 - `verify_delivery.py --help` runs from the coordinator's skill directory.
 

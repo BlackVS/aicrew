@@ -111,6 +111,20 @@ step_body() {
   store_copy "$CYC/peek" &&
     python3 "$SIM/cases.py" step_body "$1" "$CYC/peek" "$CYC/task-now.json" "$HUB_ID" "$WORKER_ID"
 }
+# pinned: aicrewd's store has an offer with the process pin step_body
+# copies. A skip run leaves the cycles out, so there the coordinator's turn
+# first offers a task of its own, which is then closed.
+pinned() {
+  store_copy "$CYC/peek" && python3 "$SIM/cases.py" pinned "$CYC/peek" && return 0
+  local main=$TASK
+  hold worker "case $CYCLE: an offer for the process pin"
+  new_task "$CYCLE-pin"
+  member resume coordinator
+  waitfor "the coordinator's triage and offer of task $TASK" 300 at 'offered/* 0'
+  hold coordinator "case $CYCLE: an offer for the process pin"
+  close_task pin
+  TASK=$main
+}
 # new_task NAME: TASK, a READY task of its own on the board, filed under NAME.
 new_task() {
   CYCLE=$1 file_task
@@ -297,6 +311,7 @@ case_f2() {
 case_f3() {
   case_start F3
   scenario "{$CASE_SCENARIO}"
+  pinned
   hold worker "case F3: the offer"
   hold coordinator "case F3: aicrewd's restart"
 
@@ -373,6 +388,7 @@ faulted() {
 # step's, and the check must fail on it.
 case_f4() {
   case_start F4
+  pinned
   hold worker "case F4: competing steps"
   hold coordinator "case F4: competing steps"
   local first offered race other pa pb
@@ -472,6 +488,7 @@ active_proof_control() {
 # aimem refuses the claim as retryable, and the step's retry commits.
 case_f5() {
   case_start F5
+  pinned
   hold worker "case F5: stale steps"
   hold coordinator "case F5: stale steps"
   local pid mark

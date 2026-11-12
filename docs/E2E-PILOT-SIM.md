@@ -261,7 +261,11 @@ command on the host it belongs to:
 Every input a person would give is a file written before the member
 starts: the invitation code, the aimem token and the forge token. Each is
 owner-only in the member's `/sim/in`, and the script then writes `ready`
-there. The member joins with them and removes them, then runs serve.
+there. The member joins with them and removes them, then runs serve. As
+an installed member's service does, the container starts serve again
+10 seconds after a failure, but not after a clean stop or exit 2: a
+member whose session refresh meets the hub stopped (case F6-unreachable)
+comes back once the hub does.
 
 No secret is printed or passed as an argument. A token or code goes from
 the container that makes it to the one that reads it through a pipe.

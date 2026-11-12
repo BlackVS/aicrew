@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # A member's start: wait (bounded) for the files the scenario writes into
 # /sim/in (the invitation code, the aimem token, the forge token, each
-# owner only, then "ready"), join once with them, and run serve. Nothing is
+# owner only, then "ready"), join once with them, and run serve, restarted
+# after a failure as the installed service restarts it. Nothing is
 # typed: join reads the code with --code-file. The member reaches aicrewd
 # and the hub through the fault proxies sim-px-crew and sim-px-aimem
 # (e2e/pilotsim/compose.yaml), and runs aimem through aimem-timed, whose
@@ -26,4 +27,20 @@ if [ ! -f "$home/agent.json" ] || ! grep -q '"agent_id"' "$home/agent.json"; the
     --cred "sim-gitea:3000=$in/forge.token"
   rm -f "$in/invite" "$in/aimem.token" "$in/forge.token"
 fi
-exec aicrew-agent serve --home "$home"
+# serve runs as an installed member's service runs it (internal/service/
+# render.go: Restart=on-failure, RestartSec=10, RestartPreventExitStatus=2):
+# after a failure, such as a session refresh that met the hub stopped in
+# case F6-unreachable, it starts again 10 seconds later; a clean stop or
+# exit 2 ends the container. A stop signal goes to serve.
+pid=
+trap '[ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null; [ -z "$pid" ] || wait "$pid"; exit 0' TERM INT
+while :; do
+  aicrew-agent serve --home "$home" &
+  pid=$!
+  rc=0
+  wait "$pid" || rc=$?
+  pid=
+  case $rc in 0 | 2) exit "$rc" ;; esac
+  echo "member.sh: serve exited $rc; it starts again in 10 s, as the installed service's does" >&2
+  sleep 10
+done

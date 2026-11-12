@@ -229,7 +229,7 @@ func (m *member) step(ctx context.Context, op, attempt, task string, body any, e
 	case code == 3 && ans.Status == agent.StepRefused && res.Settled && res.Outcome != "committed":
 		return ans, &retryLater{op: op, why: fmt.Sprintf("did not commit (%s %s)", res.Outcome, res.Report.Code)}
 	case code == 1 && ans.Error != nil && ans.Error.Retryable:
-		return m.recoverStep(ctx, op, ans)
+		return m.recoverStep(ctx, op, attempt, ans)
 	}
 	why := ans.Status
 	if ans.Error != nil {
@@ -239,8 +239,9 @@ func (m *member) step(ctx context.Context, op, attempt, task string, body any, e
 }
 
 // recoverStep finishes the recorded steps after op failed on the channel,
-// and answers for op's own: the recovered step of its operation.
-func (m *member) recoverStep(ctx context.Context, op string, failed agent.StepAnswer) (agent.StepAnswer, error) {
+// and answers for op's own: the recovered step of its operation, and of
+// its attempt when the step names one (every step but offer and claim).
+func (m *member) recoverStep(ctx context.Context, op, attempt string, failed agent.StepAnswer) (agent.StepAnswer, error) {
 	ans, code, err := m.stepOnce(ctx, "recover", "", "", nil)
 	if err != nil {
 		return ans, err
@@ -261,7 +262,7 @@ func (m *member) recoverStep(ctx context.Context, op string, failed agent.StepAn
 	}
 	var best *agent.StepResult
 	for i, r := range results {
-		if r.Operation == reservationOp[op] && (best == nil || rank(r) > rank(*best)) {
+		if r.Operation == reservationOp[op] && (attempt == "" || r.AttemptID == attempt) && (best == nil || rank(r) > rank(*best)) {
 			best = &results[i]
 		}
 	}

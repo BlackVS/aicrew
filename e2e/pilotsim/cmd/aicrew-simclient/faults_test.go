@@ -150,6 +150,29 @@ func TestRecoverWithoutTheStepFailsTheTurn(t *testing.T) {
 	}
 }
 
+// step recover finishes the recorded steps of every attempt: a committed
+// step of the same operation from an older attempt of the task is not the
+// failed step's, whose own did not commit.
+func TestRecoverTakesTheStepsOwnAttempt(t *testing.T) {
+	f := newFake(t)
+	f.steps["finalize"] = []stepReply{stepAnswer(agent.StepFailed, 1, nil,
+		&agent.StepError{Code: "unavailable", Message: "EOF", Retryable: true})}
+	f.steps["recover"] = []stepReply{stepAnswer(agent.StepRefused, 3, []agent.StepResult{
+		{AttemptID: "A-old", Operation: "finalize", Settled: true, Outcome: "committed"},
+		{AttemptID: tAttempt, Operation: "finalize", Settled: true, Outcome: "not_committed",
+			Report: agent.StepReport{Code: "conflict"}},
+	}, nil)}
+	ans, err := f.member().step(context.Background(), "finalize", tAttempt, tTask, map[string]any{"result_seq": 1})
+	later, ok := err.(*retryLater)
+	if !ok || later.pending || !strings.Contains(later.why, "did not commit after step recover") {
+		t.Fatalf("err = %v", err)
+	}
+	var res agent.StepResult
+	if json.Unmarshal(ans.Result, &res) != nil || res.AttemptID != tAttempt {
+		t.Fatalf("answer = %s", ans.Result)
+	}
+}
+
 // A submit aimem leaves undecided is recorded with its request key; the next
 // turn's submit supersedes it (case F1, update).
 func TestWorkerSupersedesAPendingSubmit(t *testing.T) {

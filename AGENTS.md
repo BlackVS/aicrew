@@ -93,7 +93,8 @@ The gates are tiered by size and surface. An XS or S pull request on an
 ordinary surface (documents, tests, CI, message texts) gets the worker's
 medium pre-push review, the worker's high review at the final head and the
 external review. An M pull request, and any pull request on a sensitive
-surface, also gets the architect's high review at the final head. The
+surface, also gets the architect's high review at the final head, where the
+architect runs another model than the author. The
 sensitive surfaces are the command guard, the installers, aicrewd's routes
 and authentication, the store schema and migrations, and wire protocols.
 Docs-only changes get the high review too. Request external review with plain `review-this`,
@@ -109,9 +110,11 @@ custom-codereview-guide if present. Pre-push: medium inline, no subagents,
 against the final pending changes. Pre-merge: high, including docs-only PRs,
 with verified findings, risk and verdict posted on the actual final head.
 The second local reader of the machine-wide gates is the architect's high
-review, and this repository asks for it only on M and sensitive-surface
-pull requests (the tiers under "Delivery"); on the others, the worker's high
-review and the external review are the pre-merge gate.
+review, where the architect runs another model than the author, and this
+repository asks for it only on M and sensitive-surface pull requests (the
+tiers under "Delivery"); on the others, and on every pull request when the
+architect runs the author's model, the worker's high review and the
+external review are the pre-merge gate.
 After a change of your own, high delta review and renewed external review
 are required; a base-only update follows the patch-identity rule below.
 Max/ultra only on explicit operator request.

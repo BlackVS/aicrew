@@ -429,6 +429,12 @@ snapshot, checks it, and resumes the member. The steps:
 | merge | coordinator | merged by `operator`, sim-ci's success on the merge commit |
 | done | none | the attempt closed and finalized, the task DONE, the reservation ended |
 
+The done step waits for more than the finalize. The finalize's lifecycle
+message wakes the coordinator again, seconds after the finalizing turn has
+ended, so the runner waits until the members have acked every message
+about the task and their turns have ended, each wait bounded at 120
+seconds.
+
 The merge is the runner's, as the Gitea `operator` person account.
 `e2e/pilotsim/cycle.py` checks each snapshot against its step's row:
 - aicrewd's store (a copy): the attempt's state and phase, its steps (all

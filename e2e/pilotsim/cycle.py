@@ -3,6 +3,7 @@
     cycle.py check STEP DIR [CASE]
     cycle.py state STORE_DIR TASK   (the attempt's STATE/PHASE and pull requests)
     cycle.py pull STORE_DIR TASK    (the number of the attempt's pull request)
+    cycle.py settled STORE_DIR TASK (exit 0 once every message to a member about the task is acked)
 
 DIR is the step's snapshot, which scripts/pilot-sim.sh takes read-only:
   ids.json               the task's ID and the members' agent IDs
@@ -268,10 +269,25 @@ def pull(store, task):
     return rows[-1][0] if rows else None
 
 
+def settled(store, task):
+    """The messages to a member about the task, or one of its attempts, that are not acked yet: a
+    message sent at a turn's end (the finalize's lifecycle) wakes the next turn, which acks it."""
+    db = sqlite3.connect(os.path.join(store, "aicrew.db"))
+    return db.execute("""SELECT m.seq FROM messages m JOIN message_recipients r ON r.message_id = m.id
+                         WHERE r.acknowledged_at IS NULL
+                           AND (m.task_id = ? OR m.attempt_id IN (SELECT id FROM attempts WHERE task_id = ?))
+                         ORDER BY m.seq""", (task, task)).fetchall()
+
+
 def main(argv):
     if len(argv) == 3 and argv[0] == "state":
         print(state(argv[1], argv[2]))
         return 0
+    if len(argv) == 3 and argv[0] == "settled":
+        left = settled(argv[1], argv[2])
+        if left:
+            print("not acked: seq %s" % ", ".join(str(r[0]) for r in left))
+        return 1 if left else 0
     if len(argv) == 3 and argv[0] == "pull":
         n = pull(argv[1], argv[2])
         print(n or "")

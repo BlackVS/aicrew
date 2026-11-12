@@ -765,11 +765,19 @@ merge() {
   forge POST "$PILOT/pulls/$PULL/merge" '{"Do":"merge"}' >/dev/null
   MERGE=$(pilot_field merge_commit_sha)
 }
+# settled: every message to a member about the task is acked (cycle.py).
+settled() { store_copy "$CYC/peek" && python3 "$SIM/cycle.py" settled "$CYC/peek" "$TASK"; }
 # delivered: the members are done with the finalized attempt, and the
 # runner's own verify-delivery, as the coordinator ran it, is the record the
 # attempt and the task must carry.
 delivered() {
   waitfor "the coordinator's delivery and finalize" 300 at 'closed/finalized *'
+  waitfor "sim-coordinator's turn to end" 120 idle coordinator
+  waitfor "sim-worker's turn to end" 120 idle worker
+  # The finalize's lifecycle message wakes a turn of its own, seconds after
+  # the finalizing turn ended: the step is done once the members have acked
+  # every message about the task and that turn has ended too.
+  waitfor "the members' acks of every message about the task" 120 settled
   waitfor "sim-coordinator's turn to end" 120 idle coordinator
   waitfor "sim-worker's turn to end" 120 idle worker
   coord sh -c 'python3 "$HOME/.claude/skills/verify-delivery/verify_delivery.py" \

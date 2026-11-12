@@ -181,7 +181,7 @@ is installed the way the operator installs it:
 | `sim-gitea` | Gitea with TLS from the CA, an `operator` user, member users with their own tokens, one repository | the Gitea image pinned at 1.27 or later (verify-delivery reads a review of an older head through its compare diff, which earlier versions do not serve), configured by its own CLI |
 | `sim-hands` | the stub reviewer (section 2.5) | built from `e2e/pilotsim/` |
 | `sim-ci` | the stub CI status (section 2.5) | built from `e2e/pilotsim/` |
-| `sim-coordinator`, `sim-worker` | one member home each, `aicrew-agent serve` under the container's init | an image with git and Python 3; `boot.sh` with `AICREW_PREBUILT_DIR` (prerequisite 2); ai-skills by its own installer, at the version the selected process set requires, into the skill directory the client reads (`aicrew-agent check` judges it by its `.ai-skills.json`, and the coordinator runs verify-delivery from it); `aicrew-simclient` installed as `claude` on `PATH`; then `aicrew-agent join --home … --wake turns --no-service --code-file /sim/in/invite …` (prerequisite 1) |
+| `sim-coordinator`, `sim-worker`, `sim-indep` | one member home each (`sim-indep` is the independent member the fault cases drive step by step), `aicrew-agent serve` under the container's init | an image with git and Python 3; `boot.sh` with `AICREW_PREBUILT_DIR` (prerequisite 2); ai-skills by its own installer, at the version the selected process set requires, into the skill directory the client reads (`aicrew-agent check` judges it by its `.ai-skills.json`, and the coordinator runs verify-delivery from it); `aicrew-simclient` installed as `claude` on `PATH`; then `aicrew-agent join --home … --wake turns --no-service --code-file /sim/in/invite …` (prerequisite 1) |
 | `sim-runner` | the scenarios, the checks and the report | the runner (section 7) |
 
 TLS is real everywhere:
@@ -272,10 +272,12 @@ failure shows what changed, not only what was missing.
 
 ### 6.1 From b4
 
-b4's three re-encrypting proxies sit on the same boundaries here:
+b4's re-encrypting proxies sit on the same boundaries here, four of them:
 - the members' aimem to the hub;
 - the members to aicrewd;
-- the hub to aicrewd.
+- the hub to aicrewd;
+- aicrewd to the hub (its peer lookups, which case F6's unreachable hub
+  cuts).
 
 Its fault cases F1 to F7 run on the new stack where a step of the cycle
 crosses the same boundary:

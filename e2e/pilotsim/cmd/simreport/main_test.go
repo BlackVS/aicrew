@@ -274,6 +274,12 @@ func store(t *testing.T, out, rel string, stmts ...string) {
 // steps records a run of the given step snapshots, in order, and writes its report.
 func steps(t *testing.T, out string, snapshots ...string) []record {
 	t.Helper()
+	return stepsWith(t, out, "", snapshots...)
+}
+
+// stepsWith is steps with the run's known secrets in the file secrets.
+func stepsWith(t *testing.T, out, secrets string, snapshots ...string) []record {
+	t.Helper()
 	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
 	evs := [][]string{
 		{"run", "aicrew_commit=x", "aimem_version=0.10.21", "os=linux", "arch=amd64", "bound_minutes=90", "skip="},
@@ -288,7 +294,7 @@ func steps(t *testing.T, out string, snapshots ...string) []record {
 			t.Fatal(err)
 		}
 	}
-	if err := write(out, ""); err != nil {
+	if err := write(out, secrets); err != nil {
 		t.Fatal(err)
 	}
 	var diffs []record
@@ -325,6 +331,42 @@ func TestChangePastTheCut(t *testing.T) {
 	}
 	if b := path(fields, "b", "before"); b != "<2 bytes>" {
 		t.Errorf("the written blob: %v", b)
+	}
+}
+
+// A known secret that the cut of a long value would split is replaced
+// before the cut, so no part of it is written.
+func TestSecretAcrossTheCut(t *testing.T) {
+	out := t.TempDir()
+	secret := "s3cret-0123456789abcdef"
+	secrets := filepath.Join(t.TempDir(), "secrets")
+	if err := os.WriteFile(secrets, []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	schema := `CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)`
+	store(t, out, "case-F1/one", schema)
+	store(t, out, "case-F1/two", schema,
+		`INSERT INTO t VALUES (1, '`+strings.Repeat("a", maxValue-6)+secret+strings.Repeat("b", 50)+`')`)
+	diffs := stepsWith(t, out, secrets, "case-F1/one", "case-F1/two")
+	gained, _ := path(diffs[1], "aicrewd", "t", "gained").([]any)
+	if len(gained) != 1 {
+		t.Fatalf("the gained row: %v", diffs[1]["aicrewd"])
+	}
+	v, _ := path(gained[0], "v").(string)
+	if !strings.HasPrefix(v, strings.Repeat("a", maxValue-6)+"[secre…") {
+		t.Errorf("the written value: %q", v)
+	}
+	b, err := os.ReadFile(filepath.Join(out, reportFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), secret[:6]) {
+		t.Error("a part of the secret is in the report")
+	}
+	for _, r := range readReport(t, out) {
+		if r["type"] == "summary" && r["secrets_redacted"] != float64(1) {
+			t.Errorf("secrets_redacted is %v", r["secrets_redacted"])
+		}
 	}
 }
 

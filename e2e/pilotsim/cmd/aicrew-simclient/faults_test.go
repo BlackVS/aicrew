@@ -86,6 +86,22 @@ func TestPendingAcceptIsRetried(t *testing.T) {
 	}
 }
 
+// The worker accepts the offer its brief names, past the withdrawn offers
+// still in its inbox (left there by cases F4 and F5 while it was held).
+func TestWorkerAcceptsTheOfferItsBriefNames(t *testing.T) {
+	f := newFake(t)
+	stale := offerInbox()[0]
+	stale["id"], stale["attempt_id"] = "m0", "01a00000-0000-7000-8000-000000000000"
+	f.inbox = append([]map[string]any{stale}, offerInbox()...)
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(offeredBrief), &out, f.member()); code != 0 {
+		t.Fatalf("turn = %d: %s", code, out.String())
+	}
+	if h := readHandoff(t, f.home); !strings.Contains(h, "Accepted the offer of attempt "+tAttempt+" ") {
+		t.Fatalf("calls %v\n%s", f.calls, h)
+	}
+}
+
 // Any other refusal still fails the turn.
 func TestOtherRefusalsFailTheTurn(t *testing.T) {
 	f := newFake(t)
@@ -147,6 +163,50 @@ func TestRecoverWithoutTheStepFailsTheTurn(t *testing.T) {
 	_, err = f.member().step(context.Background(), "finalize", tAttempt, tTask, map[string]any{"result_seq": 1})
 	if later, ok := err.(*retryLater); !ok || !later.pending {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// step recover finishes the recorded steps of every attempt: a committed
+// step of the same operation from an older attempt of the task is not the
+// failed step's, whose own did not commit.
+func TestRecoverTakesTheStepsOwnAttempt(t *testing.T) {
+	f := newFake(t)
+	f.steps["finalize"] = []stepReply{stepAnswer(agent.StepFailed, 1, nil,
+		&agent.StepError{Code: "unavailable", Message: "EOF", Retryable: true})}
+	f.steps["recover"] = []stepReply{stepAnswer(agent.StepRefused, 3, []agent.StepResult{
+		{AttemptID: "A-old", Operation: "finalize", Settled: true, Outcome: "committed"},
+		{AttemptID: tAttempt, Operation: "finalize", Settled: true, Outcome: "not_committed",
+			Report: agent.StepReport{Code: "conflict"}},
+	}, nil)}
+	ans, err := f.member().step(context.Background(), "finalize", tAttempt, tTask, map[string]any{"result_seq": 1})
+	later, ok := err.(*retryLater)
+	if !ok || later.pending || !strings.Contains(later.why, "did not commit after step recover") {
+		t.Fatalf("err = %v", err)
+	}
+	var res agent.StepResult
+	if json.Unmarshal(ans.Result, &res) != nil || res.AttemptID != tAttempt {
+		t.Fatalf("answer = %s", ans.Result)
+	}
+}
+
+// The independent member's turn takes no step: the runner drives its steps.
+// It acknowledges what reached it.
+func TestIndependentTurnOnlyAcknowledges(t *testing.T) {
+	f := newFake(t)
+	f.inbox = []map[string]any{{"id": "m1", "kind": "attempt.lifecycle", "text": "Attempt stopped."}}
+	brief := "/crew-turn No open attempt.\n\n## Who and where\n\n- Role: independent; team T1; agent A9.\n" +
+		"- Home: /home/member/agent.\n\n## The task\n\nNo task: no open attempt.\n"
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(brief), &out, f.member()); code != 0 {
+		t.Fatalf("turn = %d: %s", code, out.String())
+	}
+	if !f.called("aicrew-agent inbox --ack m1") {
+		t.Fatalf("calls %v", f.calls)
+	}
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, "aicrew-agent step") {
+			t.Fatalf("the independent turn took a step: %v", f.calls)
+		}
 	}
 }
 

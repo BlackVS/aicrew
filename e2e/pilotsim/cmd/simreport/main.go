@@ -128,7 +128,7 @@ func at(ev event) time.Time {
 func ms(d time.Duration) int64 { return d.Milliseconds() }
 
 // build turns the events into the report's records, in the order they happened.
-func build(out string, evs []event) ([]record, error) {
+func build(out string, evs []event, red *redaction) ([]record, error) {
 	var recs []record
 	var open *scenario
 	var start, end time.Time
@@ -209,10 +209,12 @@ func build(out string, evs []event) ([]record, error) {
 				recs = append(recs, rec, diff)
 				continue
 			}
-			diff["against"], diff["aicrewd"] = "", shorten(tablesDiff(nil, cur.tables))
+			var was map[string]map[string]record
+			diff["against"] = ""
 			if prev != nil {
-				diff["against"], diff["aicrewd"] = prev.rel, shorten(tablesDiff(prev.tables, cur.tables))
+				was, diff["against"] = prev.tables, prev.rel
 			}
+			diff["aicrewd"] = red.shorten(tablesDiff(was, cur.tables))
 			before := prevTask[cur.task]
 			diff["aimem_against"] = ""
 			if before != nil {
@@ -482,30 +484,48 @@ func column(v any) any {
 	return v
 }
 
-// shorten is a diff as the report writes it, once compared: text cut at
-// maxValue bytes, a blob that is not UTF-8 by its length only.
-func shorten(r record) record {
-	return shortenValue(r).(record)
+// redaction replaces the run's known secrets, and counts the replacements.
+type redaction struct {
+	secrets []string
+	n       int
 }
 
-func shortenValue(v any) any {
+func (red *redaction) replace(s string) string {
+	for i, sec := range red.secrets {
+		if c := strings.Count(s, sec); c > 0 {
+			red.n += c
+			s = strings.ReplaceAll(s, sec, fmt.Sprintf("[secret #%d]", i+1))
+		}
+	}
+	return s
+}
+
+// shorten is a diff as the report writes it, once compared: text with the
+// known secrets replaced and then cut at maxValue bytes, so a secret the
+// cut would split is never written in part; a blob that is not UTF-8 by
+// its length only.
+func (red *redaction) shorten(r record) record {
+	return red.shortenValue(r).(record)
+}
+
+func (red *redaction) shortenValue(v any) any {
 	switch x := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(x))
 		for k, e := range x {
-			out[k] = shortenValue(e)
+			out[k] = red.shortenValue(e)
 		}
 		return out
 	case []any:
 		out := make([]any, len(x))
 		for i, e := range x {
-			out[i] = shortenValue(e)
+			out[i] = red.shortenValue(e)
 		}
 		return out
 	case []byte:
 		return fmt.Sprintf("<%d bytes>", len(x))
 	case string:
-		return cut(x)
+		return cut(red.replace(x))
 	}
 	return v
 }
@@ -753,16 +773,17 @@ func write(out, secretsFile string) error {
 	if err != nil {
 		return err
 	}
-	recs, err := build(out, evs)
-	if err != nil {
-		return err
-	}
 	secrets, err := readSecrets(secretsFile)
 	if err != nil {
 		return err
 	}
+	red := &redaction{secrets: secrets}
+	recs, err := build(out, evs, red)
+	if err != nil {
+		return err
+	}
 	var buf bytes.Buffer
-	redacted := 0
+	redacted := red.n
 	for _, r := range recs {
 		if err := validate(r); err != nil {
 			return err

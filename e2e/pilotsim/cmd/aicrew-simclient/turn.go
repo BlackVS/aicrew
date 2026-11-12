@@ -229,7 +229,7 @@ func (m *member) step(ctx context.Context, op, attempt, task string, body any, e
 	case code == 3 && ans.Status == agent.StepRefused && res.Settled && res.Outcome != "committed":
 		return ans, &retryLater{op: op, why: fmt.Sprintf("did not commit (%s %s)", res.Outcome, res.Report.Code)}
 	case code == 1 && ans.Error != nil && ans.Error.Retryable:
-		return m.recoverStep(ctx, op, ans)
+		return m.recoverStep(ctx, op, attempt, ans)
 	}
 	why := ans.Status
 	if ans.Error != nil {
@@ -239,8 +239,9 @@ func (m *member) step(ctx context.Context, op, attempt, task string, body any, e
 }
 
 // recoverStep finishes the recorded steps after op failed on the channel,
-// and answers for op's own: the recovered step of its operation.
-func (m *member) recoverStep(ctx context.Context, op string, failed agent.StepAnswer) (agent.StepAnswer, error) {
+// and answers for op's own: the recovered step of its operation, and of
+// its attempt when the step names one (every step but offer and claim).
+func (m *member) recoverStep(ctx context.Context, op, attempt string, failed agent.StepAnswer) (agent.StepAnswer, error) {
 	ans, code, err := m.stepOnce(ctx, "recover", "", "", nil)
 	if err != nil {
 		return ans, err
@@ -261,7 +262,7 @@ func (m *member) recoverStep(ctx context.Context, op string, failed agent.StepAn
 	}
 	var best *agent.StepResult
 	for i, r := range results {
-		if r.Operation == reservationOp[op] && (best == nil || rank(r) > rank(*best)) {
+		if r.Operation == reservationOp[op] && (attempt == "" || r.AttemptID == attempt) && (best == nil || rank(r) > rank(*best)) {
 			best = &results[i]
 		}
 	}
@@ -353,6 +354,10 @@ func (m *member) turn(ctx context.Context, b brief) error {
 		err = m.worker(ctx, b, msgs)
 	case "coordinator":
 		err = m.coordinator(ctx, msgs)
+	case "independent":
+		// The runner drives the independent member's steps, as b4's
+		// harness does (cases F2-settle, F3-launcher, F4 and F5): its turns
+		// only acknowledge what reached it.
 	default:
 		err = fmt.Errorf("no script for the role %q", b.Role)
 	}
@@ -382,8 +387,11 @@ func (m *member) turn(ctx context.Context, b brief) error {
 
 func (m *member) worker(ctx context.Context, b brief, msgs []message) error {
 	if b.Attempt == "" || b.State == "offered" {
+		// The brief names the offer that is open: older offers in the
+		// inbox were withdrawn or closed since (the fault cases leave
+		// such offers behind while the worker is held).
 		for _, msg := range msgs {
-			if msg.Offer == nil || msg.AttemptID == "" || msg.Task == nil {
+			if msg.Offer == nil || msg.AttemptID == "" || msg.Task == nil || (b.Attempt != "" && msg.AttemptID != b.Attempt) {
 				continue
 			}
 			if _, err := m.step(ctx, "accept", msg.AttemptID, msg.Task.TaskID,

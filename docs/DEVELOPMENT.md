@@ -69,18 +69,23 @@ bash scripts/release_test.sh           # the release script's refusals
 ```
 
 CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,
-`go-test (windows-latest)`, `go-test (macos-latest)`, `go-race (agent)`,
-`go-race (server)`, `go-race (store)`, `go-build`, and `release-build` on
-each of the three platforms. A pull request shows 13 checks, these twelve
-and the repository's secret scan; a commit on main shows the twelve. A
-head is green when all of them pass, and the three `go-race` jobs are
-required beside the three `go-test` jobs.
+`go-test (windows-latest)`, `go-race (agent)`, `go-race (server)`,
+`go-race (store)`, `go-build`, and `release-build` on Linux and Windows.
+A pull request shows 10 checks, these nine and the repository's secret
+scan; a push to main shows the nine. The nightly run adds
+`go-test (macos-latest)` and `release-build (macos-latest)`. A head is
+green when all of its checks pass, and the three `go-race` jobs are
+required beside the two `go-test` jobs.
 
 What runs where:
-- **On main** (every push, and nightly at 03:41 UTC): every job runs in
-  full.
+- **On a push to main:** every job runs in full, on Linux and Windows.
+- **Nightly on main** (03:41 UTC): every job runs in full, and `go-test`
+  and `release-build` run on macOS too.
+- **At a release tag:** `release.yml` tests and builds the tagged commit
+  on macOS beside its Linux build, and publishes only when both pass
+  ("Releasing").
 - **On a pull request:** `repo-checks`, `go-lint`, `go-build`, every
-  `release-build`, and `go-test` on Linux and macOS run in full.
+  `release-build`, and `go-test` on Linux run in full.
   - A `go-race` job runs its package's tests only when the change touches
     that package or a package of this module its tests import.
   - `go-test (windows-latest)` runs only when the change touches
@@ -89,6 +94,15 @@ What runs where:
   - A change to `go.mod`, `go.sum`, `ci.yml` or the gate script runs both.
   - A gated job that has nothing to test still reports its check, as
     passed, with the test steps skipped.
+
+macOS runs only nightly and at a release tag because GitHub's hosted
+macOS runners (arm64, as Macs are now) have starved jobs since late
+October 2026: a job waited and was cancelled before any step ran, and only
+a manual re-run gave it another chance, so pull requests and merge commits
+stood waiting on a runner while the same trees passed on macOS whenever
+one was found. A Mac-only break now shows in the next nightly run or stops
+a tag, never a merge. There are no Intel macOS runners in either place:
+they prove nothing for an arm64 Mac.
 
 `scripts/ci-gate.sh` makes that decision and prints the file that made it
 in the job's log. A pull request's checkout is its merge commit, so
@@ -3243,8 +3257,10 @@ every pull request (`release-build`), publishing nothing.
    - the release already exists.
 
    It then runs the tests, builds and checks that the built `aicrew-agent`
-   reports exactly the tag. A separate job, the only one allowed to write,
-   publishes with the `gh` CLI. A release is marked latest only when no
+   reports exactly the tag. A second job tests and builds the same commit on
+   macOS and checks its sums there; a Mac-only failure stops the release.
+   A separate job, the only one allowed to write, publishes with the `gh`
+   CLI once both have passed. A release is marked latest only when no
    higher tag exists.
 4. Running the workflow by hand from main republishes an **existing** tag (after
    a failed run). It never creates a tag. With `dry_run` (the default) it

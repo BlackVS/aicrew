@@ -1,9 +1,9 @@
 # shellcheck shell=bash
-# The fault cases F1, F2, F3, F6 and F7 (docs/DESIGN-PILOT-SIMULATION.md,
+# The fault cases F1 to F7 (docs/DESIGN-PILOT-SIMULATION.md,
 # section 6.1; docs/E2E-PILOT-SIM.md, "The fault cases"), sourced by
 # cases.sh, whose helpers they use. They adapt the b4 harness's cases
 # (e2e/realaimem) to the compose stack: a fault is a rule armed on one of
-# the fault proxies (sim-px-aimem, sim-px-crew, sim-px-peer) or a container
+# the fault proxies (sim-px-aimem, sim-px-crew, sim-px-peer, sim-px-hub) or a container
 # killed and started, and each case's part is a skip-the-fault case of its
 # own, AICREW_SIM_SKIP_FAULT=PART.
 

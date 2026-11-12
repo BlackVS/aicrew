@@ -86,6 +86,22 @@ func TestPendingAcceptIsRetried(t *testing.T) {
 	}
 }
 
+// The worker accepts the offer its brief names, past the withdrawn offers
+// still in its inbox (left there by cases F4 and F5 while it was held).
+func TestWorkerAcceptsTheOfferItsBriefNames(t *testing.T) {
+	f := newFake(t)
+	stale := offerInbox()[0]
+	stale["id"], stale["attempt_id"] = "m0", "01a00000-0000-7000-8000-000000000000"
+	f.inbox = append([]map[string]any{stale}, offerInbox()...)
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(offeredBrief), &out, f.member()); code != 0 {
+		t.Fatalf("turn = %d: %s", code, out.String())
+	}
+	if h := readHandoff(t, f.home); !strings.Contains(h, "Accepted the offer of attempt "+tAttempt+" ") {
+		t.Fatalf("calls %v\n%s", f.calls, h)
+	}
+}
+
 // Any other refusal still fails the turn.
 func TestOtherRefusalsFailTheTurn(t *testing.T) {
 	f := newFake(t)

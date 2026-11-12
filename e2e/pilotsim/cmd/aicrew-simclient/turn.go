@@ -387,8 +387,11 @@ func (m *member) turn(ctx context.Context, b brief) error {
 
 func (m *member) worker(ctx context.Context, b brief, msgs []message) error {
 	if b.Attempt == "" || b.State == "offered" {
+		// The brief names the offer that is open: older offers in the
+		// inbox were withdrawn or closed since (the fault cases leave
+		// such offers behind while the worker is held).
 		for _, msg := range msgs {
-			if msg.Offer == nil || msg.AttemptID == "" || msg.Task == nil {
+			if msg.Offer == nil || msg.AttemptID == "" || msg.Task == nil || (b.Attempt != "" && msg.AttemptID != b.Attempt) {
 				continue
 			}
 			if _, err := m.step(ctx, "accept", msg.AttemptID, msg.Task.TaskID,

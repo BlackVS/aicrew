@@ -42,7 +42,7 @@ competes with everything else on the desktop for memory.
   cases", which lists them).
 - Before it builds anything, the script removes a leftover stack and
   checks the host's available memory (`MemAvailable` in `/proc/meminfo`)
-  against the 3072 MiB a run needs. With less it exits 2, naming both
+  against the 4096 MiB a run needs. With less it exits 2, naming both
   amounts. `AICREW_SIM_IGNORE_MEMORY=1` runs it anyway, deliberately.
 - `AICREW_SIM_BOUND_MINUTES=N` is the whole run's bound (90 minutes by
   default), and `AICREW_SIM_HANG=SCENARIO[:SECONDS]` hangs one scenario to
@@ -66,7 +66,7 @@ simulation can be stopped for low host memory while the stack itself
 stays small.
 
 **What it needs.** A Linux host (a VM is fine), with at least 2 vCPU and
-4 GB of memory; 6 vCPU and 16 GB leave ample room. About 10 GB of free
+6 GB of memory; 6 vCPU and 16 GB leave ample room. About 10 GB of free
 disk covers the images, the Go build cache and the reports. Full runs
 measured, sampled every 5 seconds:
 
@@ -77,9 +77,10 @@ measured, sampled every 5 seconds:
 | the stack, during the cycles and the cases | Gitea up to 301 MiB, each member up to 64 MiB, aimem up to 56 MiB, aicrewd up to 30 MiB, each stub up to 15 MiB |
 
 Every compose service has a memory limit of at least twice its peak:
-Gitea 768 MiB, each member 512 MiB, aimem and aicrewd 256 MiB each, and
-the stubs and sim-ca 128 MiB each, 2.7 GiB in all. The 3072 MiB the
-script asks for is those limits plus the build beside them. A full run
+Gitea 768 MiB, each of the three members 512 MiB, aimem and aicrewd
+256 MiB each, the stubs and sim-ca 128 MiB each, and the four fault
+proxies 64 MiB each, 3.4 GiB in all. The 4096 MiB the script asks for is
+those limits plus the build beside them. A full run
 takes about 55 minutes (54 min 51 s and 54 min 34 s on a 6 vCPU host,
 2026-11-03).
 
@@ -203,8 +204,8 @@ logs and the homes, without the staged binaries.
 | `sim-aicrewd` | `aicrewd -config …` | `install-aicrewd.sh` with `AICREW_NO_SERVICE=1` and `AICREW_PREBUILT_DIR`, from this tree's binaries; the container runs the command it prints |
 | `sim-gitea` | Gitea 1.27 with TLS from the run's CA | the pinned image, configured by its own CLI and API |
 | `sim-hands`, `sim-ci` | the stub reviewer and the stub CI ([below](#the-stub-reviewer-and-the-stub-ci)) | `simstub` (`e2e/pilotsim/cmd/simstub`) in one image, `e2e/pilotsim/stub/` |
-| `sim-px-aimem`, `sim-px-crew`, `sim-px-peer` | the fault proxies ([below](#the-fault-cases)), from I4b-1 | `simproxy` (`e2e/pilotsim/cmd/simproxy`) in one image, `e2e/pilotsim/proxy/` |
-| `sim-coordinator`, `sim-worker` | one member home each, `aicrew-agent serve` | `boot.sh` with `AICREW_PREBUILT_DIR`; aimem's verifying boot script and the ai-skills release archive checked against `SHA256SUMS`, both as `aicrew-agent check` instructs; then `aicrew-agent join … --wake turns --no-service --code-file …` |
+| `sim-px-aimem`, `sim-px-crew`, `sim-px-peer`, `sim-px-hub` | the fault proxies ([below](#the-fault-cases)) | `simproxy` (`e2e/pilotsim/cmd/simproxy`) in one image, `e2e/pilotsim/proxy/` |
+| `sim-coordinator`, `sim-worker`, `sim-indep` | one member home each, `aicrew-agent serve`; `sim-indep` is an independent member, whose steps the fault cases drive ([below](#the-direct-steps)) | `boot.sh` with `AICREW_PREBUILT_DIR`; aimem's verifying boot script and the ai-skills release archive checked against `SHA256SUMS`, both as `aicrew-agent check` instructs; then `aicrew-agent join … --wake turns --no-service --code-file … --aimem-command /usr/local/bin/aimem-timed` |
 
 The member's client is `aicrew-simclient` (`e2e/pilotsim/cmd/aicrew-simclient`),
 installed as `claude` on the image's `PATH`, where a member finds its
@@ -521,14 +522,14 @@ snapshot is taken twice, so the report's diff of each step is its own.
 ## The fault cases
 
 After P1, `e2e/pilotsim/faults.sh` runs b4's fault cases on the stack, in
-the order F1, F2, F3, F6, F7, before P3. They adapt the b4 harness's
+the order F1, F2, F3, F4, F5, F6, F7, before P3. They adapt the b4 harness's
 (`e2e/realaimem`) cases to the containers: where b4 runs a proxy in the
 test process and kills processes, the simulation arms a rule on a fault
 proxy and kills containers.
 
 ### The fault proxies
 
-`simproxy` (`e2e/pilotsim/cmd/simproxy`) stands on three of the TLS links
+`simproxy` (`e2e/pilotsim/cmd/simproxy`) stands on four of the TLS links
 of [DESIGN-PILOT-SIMULATION.md](DESIGN-PILOT-SIMULATION.md), section 6.1:
 
 | Proxy | The link | Its certificate |
@@ -536,6 +537,7 @@ of [DESIGN-PILOT-SIMULATION.md](DESIGN-PILOT-SIMULATION.md), section 6.1:
 | `sim-px-aimem` | the members' aimem to the hub | the hub's, issued for `sim-aimem` and `sim-px-aimem`: the members name `sim-px-aimem` as their hub, and their aimem checks the name against the run's CA |
 | `sim-px-crew` | the members to aicrewd | aicrewd's, which the members pin by key |
 | `sim-px-peer` | the hub to aicrewd, its peer endpoint | aicrewd's, which the hub pins by key |
+| `sim-px-hub` | aicrewd to the hub, its peer lookups | the hub's, also issued for `sim-px-hub`: aicrewd's hub binding names it, and aicrewd pins the hub by key |
 
 Each terminates its clients' TLS with its target's own certificate and
 key, opens its own TLS to the target trusting only the run's CA, and
@@ -552,7 +554,7 @@ its method and path, and is then removed, unless `-persist` keeps it until
 
 `simproxy fired` says whether a rule fired, and `simproxy log` prints the
 request log: method, path, the target's status and what the proxy did,
-never a header, query or body. Each snapshot keeps the three logs in
+never a header, query or body. Each snapshot keeps the four logs in
 `proxy/`. `sim-px-crew` also keeps the coordination proofs it sees, owner
 only, for F7.
 
@@ -573,6 +575,28 @@ not begin the step again under the rule. Once aicrewd has settled the
 step, the runner disarms the rule, arms the next one and nudges the
 member.
 
+### The direct steps
+
+F2-settle, F3-launcher, F4 and F5 take steps themselves, as b4's harness
+does, rather than through a member's turn. The runner runs `aicrew-agent
+step` in a member's container, with the step's body on its standard input,
+and keeps its answer and exit as facts of the case. Both scripted members
+are held for these parts, so that no turn of theirs takes a step on the
+cases' tasks. Each part files a task of its own, ends it as b4 does (the
+offer withdrawn, or the running attempt stopped and released), and the
+operator then cancels it on the board. A claim comes from `sim-indep`, the
+third member: aicrewd gives it the role `independent`, the coordinator's
+offers go to the worker only, and its scripted client takes no step of its
+own.
+
+Each member's home runs aimem through `aimem-timed`
+(`e2e/pilotsim/member/aimem-timed`), b4's wrapper, joined with the real
+`--aimem-command` flag. It logs each aimem command's leading arguments and
+exit, never its input. The runner sets its gates with files in the
+member's gate directory: hold a command before or after it runs, or keep
+its input, owner only, so that F5 can replay a coordination proof inside
+the container. The proof never leaves it.
+
 ### The cases
 
 Each part is a skip-the-fault case of its own. `cases.py` checks it at
@@ -589,10 +613,21 @@ its point:
 | F1-finalize-request | the same for the coordinator's finalize | request | the finalize settled not committed; the attempt is still accepted, the task in REVIEW |
 | F1-finalize-reply | | reply | the coordinator delivered again; the receipt reconciled the finalize; the task is DONE |
 | F2-begin | `sim-px-crew` drops the reply to the offer's begin | begin | the coordinator saw the step fail, and `step recover` replayed the begin to the one attempt the lost reply began |
+| F2-settle | `sim-px-crew` drops the reply to the settle of `sim-indep`'s claim | settle | the claim saw its settle fail; `step recover` settled it, once: the attempt runs, with one committed claim and no step left recorded |
+| F3-launcher | `sim-indep`'s container is killed after aimem committed its claim, before the settle | launcher | aicrewd's reconciler settled the claim within 45 seconds, and the attempt runs; the restarted launcher has no step recorded |
 | F3-aicrewd | `sim-px-aimem` holds the hub's answer to the claim for 20 seconds while `sim-aicrewd` is killed and started | restart | aicrewd's container started again, and the claim settled committed after the start |
 | F3-hub | `sim-aimem` is killed and started between steps | restart | the hub's container started again, with its hold as it was; the cycle's next steps then reach DONE |
+| F4-second | `sim-indep` claims a task the coordinator offered | second | the claim is refused `task_busy` at its begin; the task has one attempt |
+| F4-busy | the coordinator offers a second task to the worker, whose first offer is open | busy | the offer is refused `agent_busy` at its begin |
+| F4-race | an offer and a claim of one task, begun at once | race | exactly one commits and the other is refused, at its begin or by aimem; one attempt is open, and the task is held |
+| F4-lost | (the check itself) | race | the race's check never takes a step lost before its commit for a refusal |
+| F5-stale | the coordinator's claim is held before it is sent while the hub's admin edits the task | stale | aimem refused the claim begun at the old revision (exit 3), and the offer begun again at the new revision holds the task; a plain edit of a held task is refused with 409 |
+| F5-replay | the proof of a settled offer, replayed under a new key | replay | aimem refuses it |
+| F5-resume | `sim-coordinator`'s container is killed under its offer, its claim held before it is sent | resume | the old generation's proof is refused; the new generation may not continue the offer; aicrewd settles it not committed within 45 seconds, and the worker is free again |
+| F5-delay | `sim-px-peer` delays aicrewd's coordination answer by 3 seconds, past aimem's budget | delay | aimem refused the claim as retryable (exit 4), and the step's retry committed |
 | F6-release | the hub's admin recovers the running attempt's hold (`aimem reservation recover release`) | recovered | aicrewd closed the attempt as recovered by `recovery_release`, with the closing fence; the task is READY (the operator then cancels it, so that no turn offers it again) |
 | F6-cancel | the same with `recover cancel` | recovered | the same by `recovery_cancel`; the task is CANCELLED |
+| F6-unreachable | after the same release, `sim-px-hub` drops aicrewd's reads of the hub's peers, and `sim-aimem` is stopped for 65 seconds, four of aicrewd's ticks | unreachable | nothing closed the attempt while the hub was unreachable; once the hub is back, aicrewd closes it as recovered |
 | F7-leak | (the check itself) | scan | none of the run's secrets appears in the containers' logs, the run's reports and snapshots, or aicrewd's audit |
 
 F1, F2 and F3 end with the cycle's checks at the step done. For F1 these
@@ -613,5 +648,20 @@ scanned log, and the scan must find each one there.
 Without its fault, a request case fails where the lost request's effect
 never comes; a reply case and F2-begin fail their checks, for want of the
 dropped reply and the recovery; F3's parts fail for want of a restart, and
-F6's when the attempt is never closed. Each such run first runs the parts
-of its case before the skipped one, with their faults.
+F6's when the attempt is never closed. Without their faults:
+- F2-settle's claim sees no failed settle;
+- F3-launcher's claim is settled by its launcher, not by the reconciler;
+- F4-second and F4-race file a second task, so the claim or the race meets
+  no open attempt and nothing is refused;
+- F4-busy's first offer is withdrawn, so the worker is free;
+- F4-lost makes the race's loser answer as a step lost before its commit,
+  and the race's check must fail on it;
+- F5-stale's claim is never held, so the task is not edited under it;
+- F5-replay and F5-resume replay a live proof under its own step's key,
+  which aimem accepts (b4's control);
+- F5-delay's coordination answer comes in time;
+- F6-unreachable's hub stays reachable, and the attempt closes during the
+  65 seconds.
+
+Each such run first runs the parts of its case before the skipped one,
+with their faults.

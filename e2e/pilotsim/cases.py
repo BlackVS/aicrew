@@ -12,6 +12,22 @@
     cases.py handles < FILES                       (F7: the aimem session handles in session files)
     cases.py scan SECRETS ROOT STORE_DIR SKIP...   (F7: the secrets in ROOT's files and the store's audit)
 
+The direct steps of F2-settle, F3-launcher, F4 and F5 (faults.sh):
+
+    cases.py answer ANSWER_FILE EXIT               (a step's fact: {"exit": EXIT, "answer": the answer or null})
+    cases.py succeeded FACTS NAME                  (the step NAME succeeded; a reservation step committed)
+    cases.py attempt_id FACTS NAME                 (the attempt the step NAME's answer names)
+    cases.py attempt_of STORE_DIR TASK             (the task's latest attempt)
+    cases.py settled STORE_DIR TASK STATE          (the latest attempt is STATE, with no step pending)
+    cases.py step_body offer|claim STORE_DIR TASK_FILE HUB WORKER  (a step's body at the task's revision)
+    cases.py edit_body TASK_FILE TEXT              (F5: the admin's edit of the task's next action)
+    cases.py open_attempts STORE_DIR TASK WORKER INDEP  (the open attempts, "ID STATE HOLDER" a line)
+    cases.py calls < TIMING                        (aimem-timed's log as "CMD OP EXIT")
+    cases.py pending_key TASK < STEPS              (the request key of a member's recorded step on TASK)
+    cases.py lose FACTS                            (F4-lost: the race's loser answers as a lost step)
+    cases.py held DIR                              (the snapshot's task is held in aimem)
+    cases.py recovered DIR VERB                    (F6-unreachable: closed as recovered by VERB)
+
 DIR is the snapshot scripts/pilot-sim.sh takes at the case's POINT, laid out
 as cycle.py's (its docstring), with ids.json also naming "first_head" for
 P5 and the forge's forge/commits.json (the pull request's commits),

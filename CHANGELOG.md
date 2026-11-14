@@ -173,7 +173,7 @@ All of them use product commands and one-liners.
   the review requested or in progress, or the checks pending, at the
   worktree's head. Messages still start turns at once.
 - **The macOS legs leave the pull-request and push gates**
-  (01a1a284, #246). GitHub's hosted macOS runners left jobs unstarted
+  (01a1a284-ad73, #246). GitHub's hosted macOS runners left jobs unstarted
   since late October. `go-test` and `release-build` run on Linux and
   Windows for a pull request and a push to main; the nightly run on main
   adds macOS, and the release workflow tests, builds and checks the sums

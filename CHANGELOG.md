@@ -39,7 +39,7 @@ finalize's begin response (#238). A member of this release needs that
 route, so upgrade aicrewd first. aimem 0.10.0 or later stays required.
 `step offer --process` needs aimem 0.10.18 or later, the first release
 whose `process pin` reads under a team session. This release is tested
-with aimem 0.10.22 and ai-skills 1.38.0.
+with aimem 0.10.23 and ai-skills 1.38.0.
 
 ### Upgrade steps
 
@@ -79,9 +79,9 @@ All of them use product commands and one-liners.
    An edited file is kept, and the new version is written beside it with
    the suffix `.aicrew-new`.
 4. **Check each home.** Run `aicrew-agent check --home HOME`. An aimem
-   below 0.10.22 is still supported, from 0.10.0 on. A coordinator that
+   below 0.10.23 is still supported, from 0.10.0 on. A coordinator that
    offers with `--process` needs 0.10.18 or later. To move to the tested
-   release, run aimem's verifying installer with `AIMEM_VERSION=v0.10.22`,
+   release, run aimem's verifying installer with `AIMEM_VERSION=v0.10.23`,
    the command `aicrew-agent check` prints for a missing aimem.
 
 ### Added
@@ -180,14 +180,17 @@ All of them use product commands and one-liners.
   on macOS before it publishes.
 - **The architect's high review applies where the architect runs another
   model than the author** (01a18cb6-1165, #247), in AGENTS.md.
-- **The tested aimem release is 0.10.22** (01a1da78-7c4b), up from
+- **The tested aimem release is 0.10.23** (01a1da78-7c4b), up from
   0.10.15 in 0.9.0, through 0.10.17 and 0.10.18 (#237); the minimum stays
-  0.10.0. check's aimem instruction installs 0.10.22, the real-aimem
-  harness builds the v0.10.22 release commit, and the pilot simulation
-  installs that release's hub.
+  0.10.0. check's aimem instruction installs 0.10.23, the real-aimem
+  harness builds the v0.10.23 release commit, and the pilot simulation
+  installs that release's hub. 0.10.23 is the first aimem release whose
+  boot scripts check every installer file against the release's
+  `SHA256SUMS` instead of running it from the source archive, and the
+  first whose task reads outside team mode follow the project grant.
 - **The tested ai-skills release is 1.38.0** (01a1da78-7c4b), up from
   1.33.13; the minimum stays 1.26.1. aicrew requires `oh-code-review`
-  only. The process set selected at aimem v0.10.22 also names
+  only. The process set selected at aimem v0.10.23 also names
   `forge-gates` and `verify-delivery`, but a member installs a process's
   skills from the hub with `aimem skills install`, not from its own
   ai-skills installation.

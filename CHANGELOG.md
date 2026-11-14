@@ -12,8 +12,106 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.10.0] - 2026-11-14
+
+Twenty pull requests since 0.9.0 (#229 to #248). The coordinator no longer
+guesses what the launcher knows. A result's number comes with the submit
+announcement (#240). The team's members come with their agent IDs (#234).
+The offer's process pin and digest come from the hub (#237). A blocked
+worker hears the coordinator's answer through the event bus (#236). A
+finalized task records its delivery evidence (#238). A worker waiting on
+its pull request's gates costs no turn (#233), and a review request that
+the external reviewer never picks up is reported after 30 minutes (#235).
+
+The pilot simulation is complete (#231, #232, #239, #242 to #245, #248).
+It runs the scripted cycle to DONE, the pilot cases P1 to P5 and the fault
+cases F1 to F7, and writes a report. A nightly workflow runs it on main,
+green twice at d780675. The other changes:
+- the real-aimem e2e runs on a labelled pull request (#229);
+- the review gates are tiered, and CI skips the slow tests a change cannot
+  reach (#230, #247);
+- the macOS legs move to the nightly run and the release (#246);
+- the legacy names are kept with no removal release (#241).
+
+The store stays at schema 39. aicrewd gains one route,
+`POST /v1/crew/attempts/{id}/answer` (#236), and adds `evidence` to a
+finalize's begin response (#238). A member of this release needs that
+route, so upgrade aicrewd first. aimem 0.10.0 or later stays required.
+`step offer --process` needs aimem 0.10.18 or later, the first release
+whose `process pin` reads under a team session. This release is tested
+with aimem 0.10.22 and ai-skills 1.38.0.
+
+### Upgrade steps
+
+All of them use product commands and one-liners.
+
+1. **aicrewd.** On the hub host, as root, run the hub one-liner:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.10.0/install-aicrewd.sh | bash
+   ```
+
+2. **Each member and the operator's machine.** As that user, rerun the
+   member one-liner. It stops the account's registered member services,
+   swaps the binaries and starts them again:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.10.0/boot.sh | bash
+     ```
+
+   - Windows, in a PowerShell window that is already open:
+
+     ```powershell
+     irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.10.0/boot.ps1 | iex
+     ```
+
+   - Windows, from cmd or the Run dialog:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.10.0/boot.ps1 | iex"
+     ```
+
+3. **Each home.** Rerun `aicrew-agent join --home HOME`. It brings
+   ROLES.md's new steps: the coordinator's answer to a blocked worker,
+   `aicrew-agent members` and `step offer --process` in the offer, and
+   the result's number in the review, confirm-delivery and finalize steps.
+   An edited file is kept, and the new version is written beside it with
+   the suffix `.aicrew-new`.
+4. **Check each home.** Run `aicrew-agent check --home HOME`. An aimem
+   below 0.10.22 is still supported, from 0.10.0 on. A coordinator that
+   offers with `--process` needs 0.10.18 or later. To move to the tested
+   release, run aimem's verifying installer with `AIMEM_VERSION=v0.10.22`,
+   the command `aicrew-agent check` prints for a missing aimem.
+
 ### Added
 
+- **The coordinator's answer reaches a blocked worker** (01a143fe-0ed9,
+  #236). `aicrew-agent step answer --attempt ID --body '{"text": ...}'`
+  is a step on the new route `POST /v1/crew/attempts/{id}/answer`. Only
+  the team's current coordinator may take it, and only while the attempt
+  is running and blocked. aicrewd journals an `attempt.answered` event,
+  and the default answer-wake subscription sends the worker one
+  `action.needed` message that carries the text. ROLES.md has the
+  coordinator's answer step.
+- **`aicrew-agent members` names the team's members** (01a186f6-8286,
+  #234). A read-only `members` step reads the team's members with their
+  agent ID, label, role and the repositories each one's last report
+  verified. The offer step, `/crew-offer` and the `capability_missing`
+  refusal name it as the source of `worker_agent_id`.
+- **`step offer --process` fills the pin and the digest from the hub**
+  (01a187a2-d603, #237). It runs `aimem process pin -p PROJECT --json`
+  from the home's root, under the client's team session, and fills the
+  body's `process` pin and `instruction_digest`. A body that names both
+  keeps them, one that names only one is refused, and a failed read sends
+  nothing. It needs aimem 0.10.18 or later.
+- **An external review nobody picks up is reported** (01a1876f-c26a,
+  #235). A watched pull request that stays open with `review-this` and no
+  `hands-reviewing` and no external review at its head sets the attempt's
+  timer 30 minutes on. If the wait still holds then, the coordinators get
+  one `action.needed` message with a `review_pickup` subject.
+  `aicrew status` shows the open attempt's `review_wait`, with `overdue`
+  once past the bound.
 - **A coordinator reads the result's number instead of guessing it**
   (01a188f9-4d9a). The submit announcement names it:
   `<worker> submitted a result for task <task> (result_seq <n>): <ref>`.
@@ -23,6 +121,29 @@ section, and the release workflow refuses a tag that has none
   guidance's review, confirm-delivery and finalize steps and `/crew-review`
   say where the number comes from: each submit after a rework is a new
   result with the next number.
+
+### The pilot simulation
+
+- **The whole pilot runs in containers** (DESIGN-PILOT-SIMULATION.md,
+  E2E-PILOT-SIM.md). `scripts/pilot-sim.sh` brings up a hub, aicrewd,
+  Gitea and three member homes, each installed and joined as the operator
+  does it.
+  - The stub reviewer and the stub CI on Gitea (#231).
+  - A scripted member's turn and the cycle to the submit (#232).
+  - The full cycle to DONE with the delivery record (#239).
+  - The pilot cases P1 to P5 and the skip-the-fault matrix (#242).
+  - A dedicated host, per-service memory limits and a free-memory check
+    (#243).
+  - The fault proxies and the fault cases F1, F2-begin, F3, F6 and F7
+    (#244).
+  - The report, the run's bound and the nightly workflow `pilot-sim.yml`,
+    which also runs on a pull request labelled `pilot-sim` (#245).
+  - A third, independent member, b4's `aimem-timed` gates, aicrewd-to-hub
+    as a fourth proxied boundary, and the cases F2-settle, F3-launcher,
+    F4, F5 and F6-unreachable (#248).
+
+  A full run takes about 61 minutes, inside its 90-minute bound. The first
+  two nightly runs on main were green.
 
 ### Changed
 
@@ -44,6 +165,32 @@ section, and the release workflow refuses a tag that has none
   session merges an ordinary pull request once both reviews are READY and CI
   is green at its head, and the operator merges sensitive-surface and
   release-preparation pull requests.
+- **A wait on the pull request's gates costs no turn and is no stall**
+  (01a186f4-64cd, #233). A worker that pushed its head, opened the pull
+  request and asked for the external review was given a continuation turn
+  every few seconds, and three such turns stalled the attempt. The turn
+  loop now defers a due continuation while the attempt waits on its gates:
+  the review requested or in progress, or the checks pending, at the
+  worktree's head. Messages still start turns at once.
+- **The macOS legs leave the pull-request and push gates**
+  (01a1a284, #246). GitHub's hosted macOS runners left jobs unstarted
+  since late October. `go-test` and `release-build` run on Linux and
+  Windows for a pull request and a push to main; the nightly run on main
+  adds macOS, and the release workflow tests, builds and checks the sums
+  on macOS before it publishes.
+- **The architect's high review applies where the architect runs another
+  model than the author** (01a18cb6-1165, #247), in AGENTS.md.
+- **The tested aimem release is 0.10.22** (01a1da78-7c4b), up from
+  0.10.15 in 0.9.0, through 0.10.17 and 0.10.18 (#237); the minimum stays
+  0.10.0. check's aimem instruction installs 0.10.22, the real-aimem
+  harness builds the v0.10.22 release commit, and the pilot simulation
+  installs that release's hub.
+- **The tested ai-skills release is 1.38.0** (01a1da78-7c4b), up from
+  1.33.13; the minimum stays 1.26.1. aicrew requires `oh-code-review`
+  only. The process set selected at aimem v0.10.22 also names
+  `forge-gates` and `verify-delivery`, but a member installs a process's
+  skills from the hub with `aimem skills install`, not from its own
+  ai-skills installation.
 
 ### Deprecated
 
@@ -69,6 +216,12 @@ section, and the release workflow refuses a tag that has none
   response whose evidence does not match the terminal evidence before it
   calls aimem, and falls back to `url` or `text` against an aicrewd without
   the field. ROLES.md's finalize steps say so.
+
+### Docs
+
+- docs/DEVELOPMENT.md: a home joined with `--no-service` needs a
+  supervisor that restarts `aicrew-agent serve` after a failure and leaves
+  it stopped after exit 0 or exit 2, as the installed service does.
 
 ## [0.9.0] - 2026-10-28
 

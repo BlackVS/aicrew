@@ -81,8 +81,9 @@ Gitea 768 MiB, each of the three members 512 MiB, aimem and aicrewd
 256 MiB each, the stubs and sim-ca 128 MiB each, and the four fault
 proxies 64 MiB each, 3.4 GiB in all. The 4096 MiB the script asks for is
 those limits plus the build beside them. A full run
-takes about 55 minutes (54 min 51 s and 54 min 34 s on a 6 vCPU host,
-2026-11-03).
+takes about 61 minutes with the three members (60 min 57 s and 60 min 29 s
+on a 6 vCPU host, 2026-11-12; the nightly runs on GitHub's hosted runner,
+61 min 26 s and 61 min 24 s), well inside the run's 90-minute bound.
 
 **Setup.** On the host, as an ordinary user in the `docker` group:
 - Docker Engine with the Compose v2 plugin (and buildx, which Compose

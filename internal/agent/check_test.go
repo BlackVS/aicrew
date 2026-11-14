@@ -499,7 +499,7 @@ func hasInstruction(rep CheckReport, sub string) bool {
 	return false
 }
 
-var readyTools = fakeTools{Aimem: "aimem v0.10.18", Claude: "2.1.286 (Claude Code)", OpenCode: "1.18.32"}
+var readyTools = fakeTools{Aimem: "aimem v0.10.22", Claude: "2.1.286 (Claude Code)", OpenCode: "1.18.32"}
 
 // A CLAUDE_CONFIG_DIR in the invoking shell, as a member on a shared account
 // has, does not leak into the fixture: the baseline home is still ready.
@@ -787,9 +787,9 @@ func TestCheckOutcomes(t *testing.T) {
 		instruction string
 		notice      string
 	}{
-		{"aimem missing", []string{"claude"}, nil, "1.26.1", JoinBlocked, "aimem_missing", "Install aimem v0.10.18 with its verifying installer", ""},
-		{"aimem newer", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.10.19" }, "1.26.1", JoinRestartRequired, "",
-			"", "aimem 0.10.19 is newer than the tested 0.10.18"},
+		{"aimem missing", []string{"claude"}, nil, "1.26.1", JoinBlocked, "aimem_missing", "Install aimem v0.10.22 with its verifying installer", ""},
+		{"aimem newer", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.10.23" }, "1.26.1", JoinRestartRequired, "",
+			"", "aimem 0.10.23 is newer than the tested 0.10.22"},
 		{"aimem v0.9.2", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.9.2" }, "1.26.1", JoinBlocked,
 			"aimem_below", "aimem 0.10.0 or later is required", ""},
 		{"aimem source build", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.7.3-52-gabc1234" }, "1.26.1",
@@ -841,7 +841,7 @@ func TestSkillsInstructionVerifies(t *testing.T) {
 	for _, g := range []string{"linux", "darwin", "windows"} {
 		goos = g
 		s := skillsInstruction(set.Components["ai-skills"], "", []string{"oh-code-review"})
-		if !strings.Contains(s, "SHA256SUMS") || strings.Contains(s, "boot.") || !strings.Contains(s, "aiskills-1.33.13") {
+		if !strings.Contains(s, "SHA256SUMS") || strings.Contains(s, "boot.") || !strings.Contains(s, "aiskills-1.38.0") {
 			t.Fatalf("%s: %s", g, s)
 		}
 		// The archive may store install.sh without its execute bit (ai-skills
@@ -936,7 +936,7 @@ func TestSupportedSet(t *testing.T) {
 		}
 	}
 	am := set.Components["aimem"]
-	for v, want := range map[string]string{"0.8.0": StateBelow, "0.9.2": StateBelow, "0.9.10": StateBelow, "0.10.0": StateSupported, "0.10.3": StateSupported, "0.10.8": StateSupported, "0.10.13": StateSupported, "0.10.15": StateSupported, "0.10.17": StateSupported, "0.10.18": StateSupported, "0.10.19": StateNewer, "0.11.0": StateNewer, "1.0.0": StateNewer} {
+	for v, want := range map[string]string{"0.8.0": StateBelow, "0.9.2": StateBelow, "0.9.10": StateBelow, "0.10.0": StateSupported, "0.10.3": StateSupported, "0.10.8": StateSupported, "0.10.13": StateSupported, "0.10.15": StateSupported, "0.10.17": StateSupported, "0.10.18": StateSupported, "0.10.22": StateSupported, "0.10.23": StateNewer, "0.11.0": StateNewer, "1.0.0": StateNewer} {
 		s, _, _ := parseVersion(v)
 		if got, _ := am.classify(s); got != want {
 			t.Fatalf("aimem %s: %s, want %s", v, got, want)

@@ -3410,7 +3410,12 @@ every pull request (`release-build`), publishing nothing.
    - the tag is not `vX.Y.Z` (no pre-release or build suffix);
    - its commit is not on main;
    - the section is missing;
-   - the release already exists.
+   - the release already exists;
+   - the tag no longer points at the commit the run started at (it was
+     moved after the start), since the attestation names that commit.
+
+   The publish job also refuses to publish when it cannot read the tags
+   from the forge to decide "latest".
 
    It then runs the tests, builds and checks that the built `aicrew-agent`
    reports exactly the tag, in a job with read access only. A second job

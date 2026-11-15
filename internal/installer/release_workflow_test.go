@@ -120,8 +120,10 @@ func TestReleaseBuildsWithoutWritePermissions(t *testing.T) {
 	if !strings.Contains(build, "    needs: ref\n") {
 		t.Error("the build job does not wait for the ref job")
 	}
-	if !strings.Contains(publish, "    needs: [ref, build, macos]\n") {
-		t.Error("the publish job does not wait for the guard, the build and macOS")
+	// needs alone is not enough: an `if: always() && ...` would publish
+	// after a failed job it needs. The condition stays exactly this.
+	if !strings.Contains(publish, "    needs: [ref, build, macos]\n    if: needs.build.outputs.dry_run != 'true'\n") {
+		t.Error("the publish job does not wait for the guard, the build and macOS, or its if is not exactly the dry-run condition")
 	}
 	// The checks run in this order, before anything is attested or published.
 	order := []string{
@@ -182,6 +184,67 @@ func TestReleaseRefGuard(t *testing.T) {
 		if c.ok != (err == nil) || !strings.Contains(string(out), c.want) {
 			t.Errorf("ref %s, tag %s, dry run %s: want ok=%v with %q, got %v\n%s", c.ref, c.tag, c.dry, c.ok, c.want, err, out)
 		}
+	}
+}
+
+// The publish step, run as the workflow has it with a stand-in git and gh:
+// a failed or empty read of the forge's tags stops it before gh, so a
+// release is never created with "latest" decided from nothing.
+func TestReleasePublishStepRefusesAFailedTagRead(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the step runs on the ubuntu runner")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("no bash")
+	}
+	publish := stepRun(t, releaseJobs(t)["publish"], "Publish")
+	cases := []struct {
+		name, git, tag string
+		ok             bool
+		want           string // in the output, or in gh's arguments when ok
+	}{
+		{"the read fails", "exit 128", "v0.11.0", false, "could not read the vX.Y.Z tags from the forge"},
+		{"no release tag listed", "echo 'abc\trefs/tags/latest'", "v0.11.0", false, "could not read the vX.Y.Z tags"},
+		{"nothing listed", "true", "v0.11.0", false, "could not read the vX.Y.Z tags"},
+		{"the newest tag", "printf 'a\trefs/tags/v0.9.0\\nb\trefs/tags/v0.11.0\\nc\trefs/tags/v0.10.0\\n'", "v0.11.0", true, "--latest=true"},
+		{"an older tag", "printf 'a\trefs/tags/v0.9.0\\nb\trefs/tags/v0.11.0\\n'", "v0.9.0", true, "--latest=false"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := filepath.Join(dir, "bin")
+			ghArgs := filepath.Join(dir, "gh-args")
+			if err := os.Mkdir(bin, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for name, body := range map[string]string{
+				"git": "#!/usr/bin/env bash\n" + c.git + "\n",
+				"gh":  "#!/usr/bin/env bash\necho \"$*\" > \"" + ghArgs + "\"\n",
+			} {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command(bash, "-e", "-c", publish)
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"TAG="+c.tag, "GH_REPO=example/repo", "GH_TOKEN=")
+			out, err := cmd.CombinedOutput()
+			args, readErr := os.ReadFile(ghArgs)
+			if !c.ok {
+				if err == nil || !strings.Contains(string(out), c.want) {
+					t.Fatalf("want a refusal with %q, got %v\n%s", c.want, err, out)
+				}
+				if readErr == nil {
+					t.Fatalf("gh was reached: %s", args)
+				}
+				return
+			}
+			if err != nil || readErr != nil || !strings.Contains(string(args), c.want) {
+				t.Fatalf("want gh called with %q, got %v %v\n%s\ngh: %s", c.want, err, readErr, out, args)
+			}
+		})
 	}
 }
 

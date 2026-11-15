@@ -11,8 +11,11 @@
 #   release.sh check vX.Y.Z [--dry-run]
 #       Check out the commit to release. The tag must be vX.Y.Z on a commit
 #       reachable from main, CHANGELOG.md must have its section, and the
-#       release must not exist yet. This script never creates a tag: without
-#       the tag only a dry run proceeds, on main's tip.
+#       release must not exist yet. In a run that publishes, the tag's commit
+#       must be the one the run started at (GITHUB_SHA, when set): a tag
+#       moved after the start would publish a build of one commit attested
+#       as another. This script never creates a tag: without the tag only a
+#       dry run proceeds, on main's tip.
 #   release.sh build vX.Y.Z
 #       dist/: aicrewd, aicrew and aicrew-agent for every platform, stamped
 #       with the tag, LICENSE, the installer scripts, and SHA256SUMS over
@@ -81,6 +84,15 @@ check)
     commit=$(git rev-parse "$TAG^{commit}")
     git merge-base --is-ancestor "$commit" origin/main ||
       fail "$TAG points at $(git rev-parse --short "$commit"), which is not on main: merge first, then tag"
+    # The attestation names the commit the run started at; the tags were
+    # fetched again above, so compare (peeled: GITHUB_SHA may name a tag
+    # object or a commit).
+    if ! $dry && [ -n "${GITHUB_SHA:-}" ]; then
+      started=$(git rev-parse -q --verify "$GITHUB_SHA^{commit}") ||
+        fail "the commit this run started at ($GITHUB_SHA) is not in the checkout"
+      [ "$started" = "$commit" ] ||
+        fail "$TAG points at $(git rev-parse --short "$commit"), but this run started at $(git rev-parse --short "$started"): the tag moved after the run started; start a new run from the tag"
+    fi
   elif $dry; then
     commit=$(git rev-parse origin/main)
     echo "::notice::tag $TAG does not exist: a dry run of main's tip $(git rev-parse --short "$commit")"

@@ -242,8 +242,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # A failed read must not leave "latest" decided from nothing: with
+          # pipefail a failing git ls-remote fails the read, and so does an
+          # empty list (grep matches nothing), which is never right, since
+          # the tag being published exists there.
+          set -o pipefail
           newest=$(git ls-remote --tags --refs "https://github.com/$GH_REPO" 'v*' | sed 's|.*refs/tags/||' |
-            grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n 1)
+            grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n 1) ||
+            { echo "::error::could not read the vX.Y.Z tags from the forge"; exit 1; }
           latest=false; [ "$newest" = "$TAG" ] && latest=true
           echo "newest tag on the forge: $newest; $TAG latest: $latest"
           gh release create "$TAG" release/dist/* --verify-tag --latest="$latest" \

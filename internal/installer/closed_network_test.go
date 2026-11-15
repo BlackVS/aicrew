@@ -620,6 +620,17 @@ func windowsExportForms(t *testing.T) map[string]string {
 	return forms
 }
 
+// longPath gives p with long names: PowerShell reports $PSCommandPath that
+// way, and a runner's TEMP may hold an 8.3 short name (RUNNER~1).
+func longPath(t *testing.T, p string) string {
+	t.Helper()
+	l, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
 // Each documented Windows export form runs boot.ps1 from a local copy,
 // with AICREW_BASE set to the share, and leaves neither the variable nor
 // the copy behind. A failed copy never runs a copy an earlier run left in
@@ -629,7 +640,7 @@ func TestDocumentedWindowsExportFormRuns(t *testing.T) {
 	for doc, form := range windowsExportForms(t) {
 		t.Run(doc, func(t *testing.T) {
 			for _, ok := range []bool{true, false} {
-				root, tmp := t.TempDir(), t.TempDir()
+				root, tmp := longPath(t, t.TempDir()), longPath(t, t.TempDir())
 				seen := filepath.Join(t.TempDir(), "seen.txt")
 				dir := filepath.Join(root, "aicrew", "v0.0.2")
 				if err := os.MkdirAll(dir, 0o755); err != nil {

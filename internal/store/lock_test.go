@@ -285,13 +285,17 @@ func TestLockEndsWithHoldingProcess(t *testing.T) {
 }
 
 // TestHelperHoldStore is the child process of TestLockEndsWithHoldingProcess:
-// it opens the store, reports it, and never closes it.
+// it opens the store, reports it, and never closes it. The store stays
+// reachable until the process ends: a store the helper dropped could be
+// collected, and the finalizer of its lock file would release the lock
+// before the parent checks it.
 func TestHelperHoldStore(t *testing.T) {
 	path := os.Getenv("AICREW_HOLD_STORE")
 	if path == "" {
 		t.Skip("helper process only")
 	}
-	if _, err := Open(context.Background(), path); err != nil {
+	s, err := Open(context.Background(), path)
+	if err != nil {
 		fmt.Println("error:", err)
 		os.Exit(1)
 	}
@@ -299,7 +303,9 @@ func TestHelperHoldStore(t *testing.T) {
 	if os.Getenv("AICREW_HOLD_MODE") == "exit" {
 		// Wait for the parent's signal, then exit without Close.
 		bufio.NewReader(os.Stdin).ReadString('\n') //nolint:errcheck // EOF is the signal
-		os.Exit(0)
+	} else {
+		time.Sleep(time.Hour) // killed by the parent
 	}
-	time.Sleep(time.Hour) // killed by the parent
+	runtime.KeepAlive(s)
+	os.Exit(0)
 }

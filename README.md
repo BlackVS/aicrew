@@ -69,3 +69,16 @@ in a closed network", the details.
   irm https://files.example.com/aiforge/aicrew/<tag>/boot.ps1 | iex
   Remove-Item Env:AICREW_BASE
   ```
+
+The forms above set `AICREW_BASE` for the installer only. Join each member
+home with it set to the same export, so that the join records it and
+`aicrew-agent check` names the export, not github.com, in what it tells
+a member to install (aimem's boot script; skills always come from the
+hub):
+
+```sh
+AICREW_BASE=/media/aiforge-export aicrew-agent join --label builder --url https://aicrew.example:8443 ...
+```
+
+On Windows, set `$env:AICREW_BASE` before `aicrew-agent join` and remove
+it afterwards, as in the forms above.

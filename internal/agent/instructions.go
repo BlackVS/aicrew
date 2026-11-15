@@ -1,19 +1,55 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
 
 // The exact steps a blocked check reports (5a installs nothing). Each pins
-// the version it names and installs only from a verified distribution:
-// aimem's boot script checks its release asset against SHA256SUMS, and the
-// ai-skills steps check the release archive before installing from it (its
-// one-line boot verifies nothing).
+// the version it names and installs only from a verified source: aimem's
+// boot script, taken at the tag it installs, checks its release asset
+// against SHA256SUMS, and the skills come from the aimem hub, which serves
+// the set the project's process pins (docs/DESIGN-INSTANCE-BOUNDARY.md,
+// D4). No skills text names a forge URL; with an export base, no aimem
+// text does either.
 
 // goos is the platform the instructions are written for; tests replace it.
 var goos = runtime.GOOS
+
+const (
+	// skillsInstallAimem is the first aimem with `aimem skills install`.
+	skillsInstallAimem = "0.10.7"
+	// exportAimem is the first aimem whose boot scripts read AIMEM_BASE.
+	exportAimem = "0.10.23"
+	// BaseEnv names an aiforge export, as the installers read it.
+	BaseEnv = "AICREW_BASE"
+)
+
+// checkBase validates an export base as the installers do: an absolute
+// directory (on Windows also a drive or \\host\share path) or an https://
+// URL with a host; plain http and a relative path are refused. It returns
+// the base without a trailing separator.
+func checkBase(s string) (string, error) {
+	if strings.Contains(s, "://") {
+		u, err := url.Parse(s)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return "", fmt.Errorf("%s=%q is not an https:// URL with a host (plain http is refused)", BaseEnv, s)
+		}
+		return strings.TrimRight(s, "/"), nil
+	}
+	if s == "" || !filepath.IsAbs(s) {
+		return "", fmt.Errorf("%s=%q is not an absolute directory or an https:// URL", BaseEnv, s)
+	}
+	t := strings.TrimRight(s, `/\`)
+	if t == "" || (len(t) == 2 && t[1] == ':') {
+		return "", errors.New(BaseEnv + " names the root of a drive or of the file system, not an export")
+	}
+	return t, nil
+}
 
 // installRelease is the release a component's instructions install: the
 // tested release of the line the found version belongs to, else of the
@@ -29,7 +65,21 @@ func (c supportedComponent) installRelease(found string) string {
 	return c.Ranges[0].Tested
 }
 
-func aimemInstruction(c supportedComponent, found string) string {
+// atLeast reports whether release rel is min or later.
+func atLeast(rel, min string) bool {
+	v, _, ok := parseVersion(rel)
+	m, _, _ := parseVersion(min)
+	return ok && !v.less(m)
+}
+
+// shQuote quotes s for a POSIX shell; psQuote for PowerShell.
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+func psQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+
+// aimemInstruction installs aimem's tested release with its verifying boot
+// script, taken at that release's tag. With base, an aiforge export, it
+// installs from the export and names no other host.
+func aimemInstruction(c supportedComponent, found, base string) string {
 	need := fmt.Sprintf("aimem %s or later is required", c.minimum())
 	if c.Note != "" {
 		need += " (" + c.Note + ")"
@@ -40,41 +90,64 @@ func aimemInstruction(c supportedComponent, found string) string {
 			"(https://github.com/BlackVS/aimem, `./install.sh user` from a checkout; " +
 			"`install.ps1` on Windows), or wait for the next aimem release; then rerun `aicrew-agent check`"
 	}
-	if goos == "windows" {
-		return fmt.Sprintf("%s. Install aimem v%s with its verifying installer, from an empty directory: "+
-			"`$env:AIMEM_VERSION='v%s'; Set-Location (New-Item -ItemType Directory (Join-Path $env:TEMP "+
-			"([guid]::NewGuid()))); powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm "+
-			"https://raw.githubusercontent.com/BlackVS/aimem/master/boot.ps1 | iex\"`; then rerun `aicrew-agent check`",
-			need, rel, rel)
+	const rerun = "; then rerun `aicrew-agent check`"
+	head := fmt.Sprintf("%s. Install aimem v%s with its verifying installer", need, rel)
+	if base != "" && atLeast(rel, exportAimem) {
+		return head + ", from the aiforge export " + base + ": " + aimemFromExport(base, rel) + rerun
 	}
-	return fmt.Sprintf("%s. Install aimem v%s with its verifying installer, from an empty directory: "+
-		"`cd \"$(mktemp -d)\" && curl -fsSL https://raw.githubusercontent.com/BlackVS/aimem/master/boot.sh | "+
-		"AIMEM_VERSION=v%s bash`; then rerun `aicrew-agent check`", need, rel, rel)
+	closed := ". In a closed network, install it from your aiforge export instead, as the export's README.txt says, " +
+		"and give `aicrew-agent join` the export in " + BaseEnv + " so that this check names it"
+	if goos == "windows" {
+		return fmt.Sprintf("%s, from an empty directory: `$env:AIMEM_VERSION='v%s'; Set-Location (New-Item -ItemType "+
+			"Directory (Join-Path $env:TEMP ([guid]::NewGuid()))); powershell -NoProfile -ExecutionPolicy Bypass -Command "+
+			"\"irm https://raw.githubusercontent.com/BlackVS/aimem/v%s/boot.ps1 | iex\"`%s%s",
+			head, rel, rel, closed, rerun)
+	}
+	return fmt.Sprintf("%s, from an empty directory: `cd \"$(mktemp -d)\" && curl -fsSL "+
+		"https://raw.githubusercontent.com/BlackVS/aimem/v%s/boot.sh | AIMEM_VERSION=v%s bash`%s%s",
+		head, rel, rel, closed, rerun)
 }
 
-// skillsInstruction installs the required skills at user level for Claude
-// Code, where OpenCode reads them too, from the verified release archive.
-func skillsInstruction(c supportedComponent, found string, skills []string) string {
-	rel := c.installRelease(found)
-	list := strings.Join(skills, ",")
-	base := "https://github.com/BlackVS/aiskills/releases/download/v" + rel
+// aimemFromExport is aimem's own export form (its ADMIN-MANUAL, "Installing
+// from an aiforge export"), from an empty directory: a directory export runs
+// the script in place, an https one pipes it, and on Windows a directory or
+// share is copied to the new directory first and the copy run.
+func aimemFromExport(base, rel string) string {
+	https := strings.HasPrefix(base, "https://")
 	if goos == "windows" {
-		return fmt.Sprintf("install ai-skills %s (%s) from its release archive, checked against SHA256SUMS: "+
-			"`Set-Location (New-Item -ItemType Directory (Join-Path $env:TEMP ([guid]::NewGuid()))); "+
-			"irm %s/aiskills-%s.zip -OutFile a.zip; irm %s/SHA256SUMS -OutFile SHA256SUMS; "+
-			"$h = (Get-FileHash a.zip -Algorithm SHA256).Hash.ToLower(); "+
-			"if (-not (Select-String -Path SHA256SUMS -Pattern \"^$h\\s+aiskills-%s.zip$\" -Quiet)) { throw 'checksum mismatch' }; "+
-			"Expand-Archive a.zip src; & \"$((Get-ChildItem src -Directory)[0].FullName)\\install.ps1\" -User -Tool claude -Skills %s`; "+
-			"then rerun `aicrew-agent check`", rel, list, base, rel, base, rel, list)
+		env := fmt.Sprintf("$env:AIMEM_BASE=%s; $env:AIMEM_VERSION='v%s'; Set-Location (New-Item -ItemType Directory "+
+			"(Join-Path $env:TEMP ([guid]::NewGuid()))); ", psQuote(base), rel)
+		clear := "Remove-Item Env:AIMEM_BASE, Env:AIMEM_VERSION"
+		if https {
+			return fmt.Sprintf("`%spowershell -NoProfile -ExecutionPolicy Bypass -Command \"irm %s | iex\"; %s`",
+				env, psQuote(base+"/aimem/v"+rel+"/boot.ps1"), clear)
+		}
+		return fmt.Sprintf("`%stry { Copy-Item -LiteralPath %s -Destination boot.ps1 -ErrorAction Stop; "+
+			"powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\\boot.ps1 } finally { %s }`",
+			env, psQuote(base+`\aimem\v`+rel+`\boot.ps1`), clear)
 	}
-	sum := "sha256sum --ignore-missing -c SHA256SUMS"
-	if goos == "darwin" {
-		sum = "shasum -a 256 --ignore-missing -c SHA256SUMS"
+	vars := fmt.Sprintf("AIMEM_BASE=%s AIMEM_VERSION=v%s", shQuote(base), rel)
+	script := shQuote(base + "/aimem/v" + rel + "/boot.sh")
+	if https {
+		return fmt.Sprintf("`cd \"$(mktemp -d)\" && curl -fsSL %s | %s bash`", script, vars)
 	}
-	return fmt.Sprintf("install ai-skills %s (%s) from its release archive, checked against SHA256SUMS: "+
-		"`cd \"$(mktemp -d)\" && curl -fsSLO %s/aiskills-%s.tar.gz && curl -fsSLO %s/SHA256SUMS && %s && "+
-		"mkdir src && tar -xzf aiskills-%s.tar.gz -C src --strip-components=1 && bash ./src/install.sh --user -t claude -s %s`; "+
-		"then rerun `aicrew-agent check`", rel, list, base, rel, base, sum, rel, list)
+	return fmt.Sprintf("`cd \"$(mktemp -d)\" && %s bash %s`", vars, script)
+}
+
+// skillsInstruction installs the required skills from the aimem hub into
+// the home, where Claude Code and OpenCode both read them, with the home's
+// own aimem installation. The hub serves the version the project's process
+// pins, so the text names no ai-skills version to download and no URL.
+func skillsInstruction(c supportedComponent, found string, skills []string, home, aimem string) string {
+	need := ""
+	if found != "" {
+		need = fmt.Sprintf("ai-skills %s or later is required (found %s): ", c.minimumFor(found), found)
+	}
+	return fmt.Sprintf("%sinstall the skills %s from the aimem hub, with aimem %s or later: in the home (%s), with "+
+		"the home's variables AIMEM_STATE_DIR=%s and AIMEM_SOCKET=%s, run `%s skills install -p <project> --tool claude`, "+
+		"where <project> is the aimem project your team works on (the hub serves the version the project's process "+
+		"pins); then rerun `aicrew-agent check`", need, strings.Join(skills, ", "), skillsInstallAimem,
+		absHome(home), AimemDir(home), AimemSocket(home), quoteArg(aimem))
 }
 
 // clientInstruction names the npm package of the tested release.

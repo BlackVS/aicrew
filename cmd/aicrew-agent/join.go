@@ -36,7 +36,9 @@ const joinUsage = `usage: aicrew-agent join --label LABEL [--home DIR] --url htt
        the turn loop, serve, whose home has no Stop hook. A ready home in
        turns mode gets its service (aicrew-agent service install), which
        starts the member now and at each login; --no-service, or
-       AICREW_NO_SERVICE=1, leaves it out.`
+       AICREW_NO_SERVICE=1, leaves it out. AICREW_BASE, the aiforge export
+       the installers read in a closed network, is recorded when set, so
+       that check names the export in what it tells you to install.`
 
 // joinDeps builds the bootstrap's collaborators on the real terminal,
 // aicrewd and aimem.
@@ -170,6 +172,7 @@ func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.W
 	}
 	o.Terminal = terminal
 	o.Clients = splitList(*clients)
+	o.ExportBase = os.Getenv(agent.BaseEnv)
 	rep, err := agent.Join(ctx, o, deps)
 	switch {
 	case errors.Is(err, agent.ErrJoinUsage):

@@ -2007,6 +2007,22 @@ irm https://files.example.com/aiforge/aicrew/<tag>/boot.ps1 | iex
 Remove-Item Env:AICREW_BASE
 ```
 
+**Join with the base set.** The forms above set `AICREW_BASE` for the
+installer only, and the Windows forms remove it. Run `aicrew-agent join`
+for each member home with `AICREW_BASE` set to the same export: the join
+records it as `export_base` in agent.json, and `aicrew-agent check` then
+gives aimem's export form, with no forge host, when it tells a member to
+install aimem ("The instructions of a blocked report", under the check).
+A join without it records nothing and keeps a base recorded earlier;
+then the check's line for a missing aimem is the connected form at the
+tested tag with one sentence that a closed network installs from its
+export. An `AICREW_BASE` in the check's own environment overrides the
+recorded one.
+
+```sh
+AICREW_BASE=/media/aiforge-export aicrew-agent join --home ~/aicrew/agents/builder
+```
+
 An https export behind a private CA needs that CA trusted where the
 installer runs: the system store on Linux, which curl reads, and the
 machine's Trusted Root store on Windows, which PowerShell reads.
@@ -2415,15 +2431,34 @@ member's user-level skills under it. It reports:
   - `unknown`: a refused login, a limit, the ceiling or another failure, as
     a notice; the first turn reports it in its own way.
 - **The instructions of a blocked report** are exact and pinned:
-  - aimem's verifying boot script with `AIMEM_VERSION`;
-  - the ai-skills release archive checked against its `SHA256SUMS` and
-    installed with `bash ./src/install.sh --user -t claude -s <skills>`
-    (OpenCode reads the same directory), because the ai-skills one-line
-    boot does not verify its download yet
-    ([aiskills#25](https://github.com/BlackVS/aiskills/issues/25)). The
-    installer runs through `bash` because an archive may store it without
-    its execute bit, as 1.33.13 does;
+  - aimem's verifying boot script with `AIMEM_VERSION`, taken at the
+    tested release's tag (`raw.githubusercontent.com/BlackVS/aimem/v<tested>/boot.sh`,
+    `boot.ps1` on Windows), never from the default branch, which changes
+    under every released aicrew. Without an export base the line adds one
+    sentence: a closed network installs from its aiforge export, as the
+    export's `README.txt` says. With a base (below) it is aimem's own
+    export form, with `AIMEM_BASE` and `AIMEM_VERSION`, and names no other
+    host: run in place from a directory, piped from an https server, and
+    on Windows copied from a directory or share into a new empty directory
+    and run there. aimem reads `AIMEM_BASE` from 0.10.23; for an older
+    tested release the line stays the connected one;
+  - the skills from the aimem hub, with no URL (docs/DESIGN-INSTANCE-BOUNDARY.md,
+    D4): in the home, with the home's `AIMEM_STATE_DIR` and `AIMEM_SOCKET`,
+    `aimem skills install -p <project> --tool claude`, which writes them
+    into the home's `.claude/skills` (where Claude Code and OpenCode both
+    read them) with the `.ai-skills.json` record the check judges. The
+    hub serves the version the project's process pins. The command needs
+    aimem 0.10.7 or later, and the line says so;
   - the client's npm package at the tested version.
+
+  **The export base.** `aicrew-agent join` records `AICREW_BASE`, when it
+  is set for the join, as `export_base` at the top level of agent.json
+  (outside the `aicrew` section, so an older aicrew-agent still reads the
+  home), validated as the installers validate it; a run without it keeps
+  the recorded one, and a run with another replaces it; removing the key
+  from agent.json forgets it. The check uses an `AICREW_BASE` in its own
+  environment first, then `export_base`; an invalid value is a notice, and
+  the connected form is given.
 
   OpenCode 1.x refusing data that OpenCode 2 wrote is reported, not
   resolved.

@@ -48,6 +48,18 @@ section, and the release workflow refuses a tag that has none
   from `main`, called on their last line, and `boot.ps1` is one script
   block closed on its last line. `boot.sh` needs curl only for an https
   source.
+- **`aicrew-agent check` tells a member to install skills from the hub**
+  (01a1df38-49c9). The line for missing or outdated skills is
+  `aimem skills install -p <project> --tool claude`, run in the home with
+  the home's aimem variables, and names no URL; it needs aimem 0.10.7 or
+  later, which it says.
+- **The line for a missing aimem takes aimem's boot script at the tested
+  tag**, not from the default branch, for the shell and for PowerShell,
+  as the simulation's member image now does too. `aicrew-agent join`
+  records `AICREW_BASE`, when set, as `export_base` in agent.json, and
+  the check then gives aimem's export form with no forge host (an
+  `AICREW_BASE` in the check's environment overrides it). Without a base,
+  the line adds that a closed network installs from its export.
 
 ### Docs
 

@@ -232,6 +232,28 @@ type checker struct {
 	rep      CheckReport
 	disc     discoveryEnv
 	blockers []string
+	base     string // the aiforge export the instructions name, if any
+}
+
+// exportBase is the aiforge export the instructions install from: an
+// AICREW_BASE in the check's own environment, else the one join recorded
+// in agent.json, else none. An invalid value is a notice and is not used.
+func (c *checker) exportBase() string {
+	for _, s := range []struct{ v, from string }{
+		{os.Getenv(BaseEnv), "the environment's " + BaseEnv},
+		{str(c.doc.top, "export_base"), "agent.json's export_base"},
+	} {
+		if s.v == "" {
+			continue
+		}
+		b, err := checkBase(s.v)
+		if err != nil {
+			c.notice(fmt.Sprintf("%s is not used (%v): the instructions name the connected sources", s.from, err))
+			return ""
+		}
+		return b
+	}
+	return ""
 }
 
 func (c *checker) block(reason, instruction string) {
@@ -258,6 +280,7 @@ func runCheck(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) 
 		return CheckReport{}, err
 	}
 	c := &checker{o: o, doc: doc, set: set, rep: CheckReport{Agent: version.Get()}}
+	c.base = c.exportBase()
 	sel, err := selectClients(o.Clients, *doc)
 	if err != nil {
 		return CheckReport{}, err
@@ -412,7 +435,7 @@ func (c *checker) checkAimem(ctx context.Context) {
 	path, err := exec.LookPath(c.aimemCommand())
 	if err != nil {
 		r.State, r.Detail = StateMissing, err.Error()
-		c.block("aimem_missing", aimemInstruction(comp, ""))
+		c.block("aimem_missing", aimemInstruction(comp, "", c.base))
 		return
 	}
 	out, errOut, err := discoveryEnv{env: checkProbeEnv(os.Environ(), c.o.Home), timeout: 30 * time.Second}.capture(ctx, c.o.Home, path, "version")
@@ -422,7 +445,7 @@ func (c *checker) checkAimem(ctx context.Context) {
 		return
 	}
 	r.Found = strings.TrimSpace(out)
-	c.classify(&r, comp, r.Found, func() string { return aimemInstruction(comp, r.Found) })
+	c.classify(&r, comp, r.Found, func() string { return aimemInstruction(comp, r.Found, c.base) })
 	if r.State != StateBelow && r.State != StateFailed {
 		c.checkCredential(ctx, path)
 	}
@@ -547,7 +570,7 @@ func (c *checker) checkClient(ctx context.Context, name string, single bool) {
 	}
 	if len(r.MissingSkills) > 0 {
 		c.block(name+"_skills", fmt.Sprintf("%s does not see the required skills %s: %s", name,
-			strings.Join(r.MissingSkills, ", "), skillsInstruction(c.set.Components["ai-skills"], "", r.MissingSkills)))
+			strings.Join(r.MissingSkills, ", "), skillsInstruction(c.set.Components["ai-skills"], "", r.MissingSkills, c.o.Home, c.aimemCommand())))
 	}
 	if d.ApprovalPending {
 		c.notice(fmt.Sprintf("Claude Code will ask at the first interactive start in this home to trust the folder and to "+
@@ -683,10 +706,12 @@ func (c *checker) skillsInstallation(comp supportedComponent, dir string, unknow
 		r.State = StateFailed
 		r.Detail = "the record " + record + " cannot be used: " + tail(err.Error(), 200)
 		c.block("ai-skills_record", fmt.Sprintf("the ai-skills installation in %s has a version record that cannot be used "+
-			"(%s): reinstall it: %s", dir, tail(err.Error(), 200), skillsInstruction(comp, "", c.set.RequiredSkills)))
+			"(%s): reinstall it: %s", dir, tail(err.Error(), 200), skillsInstruction(comp, "", c.set.RequiredSkills, c.o.Home, c.aimemCommand())))
 		return r
 	}
 	r.Found = m.Version
-	c.classify(&r, comp, m.Version, func() string { return skillsInstruction(comp, m.Version, c.set.RequiredSkills) })
+	c.classify(&r, comp, m.Version, func() string {
+		return skillsInstruction(comp, m.Version, c.set.RequiredSkills, c.o.Home, c.aimemCommand())
+	})
 	return r
 }

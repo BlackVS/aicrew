@@ -5,9 +5,17 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.10.0/boot.sh | bash
 #
-# It installs the release this script was fetched from (RELEASE below):
-# aicrew-agent and aicrew for this platform, each checked against that
-# release's SHA256SUMS, as ~/.local/bin/aicrew-agent and ~/.local/bin/aicrew.
+# In a closed network, from an aiforge export (a local directory, or an
+# internal https server holding the same files; README.txt in the export
+# has the commands with its tags filled in):
+#
+#   AICREW_BASE=/media/aiforge-export bash /media/aiforge-export/aicrew/<tag>/boot.sh
+#   curl -fsSL https://files.example.com/aiforge/aicrew/<tag>/boot.sh | AICREW_BASE=https://files.example.com/aiforge bash
+#
+# It installs the release this script was fetched from (RELEASE below), or
+# the one the export's MANIFEST names: aicrew-agent and aicrew for this
+# platform, each checked against that release's SHA256SUMS, as
+# ~/.local/bin/aicrew-agent and ~/.local/bin/aicrew.
 # A binary that already reports the release is left as it is; an older one
 # is replaced, and both versions are printed. A checksum mismatch installs
 # neither. It installs the binaries and nothing else:
@@ -19,38 +27,117 @@
 #
 # Environment knobs:
 #   AICREW_BIN_DIR=~/.local/bin     where aicrew-agent and aicrew go
+#   AICREW_BASE=/abs/dir|https://...  install from an aiforge export instead
+#                                   of github.com: <base>/MANIFEST names the
+#                                   release, <base>/aicrew/<tag>/ holds its
+#                                   files; no other host is contacted
 #   AICREW_VERSION=vX.Y.Z           install another release than RELEASE
-#   AICREW_REPO=owner/name          install from a fork
+#                                   (or than the export's MANIFEST names)
+#   AICREW_REPO=owner/name          install from a fork (not read with AICREW_BASE)
 #   AICREW_NO_SERVICE=1             leave the members' services alone
 #   AICREW_PREBUILT_DIR=            a directory holding aicrew-agent and aicrew to
 #                                   install instead of downloading; a SHA256SUMS
 #                                   in it, when present, is checked
+#
+# Everything runs from main, called on the last line, so a download cut
+# short runs nothing.
 set -euo pipefail
 
 # The release this script installs. Bumped together with the CHANGELOG
 # when a release is cut (internal/installer checks they agree).
 RELEASE=v0.10.0
 
-[ -n "${AICREW_PREBUILT_DIR:-}" ] || command -v curl >/dev/null 2>&1 ||
-  { echo "ERROR: 'curl' is required." >&2; exit 1; }
-REPO=${AICREW_REPO:-BlackVS/aicrew}
-TAG=${AICREW_VERSION:-$RELEASE}
-DL_BASE="https://github.com/$REPO/releases/download/$TAG"
-BIN_DIR=${AICREW_BIN_DIR:-$HOME/.local/bin}
-case "$(uname -s)" in
-  Linux) OS=linux ;;
-  Darwin) OS=darwin ;;
-  *) echo "ERROR: $(uname -s) is not supported; on Windows use boot.ps1." >&2; exit 1 ;;
-esac
-case "$(uname -m)" in
-  x86_64|amd64) ARCH=amd64 ;;
-  aarch64|arm64) ARCH=arm64 ;;
-  *) echo "ERROR: $(uname -m) is not a released architecture." >&2; exit 1 ;;
-esac
+# BEGIN release-source
+# Where the release's files come from, and their verification. boot.sh
+# and install-aicrewd.sh carry the same block (internal/installer keeps
+# the copies equal). Connected: the release download URL on github.com. With
+# AICREW_BASE: an aiforge export, format 1 - <base>/MANIFEST is
+# `aiforge-export 1` and then `<product> <tag>` lines, <base>/aicrew/<tag>/
+# holds the release's assets under their published names with its
+# SHA256SUMS. An explicit AICREW_VERSION wins over MANIFEST. An https
+# download follows redirects only to https. Each function prints its
+# refusal and returns 1, and the caller then stops with nothing changed.
+sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | awk '{print $1}'; }
+refuse() { echo "ERROR: $*. Nothing changed." >&2; return 1; }
+get_file() { # source dest: an https download, or a copy of a local file
+  case "$1" in
+    https://*) curl -fsSL --proto =https --proto-redir =https "$1" -o "$2" ;;
+    *) [ -f "$1" ] && cp "$1" "$2" ;;
+  esac
+}
+valid_tag() {
+  case "$1" in
+    v[0-9]*) case "$1" in */* | *..* | *[!A-Za-z0-9._+-]*) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
+}
+# resolve_source: TAG and SRC (the directory or URL holding the release's
+# files) from AICREW_BASE, AICREW_VERSION, AICREW_REPO and RELEASE.
+resolve_source() {
+  local base manifest format
+  if [ -z "${AICREW_BASE:-}" ]; then
+    TAG=${AICREW_VERSION:-$RELEASE}
+    valid_tag "$TAG" || { refuse "'$TAG' is not a release tag"; return 1; }
+    SRC="https://github.com/${AICREW_REPO:-BlackVS/aicrew}/releases/download/$TAG"
+    return 0
+  fi
+  [ -z "${AICREW_PREBUILT_DIR:-}" ] ||
+    { refuse "AICREW_BASE and AICREW_PREBUILT_DIR exclude each other; set one"; return 1; }
+  case "$AICREW_BASE" in
+    https://* | /*) ;;
+    *) refuse "AICREW_BASE must be an absolute directory or an https:// URL, not '$AICREW_BASE'"; return 1 ;;
+  esac
+  base=${AICREW_BASE%/}
+  if [ -n "${AICREW_VERSION:-}" ]; then
+    TAG=$AICREW_VERSION
+  else
+    manifest=$(mktemp)
+    if ! get_file "$base/MANIFEST" "$manifest"; then
+      rm -f "$manifest"
+      refuse "$base/MANIFEST is missing (or set AICREW_VERSION to name the release)"
+      return 1
+    fi
+    format=$(head -n 1 "$manifest" | tr -d '\r')
+    TAG=$(tail -n +2 "$manifest" | tr -d '\r' | awk '$1 == "aicrew" { print $2; exit }')
+    rm -f "$manifest"
+    [ "$format" = "aiforge-export 1" ] ||
+      { refuse "$base/MANIFEST is '$format', not a format this installer reads (aiforge-export 1)"; return 1; }
+    [ -n "$TAG" ] || { refuse "$base/MANIFEST names no aicrew release"; return 1; }
+  fi
+  valid_tag "$TAG" || { refuse "'$TAG' is not a release tag"; return 1; }
+  SRC="$base/aicrew/$TAG"
+}
+# fetch_missing path: the refusal for a file that could not be read.
+fetch_missing() {
+  if [ -n "${AICREW_BASE:-}" ]; then
+    refuse "$1 is missing: the export holds an incomplete copy of aicrew $TAG"
+  else
+    refuse "cannot fetch $1"
+  fi
+}
+# fetch_sums dir: the release's SHA256SUMS into dir.
+fetch_sums() {
+  get_file "$SRC/SHA256SUMS" "$1/SHA256SUMS" || { fetch_missing "$SRC/SHA256SUMS"; return 1; }
+}
+# fetch_verified dir asset dest: the asset into dir/dest, checked against
+# dir/SHA256SUMS on its whole name; a mismatch removes it.
+fetch_verified() {
+  local want got
+  get_file "$SRC/$2" "$1/$3" || { rm -f "$1/$3"; fetch_missing "$SRC/$2"; return 1; }
+  want=$(awk -v a="$2" '$2 == a || $2 == "*"a { print $1; exit }' "$1/SHA256SUMS")
+  got=$(sha256 "$1/$3")
+  if [ -z "$want" ] || [ "$want" != "$got" ]; then
+    rm -f "$1/$3"
+    refuse "checksum mismatch for $SRC/$2 (want ${want:-absent}, got $got); refusing it"
+    return 1
+  fi
+  echo "checksum OK: $2"
+}
+# END release-source
 
 # BEGIN install-agent
 # install_agent: install aicrew-agent and the operator CLI aicrew, both
-# $TAG, from $DL_BASE into $BIN_DIR for $OS/$ARCH, or the ones in
+# $TAG, from $SRC (release-source) into $BIN_DIR for $OS/$ARCH, or the ones in
 # $AICREW_PREBUILT_DIR when it is set. A binary that already reports $TAG,
 # or is the same file as the prebuilt one, is left alone. Every download is
 # checked against the release's SHA256SUMS in a temporary directory, all of
@@ -58,7 +145,6 @@ esac
 # every one passes. Both prebuilt binaries are staged and checked the same
 # way, against their directory's SHA256SUMS when it holds one, before either
 # is judged current, so a mismatch for one never lets the other through.
-sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | awk '{print $1}'; }
 install_agent() {
   local tmp rc=0 name todo=""
   tmp=$(mktemp -d)
@@ -148,24 +234,15 @@ stage_prebuilt() {
     chmod 755 "$tmp/$name" || return 1
   done
 }
-# stage_release tmp name...: download each binary's release asset of $TAG
-# into tmp and check it against the release's SHA256SUMS.
+# stage_release tmp name...: each binary's release asset of $TAG from $SRC
+# into tmp, checked against the release's SHA256SUMS.
 stage_release() {
-  local tmp=$1 name asset want got
+  local tmp=$1 name
   shift
-  curl -fsSL "$DL_BASE/SHA256SUMS" -o "$tmp/SHA256SUMS" ||
-    { echo "ERROR: cannot fetch the SHA256SUMS of $TAG; refusing an unverified binary. Nothing changed." >&2; return 1; }
+  fetch_sums "$tmp" || return 1
   for name in "$@"; do
-    asset="$name-$OS-$ARCH"
-    echo "fetching $name $TAG ($asset)"
-    curl -fsSL "$DL_BASE/$asset" -o "$tmp/$name" ||
-      { echo "ERROR: cannot fetch $asset of $TAG. Nothing changed." >&2; return 1; }
-    want=$(awk -v n="$asset" '$2==n || $2=="*"n {print $1}' "$tmp/SHA256SUMS")
-    got=$(sha256 "$tmp/$name")
-    if [ -z "$want" ] || [ "$want" != "$got" ]; then
-      echo "ERROR: checksum mismatch for $asset (want ${want:-absent}, got $got); refusing it. Nothing changed." >&2
-      return 1
-    fi
+    echo "fetching $name $TAG ($name-$OS-$ARCH)"
+    fetch_verified "$tmp" "$name-$OS-$ARCH" "$name" || return 1
     chmod 755 "$tmp/$name" || return 1
   done
 }
@@ -189,8 +266,31 @@ svc_start_all() {
 }
 # END install-agent
 
-install_agent
-case ":$PATH:" in
-  *":$BIN_DIR:"*) ;;
-  *) echo "note: $BIN_DIR is not on PATH; add it to your shell profile." ;;
-esac
+main() {
+  case "$(uname -s)" in
+    Linux) OS=linux ;;
+    Darwin) OS=darwin ;;
+    *) echo "ERROR: $(uname -s) is not supported; on Windows use boot.ps1." >&2; exit 1 ;;
+  esac
+  case "$(uname -m)" in
+    x86_64|amd64) ARCH=amd64 ;;
+    aarch64|arm64) ARCH=arm64 ;;
+    *) echo "ERROR: $(uname -m) is not a released architecture." >&2; exit 1 ;;
+  esac
+  BIN_DIR=${AICREW_BIN_DIR:-$HOME/.local/bin}
+  resolve_source || exit 1
+  # curl only for an https source: a directory export needs none.
+  if [ -z "${AICREW_PREBUILT_DIR:-}" ]; then
+    case "$SRC" in
+      https://*) command -v curl >/dev/null 2>&1 || { echo "ERROR: 'curl' is required." >&2; exit 1; } ;;
+    esac
+    [ -z "${AICREW_BASE:-}" ] || echo "installing aicrew $TAG from $SRC"
+  fi
+  install_agent
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) ;;
+    *) echo "note: $BIN_DIR is not on PATH; add it to your shell profile." ;;
+  esac
+}
+
+main "$@"

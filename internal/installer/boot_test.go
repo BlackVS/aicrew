@@ -83,13 +83,13 @@ func agentRelease(t *testing.T, version, badSum string) string {
 	return dir
 }
 
-func fileURL(dir string) string {
-	p := filepath.ToSlash(dir)
-	if !strings.HasPrefix(p, "/") {
-		p = "/" + p
-	}
-	return "file://" + p
-}
+// mismatchPath is how a refusal names an asset of the release directory
+// dir: the source and the asset name, joined by a slash on every platform.
+func mismatchPath(dir, asset string) string { return dir + "/" + asset }
+
+// unwrapped is out without its line breaks: PowerShell wraps an error at
+// the console's width, inside a path as well.
+func unwrapped(out string) string { return strings.NewReplacer("\r", "", "\n", "").Replace(out) }
 
 // files lists every regular file under root, relative to it.
 func files(t *testing.T, root string) []string {
@@ -129,10 +129,11 @@ func serviceEnv(home string) string {
 func bootSh(home, binDir, tmp string, env ...string) bootRun {
 	return func(t *testing.T, rel, tag string) (string, int) {
 		t.Helper()
-		text := "set -euo pipefail\n" + extractFrom(t, "boot.sh", "install-agent") + "install_agent\n"
+		text := "set -euo pipefail\n" + extractFrom(t, "boot.sh", "release-source") +
+			extractFrom(t, "boot.sh", "install-agent") + "install_agent\n"
 		cmd := exec.Command("bash", "-c", text)
 		cmd.Dir = home
-		cmd.Env = append(os.Environ(), "HOME="+home, "TMPDIR="+tmp, "TAG="+tag, "DL_BASE="+fileURL(rel),
+		cmd.Env = append(os.Environ(), "HOME="+home, "TMPDIR="+tmp, "TAG="+tag, "SRC="+rel,
 			"BIN_DIR="+binDir, "OS="+runtime.GOOS, "ARCH="+runtime.GOARCH, serviceEnv(home))
 		cmd.Env = append(cmd.Env, env...)
 		return combined(t, cmd)
@@ -144,8 +145,9 @@ func bootPs1(home, binDir, tmp string, env ...string) bootRun {
 		t.Helper()
 		script := filepath.Join(t.TempDir(), "run.ps1")
 		// As the script does before its install step.
-		text := "$ErrorActionPreference = 'Stop'\n" + extractFrom(t, "boot.ps1", "install-agent") +
-			fmt.Sprintf("Install-Agent '%s' '%s' '%s'\n", tag, fileURL(rel), binDir)
+		text := "$ErrorActionPreference = 'Stop'\n" + extractFrom(t, "boot.ps1", "release-source") +
+			extractFrom(t, "boot.ps1", "install-agent") +
+			fmt.Sprintf("Install-Agent '%s' '%s' '%s'\n", tag, rel, binDir)
 		if err := os.WriteFile(script, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -241,7 +243,7 @@ func TestBootInstallsAndUpgrades(t *testing.T) {
 		dir, binary string
 	}{{v2badCLI, "aicrew"}, {v2badAgt, "aicrew-agent"}} {
 		out, code = run(t, bad.dir, "v0.0.2")
-		if code == 0 || !strings.Contains(out, "checksum mismatch for "+asset(bad.binary)) || versions() != "v0.0.1/v0.0.1" {
+		if code == 0 || !strings.Contains(unwrapped(out), "checksum mismatch for "+mismatchPath(bad.dir, asset(bad.binary))) || versions() != "v0.0.1/v0.0.1" {
 			t.Fatalf("a bad hash for %s was not refused, or an installed binary changed (exit %d):\n%s", bad.binary, code, out)
 		}
 	}
@@ -404,7 +406,7 @@ func TestBootShPrebuilt(t *testing.T) {
 	shellOnly(t)
 	home, tmp := t.TempDir(), t.TempDir()
 	bin := filepath.Join(home, ".local", "bin")
-	nothing := t.TempDir() // DL_BASE: every download from it fails
+	nothing := t.TempDir() // SRC: every download from it fails
 	v1 := agentRelease(t, "v0.0.1", "")
 	v2 := agentRelease(t, "v0.0.2", "")
 	run := func(dir string) (string, int) {

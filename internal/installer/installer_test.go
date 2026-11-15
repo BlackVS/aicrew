@@ -125,14 +125,26 @@ func TestOneLinersNameTheReleaseTag(t *testing.T) {
 	}
 }
 
-// The release workflow's check refuses a tag an installer does not pin
-// (scripts/release_test.sh runs the refusal).
-func TestReleaseCheckRefusesAnotherPin(t *testing.T) {
+// The release publishes the three installers as assets under exactly the
+// names an aiforge export looks for (aiskills' export script), and the sums
+// are written after they are in dist/, so SHA256SUMS lists them. Its check
+// refuses a tag an installer does not pin (scripts/release_test.sh runs the
+// refusal).
+func TestReleasePublishesAndChecksTheInstallers(t *testing.T) {
 	rel := read(t, "scripts/release.sh")
-	for _, check := range []string{`for f in install-aicrewd.sh boot.sh`, `grep -qx "RELEASE=$TAG" "$f"`, `grep -qx "\$release = '$TAG'"`} {
+	for _, check := range []string{
+		"\ninstallers=\"install-aicrewd.sh boot.sh boot.ps1\"\n",
+		"for f in $installers; do\n    [ -f \"$f\" ] || continue",
+		`grep -qx "RELEASE=$TAG" "$f"`, `grep -qx "\$release = '$TAG'"`,
+	} {
 		if !strings.Contains(rel, check) {
 			t.Errorf("scripts/release.sh does not check the installers' pins (%s)", check)
 		}
+	}
+	copied := strings.Index(rel, `for f in $installers; do cp "$f" "dist/$f"; done`)
+	summed := strings.Index(rel, "> SHA256SUMS)")
+	if copied < 0 || summed < 0 || copied > summed {
+		t.Errorf("scripts/release.sh build does not copy the installers into dist/ before it writes SHA256SUMS (copy at %d, sums at %d)", copied, summed)
 	}
 }
 
@@ -233,8 +245,8 @@ func TestDownloadRefusesAnUnlistedHash(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			out, code := bash(t, "set -euo pipefail\n"+extract(t, "download")+`fetch_release "$DST"`,
-				"DL_BASE=file://"+filepath.ToSlash(rel), "ARCH=amd64", "DST="+dst)
+			out, code := bash(t, "set -euo pipefail\n"+extract(t, "release-source")+extract(t, "download")+`fetch_release "$DST"`,
+				"SRC="+rel, "ARCH=amd64", "DST="+dst)
 			_, errD := os.Stat(filepath.Join(dst, "aicrewd"))
 			_, errC := os.Stat(filepath.Join(dst, "aicrew"))
 			if tc.ok {
@@ -243,7 +255,7 @@ func TestDownloadRefusesAnUnlistedHash(t *testing.T) {
 				}
 				return
 			}
-			if code == 0 || !strings.Contains(out, "checksum mismatch for aicrew-linux-amd64") || errD == nil || errC == nil {
+			if code == 0 || !strings.Contains(out, "checksum mismatch for "+rel+"/aicrew-linux-amd64") || errD == nil || errC == nil {
 				t.Fatalf("an unlisted hash was not refused (exit %d):\n%s", code, out)
 			}
 		})

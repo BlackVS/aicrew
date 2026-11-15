@@ -12,6 +12,71 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.11.0] - 2026-11-15
+
+Three pull requests since 0.10.0 (#250 to #252), all on the way aicrew is
+installed and released:
+- **Closed-network installs (#250).** aicrew installs in a closed network
+  from an aiforge export, and every file an installer runs is checked
+  against the release's `SHA256SUMS` first.
+- **`aicrew-agent check` (#251).** It tells a member to take skills from
+  the aimem hub and aimem's boot script at the tested tag, and names the
+  export when the home was joined from one.
+- **The release (#252).** It is built without write permissions and
+  attested: this is the first aicrew release whose files carry build
+  attestations. `gh attestation verify <file> --repo BlackVS/aicrew`
+  checks them.
+
+The store stays at schema 39, and aicrewd's routes are unchanged.
+aimem 0.10.0 or later stays required. This release is tested with aimem
+0.10.25 and ai-skills 1.40.1.
+
+### Upgrade steps
+
+All of them use product commands and one-liners. aicrewd and the members
+can be upgraded in either order.
+
+1. **aicrewd.** On the hub host, as root, run the hub one-liner:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.0/install-aicrewd.sh | bash
+   ```
+
+2. **Each member and the operator's machine.** As that user, rerun the
+   member one-liner. It stops the account's registered member services,
+   swaps the binaries and starts them again:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.0/boot.sh | bash
+     ```
+
+   - Windows, in a PowerShell window that is already open:
+
+     ```powershell
+     irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.0/boot.ps1 | iex
+     ```
+
+   - Windows, from cmd or the Run dialog:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.0/boot.ps1 | iex"
+     ```
+
+   In a closed network, install from the aiforge export instead, as
+   README's closed-network forms show (`AICREW_BASE`).
+3. **A home joined in a closed network.** Rerun
+   `aicrew-agent join --home HOME` with `AICREW_BASE` set to the export.
+   The join records it, and `aicrew-agent check` then names the export
+   in what it tells you to install.
+4. **Check each home.** Run `aicrew-agent check --home HOME`.
+   - An aimem below 0.10.25 is still supported, from 0.10.0 on. To move to
+     the tested release, run the command the check prints for a missing
+     aimem: aimem's boot script at the tag `v0.10.25`.
+   - Skills come from the aimem hub. The check prints
+     `aimem skills install -p <project> --tool claude`, run in the home with
+     the home's aimem variables (aimem 0.10.7 or later).
+
 ### Added
 
 - **The installers install from an aiforge export** (01a1cf0c-3471). In a

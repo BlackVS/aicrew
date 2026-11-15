@@ -12,6 +12,16 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+### Fixed
+
+- **The store lock test can no longer fail a release on a collection**
+  (01a1e121-a475). The first run of the v0.11.0 release stopped in the
+  macOS job: `TestLockEndsWithHoldingProcess/kill` found the store unlocked
+  while its helper process still held it. The helper dropped the store it
+  opened, so a garbage collection in that process could finalize the lock's
+  file and release the lock early. It now keeps the store until the process
+  ends. Only the test changed; aicrewd keeps its store for its whole run.
+
 ## [0.11.0] - 2026-11-15
 
 Three pull requests since 0.10.0 (#250 to #252), all on the way aicrew is

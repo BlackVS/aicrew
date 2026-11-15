@@ -1,10 +1,11 @@
 # A member home (sim-coordinator, sim-worker, sim-indep): git and Python 3,
 # the client stand-in as `claude` on PATH, b4's aimem-timed wrapper that
 # the home joins with as its aimem command, then each component by its own
-# installer, as aicrew-agent check instructs (DESIGN-PILOT-SIMULATION
-# section 3): aicrew's boot.sh from this tree's binaries, aimem's
-# verifying boot script at the tested release, ai-skills from its release
-# archive checked against SHA256SUMS. aimem's installer needs jq.
+# installer (DESIGN-PILOT-SIMULATION section 3): aicrew's boot.sh from this
+# tree's binaries; aimem's verifying boot script taken at the tested tag,
+# as aicrew-agent check instructs; ai-skills from its release archive
+# checked against SHA256SUMS, since a build has no hub to install them from
+# (check tells a member `aimem skills install`). aimem's installer needs jq.
 FROM debian:bookworm-20261020-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
 ARG AIMEM_VERSION
 ARG AISKILLS_VERSION
@@ -23,7 +24,7 @@ USER member
 WORKDIR /home/member
 ENV PATH=/home/member/.local/bin:/usr/local/bin:/usr/bin:/bin
 RUN AICREW_PREBUILT_DIR=/opt/aicrew-prebuilt AICREW_NO_SERVICE=1 bash /opt/aicrew-boot.sh
-RUN cd "$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/BlackVS/aimem/master/boot.sh \
+RUN cd "$(mktemp -d)" && curl -fsSL "https://raw.githubusercontent.com/BlackVS/aimem/v$AIMEM_VERSION/boot.sh" \
     | AIMEM_VERSION="v$AIMEM_VERSION" bash
 RUN cd "$(mktemp -d)" \
     && base="https://github.com/BlackVS/aiskills/releases/download/v$AISKILLS_VERSION" \

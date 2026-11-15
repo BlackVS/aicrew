@@ -418,6 +418,8 @@ func setupCheck(t *testing.T, f fakeTools, tools ...string) *checkEnv {
 	raw, _ := json.Marshal(f)
 	t.Setenv(fakeToolsEnv, string(raw))
 	t.Setenv("CLAUDECODE", "1") // the calling session's variables must not reach a client
+	t.Setenv(BaseEnv, "")       // the developer's own export must not reach the instructions
+	os.Unsetenv(BaseEnv)
 	foreignInstallation(t, e.home)
 	t.Setenv(SessionEnv, filepath.Join(e.user, "foreign-session.json")) // another installation's session
 	doc := `{"layout": 1, "label": "builder", "aicrew": {"url": "https://aicrew.example", "tls_trust_mode": "ca_dns",
@@ -809,9 +811,10 @@ func TestCheckOutcomes(t *testing.T) {
 			"", "claude 2.2.0 is newer than the tested 2.1.286"},
 		{"claude MCP failed", []string{"aimem", "claude"}, func(f *fakeTools) { f.ClaudeMCP = "failed" }, "1.26.1", JoinBlocked,
 			"claude_mcp", "does not have aimem's MCP server running", ""},
-		{"skill missing", []string{"aimem", "claude"}, nil, "-", JoinBlocked, "claude_skills", "SHA256SUMS", ""},
+		{"skill missing", []string{"aimem", "claude"}, nil, "-", JoinBlocked, "claude_skills", "skills install -p <project> --tool claude", ""},
 		{"ai-skills unrecorded", []string{"aimem", "claude"}, nil, "", JoinRestartRequired, "", "", "the ai-skills version is unknown"},
-		{"ai-skills below", []string{"aimem", "claude"}, nil, "1.20.0", JoinBlocked, "ai-skills_below", "SHA256SUMS", ""},
+		{"ai-skills below", []string{"aimem", "claude"}, nil, "1.20.0", JoinBlocked, "ai-skills_below",
+			"ai-skills 1.26.1 or later is required (found 1.20.0)", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -830,30 +833,6 @@ func TestCheckOutcomes(t *testing.T) {
 				t.Fatalf("%s", raw)
 			}
 		})
-	}
-}
-
-// The ai-skills instruction installs from the verified release archive,
-// never from the unverified one-line boot.
-func TestSkillsInstructionVerifies(t *testing.T) {
-	set, _ := LoadSupported()
-	defer func(g string) { goos = g }(goos)
-	for _, g := range []string{"linux", "darwin", "windows"} {
-		goos = g
-		s := skillsInstruction(set.Components["ai-skills"], "", []string{"oh-code-review"})
-		if !strings.Contains(s, "SHA256SUMS") || strings.Contains(s, "boot.") || !strings.Contains(s, "aiskills-1.38.0") {
-			t.Fatalf("%s: %s", g, s)
-		}
-		// The archive may store install.sh without its execute bit (ai-skills
-		// 1.33.13 does), so the installer runs through bash.
-		if g != "windows" && (!strings.Contains(s, "&& bash ./src/install.sh --user -t claude -s oh-code-review`") ||
-			strings.Contains(s, "&& ./src/install.sh")) {
-			t.Fatalf("%s: the installer does not run through bash: %s", g, s)
-		}
-		a := aimemInstruction(supportedComponent{Ranges: []versionRange{{Min: "0.7.4", Tested: "0.7.4"}}}, "")
-		if !strings.Contains(a, "AIMEM_VERSION") || !strings.Contains(a, "v0.7.4") {
-			t.Fatalf("%s: %s", g, a)
-		}
 	}
 }
 

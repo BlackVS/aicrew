@@ -60,6 +60,11 @@ type JoinOptions struct {
 	Trust        tlstrust.Binding
 	AimemHub     string // aimem's name for the hub; required on the first run
 	AimemCommand string // recorded when set
+	// ExportBase is AICREW_BASE at the join: the aiforge export this
+	// machine installs from. Recorded in agent.json as export_base, so that
+	// check names the export in its instructions; a run without it keeps
+	// the recorded one.
+	ExportBase string
 	// Terminal reports whether standard input is a terminal, where the code
 	// is read at a hidden prompt.
 	Terminal bool
@@ -228,6 +233,11 @@ func Join(ctx context.Context, o JoinOptions, deps JoinDeps) (JoinReport, error)
 	if j.doc.linked() {
 		fmt.Fprintf(j.deps.Out, "This home is linked to agent %s in team %s: refreshing its files and checking its clients.\n",
 			str(j.doc.aicrew, "agent_id"), str(j.doc.aicrew, "team_id"))
+		if j.recordBase() {
+			if err := j.doc.write(j.o.Home); err != nil {
+				return JoinReport{}, err
+			}
+		}
 		return j.prepare(ctx, false)
 	}
 	return j.join(ctx)
@@ -241,6 +251,13 @@ func (j *joiner) options() error {
 	}
 	if !labelShape.MatchString(o.Label) {
 		return errors.New("--label must be 1 to 32 lowercase letters, digits and '-'")
+	}
+	if o.ExportBase != "" {
+		b, err := checkBase(o.ExportBase)
+		if err != nil {
+			return fmt.Errorf("%v: set it to the aiforge export the installers read, or unset it", err)
+		}
+		o.ExportBase = b
 	}
 	if o.AimemHub != "" && !aimemHubShape.MatchString(o.AimemHub) {
 		return errors.New("--aimem-hub must be an aimem hub name: lowercase letters, digits and '-'")
@@ -380,6 +397,21 @@ func (j *joiner) bind() {
 	if o.AimemCommand != "" {
 		d.set(d.aicrew, "aimem_command", o.AimemCommand)
 	}
+	j.recordBase()
+}
+
+// recordBase records the run's export base in agent.json when it differs
+// from the recorded one, and reports whether it changed the document. It
+// sits at the top level, not in the aicrew section, which admits no
+// unknown field: an older aicrew-agent still reads the home.
+func (j *joiner) recordBase() bool {
+	if j.o.ExportBase == "" || j.o.ExportBase == str(j.doc.top, "export_base") {
+		return false
+	}
+	j.doc.set(j.doc.top, "export_base", j.o.ExportBase)
+	fmt.Fprintf(j.deps.Out, "Recorded the aiforge export %s (%s): aicrew-agent check names it in what it tells you to install.\n",
+		j.o.ExportBase, BaseEnv)
+	return true
 }
 
 // credentialInstruction tells how to provision the home's aimem

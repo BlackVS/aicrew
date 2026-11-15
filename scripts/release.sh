@@ -14,8 +14,9 @@
 #       the tag only a dry run proceeds, on main's tip.
 #   release.sh build vX.Y.Z
 #       dist/: aicrewd, aicrew and aicrew-agent for every platform, stamped
-#       with the tag, LICENSE, and SHA256SUMS over every other asset; then
-#       the stamped version is checked on the built aicrew-agent.
+#       with the tag, LICENSE, the installer scripts, and SHA256SUMS over
+#       every other asset; then the stamped version is checked on the built
+#       aicrew-agent.
 #   release.sh notes vX.Y.Z [--dry-run]
 #       release_notes.md: the tag's CHANGELOG section and the license notice.
 #   release.sh publish vX.Y.Z
@@ -30,6 +31,10 @@ dry=false; [ "$flag" = --dry-run ] && dry=true
 # The release matrix (DEVELOPMENT, "Releasing").
 binaries="aicrewd aicrew aicrew-agent"
 platforms="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64"
+# The installer scripts, published as assets under these names: an aiforge
+# export copies them, and its script looks for exactly these three
+# (internal/installer checks the list).
+installers="install-aicrewd.sh boot.sh boot.ps1"
 
 sha256() { if command -v sha256sum >/dev/null; then sha256sum -- "$@"; else shasum -a 256 -- "$@"; fi; }
 
@@ -83,7 +88,7 @@ check)
   # The one-liners fetch the installers from this tag, and each installs
   # the release it pins: a tag one does not pin would install another
   # release. boot.ps1 is checked out with CRLF (.gitattributes).
-  for f in install-aicrewd.sh boot.sh boot.ps1; do
+  for f in $installers; do
     [ -f "$f" ] || continue
     case "$f" in
       *.ps1) tr -d '\r' < "$f" | grep -qx "\$release = '$TAG'" && continue ;;
@@ -108,6 +113,9 @@ build)
     done
   done
   cp LICENSE dist/LICENSE
+  # The installers as they are checked out at the tag: boot.ps1 with CRLF
+  # (.gitattributes), the shell scripts with LF.
+  for f in $installers; do cp "$f" "dist/$f"; done
   # One format on every host: "HASH  NAME" (a binary-mode "*NAME" from some
   # sha256sum builds is written as text mode; the bytes hashed are the same).
   (cd dist && sha256 $(ls | grep -vx SHA256SUMS) | sed 's/ \*/  /' > SHA256SUMS)

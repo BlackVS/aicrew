@@ -153,11 +153,36 @@ its own forge, for example `https://forge.example.com/ops/aiforge-instance.git`.
   aiskills release archive with its sums, the template processes, and the
   one-liner installers. The directory is copied into the closed network.
 - **Every installer** (aimem's `boot.sh` and `install-hub.sh`, aicrew's
-  `boot.sh` and `install-aicrewd.sh`, aiskills' `boot.sh`) accepts a local
-  base directory or an internal URL instead of github.com, through
-  `AIMEM_BASE`, `AICREW_BASE` and `AI_SKILLS_BASE` (a file path such as
-  `/media/aiforge-export` or `https://files.example.com/aiforge`), verifies
-  the same `SHA256SUMS`, and prints no GitHub URL in its output.
+  `boot.sh`, `boot.ps1` and `install-aicrewd.sh`, aiskills' `boot.sh` and
+  `boot.ps1`) accepts the export's root instead of github.com: a local
+  directory such as `/media/aiforge-export` (on Windows also a drive or
+  `\\host\share` path) or an internal `https://` URL, never plain http.
+  aimem reads it from `AIMEM_BASE`, aicrew from `AICREW_BASE`, and aiskills
+  from `AI_SKILLS_EXPORT`, because `AI_SKILLS_BASE` already names a Gitea
+  mirror there and keeps that meaning (decided 2026-11-14). Each verifies
+  the release's own `SHA256SUMS`, contacts no other host and prints no
+  GitHub URL.
+- **The export layout, format 1** (decided 2026-11-14; aiskills documents
+  it as the format's owner, in its `docs/aiforge-export.md`):
+  - `<root>/MANIFEST`: the line `aiforge-export 1`, then one
+    `<product> <tag>` line per product. A reader takes its own product's
+    line, ignores lines it does not know, and stops on a format number it
+    does not know.
+  - `<root>/README.txt`: the install commands with this export's tags
+    filled in; it names no github.com.
+  - `<root>/<product>/<tag>/`: the release's assets under their published
+    names, unchanged, with the release's own `SHA256SUMS`. A release
+    therefore publishes as assets every file its installers read, the
+    installers themselves included (aicrew from the first release after
+    0.10.0). A subset of the platform binaries is allowed; `SHA256SUMS`
+    stays whole.
+  - The version is an explicit version variable, else the MANIFEST's tag.
+    A missing MANIFEST, an unknown format, a missing product line, a
+    missing file or a sum that does not match stops the install with the
+    path, and nothing is installed. Several tags of a product may sit side
+    by side.
+  - Integrity is the release's own `SHA256SUMS`; the export adds no
+    signature of its own.
 - **The imports take archives:** `aimem process select --from-archive FILE`
   and `aimem skills import --from-archive FILE` beside the git form.
 - **Members install skills from the hub:** `aicrew-agent check` and the

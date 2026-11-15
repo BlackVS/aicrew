@@ -12,6 +12,50 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+### Added
+
+- **The installers install from an aiforge export** (01a1cf0c-3471). In a
+  closed network, `boot.sh`, `boot.ps1` and `install-aicrewd.sh` read the
+  release from an aiforge export named by `AICREW_BASE`, format 1: an
+  absolute directory (on Windows also a drive or `\\host\share` path) or an
+  internal `https://` URL, never plain http.
+  - The release is the one the export's `MANIFEST` names, unless
+    `AICREW_VERSION` names one.
+  - Every file comes from `<base>/aicrew/<tag>/` and is checked against
+    that directory's `SHA256SUMS` on its whole name.
+  - A missing file is reported as an incomplete export, with its path,
+    and nothing is installed.
+  - No other host is contacted and no forge URL is printed.
+
+  The documented Windows form copies `boot.ps1` from the share to a local
+  folder and runs the copy. README and docs/DEVELOPMENT.md, "Installing in
+  a closed network", show each closed-network form beside the connected
+  one, and docs/DESIGN-INSTANCE-BOUNDARY.md, D4, carries the layout.
+- **The release publishes its installers.** `boot.sh`, `boot.ps1` and
+  `install-aicrewd.sh` are release assets under these names, listed in
+  `SHA256SUMS`, as the aiforge export expects. Releases up to 0.10.0 do
+  not publish them and cannot be installed from an export; their
+  connected one-liners are unchanged.
+
+### Changed
+
+- **Downloads stay on https.** Every https download of the installers,
+  from github.com or from an export, follows redirects only to https.
+  curl runs with `--proto =https --proto-redir =https`, and `boot.ps1`
+  follows each redirect itself, one hop at a time: Windows PowerShell 5.1
+  would otherwise follow a redirect to http.
+- **A cut download runs nothing.** `boot.sh` and `install-aicrewd.sh` run
+  from `main`, called on their last line, and `boot.ps1` is one script
+  block closed on its last line. `boot.sh` needs curl only for an https
+  source.
+
+### Docs
+
+- docs/DEVELOPMENT.md: `store_path` is an absolute path. The installer
+  writes it absolute and an upgrade keeps it as written, so only a
+  configuration written by hand could hold a relative one, which aicrewd
+  and the installer's backup would resolve from different directories.
+
 ## [0.10.0] - 2026-11-14
 
 Twenty pull requests since 0.9.0 (#229 to #248). The coordinator no longer

@@ -4,8 +4,16 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.10.0/install-aicrewd.sh | bash
 #
+# In a closed network, from an aiforge export (a local directory, or an
+# internal https server holding the same files; README.txt in the export
+# has the commands with its tags filled in):
+#
+#   AICREW_BASE=/media/aiforge-export bash /media/aiforge-export/aicrew/<tag>/install-aicrewd.sh
+#   curl -fsSL https://files.example.com/aiforge/aicrew/<tag>/install-aicrewd.sh | AICREW_BASE=https://files.example.com/aiforge bash
+#
 # What it does: installs the release this script was fetched from (RELEASE
-# below), aicrewd and aicrew, checked against that release's SHA256SUMS,
+# below), or the one the export's MANIFEST names, aicrewd and aicrew,
+# checked against that release's SHA256SUMS,
 # under the service user (with systemd linger) in ~/aicrew/{bin,etc,lib},
 # writes the systemd user unit aicrewd.service when there is none, starts
 # it and waits until it answers health at that version.
@@ -49,59 +57,125 @@
 #   AICREW_CRED_DIR=                upgrade over a 0.2.0 configuration: the
 #                                   directory aimem identity peer provision
 #                                   wrote (the hub ID and the team credentials)
-#   AICREW_REPO=owner/name          install from a fork
+#   AICREW_BASE=/abs/dir|https://...  install from an aiforge export instead
+#                                   of github.com: <base>/MANIFEST names the
+#                                   release, <base>/aicrew/<tag>/ holds its
+#                                   files; no other host is contacted
+#   AICREW_REPO=owner/name          install from a fork (not read with AICREW_BASE)
 #   AICREW_VERSION=vX.Y.Z           install another release than RELEASE
+#                                   (or than the export's MANIFEST names)
 #   AICREW_UPGRADE_WAIT=30          seconds to wait for health after a start
 #   AICREW_PREBUILT_DIR=            a directory holding aicrewd and aicrew to
 #                                   install instead of downloading
 #   AICREW_NO_SERVICE=1             install-only: no systemd unit, linger or
 #                                   start; a supervisor of your choice runs it
+#
+# Everything runs from main, called on the last line, so a download cut
+# short runs nothing.
 set -euo pipefail
 
 # The release this script installs. Bumped together with the CHANGELOG
 # when a release is cut (internal/installer checks they agree).
 RELEASE=v0.10.0
 
-[ "$(id -u)" = 0 ] || { echo "ERROR: run as root." >&2; exit 1; }
-NO_SERVICE=""
-[ "${AICREW_NO_SERVICE:-}" != 1 ] || NO_SERVICE=1
-SYSTEMD_TOOLS="systemctl loginctl"
-[ -z "$NO_SERVICE" ] || SYSTEMD_TOOLS=""
-for t in curl runuser sha256sum $SYSTEMD_TOOLS; do
-  command -v "$t" >/dev/null 2>&1 || { echo "ERROR: '$t' is required." >&2; exit 1; }
-done
-
-HUB_USER=${AICREW_HUB_USER:-sessiond}
-REPO=${AICREW_REPO:-BlackVS/aicrew}
-TAG=${AICREW_VERSION:-$RELEASE}
-DL_BASE="https://github.com/$REPO/releases/download/$TAG"
-ARCH=amd64
-case "$(uname -m)" in aarch64|arm64) ARCH=arm64 ;; esac
-
-# BEGIN download
-# fetch_release dir: put the release's aicrewd and aicrew into dir, each
-# checked against the release's SHA256SUMS; any failure removes them and
-# fails. DL_BASE is the release's download URL and ARCH its architecture.
-fetch_release() {
-  local dir=$1 a want got
-  curl -fsSL "$DL_BASE/SHA256SUMS" -o "$dir/SHA256SUMS" || {
-    echo "ERROR: cannot fetch the SHA256SUMS of $DL_BASE; refusing unverified binaries." >&2
-    return 1
-  }
-  for a in aicrewd aicrew; do
-    curl -fsSL "$DL_BASE/$a-linux-$ARCH" -o "$dir/$a" || {
-      echo "ERROR: cannot fetch $a-linux-$ARCH from $DL_BASE." >&2
-      rm -f "$dir/aicrewd" "$dir/aicrew"
-      return 1
-    }
-    want=$(awk -v n="$a-linux-$ARCH" '$2==n || $2=="*"n {print $1}' "$dir/SHA256SUMS")
-    got=$(sha256sum "$dir/$a" | awk '{print $1}')
-    if [ -z "$want" ] || [ "$want" != "$got" ]; then
-      echo "ERROR: checksum mismatch for $a-linux-$ARCH (want ${want:-absent}, got $got); refusing it." >&2
-      rm -f "$dir/aicrewd" "$dir/aicrew"
+# BEGIN release-source
+# Where the release's files come from, and their verification. boot.sh
+# and install-aicrewd.sh carry the same block (internal/installer keeps
+# the copies equal). Connected: the release download URL on github.com. With
+# AICREW_BASE: an aiforge export, format 1 - <base>/MANIFEST is
+# `aiforge-export 1` and then `<product> <tag>` lines, <base>/aicrew/<tag>/
+# holds the release's assets under their published names with its
+# SHA256SUMS. An explicit AICREW_VERSION wins over MANIFEST. An https
+# download follows redirects only to https. Each function prints its
+# refusal and returns 1, and the caller then stops with nothing changed.
+sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | awk '{print $1}'; }
+refuse() { echo "ERROR: $*. Nothing changed." >&2; return 1; }
+get_file() { # source dest: an https download, or a copy of a local file
+  case "$1" in
+    https://*) curl -fsSL --proto =https --proto-redir =https "$1" -o "$2" ;;
+    *) [ -f "$1" ] && cp "$1" "$2" ;;
+  esac
+}
+valid_tag() {
+  case "$1" in
+    v[0-9]*) case "$1" in */* | *..* | *[!A-Za-z0-9._+-]*) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
+}
+# resolve_source: TAG and SRC (the directory or URL holding the release's
+# files) from AICREW_BASE, AICREW_VERSION, AICREW_REPO and RELEASE.
+resolve_source() {
+  local base manifest format
+  if [ -z "${AICREW_BASE:-}" ]; then
+    TAG=${AICREW_VERSION:-$RELEASE}
+    valid_tag "$TAG" || { refuse "'$TAG' is not a release tag"; return 1; }
+    SRC="https://github.com/${AICREW_REPO:-BlackVS/aicrew}/releases/download/$TAG"
+    return 0
+  fi
+  [ -z "${AICREW_PREBUILT_DIR:-}" ] ||
+    { refuse "AICREW_BASE and AICREW_PREBUILT_DIR exclude each other; set one"; return 1; }
+  case "$AICREW_BASE" in
+    https://* | /*) ;;
+    *) refuse "AICREW_BASE must be an absolute directory or an https:// URL, not '$AICREW_BASE'"; return 1 ;;
+  esac
+  base=${AICREW_BASE%/}
+  if [ -n "${AICREW_VERSION:-}" ]; then
+    TAG=$AICREW_VERSION
+  else
+    manifest=$(mktemp)
+    if ! get_file "$base/MANIFEST" "$manifest"; then
+      rm -f "$manifest"
+      refuse "$base/MANIFEST is missing (or set AICREW_VERSION to name the release)"
       return 1
     fi
-    echo "checksum OK: $a-linux-$ARCH"
+    format=$(head -n 1 "$manifest" | tr -d '\r')
+    TAG=$(tail -n +2 "$manifest" | tr -d '\r' | awk '$1 == "aicrew" { print $2; exit }')
+    rm -f "$manifest"
+    [ "$format" = "aiforge-export 1" ] ||
+      { refuse "$base/MANIFEST is '$format', not a format this installer reads (aiforge-export 1)"; return 1; }
+    [ -n "$TAG" ] || { refuse "$base/MANIFEST names no aicrew release"; return 1; }
+  fi
+  valid_tag "$TAG" || { refuse "'$TAG' is not a release tag"; return 1; }
+  SRC="$base/aicrew/$TAG"
+}
+# fetch_missing path: the refusal for a file that could not be read.
+fetch_missing() {
+  if [ -n "${AICREW_BASE:-}" ]; then
+    refuse "$1 is missing: the export holds an incomplete copy of aicrew $TAG"
+  else
+    refuse "cannot fetch $1"
+  fi
+}
+# fetch_sums dir: the release's SHA256SUMS into dir.
+fetch_sums() {
+  get_file "$SRC/SHA256SUMS" "$1/SHA256SUMS" || { fetch_missing "$SRC/SHA256SUMS"; return 1; }
+}
+# fetch_verified dir asset dest: the asset into dir/dest, checked against
+# dir/SHA256SUMS on its whole name; a mismatch removes it.
+fetch_verified() {
+  local want got
+  get_file "$SRC/$2" "$1/$3" || { rm -f "$1/$3"; fetch_missing "$SRC/$2"; return 1; }
+  want=$(awk -v a="$2" '$2 == a || $2 == "*"a { print $1; exit }' "$1/SHA256SUMS")
+  got=$(sha256 "$1/$3")
+  if [ -z "$want" ] || [ "$want" != "$got" ]; then
+    rm -f "$1/$3"
+    refuse "checksum mismatch for $SRC/$2 (want ${want:-absent}, got $got); refusing it"
+    return 1
+  fi
+  echo "checksum OK: $2"
+}
+# END release-source
+
+# BEGIN download
+# fetch_release dir: put the release's aicrewd and aicrew from $SRC
+# (release-source) into dir, each checked against the release's
+# SHA256SUMS; any failure removes them and fails. ARCH is the release's
+# architecture.
+fetch_release() {
+  local dir=$1 a
+  fetch_sums "$dir" || return 1
+  for a in aicrewd aicrew; do
+    fetch_verified "$dir" "$a-linux-$ARCH" "$a" || { rm -f "$dir/aicrewd" "$dir/aicrew"; return 1; }
   done
   chmod 755 "$dir/aicrewd" "$dir/aicrew"
 }
@@ -283,122 +357,137 @@ rollback() {
 }
 # END upgrade-transaction
 
-# --- preflight: refuse before any change ------------------------------------
-HOME_DIR=""
-if id "$HUB_USER" >/dev/null 2>&1; then HOME_DIR=$(getent passwd "$HUB_USER" | cut -d: -f6); fi
-ROOT_DIR=${HOME_DIR:-/nonexistent}/aicrew
-AICREWD_BIN="$ROOT_DIR/bin/aicrewd"
-AICREW_BIN="$ROOT_DIR/bin/aicrew"
-CONFIG="$ROOT_DIR/etc/aicrewd.json"
-UPGRADE=""
-[ -n "$HOME_DIR" ] && [ -e "$AICREWD_BIN" ] && UPGRADE=1
+main() {
+  [ "$(id -u)" = 0 ] || { echo "ERROR: run as root." >&2; exit 1; }
+  NO_SERVICE=""
+  [ "${AICREW_NO_SERVICE:-}" != 1 ] || NO_SERVICE=1
+  SYSTEMD_TOOLS="systemctl loginctl"
+  [ -z "$NO_SERVICE" ] || SYSTEMD_TOOLS=""
+  for t in curl runuser sha256sum $SYSTEMD_TOOLS; do
+    command -v "$t" >/dev/null 2>&1 || { echo "ERROR: '$t' is required." >&2; exit 1; }
+  done
 
-SERVICE_ID=${AICREW_SERVICE_ID:-aicrew-service}
-LISTEN=${AICREW_LISTEN:-0.0.0.0:9443}
-if [ -z "$UPGRADE" ] && [ ! -e "$CONFIG" ]; then
-  printf '%s' "$SERVICE_ID" | grep -Eqx '[A-Za-z0-9._:-]{1,128}' && [ "$SERVICE_ID" != . ] && [ "$SERVICE_ID" != .. ] ||
-    { echo "ERROR: AICREW_SERVICE_ID must be 1 to 128 characters from [A-Za-z0-9._:-]; nothing was changed." >&2; exit 1; }
-  printf '%s' "$LISTEN" | grep -Eqx '[][A-Za-z0-9.:-]*:[0-9]{1,5}' ||
-    { echo "ERROR: AICREW_LISTEN must be host:port; nothing was changed." >&2; exit 1; }
-  if [ -n "${AICREW_TLS_CERT:-}${AICREW_TLS_KEY:-}" ]; then
-    for f in "${AICREW_TLS_CERT:-}" "${AICREW_TLS_KEY:-}"; do
-      case "$f" in /*) ;; *) echo "ERROR: AICREW_TLS_CERT and AICREW_TLS_KEY must both name a file by its absolute path; nothing was changed." >&2; exit 1 ;; esac
-      case "$f" in *'"'*|*\\*) echo "ERROR: $f: a path with a quote or a backslash is refused; nothing was changed." >&2; exit 1 ;; esac
-      [ -f "$f" ] || { echo "ERROR: $f does not exist; nothing was changed." >&2; exit 1; }
-      [ -z "$HOME_DIR" ] || runuser -u "$HUB_USER" -- test -r "$f" ||
-        { echo "ERROR: $HUB_USER cannot read $f; nothing was changed." >&2; exit 1; }
-    done
-  elif [ -n "${AICREW_DOMAIN:-}" ]; then
-    printf '%s' "$AICREW_DOMAIN" | grep -Eqx '[A-Za-z0-9.-]{1,253}' ||
-      { echo "ERROR: AICREW_DOMAIN must be a host name; nothing was changed." >&2; exit 1; }
-    command -v openssl >/dev/null 2>&1 || { echo "ERROR: 'openssl' is required for AICREW_DOMAIN." >&2; exit 1; }
-  else
-    {
-      echo "ERROR: a fresh install needs a TLS certificate; nothing was changed. Either"
-      echo "  AICREW_TLS_CERT=/path/cert.pem AICREW_TLS_KEY=/path/key.pem (existing files the service user can read), or"
-      echo "  AICREW_DOMAIN=aicrew.example.com to generate a self-signed certificate."
-    } >&2
-    exit 1
-  fi
-fi
+  HUB_USER=${AICREW_HUB_USER:-sessiond}
+  resolve_source || exit 1
+  ARCH=amd64
+  case "$(uname -m)" in aarch64|arm64) ARCH=arm64 ;; esac
 
-STAGED=$(mktemp -d)
-trap 'rm -rf "$STAGED"' EXIT
-chmod 755 "$STAGED"
-if [ -n "${AICREW_PREBUILT_DIR:-}" ]; then
-  install -m 755 "$AICREW_PREBUILT_DIR/aicrewd" "$STAGED/aicrewd"
-  install -m 755 "$AICREW_PREBUILT_DIR/aicrew" "$STAGED/aicrew"
-  echo "installing the prebuilt binaries from $AICREW_PREBUILT_DIR"
-else
-  echo "installing aicrewd and aicrew $TAG (linux-$ARCH)"
-  fetch_release "$STAGED"
-fi
-
-as_user() { runuser -u "$HUB_USER" -- "$@"; }
-sysuser() { runuser -u "$HUB_USER" -- env "XDG_RUNTIME_DIR=/run/user/$(id -u "$HUB_USER")" systemctl --user "$@"; }
-crew_as() { runuser -u "$HUB_USER" -- env "HOME=$HOME_DIR" "$@"; }
-svc_stop() { sysuser stop aicrewd.service 2>/dev/null || true; }
-# A release that failed to start leaves the unit failed, and past its start
-# limit systemd refuses to start it again until the failure is reset.
-svc_start() { sysuser reset-failed aicrewd.service 2>/dev/null || true; sysuser restart aicrewd.service || true; }
-if [ -n "$NO_SERVICE" ]; then
-  svc_stop() { :; }
-  svc_start() { :; }
-fi
-
-if [ -n "$UPGRADE" ]; then
-  preflight_upgrade "$STAGED/aicrewd" || exit 1
-  [ -n "$NO_SERVICE" ] || sysuser daemon-reload
-  upgrade_txn "$STAGED" || exit 1
-  exit 0
-fi
-
-# --- fresh install ----------------------------------------------------------
-if [ -z "$HOME_DIR" ]; then
-  useradd -m -s /bin/bash "$HUB_USER"
-  echo "created user $HUB_USER"
-  HOME_DIR=$(getent passwd "$HUB_USER" | cut -d: -f6)
-  ROOT_DIR=$HOME_DIR/aicrew
+  # --- preflight: refuse before any change ------------------------------------
+  HOME_DIR=""
+  if id "$HUB_USER" >/dev/null 2>&1; then HOME_DIR=$(getent passwd "$HUB_USER" | cut -d: -f6); fi
+  ROOT_DIR=${HOME_DIR:-/nonexistent}/aicrew
   AICREWD_BIN="$ROOT_DIR/bin/aicrewd"
   AICREW_BIN="$ROOT_DIR/bin/aicrew"
   CONFIG="$ROOT_DIR/etc/aicrewd.json"
-fi
-if [ -z "$NO_SERVICE" ]; then
-  loginctl enable-linger "$HUB_USER"
-  # Linger starts the user's systemd instance; systemctl --user needs its bus.
-  for _ in $(seq 1 20); do [ -S "/run/user/$(id -u "$HUB_USER")/bus" ] && break; sleep 0.5; done
-  as_user mkdir -p "$HOME_DIR/.config/systemd/user"
-fi
-as_user mkdir -p "$ROOT_DIR/bin" "$ROOT_DIR/etc" "$ROOT_DIR/lib"
-as_user chmod 700 "$ROOT_DIR/etc" "$ROOT_DIR/lib"
-as_user cp "$STAGED/aicrewd" "$AICREWD_BIN"
-as_user cp "$STAGED/aicrew" "$AICREW_BIN"
-as_user chmod 755 "$AICREWD_BIN" "$AICREW_BIN"
+  UPGRADE=""
+  [ -n "$HOME_DIR" ] && [ -e "$AICREWD_BIN" ] && UPGRADE=1
 
-if [ -e "$CONFIG" ]; then
-  echo "kept existing $CONFIG"
-else
-  if [ -n "${AICREW_TLS_CERT:-}" ]; then
-    as_user test -r "$AICREW_TLS_CERT" && as_user test -r "$AICREW_TLS_KEY" ||
-      { echo "ERROR: $HUB_USER cannot read $AICREW_TLS_CERT or $AICREW_TLS_KEY." >&2; exit 1; }
-    CERT=$AICREW_TLS_CERT KEY=$AICREW_TLS_KEY
-  else
-    CERT=$ROOT_DIR/etc/tls/cert.pem KEY=$ROOT_DIR/etc/tls/key.pem
-    if [ ! -f "$CERT" ]; then
-      as_user mkdir -p "$ROOT_DIR/etc/tls"
-      as_user openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-        -keyout "$KEY" -out "$CERT" -days 3650 -nodes -subj "/CN=$AICREW_DOMAIN" \
-        -addext "subjectAltName=DNS:$AICREW_DOMAIN" 2>/dev/null
-      as_user chmod 600 "$KEY"
-      echo "generated a self-signed certificate for $AICREW_DOMAIN in $ROOT_DIR/etc/tls (replace it with a real one when enrolled)"
+  SERVICE_ID=${AICREW_SERVICE_ID:-aicrew-service}
+  LISTEN=${AICREW_LISTEN:-0.0.0.0:9443}
+  if [ -z "$UPGRADE" ] && [ ! -e "$CONFIG" ]; then
+    printf '%s' "$SERVICE_ID" | grep -Eqx '[A-Za-z0-9._:-]{1,128}' && [ "$SERVICE_ID" != . ] && [ "$SERVICE_ID" != .. ] ||
+      { echo "ERROR: AICREW_SERVICE_ID must be 1 to 128 characters from [A-Za-z0-9._:-]; nothing was changed." >&2; exit 1; }
+    printf '%s' "$LISTEN" | grep -Eqx '[][A-Za-z0-9.:-]*:[0-9]{1,5}' ||
+      { echo "ERROR: AICREW_LISTEN must be host:port; nothing was changed." >&2; exit 1; }
+    if [ -n "${AICREW_TLS_CERT:-}${AICREW_TLS_KEY:-}" ]; then
+      for f in "${AICREW_TLS_CERT:-}" "${AICREW_TLS_KEY:-}"; do
+        case "$f" in /*) ;; *) echo "ERROR: AICREW_TLS_CERT and AICREW_TLS_KEY must both name a file by its absolute path; nothing was changed." >&2; exit 1 ;; esac
+        case "$f" in *'"'*|*\\*) echo "ERROR: $f: a path with a quote or a backslash is refused; nothing was changed." >&2; exit 1 ;; esac
+        [ -f "$f" ] || { echo "ERROR: $f does not exist; nothing was changed." >&2; exit 1; }
+        [ -z "$HOME_DIR" ] || runuser -u "$HUB_USER" -- test -r "$f" ||
+          { echo "ERROR: $HUB_USER cannot read $f; nothing was changed." >&2; exit 1; }
+      done
+    elif [ -n "${AICREW_DOMAIN:-}" ]; then
+      printf '%s' "$AICREW_DOMAIN" | grep -Eqx '[A-Za-z0-9.-]{1,253}' ||
+        { echo "ERROR: AICREW_DOMAIN must be a host name; nothing was changed." >&2; exit 1; }
+      command -v openssl >/dev/null 2>&1 || { echo "ERROR: 'openssl' is required for AICREW_DOMAIN." >&2; exit 1; }
+    else
+      {
+        echo "ERROR: a fresh install needs a TLS certificate; nothing was changed. Either"
+        echo "  AICREW_TLS_CERT=/path/cert.pem AICREW_TLS_KEY=/path/key.pem (existing files the service user can read), or"
+        echo "  AICREW_DOMAIN=aicrew.example.com to generate a self-signed certificate."
+      } >&2
+      exit 1
     fi
   fi
-  if [ -e "$ROOT_DIR/etc/operator.token" ]; then
-    echo "kept existing $ROOT_DIR/etc/operator.token"
+
+  STAGED=$(mktemp -d)
+  trap 'rm -rf "$STAGED"' EXIT
+  chmod 755 "$STAGED"
+  if [ -n "${AICREW_PREBUILT_DIR:-}" ]; then
+    install -m 755 "$AICREW_PREBUILT_DIR/aicrewd" "$STAGED/aicrewd"
+    install -m 755 "$AICREW_PREBUILT_DIR/aicrew" "$STAGED/aicrew"
+    echo "installing the prebuilt binaries from $AICREW_PREBUILT_DIR"
   else
-    as_user "$AICREW_BIN" operator-token new --output "$ROOT_DIR/etc/operator.token"
+    echo "installing aicrewd and aicrew $TAG (linux-$ARCH) from $SRC"
+    fetch_release "$STAGED"
   fi
-  as_user sh -c 'umask 077 && cat > "$1"' sh "$CONFIG" <<EOF
+
+  as_user() { runuser -u "$HUB_USER" -- "$@"; }
+  sysuser() { runuser -u "$HUB_USER" -- env "XDG_RUNTIME_DIR=/run/user/$(id -u "$HUB_USER")" systemctl --user "$@"; }
+  crew_as() { runuser -u "$HUB_USER" -- env "HOME=$HOME_DIR" "$@"; }
+  svc_stop() { sysuser stop aicrewd.service 2>/dev/null || true; }
+  # A release that failed to start leaves the unit failed, and past its start
+  # limit systemd refuses to start it again until the failure is reset.
+  svc_start() { sysuser reset-failed aicrewd.service 2>/dev/null || true; sysuser restart aicrewd.service || true; }
+  if [ -n "$NO_SERVICE" ]; then
+    svc_stop() { :; }
+    svc_start() { :; }
+  fi
+
+  if [ -n "$UPGRADE" ]; then
+    preflight_upgrade "$STAGED/aicrewd" || exit 1
+    [ -n "$NO_SERVICE" ] || sysuser daemon-reload
+    upgrade_txn "$STAGED" || exit 1
+    exit 0
+  fi
+
+  # --- fresh install ----------------------------------------------------------
+  if [ -z "$HOME_DIR" ]; then
+    useradd -m -s /bin/bash "$HUB_USER"
+    echo "created user $HUB_USER"
+    HOME_DIR=$(getent passwd "$HUB_USER" | cut -d: -f6)
+    ROOT_DIR=$HOME_DIR/aicrew
+    AICREWD_BIN="$ROOT_DIR/bin/aicrewd"
+    AICREW_BIN="$ROOT_DIR/bin/aicrew"
+    CONFIG="$ROOT_DIR/etc/aicrewd.json"
+  fi
+  if [ -z "$NO_SERVICE" ]; then
+    loginctl enable-linger "$HUB_USER"
+    # Linger starts the user's systemd instance; systemctl --user needs its bus.
+    for _ in $(seq 1 20); do [ -S "/run/user/$(id -u "$HUB_USER")/bus" ] && break; sleep 0.5; done
+    as_user mkdir -p "$HOME_DIR/.config/systemd/user"
+  fi
+  as_user mkdir -p "$ROOT_DIR/bin" "$ROOT_DIR/etc" "$ROOT_DIR/lib"
+  as_user chmod 700 "$ROOT_DIR/etc" "$ROOT_DIR/lib"
+  as_user cp "$STAGED/aicrewd" "$AICREWD_BIN"
+  as_user cp "$STAGED/aicrew" "$AICREW_BIN"
+  as_user chmod 755 "$AICREWD_BIN" "$AICREW_BIN"
+
+  if [ -e "$CONFIG" ]; then
+    echo "kept existing $CONFIG"
+  else
+    if [ -n "${AICREW_TLS_CERT:-}" ]; then
+      as_user test -r "$AICREW_TLS_CERT" && as_user test -r "$AICREW_TLS_KEY" ||
+        { echo "ERROR: $HUB_USER cannot read $AICREW_TLS_CERT or $AICREW_TLS_KEY." >&2; exit 1; }
+      CERT=$AICREW_TLS_CERT KEY=$AICREW_TLS_KEY
+    else
+      CERT=$ROOT_DIR/etc/tls/cert.pem KEY=$ROOT_DIR/etc/tls/key.pem
+      if [ ! -f "$CERT" ]; then
+        as_user mkdir -p "$ROOT_DIR/etc/tls"
+        as_user openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+          -keyout "$KEY" -out "$CERT" -days 3650 -nodes -subj "/CN=$AICREW_DOMAIN" \
+          -addext "subjectAltName=DNS:$AICREW_DOMAIN" 2>/dev/null
+        as_user chmod 600 "$KEY"
+        echo "generated a self-signed certificate for $AICREW_DOMAIN in $ROOT_DIR/etc/tls (replace it with a real one when enrolled)"
+      fi
+    fi
+    if [ -e "$ROOT_DIR/etc/operator.token" ]; then
+      echo "kept existing $ROOT_DIR/etc/operator.token"
+    else
+      as_user "$AICREW_BIN" operator-token new --output "$ROOT_DIR/etc/operator.token"
+    fi
+    as_user sh -c 'umask 077 && cat > "$1"' sh "$CONFIG" <<EOF
 {
   "store_path": "$ROOT_DIR/lib/aicrew.db",
   "listen_addr": "$LISTEN",
@@ -408,23 +497,23 @@ else
   "operator_token_file": "$ROOT_DIR/etc/operator.token"
 }
 EOF
-  crew_as "$AICREWD_BIN" config show -config "$CONFIG" >/dev/null
-  echo "wrote $CONFIG"
-fi
+    crew_as "$AICREWD_BIN" config show -config "$CONFIG" >/dev/null
+    echo "wrote $CONFIG"
+  fi
 
-SHOW=$(crew_as "$AICREWD_BIN" config show -config "$CONFIG")
-LISTEN=$(cfg_field "$SHOW" listen_addr)
-SERVICE_ID=$(cfg_field "$SHOW" service_id)
-RESTART="systemctl --user restart aicrewd"
-UNIT=$HOME_DIR/.config/systemd/user/aicrewd.service
-if [ -n "$NO_SERVICE" ]; then
-  RESTART="through your supervisor, with the command above"
-  echo "aicrewd is installed and not started (AICREW_NO_SERVICE=1). Have a supervisor run, as $HUB_USER:"
-  echo "  $AICREWD_BIN -config $CONFIG"
-elif [ -e "$UNIT" ]; then
-  echo "kept existing $UNIT"
-else
-  as_user sh -c 'cat > "$1"' sh "$UNIT" <<'EOF'
+  SHOW=$(crew_as "$AICREWD_BIN" config show -config "$CONFIG")
+  LISTEN=$(cfg_field "$SHOW" listen_addr)
+  SERVICE_ID=$(cfg_field "$SHOW" service_id)
+  RESTART="systemctl --user restart aicrewd"
+  UNIT=$HOME_DIR/.config/systemd/user/aicrewd.service
+  if [ -n "$NO_SERVICE" ]; then
+    RESTART="through your supervisor, with the command above"
+    echo "aicrewd is installed and not started (AICREW_NO_SERVICE=1). Have a supervisor run, as $HUB_USER:"
+    echo "  $AICREWD_BIN -config $CONFIG"
+  elif [ -e "$UNIT" ]; then
+    echo "kept existing $UNIT"
+  else
+    as_user sh -c 'cat > "$1"' sh "$UNIT" <<'EOF'
 [Unit]
 Description=aicrewd - aicrew service
 
@@ -437,21 +526,21 @@ UMask=0077
 [Install]
 WantedBy=default.target
 EOF
-  echo "wrote $UNIT"
-fi
-if [ -z "$NO_SERVICE" ]; then
-  sysuser daemon-reload
-  sysuser enable aicrewd.service >/dev/null 2>&1 || true
-  svc_start
-  WANT=$(crew_as "$AICREWD_BIN" -version | awk '{print $2}')
-  if txn_wait "$LISTEN" "$WANT"; then
-    echo "aicrewd is up: $WANT on $LISTEN"
-  else
-    echo "WARNING: aicrewd did not answer health at $WANT; inspect: journalctl --user -u aicrewd (as $HUB_USER)" >&2
-    exit 1
+    echo "wrote $UNIT"
   fi
-fi
-cat <<EOF
+  if [ -z "$NO_SERVICE" ]; then
+    sysuser daemon-reload
+    sysuser enable aicrewd.service >/dev/null 2>&1 || true
+    svc_start
+    WANT=$(crew_as "$AICREWD_BIN" -version | awk '{print $2}')
+    if txn_wait "$LISTEN" "$WANT"; then
+      echo "aicrewd is up: $WANT on $LISTEN"
+    else
+      echo "WARNING: aicrewd did not answer health at $WANT; inspect: journalctl --user -u aicrewd (as $HUB_USER)" >&2
+      exit 1
+    fi
+  fi
+  cat <<EOF
 
 Still to supply (this installer writes no credential):
   1. On the aimem hub, provision this service ($SERVICE_ID) into a directory DIR:
@@ -463,3 +552,6 @@ Still to supply (this installer writes no credential):
   3. Restart aicrewd: $RESTART
 The operator credential is $ROOT_DIR/etc/operator.token (aicrew --token-file); it was never shown.
 EOF
+}
+
+main "$@"

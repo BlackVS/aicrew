@@ -259,6 +259,13 @@ an address; it holds no secret itself:
 }
 ```
 
+- `store_path` is an absolute path. aicrewd resolves a relative one from
+  the service's working directory, while `install-aicrewd.sh` backs the
+  store up from the path as written, from root's working directory, so
+  a configuration written by hand names the store absolutely. The
+  installer writes `~/aicrew/lib/aicrew.db` with the service user's home in
+  full, only on a fresh install, and an upgrade, `aicrewd config migrate`
+  and `aicrew hub add` keep the path as written.
 - `service_id` is the ID aimem registers this service under (identity.v1:
   1 to 128 characters from `[A-Za-z0-9._:-]`).
 - `operator_token_file` is required. It holds the operator credential that
@@ -448,7 +455,8 @@ binaries, editing `aicrewd.json` and restarting. The script installs the
 release it pins (`RELEASE=`), which is the release of the tag it is fetched
 from. It downloads `aicrewd` and `aicrew` for the host's architecture and
 refuses either one unless its SHA-256 is listed in the release's
-`SHA256SUMS`.
+`SHA256SUMS`. In a closed network it installs from an aiforge export
+instead ("Installing in a closed network", below).
 
 Everything goes under the service user (`AICREW_HUB_USER`, default
 `sessiond`, the aimem hub's user), with systemd linger:
@@ -505,6 +513,8 @@ The script then:
    failed run left is kept as `<store>.failed-<UTC time>`.
 
 Other knobs:
+- `AICREW_BASE`: install from an aiforge export ("Installing in a closed
+  network", below);
 - `AICREW_VERSION`: install a release other than the pinned one;
 - `AICREW_REPO`: install from a fork;
 - `AICREW_PREBUILT_DIR`: a directory holding `aicrewd` and `aicrew` to
@@ -1868,7 +1878,8 @@ fetched from:
 - it downloads `aicrew-agent` and `aicrew` for the platform, and refuses
   them unless each one's SHA-256 is listed in the release's `SHA256SUMS`.
   Both are checked before either is installed, so a mismatch installs
-  neither;
+  neither. In a closed network it reads them from an aiforge export
+  instead ("Installing in a closed network", below);
 - it installs them as `~/.local/bin/aicrew-agent` and `~/.local/bin/aicrew`
   on Linux and macOS, or as `aicrew-agent.exe` and `aicrew.exe` in
   `%LOCALAPPDATA%\aicrew\bin` on Windows, where the directory is added
@@ -1904,6 +1915,8 @@ fails starts them again on the binary that stayed.
 Knobs:
 - `AICREW_BIN_DIR`: another bin directory, for example to upgrade a binary
   where it already is;
+- `AICREW_BASE`: install from an aiforge export ("Installing in a closed
+  network", below);
 - `AICREW_VERSION`: another release than the pinned one;
 - `AICREW_REPO`: a fork;
 - `AICREW_NO_SERVICE=1`: leave the members' services alone;
@@ -1921,6 +1934,109 @@ a fresh install of both binaries, the same release, a refused hash for
 either binary (installing neither), and an upgrade while the old agent is
 running. The release check refuses a tag either script does
 not pin.
+
+### Installing in a closed network: `AICREW_BASE`
+
+A closed network installs from an aiforge export instead of github.com:
+one directory that aiskills' `aiforge-export` writes on a connected
+machine, copied into the network or served from an internal https server
+(docs/DESIGN-INSTANCE-BOUNDARY.md, D4). The export's `README.txt` prints
+the commands below with its tags filled in.
+
+The layout, format 1:
+- `<base>/MANIFEST`: the line `aiforge-export 1`, then one `<product> <tag>`
+  line per product (`aimem`, `aicrew`, `aiskills`). An installer reads its
+  own product's line and ignores the others, and stops on any other format
+  number.
+- `<base>/aicrew/<tag>/`: the release's assets under their published names,
+  unchanged, with the release's own `SHA256SUMS`. From the first release
+  after 0.10.0 these include the three installers, `boot.sh`, `boot.ps1`
+  and `install-aicrewd.sh`. 0.10.0 and earlier releases do not publish
+  them, so they cannot be installed from an export (the export script
+  refuses them).
+
+`AICREW_BASE` names the base: an absolute directory, on Windows also a
+drive path or a `\\host\share` path, or an `https://` URL. Plain http and a
+relative path are refused. With a base:
+- the release is the one `MANIFEST` names; an explicit `AICREW_VERSION`
+  wins, and then `MANIFEST` is not read;
+- every file the installer reads comes from `<base>/aicrew/<tag>/` and is
+  checked against that directory's `SHA256SUMS` on its whole name before
+  it is used. A missing file is reported with its path as an incomplete
+  export, a mismatch with both hashes, and nothing is installed;
+- no other host is contacted, no forge URL is printed, and `AICREW_REPO`
+  is not read. `AICREW_BASE` and `AICREW_PREBUILT_DIR` together are refused.
+
+From a directory, run the installer in place:
+
+```sh
+AICREW_BASE=/media/aiforge-export bash /media/aiforge-export/aicrew/<tag>/boot.sh
+# on the hub host, as root:
+AICREW_BASE=/media/aiforge-export bash /media/aiforge-export/aicrew/<tag>/install-aicrewd.sh
+```
+
+From an internal https server, pipe it from the server as the connected
+one-liner does:
+
+```sh
+curl -fsSL https://files.example.com/aiforge/aicrew/<tag>/boot.sh | AICREW_BASE=https://files.example.com/aiforge bash
+curl -fsSL https://files.example.com/aiforge/aicrew/<tag>/install-aicrewd.sh | AICREW_BASE=https://files.example.com/aiforge bash
+```
+
+On Windows, from a directory or a share, copy `boot.ps1` to a local folder
+and run the copy. Windows PowerShell refuses an unsigned script read
+straight from a share named by a dotted host name or an address under
+`RemoteSigned`. The copy is made inside the `try` with
+`-ErrorAction Stop`, so a failed copy never runs one an earlier run left
+behind, and the `finally` removes the variable and the copy:
+
+```powershell
+$env:AICREW_BASE = '\\files\aiforge-export'
+$boot = Join-Path $env:TEMP 'aicrew-boot.ps1'
+try {
+  Copy-Item -LiteralPath "$env:AICREW_BASE\aicrew\<tag>\boot.ps1" -Destination $boot -ErrorAction Stop
+  powershell -NoProfile -ExecutionPolicy RemoteSigned -File $boot
+} finally { Remove-Item Env:AICREW_BASE; Remove-Item $boot -ErrorAction SilentlyContinue }
+```
+
+From an https server, in an open PowerShell window:
+
+```powershell
+$env:AICREW_BASE = 'https://files.example.com/aiforge'
+irm https://files.example.com/aiforge/aicrew/<tag>/boot.ps1 | iex
+Remove-Item Env:AICREW_BASE
+```
+
+An https export behind a private CA needs that CA trusted where the
+installer runs: the system store on Linux, which curl reads, and the
+machine's Trusted Root store on Windows, which PowerShell reads.
+
+**Downloads stay on https.** Every https download, from github.com or from
+an https base, follows redirects only to https: curl runs with
+`--proto =https --proto-redir =https`, and `boot.ps1` follows each redirect
+itself, one hop at a time, refusing a hop that is not https. Windows
+PowerShell 5.1 would otherwise follow a redirect from https to http and
+download over http (observed by aimem; PowerShell 7 refuses one).
+
+**A cut download runs nothing.** `boot.sh` and `install-aicrewd.sh` run
+from `main`, called on their last line; `boot.ps1` is one script block
+closed on its last line, which a cut download leaves unparsed.
+
+**Releases before the installers were assets.** The installers read only
+`SHA256SUMS` and the binaries, which every release since 0.1.0 publishes,
+so a connected install of an older release is unchanged: its own
+one-liner at its tag, or the current script with `AICREW_VERSION`.
+
+`internal/installer` runs each installer against a temporary export, from
+a directory and from a local https server: the release `MANIFEST` names, an
+explicit version, a missing file, a mismatch, a file listed only under a
+longer name, a missing or unknown `MANIFEST`, plain http and a relative
+base. With a directory it checks that no host is contacted (a `curl` that
+records being run) and no forge URL is printed. Over https it follows a
+relative https redirect and refuses one to http with nothing requested
+over http. It also runs every line prefix of the two shell scripts under
+`bash -x` and checks that it runs nothing, and parses every line prefix
+of `boot.ps1`.
 
 For development, build it from source:
 

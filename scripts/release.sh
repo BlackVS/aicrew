@@ -5,8 +5,9 @@
 #   release.sh resolve
 #       From the event (GITHUB_EVENT_NAME, GITHUB_REF, GITHUB_REF_NAME,
 #       INPUT_TAG, INPUT_DRY_RUN), append TAG and DRY_RUN to $GITHUB_ENV and
-#       $GITHUB_OUTPUT. A pushed tag publishes; a manual run must come from
-#       main and publishes an existing tag, or with dry_run builds only.
+#       $GITHUB_OUTPUT. A pushed tag publishes. A manual run that publishes
+#       must start from the tag it names (the attestation names the ref the
+#       run started from); a dry run builds only and must start from main.
 #   release.sh check vX.Y.Z [--dry-run]
 #       Check out the commit to release. The tag must be vX.Y.Z on a commit
 #       reachable from main, CHANGELOG.md must have its section, and the
@@ -19,9 +20,9 @@
 #       aicrew-agent.
 #   release.sh notes vX.Y.Z [--dry-run]
 #       release_notes.md: the tag's CHANGELOG section and the license notice.
-#   release.sh publish vX.Y.Z
-#       Create the release from dist/ and release_notes.md with the gh CLI;
-#       it is marked latest only when no higher vX.Y.Z tag exists.
+#
+# The workflow's publish job checks, attests and publishes dist/ without a
+# checkout, so no step of this script runs with a token that writes.
 set -euo pipefail
 cmd=${1:-}; TAG=${2:-}; flag=${3:-}
 fail() { echo "::error::$*" >&2; exit 1; }
@@ -51,11 +52,17 @@ section() {
 if [ "$cmd" = resolve ]; then
   out() { for f in "${GITHUB_ENV:-/dev/null}" "${GITHUB_OUTPUT:-/dev/null}"; do printf '%s\n' "$@" >> "$f"; done; }
   if [ "${GITHUB_EVENT_NAME:-}" = workflow_dispatch ]; then
-    # A manual run uses main's own workflow and script, never a branch's.
-    [ "${GITHUB_REF:-}" = refs/heads/main ] || fail "run the release workflow from main, not ${GITHUB_REF:-}"
+    # The workflow's ref job refuses the same runs before any build; this
+    # is the rule again where the tests can reach it.
     t=${INPUT_TAG:-}; [[ $t = v* ]] || t=v$t
     [[ $t =~ $semver ]] || fail "tag '${INPUT_TAG:-}' is not vMAJOR.MINOR.PATCH"
     d=false; [ "${INPUT_DRY_RUN:-}" = true ] && d=true
+    if $d; then
+      [ "${GITHUB_REF:-}" = refs/heads/main ] || fail "a dry run starts from main, not ${GITHUB_REF:-}"
+    else
+      [ "${GITHUB_REF:-}" = "refs/tags/$t" ] ||
+        fail "a run that publishes starts from its tag refs/tags/$t, not ${GITHUB_REF:-}: gh workflow run release.yml --ref $t -f tag=$t -f dry_run=false"
+    fi
     out "TAG=$t" "DRY_RUN=$d"
   else
     t=${GITHUB_REF_NAME:-}
@@ -142,22 +149,15 @@ notes)
     printf '%s\n\n---\n\n' "$body"
     echo "Verify a download against SHA256SUMS before running it; DEVELOPMENT.md, \"Releasing\", has the command for each platform."
     echo
+    echo "SHA256SUMS checks that a download arrived intact. To check that this repository's release workflow built it: \`gh attestation verify <file> --repo BlackVS/aicrew\`."
+    echo
     echo "Licensed under the PolyForm Noncommercial License 1.0.0: https://polyformproject.org/licenses/noncommercial/1.0.0"
     echo
     grep '^Required Notice:' LICENSE
   } > release_notes.md
   echo "release notes written ($(wc -l < release_notes.md) lines)"
   ;;
-publish)
-  [ -f release_notes.md ] && [ -f dist/SHA256SUMS ] || fail "run build and notes first"
-  git fetch -q --force origin '+refs/tags/*:refs/tags/*'
-  newest=$(git tag -l 'v[0-9]*' | grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n 1)
-  latest=false; [ "$newest" = "$TAG" ] && latest=true
-  echo "newest tag on origin: $newest; $TAG latest: $latest"
-  gh release create "$TAG" dist/* --verify-tag --latest="$latest" \
-    --title "aicrew ${TAG#v}" --notes-file release_notes.md
-  ;;
 *)
-  fail "usage: release.sh resolve | check|build|notes|publish vX.Y.Z [--dry-run]"
+  fail "usage: release.sh resolve | check|build|notes vX.Y.Z [--dry-run]"
   ;;
 esac

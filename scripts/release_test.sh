@@ -85,14 +85,21 @@ grep -q '^- first release$' release_notes.md && grep -q '^Required Notice: Copyr
 expect fail "notes without a section"         "has no [1.1.0] section"    -- bash "$script" notes v1.1.0
 expect ok   "notes without a section, dry run" ""                         -- bash "$script" notes v1.1.0 --dry-run
 
-# resolve: a pushed tag publishes; a manual run comes from main.
+# resolve: a pushed tag publishes; a manual run that publishes starts from
+# its tag, and a dry run from main.
 envf=$work/env
 expect ok   "resolve a pushed tag"            "" -- env GITHUB_ENV="$envf" GITHUB_EVENT_NAME=push GITHUB_REF_NAME=v1.2.3 bash "$script" resolve
 grep -qx 'TAG=v1.2.3' "$envf" && grep -qx 'DRY_RUN=false' "$envf" && pass=$((pass + 1)) || { echo "FAIL resolve output: $(cat "$envf")"; failures=$((failures + 1)); }
 : > "$envf"
 expect ok   "resolve a manual dry run"        "" -- env GITHUB_ENV="$envf" GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main INPUT_TAG=1.2.3 INPUT_DRY_RUN=true bash "$script" resolve
 grep -qx 'TAG=v1.2.3' "$envf" && grep -qx 'DRY_RUN=true' "$envf" && pass=$((pass + 1)) || { echo "FAIL resolve dispatch output: $(cat "$envf")"; failures=$((failures + 1)); }
-expect fail "a manual run off main"           "from main" -- env GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/side INPUT_TAG=v1.2.3 bash "$script" resolve
+expect fail "a dry run off main"             "a dry run starts from main" -- env GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/side INPUT_TAG=v1.2.3 INPUT_DRY_RUN=true bash "$script" resolve
+expect fail "a dry run from the tag"          "a dry run starts from main" -- env GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/tags/v1.2.3 INPUT_TAG=v1.2.3 INPUT_DRY_RUN=true bash "$script" resolve
+: > "$envf"
+expect ok   "resolve a manual run from its tag" "" -- env GITHUB_ENV="$envf" GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/tags/v1.2.3 INPUT_TAG=1.2.3 INPUT_DRY_RUN=false bash "$script" resolve
+grep -qx 'TAG=v1.2.3' "$envf" && grep -qx 'DRY_RUN=false' "$envf" && pass=$((pass + 1)) || { echo "FAIL resolve publishing dispatch output: $(cat "$envf")"; failures=$((failures + 1)); }
+expect fail "a publishing run from main"      "starts from its tag refs/tags/v1.2.3" -- env GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main INPUT_TAG=v1.2.3 INPUT_DRY_RUN=false bash "$script" resolve
+expect fail "a publishing run from another tag" "starts from its tag refs/tags/v1.2.3" -- env GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/tags/v1.2.2 INPUT_TAG=v1.2.3 INPUT_DRY_RUN=false bash "$script" resolve
 expect fail "a bad manual tag"                "is not vMAJOR.MINOR.PATCH" -- env GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main INPUT_TAG='v1.2.3
 x' bash "$script" resolve
 expect fail "a pushed non-release tag"        "is not vMAJOR.MINOR.PATCH" -- env GITHUB_EVENT_NAME=push GITHUB_REF_NAME=latest bash "$script" resolve

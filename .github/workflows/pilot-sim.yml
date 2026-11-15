@@ -28,7 +28,12 @@ concurrency:
     !(contains(github.event.pull_request.labels.*.name, 'pilot-sim') &&
     (github.event.action != 'labeled' || github.event.label.name == 'pilot-sim')) &&
     format('-skipped-{0}', github.run_id) || '' }}
-  cancel-in-progress: false
+  # A new push to a pull request cancels the run for its older head, which
+  # would otherwise hold the new head's run pending behind it. Only pull
+  # request runs cancel: a run on main, a nightly run and a run by hand
+  # have refs of their own and are never cancelled, and a skipped event's
+  # group is its own run's, so it cancels nothing.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   pilot-sim:

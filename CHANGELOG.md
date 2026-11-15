@@ -60,6 +60,33 @@ section, and the release workflow refuses a tag that has none
   the check then gives aimem's export form with no forge host (an
   `AICREW_BASE` in the check's environment overrides it). Without a base,
   the line adds that a closed network installs from its export.
+- **CI: a superseded simulation run is cancelled.** A new push to a pull
+  request cancels that pull request's running pilot simulation and
+  real-aimem runs for the older head, which used to hold the new head's
+  run pending. Runs on main, nightly runs and runs by hand are never
+  cancelled.
+
+### Security
+
+- **Releases are attested** (01a1e030-565a). The release's publish job
+  attests the build provenance of every published file, `SHA256SUMS`
+  included, with `actions/attest-build-provenance`. `SHA256SUMS` shows that
+  a download arrived intact; `gh attestation verify <file> --repo
+  BlackVS/aicrew` shows that this repository's release workflow built it.
+  - The tests and the build run with read access only. The publish job
+    holds the write permissions and the OIDC token, checks out nothing and
+    runs no code from the repository. Before it attests, it checks that
+    `SHA256SUMS` and the notes are the ones the build job produced, that
+    every file matches `SHA256SUMS`, and that the files are exactly the
+    ones listed.
+  - The attestation names the ref the run started from, so a manual run
+    that publishes must start from its tag
+    (`gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z -f dry_run=false`);
+    one started from a branch is refused before anything is built. A dry
+    run still starts from main.
+- **Actions stay pinned.** Every action is named by a full commit SHA with
+  its version in a comment; dependabot now keeps the pins, and a test
+  fails on an unpinned action or a checkout that keeps the token.
 
 ### Docs
 

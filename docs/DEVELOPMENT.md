@@ -3413,16 +3413,41 @@ every pull request (`release-build`), publishing nothing.
    - the release already exists.
 
    It then runs the tests, builds and checks that the built `aicrew-agent`
-   reports exactly the tag. A second job tests and builds the same commit on
-   macOS and checks its sums there; a Mac-only failure stops the release.
-   A separate job, the only one allowed to write, publishes with the `gh`
-   CLI once both have passed. A release is marked latest only when no
-   higher tag exists.
-4. Running the workflow by hand from main republishes an **existing** tag (after
-   a failed run). It never creates a tag. With `dry_run` (the default) it
-   checks, builds, stamps and prints the sums of a tag that need not exist yet,
-   main's tip standing in, and publishes nothing. Use it before the first real
-   tag.
+   reports exactly the tag, in a job with read access only. A second job
+   tests and builds the same commit on macOS and checks its sums there; a
+   Mac-only failure stops the release.
+   The publish job runs once both have passed. It is the only job allowed
+   to write and to sign, and it checks out nothing and runs no code from
+   the repository. It checks the files the build job handed over:
+   - `SHA256SUMS` and the notes are the ones the build job produced (their
+     digests travel as job outputs, apart from the files);
+   - every file matches its line in `SHA256SUMS`;
+   - the files are exactly the ones `SHA256SUMS` lists.
+
+   It then attests the build provenance of every file, `SHA256SUMS`
+   included, and creates the release with all of them in one step. A
+   release is marked latest only when no higher tag exists.
+4. Running the workflow by hand republishes an **existing** tag after a
+   failed run. It never creates a tag. The attestation names the ref the run
+   started from, so a run that publishes starts from its tag, and a run
+   started from anything else is refused before any runner builds:
+
+   ```sh
+   gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z -f dry_run=false
+   ```
+
+   Such a run executes the workflow and `scripts/release.sh` as they are at
+   the tag. A workflow broken at a tag is fixed in the next version, not
+   by republishing the tag from main.
+
+   With `dry_run` (the default), started from main, it checks, builds,
+   stamps and prints the sums of a tag that need not exist yet, main's tip
+   standing in, and attests and publishes nothing. Use it before the first
+   real tag:
+
+   ```sh
+   gh workflow run release.yml --ref main -f tag=vX.Y.Z
+   ```
 
    Its sums are not the release's, by design. Go stamps the main module's
    version from the VCS tag (`go version -m` shows
@@ -3470,3 +3495,22 @@ and reports it with `aicrewd -version`, `aicrew version` and
   ```
 
 Then the binary's version must be the release's.
+
+**Verifying who built it.** `SHA256SUMS` shows that a download arrived as
+published, not who built it: one who could change an asset could change the
+sums with it. Every published file, `SHA256SUMS` included, carries a build
+attestation that ties it to this repository's release workflow at the run's
+tag. GitHub's CLI checks it:
+
+```sh
+gh attestation verify aicrew-agent-linux-amd64 --repo BlackVS/aicrew
+gh attestation verify SHA256SUMS --repo BlackVS/aicrew
+```
+
+Releases up to 0.10.0 carry no attestation.
+
+**The workflows' actions.** Every action in `.github/workflows` is named by
+a full commit SHA with its version in a comment, and every checkout sets
+`persist-credentials: false`; dependabot updates the pins in that form, and
+`internal/installer/release_workflow_test.go` fails on an action named any
+other way or a checkout that keeps the token.

@@ -327,3 +327,43 @@ func TestAimemExportFormRuns(t *testing.T) {
 		}
 	}
 }
+
+// The skills command runs as printed when the home's aimem is a path that
+// needs quoting: a space and an apostrophe, under PowerShell on Windows and
+// bash elsewhere.
+func TestSkillsCommandRunsWithAQuotedAimemPath(t *testing.T) {
+	withGOOS(t, runtime.GOOS)
+	dir := filepath.Join(t.TempDir(), "my tool's")
+	os.MkdirAll(dir, 0o755)
+	seen := filepath.Join(t.TempDir(), "seen.txt")
+	exe := filepath.Join(dir, "aimem")
+	if runtime.GOOS == "windows" {
+		exe += ".cmd"
+		os.WriteFile(exe, []byte("@echo %* > \"%SEEN%\"\r\n"), 0o755)
+	} else {
+		os.WriteFile(exe, []byte("#!/bin/sh\nprintf '%s ' \"$@\" > \"$SEEN\"\n"), 0o755)
+	}
+	set, _ := LoadSupported()
+	s := skillsInstruction(set.Components["ai-skills"], "", []string{"oh-code-review"}, t.TempDir(), exe)
+	m := regexp.MustCompile("`([^`]*skills install[^`]*)`").FindStringSubmatch(s)
+	if m == nil {
+		t.Fatalf("no command: %s", s)
+	}
+	line := strings.ReplaceAll(m[1], "<project>", "proj")
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		ps, err := exec.LookPath("powershell.exe")
+		if err != nil {
+			t.Skip("no Windows PowerShell")
+		}
+		cmd = exec.Command(ps, "-NoProfile", "-NonInteractive", "-Command", line)
+	} else {
+		cmd = exec.Command("bash", "-c", line)
+	}
+	cmd.Env = append(os.Environ(), "SEEN="+seen)
+	out, err := cmd.CombinedOutput()
+	got, _ := os.ReadFile(seen)
+	if err != nil || strings.TrimSpace(string(got)) != "skills install -p proj --tool claude" {
+		t.Fatalf("%s ran %q: %v\n%s", line, got, err, out)
+	}
+}

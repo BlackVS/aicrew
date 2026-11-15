@@ -147,7 +147,20 @@ func skillsInstruction(c supportedComponent, found string, skills []string, home
 		"the home's variables AIMEM_STATE_DIR=%s and AIMEM_SOCKET=%s, run `%s skills install -p <project> --tool claude`, "+
 		"where <project> is the aimem project your team works on (the hub serves the version the project's process "+
 		"pins); then rerun `aicrew-agent check`", need, strings.Join(skills, ", "), skillsInstallAimem,
-		absHome(home), AimemDir(home), AimemSocket(home), quoteArg(aimem))
+		absHome(home), AimemDir(home), AimemSocket(home), commandWord(aimem))
+}
+
+// commandWord is an executable as the first word of a command the reader
+// pastes: bare when it needs no quoting, else quoted, and on Windows called
+// with &, since PowerShell reads a quoted path alone as a string.
+func commandWord(exe string) string {
+	if !strings.ContainsAny(exe, " \t'\"$`&;|()<>{}#") {
+		return exe
+	}
+	if goos == "windows" {
+		return "& " + psQuote(exe)
+	}
+	return shQuote(exe)
 }
 
 // clientInstruction names the npm package of the tested release.

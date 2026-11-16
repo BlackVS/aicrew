@@ -7,7 +7,8 @@ name: Release
 #
 # Run by hand, it either republishes an existing tag after a failed run, or,
 # with dry_run (the default), builds, stamps and prints the sums of a tag
-# that need not exist yet and publishes nothing:
+# that need not exist yet, hands the files over and checks them as a
+# release would, and attests and publishes nothing:
 #   gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z -f dry_run=false
 #   gh workflow run release.yml --ref main -f tag=vX.Y.Z
 # A run that publishes starts from its tag, so it runs this workflow and
@@ -18,10 +19,13 @@ name: Release
 # The jobs: `ref` refuses a manual run from the wrong ref before any runner
 # builds. `build` checks out the commit, runs the guards, the tests and the
 # build with read access only, and hands dist/ and the notes over as an
-# artifact. `macos` tests and builds the same commit on macOS. `publish`
-# holds the write permissions and the OIDC token the attestation is signed
-# with; it checks out nothing and runs no code from the repository: it
-# checks the files build handed over, attests them and creates the release.
+# artifact. `macos` tests and builds the same commit on macOS. `check`, in
+# every run and without any permission, downloads that artifact and runs
+# the publishing job's checks on it, so a dry run proves the hand-over and
+# the checks. `publish` holds the write permissions and the OIDC token the
+# attestation is signed with; it checks out nothing and runs no code from
+# the repository: it runs the same checks (the same steps, by YAML alias)
+# on its own download, attests the files and creates the release.
 on:
   push:
     tags: ['v*']
@@ -129,8 +133,9 @@ jobs:
         run: |
           echo "sums=$(sha256sum dist/SHA256SUMS | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "notes=$(sha256sum release_notes.md | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - name: Keep the assets for the publishing job
-        if: env.DRY_RUN != 'true'
+      # In every run, a dry run included: the check job takes the artifact
+      # over the same way the publishing job does.
+      - name: Keep the assets for the checking and publishing jobs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release
@@ -176,23 +181,25 @@ jobs:
         working-directory: dist
         run: shasum -a 256 --ignore-missing -c SHA256SUMS
 
-  publish:
-    needs: [ref, build, macos]
-    if: needs.build.outputs.dry_run != 'true'
+  # The publishing job's checks, in every run: a dry run downloads the
+  # artifact and runs them here, so the hand-over and the checks are proven
+  # before a tag needs them. The steps are defined once, under the anchors
+  # below; publish runs the same steps by their aliases on its own download.
+  # This job holds no permission: it writes nothing and signs nothing, and
+  # the download within the run needs no token.
+  check:
+    needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write       # create the release and upload its assets
-      id-token: write       # the OIDC token the attestation is signed with
-      attestations: write   # store the attestation
-    env:
-      TAG: ${{ needs.build.outputs.tag }}
+    permissions: {}
     steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - &download
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release
           path: release
 
-      - name: SHA256SUMS and the notes are the ones build produced
+      - &digests
+        name: SHA256SUMS and the notes are the ones build produced
         working-directory: release
         env:
           SUMS: ${{ needs.build.outputs.sums }}
@@ -201,7 +208,8 @@ jobs:
           printf '%s  %s\n' "$SUMS" dist/SHA256SUMS "$NOTES" release_notes.md | sha256sum -c --strict - ||
             { echo "::error::the downloaded SHA256SUMS or release notes are not the ones the build job produced"; exit 1; }
 
-      - name: Every file matches SHA256SUMS
+      - &sums
+        name: Every file matches SHA256SUMS
         working-directory: release/dist
         run: |
           sha256sum -c --strict SHA256SUMS ||
@@ -210,7 +218,8 @@ jobs:
       # sha256sum -c ignores a file SHA256SUMS does not list, and the steps
       # below attest and publish dist/*: the files must be exactly the ones
       # listed, nothing more and nothing missing.
-      - name: dist holds exactly the files SHA256SUMS lists
+      - &exact
+        name: dist holds exactly the files SHA256SUMS lists
         working-directory: release/dist
         run: |
           listed=$(sed 's/^[0-9a-f]\{64\} [ *]//' SHA256SUMS | LC_ALL=C sort)
@@ -221,6 +230,27 @@ jobs:
             echo "present but not listed:"; comm -13 <(printf '%s\n' "$listed") <(printf '%s\n' "$present")
             exit 1
           fi
+
+  # Only a run that publishes reaches this job. It holds the write
+  # permissions and the OIDC token the attestation is signed with; it checks
+  # out nothing and runs no code from the repository. It attests the files
+  # it holds, so it downloads them itself and runs the check job's steps
+  # again on them, by alias: the same definition, never a copy.
+  publish:
+    needs: [ref, build, macos, check]
+    if: needs.build.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # create the release and upload its assets
+      id-token: write       # the OIDC token the attestation is signed with
+      attestations: write   # store the attestation
+    env:
+      TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - *download
+      - *digests
+      - *sums
+      - *exact
 
       # SHA256SUMS proves a download arrived intact, not who built it: one
       # who could change an asset could change the sums with it. The

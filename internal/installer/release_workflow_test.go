@@ -32,13 +32,15 @@ func workflowJobs(t *testing.T, wf string) map[string]string {
 }
 
 // stepRun is the `run: |` script of the step named name in job, dedented.
+// The step may carry a YAML anchor (`- &digests` on the line above its
+// name).
 func stepRun(t *testing.T, job, name string) string {
 	t.Helper()
-	i := strings.Index(job, "      - name: "+name+"\n")
-	if i < 0 {
+	m := regexp.MustCompile(`(?m)^      - (?:&[A-Za-z0-9_-]+\n        )?name: ` + regexp.QuoteMeta(name) + `\n`).FindStringIndex(job)
+	if m == nil {
 		t.Fatalf("no step %q", name)
 	}
-	step := job[i+len("      - name: "+name+"\n"):]
+	step := job[m[1]:]
 	if j := strings.Index(step, "\n      - "); j >= 0 {
 		step = step[:j+1]
 	}
@@ -71,9 +73,9 @@ func TestReleaseBuildsWithoutWritePermissions(t *testing.T) {
 		t.Error("the workflow's own permissions are not contents: read alone")
 	}
 	jobs := releaseJobs(t)
-	ref, build, macos, publish := jobs["ref"], jobs["build"], jobs["macos"], jobs["publish"]
-	if ref == "" || build == "" || macos == "" || publish == "" {
-		t.Fatalf("release.yml lacks one of the jobs ref, build, macos, publish: %v", jobs)
+	ref, build, macos, check, publish := jobs["ref"], jobs["build"], jobs["macos"], jobs["check"], jobs["publish"]
+	if ref == "" || build == "" || macos == "" || check == "" || publish == "" {
+		t.Fatalf("release.yml lacks one of the jobs ref, build, macos, check, publish: %v", jobs)
 	}
 	perms := regexp.MustCompile(`(?m)^    permissions:(.*)\n((?:      .*\n)*)`)
 	permsOf := func(job string) string {
@@ -89,6 +91,11 @@ func TestReleaseBuildsWithoutWritePermissions(t *testing.T) {
 	if got := permsOf(ref); got != "{}" {
 		t.Errorf("the ref job's permissions are %q, not {}", got)
 	}
+	// The job that checks the hand-over in every run, a dry run included,
+	// holds no permission at all: it can write nothing and sign nothing.
+	if got := permsOf(check); got != "{}" {
+		t.Errorf("the check job's permissions are %q, not {}", got)
+	}
 	// macos inherits the workflow's contents: read.
 	if got := permsOf(macos); got != "(inherited)" && got != "contents: read" {
 		t.Errorf("the macos job's permissions are %q", got)
@@ -97,7 +104,7 @@ func TestReleaseBuildsWithoutWritePermissions(t *testing.T) {
 		if !strings.Contains(permsOf(publish), p) {
 			t.Errorf("the publish job lacks %q", p)
 		}
-		for name, job := range map[string]string{"ref": ref, "build": build, "macos": macos} {
+		for name, job := range map[string]string{"ref": ref, "build": build, "macos": macos, "check": check} {
 			if strings.Contains(job, strings.SplitN(p, ":", 2)[0]+": write") {
 				t.Errorf("the %s job holds %q", name, p)
 			}
@@ -109,9 +116,19 @@ func TestReleaseBuildsWithoutWritePermissions(t *testing.T) {
 		}
 	}
 	for _, s := range []string{"actions/checkout@", "setup-go", "release.sh", "scripts/", "go test", "go build", "go run"} {
-		if strings.Contains(publish, s) {
-			t.Errorf("the publish job runs %q: it must check out and run nothing from the repository", s)
+		for name, job := range map[string]string{"publish": publish, "check": check} {
+			if strings.Contains(job, s) {
+				t.Errorf("the %s job runs %q: it must check out and run nothing from the repository", name, s)
+			}
 		}
+	}
+	// The artifact is handed over in every run, so a dry run uploads it too.
+	upload := regexp.MustCompile(`(?m)^      - name: Keep the assets[^\n]*\n((?:        .*\n)*)`).FindStringSubmatch(build)
+	if upload == nil || !strings.Contains(upload[1], "uses: actions/upload-artifact@") {
+		t.Fatal("the build job has no upload step named \"Keep the assets ...\"")
+	}
+	if strings.Contains(upload[1], "        if:") {
+		t.Errorf("the upload step has a condition; a dry run must hand the files over too:\n%s", upload[1])
 	}
 	_, body, _ := strings.Cut(wf, "\njobs:\n")
 	if first := regexp.MustCompile(`(?m)^  ([A-Za-z0-9_-]+):\n`).FindStringSubmatch(body); first == nil || first[1] != "ref" {
@@ -122,19 +139,46 @@ func TestReleaseBuildsWithoutWritePermissions(t *testing.T) {
 	}
 	// needs alone is not enough: an `if: always() && ...` would publish
 	// after a failed job it needs. The condition stays exactly this.
-	if !strings.Contains(publish, "    needs: [ref, build, macos]\n    if: needs.build.outputs.dry_run != 'true'\n") {
-		t.Error("the publish job does not wait for the guard, the build and macOS, or its if is not exactly the dry-run condition")
+	if !strings.Contains(publish, "    needs: [ref, build, macos, check]\n    if: needs.build.outputs.dry_run != 'true'\n") {
+		t.Error("the publish job does not wait for the guard, the build, macOS and the check, or its if is not exactly the dry-run condition")
 	}
-	// The checks run in this order, before anything is attested or published.
-	order := []string{
-		"actions/download-artifact@",
-		"- name: SHA256SUMS and the notes are the ones build produced",
-		"- name: Every file matches SHA256SUMS",
-		"- name: dist holds exactly the files SHA256SUMS lists",
-		"actions/attest-build-provenance@",
-		"gh release create",
+	// The check job runs in every run: no condition of its own.
+	if !strings.Contains(check, "    needs: build\n") || regexp.MustCompile(`(?m)^    if:`).MatchString(check) {
+		t.Error("the check job does not wait for the build alone, or it has a condition: it must run in a dry run too")
+	}
+	// The download and the three checks are defined once, in the check
+	// job, each under an anchor; publish runs exactly those steps by alias,
+	// in the same order, before anything is attested or published. A
+	// copied step list in publish (which could drift) fails here.
+	anchors := []string{
+		"download\n        uses: actions/download-artifact@",
+		"digests\n        name: SHA256SUMS and the notes are the ones build produced\n",
+		"sums\n        name: Every file matches SHA256SUMS\n",
+		"exact\n        name: dist holds exactly the files SHA256SUMS lists\n",
 	}
 	at := -1
+	for _, a := range anchors {
+		i := strings.Index(check, "      - &"+a)
+		if i <= at {
+			t.Fatalf("check: the anchored step %q is missing or out of order", strings.SplitN(a, "\n", 2)[0])
+		}
+		at = i
+	}
+	steps := regexp.MustCompile(`(?m)^      - (.*)$`).FindAllStringSubmatch(publish, -1)
+	want := []string{"*download", "*digests", "*sums", "*exact", "name: Attest build provenance", "name: Publish"}
+	if len(steps) != len(want) {
+		t.Fatalf("publish has the steps %v, want %v", steps, want)
+	}
+	for i, w := range want {
+		if steps[i][1] != w {
+			t.Errorf("publish step %d is %q, want %q", i+1, steps[i][1], w)
+		}
+	}
+	if strings.Contains(publish, "sha256sum") {
+		t.Error("publish carries its own copy of a check; it must run the check job's steps by alias")
+	}
+	order := []string{"actions/attest-build-provenance@", "gh release create"}
+	at = -1
 	for _, s := range order {
 		i := strings.Index(publish, s)
 		if i <= at {
@@ -282,11 +326,59 @@ func TestWorkflowsPinActionsAndKeepNoCredential(t *testing.T) {
 	if !strings.Contains(dep, "package-ecosystem: github-actions") {
 		t.Error(".github/dependabot.yml does not keep the actions' pins")
 	}
+	// One pull request for the actions' updates, not one per action.
+	if !regexp.MustCompile(`(?m)^    groups:\n      actions:\n        patterns: \['\*'\]\n`).MatchString(dep) {
+		t.Error(".github/dependabot.yml does not group the actions' updates")
+	}
 }
 
-// The publish job's three checks, run as release.yml has them against a
-// handed-over artifact: a good one passes all three, and each tampering
-// stops at the check that names it.
+// The simulation workflows run on a pull request only when their label
+// asks for it. Their job has no job-level if: GitHub does not evaluate the
+// name of a job an if skips, so its check run would carry the name's
+// expression as text. The job always starts, and REQUESTED, the very
+// condition the name uses, gates every step but the one that says it was
+// not requested; the check is then "<job> (not requested)", never a
+// skipped "<job>" that passes for a real run.
+func TestSimulationWorkflowsNameEveryCheck(t *testing.T) {
+	space := regexp.MustCompile(`\s+`)
+	for file, job := range map[string]string{"pilot-sim.yml": "pilot-sim", "e2e-real-aimem.yml": "real-aimem"} {
+		t.Run(job, func(t *testing.T) {
+			body := workflowJobs(t, read(t, filepath.Join(".github", "workflows", file)))[job]
+			if body == "" {
+				t.Fatalf("%s has no job %s", file, job)
+			}
+			if regexp.MustCompile(`(?m)^    if:`).MatchString(body) {
+				t.Error("the job has a job-level if; a skipped job's check run is named by the expression's text")
+			}
+			name := regexp.MustCompile(`(?s)    name: >-\n      \$\{\{ \((.*?)\)\n      && '` + regexp.QuoteMeta(job) + `' \|\| '` + regexp.QuoteMeta(job) + ` \(not requested\)' \}\}\n`).FindStringSubmatch(body)
+			req := regexp.MustCompile(`(?s)      REQUESTED: >-\n        \$\{\{ (.*?) \}\}\n`).FindStringSubmatch(body)
+			if name == nil || req == nil {
+				t.Fatalf("no name expression or no REQUESTED in the job:\n%s", body)
+			}
+			if a, b := space.ReplaceAllString(name[1], " "), space.ReplaceAllString(req[1], " "); a != b {
+				t.Errorf("REQUESTED is not the name's condition:\n name: %s\n REQUESTED: %s", a, b)
+			}
+			steps := strings.Split(body, "\n      - ")[1:]
+			if len(steps) < 2 {
+				t.Fatalf("the job has %d steps", len(steps))
+			}
+			if !strings.HasPrefix(steps[0], "name: not requested\n        if: env.REQUESTED != 'true'\n") {
+				t.Errorf("the first step is not the one that says the run was not requested:\n%s", steps[0])
+			}
+			for _, s := range steps[1:] {
+				if !regexp.MustCompile(`(?m)^        if: (always\(\) && )?env\.REQUESTED == 'true'$`).MatchString(s) {
+					t.Errorf("a step runs when the simulation was not requested:\n%s", strings.SplitN(s, "\n", 2)[0])
+				}
+			}
+		})
+	}
+}
+
+// The three checks, run as release.yml has them against a handed-over
+// artifact: a good one passes all three, and each tampering stops at the
+// check that names it. They are read from the check job, where they are
+// defined; the publish job runs the same steps by alias (pinned above), so
+// this covers the dry run and the publishing run alike.
 func TestPublishChecksRefuseAnArtifactBuildDidNotProduce(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the checks run on the ubuntu runner (GNU coreutils and find)")
@@ -295,10 +387,10 @@ func TestPublishChecksRefuseAnArtifactBuildDidNotProduce(t *testing.T) {
 	if err != nil {
 		t.Skip("no bash")
 	}
-	publish := releaseJobs(t)["publish"]
-	digests := stepRun(t, publish, "SHA256SUMS and the notes are the ones build produced")
-	sums := stepRun(t, publish, "Every file matches SHA256SUMS")
-	exact := stepRun(t, publish, "dist holds exactly the files SHA256SUMS lists")
+	check := releaseJobs(t)["check"]
+	digests := stepRun(t, check, "SHA256SUMS and the notes are the ones build produced")
+	sums := stepRun(t, check, "Every file matches SHA256SUMS")
+	exact := stepRun(t, check, "dist holds exactly the files SHA256SUMS lists")
 	hand := stepRun(t, releaseJobs(t)["build"], "Hand over the digests")
 
 	run := func(dir, script string, env ...string) (string, error) {

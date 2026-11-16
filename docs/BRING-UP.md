@@ -20,7 +20,8 @@ page says so. Such gaps are listed at the end, under "Gaps".
 Only a person can:
 - provide each host and its OS user;
 - log the client in on each host;
-- create the member's aimem user and issue its token on the hub;
+- grant the team its projects on the hub, and create each member's aimem
+  user and issue its token there (the hub's admin);
 - create the member's forge account and issue its token;
 - issue each invitation with the operator credential.
 
@@ -70,13 +71,23 @@ after. Each step ends with its check. Throughout, `crew` is the team's
 name, `main` the hub's alias in aicrew, and `PROJECT` the project the
 team works on.
 
-### 1. The team on its hub (operator, once)
+### 1. The team on its hub (operator and the hub's admin, once)
 
 ```sh
 aicrew team setup crew --hub main --project PROJECT
 ```
 
-Check: `aicrew team show --team-name crew` prints the team.
+A new team has no project yet. `team setup` creates or registers it, then
+prints `not granted yet; on the hub, as its admin, run:` followed by one
+`aimem identity team grant ...` line per project, and exits 3. The hub's
+admin runs each printed line on the hub. The operator then runs
+`aicrew team setup` again with the same arguments.
+
+Check: the rerun exits 0 and prints
+`every project is granted to team crew`. A `granted:` project followed by
+`has no repository on the hub` or `has no selected process on the hub`
+still needs that done on the hub first; rerun after it until neither line
+appears.
 
 ### 2. The member's aimem user and token (operator, on the hub)
 

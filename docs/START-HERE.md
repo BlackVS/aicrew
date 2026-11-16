@@ -36,7 +36,10 @@ or launch workers.
 
 The repository was created by the operator. The baseline task records the
 verified visibility, license, CI check (`repo-checks`) and external-review
-integration; recheck them rather than assume. Preserve the existing README
+integration; recheck them rather than assume.
+
+To bring up a team's members on separate hosts, the operator follows
+`docs/BRING-UP.md`: what each host needs, and the bring-up in order. Preserve the existing README
 and LICENSE unless a scoped reviewed change is needed.
 
 ## Coordination with aimem implementation

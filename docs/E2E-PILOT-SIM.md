@@ -59,7 +59,9 @@ access: the images install aimem and ai-skills from their GitHub releases,
 as an operator's host does.
 
 The script exits 0 when the stack is healthy, the stubs' fixtures pass,
-two cycles reach DONE with their delivery records and the pilot and fault cases pass. Otherwise it exits non-zero
+two cycles reach DONE with their delivery records and the pilot and fault cases pass; with
+`-upgrade`, when the setup on the previous release, both cycles, the
+upgrade and the reads of the first cycle pass. Otherwise it exits non-zero
 and prints the last lines of every container's log. Either way the full
 logs are in `DIR/logs/` and the report in `DIR/report.jsonl` (see "The
 report").
@@ -559,7 +561,7 @@ release. The installers' command lines are the documented ones,
 unchanged, and nothing in a store, a home or a unit is edited by hand.
 
 The scenario `upgrade` is bounded to 15 minutes and `upgrade-kept` to 5;
-the others keep their bounds above. A green run on a 4-vCPU host took 15
+the others keep their bounds above. A green run on a 6-vCPU host took 15
 minutes: the setup 2.2, a cycle 5 to 6, the upgrade itself half a minute.
 
 Today the previous release and this tree have the same store schema, so

@@ -567,7 +567,11 @@ minutes: the setup 2.2, a cycle 5 to 6, the upgrade itself half a minute.
 Today the previous release and this tree have the same store schema, so
 the upgrade migrates nothing, and the scenario proves the upgrade's
 mechanics and that the records stay readable. The first change of the
-schema makes it run a real migration.
+schema makes it run a real migration. aicrewd's rows are compared on the
+columns they had before the upgrade: a migration's author sees each added
+column named in a `note:` line of `DIR/upgrade-same-*.txt`, and the run
+stays green; a column that is gone or renamed, or a changed value, fails
+it.
 
 ## The pilot cases
 

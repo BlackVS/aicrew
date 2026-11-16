@@ -31,6 +31,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -54,9 +55,12 @@ func run(args []string) error {
 		fmt.Println(tag)
 		return nil
 	case (len(args) == 3 || len(args) == 4 && args[3] == "-grown") && args[0] == "same":
-		diffs, counts, err := same(args[1], args[2], len(args) == 4)
+		diffs, notes, counts, err := same(args[1], args[2], len(args) == 4)
 		if err != nil {
 			return err
+		}
+		for _, n := range notes {
+			fmt.Println("note:", n)
 		}
 		for _, d := range diffs {
 			fmt.Println(d)
@@ -103,46 +107,51 @@ type item struct {
 }
 
 // scope is what the first cycle's records are, read from BEFORE: its
-// task, its attempts, and the audit up to the upgrade.
+// task, its attempts, the audit up to the upgrade, and the columns each of
+// aicrewd's tables had.
 type scope struct {
 	task     string
 	attempts []string
 	auditMax int64
+	cols     map[string][]string
 }
 
 // places are the three the upgrade must leave unchanged. Each read returns
-// its records by key.
+// its records by key, and notes on what it did not compare.
 var places = []struct {
 	name string
-	read func(dir string, s scope) (map[string]item, error)
+	read func(dir string, s scope) (map[string]item, []string, error)
 }{
 	{"aicrewd", readCrew},
 	{"aimem", readAimem},
 	{"homes", readHomes},
 }
 
-func same(before, after string, grown bool) ([]string, string, error) {
+func same(before, after string, grown bool) (diffs, notes []string, counts string, err error) {
 	s, err := scopeOf(before)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
-	var diffs, counts []string
+	var n []string
 	for _, p := range places {
-		b, err := p.read(before, s)
+		b, _, err := p.read(before, s)
 		if err != nil {
-			return nil, "", fmt.Errorf("%s, before: %v", p.name, err)
+			return nil, nil, "", fmt.Errorf("%s, before: %v", p.name, err)
 		}
 		if !anyText(b) {
-			return nil, "", fmt.Errorf("%s: nothing of the first cycle to compare in %s", p.name, before)
+			return nil, nil, "", fmt.Errorf("%s: nothing of the first cycle to compare in %s", p.name, before)
 		}
-		a, err := p.read(after, s)
+		a, an, err := p.read(after, s)
 		if err != nil {
-			return nil, "", fmt.Errorf("%s, after: %v", p.name, err)
+			return nil, nil, "", fmt.Errorf("%s, after: %v", p.name, err)
 		}
 		diffs = append(diffs, compare(p.name, b, a, grown)...)
-		counts = append(counts, fmt.Sprintf("%s %d", p.name, len(b)))
+		for _, x := range an {
+			notes = append(notes, p.name+": "+x)
+		}
+		n = append(n, fmt.Sprintf("%s %d", p.name, len(b)))
 	}
-	return diffs, strings.Join(counts, ", "), nil
+	return diffs, notes, strings.Join(n, ", "), nil
 }
 
 func compare(place string, before, after map[string]item, grown bool) []string {
@@ -243,7 +252,23 @@ func scopeOf(before string) (scope, error) {
 	if err := db.QueryRow("SELECT COALESCE(MAX(id), 0) FROM audit").Scan(&s.auditMax); err != nil {
 		return scope{}, err
 	}
+	s.cols = map[string][]string{}
+	for _, t := range crewTables {
+		if s.cols[t.table], err = columns(db, t.table); err != nil {
+			return scope{}, fmt.Errorf("aicrewd: %s: %v", t.table, err)
+		}
+	}
 	return s, nil
+}
+
+// columns are a table's columns, in the store's order.
+func columns(db *sql.DB, table string) ([]string, error) {
+	rows, err := db.Query("SELECT * FROM " + table + " LIMIT 0")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return rows.Columns()
 }
 
 // crewTables are the first cycle's records in aicrewd's store: the task's
@@ -266,10 +291,14 @@ var crewTables = []struct{ table, where string }{
 	{"audit", "id <= :audit"},
 }
 
-func readCrew(dir string, s scope) (map[string]item, error) {
+// readCrew reads each table on the columns BEFORE had: a store migration
+// that adds a column changes no record, and the column is named in a note.
+// A column BEFORE had is a record of its own, so one that is gone (dropped
+// or renamed) is a difference, and so is every row read without it.
+func readCrew(dir string, s scope) (map[string]item, []string, error) {
 	db, err := openStore(dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer db.Close()
 	quoted := make([]string, len(s.attempts))
@@ -277,7 +306,27 @@ func readCrew(dir string, s scope) (map[string]item, error) {
 		quoted[i] = "'" + strings.ReplaceAll(a, "'", "''") + "'"
 	}
 	out := map[string]item{}
+	var notes []string
 	for _, t := range crewTables {
+		have, err := columns(db, t.table)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %v", t.table, err)
+		}
+		var sel []string
+		for _, c := range s.cols[t.table] {
+			if slices.Contains(have, c) {
+				sel = append(sel, `"`+c+`"`)
+				out[t.table+" column "+c] = item{text: "a column of " + t.table, grown: "exact"}
+			}
+		}
+		for _, c := range have {
+			if !slices.Contains(s.cols[t.table], c) {
+				notes = append(notes, fmt.Sprintf("%s gained the column %s, which is not compared", t.table, c))
+			}
+		}
+		if len(sel) == 0 {
+			continue
+		}
 		where := strings.NewReplacer(":attempts", strings.Join(quoted, ","), ":task", "?", ":audit", "?").Replace(t.where)
 		var args []any
 		for _, m := range regexp.MustCompile(`:task|:audit`).FindAllString(t.where, -1) {
@@ -287,13 +336,13 @@ func readCrew(dir string, s scope) (map[string]item, error) {
 				args = append(args, s.auditMax)
 			}
 		}
-		rows, err := db.Query("SELECT * FROM "+t.table+" WHERE "+where, args...)
+		rows, err := db.Query("SELECT "+strings.Join(sel, ", ")+" FROM "+t.table+" WHERE "+where, args...)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %v", t.table, err)
+			return nil, nil, fmt.Errorf("%s: %v", t.table, err)
 		}
 		recs, err := rowTexts(rows)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %v", t.table, err)
+			return nil, nil, fmt.Errorf("%s: %v", t.table, err)
 		}
 		// A row is its own key: compared as a set, a changed row reads as
 		// one gone and one new.
@@ -301,7 +350,7 @@ func readCrew(dir string, s scope) (map[string]item, error) {
 			out[t.table+" "+r] = item{text: r, grown: "exact"}
 		}
 	}
-	return out, nil
+	return out, notes, nil
 }
 
 // rowTexts is each row as canonical JSON, keyed by column name.
@@ -340,24 +389,24 @@ func rowTexts(rows *sql.Rows) ([]string, error) {
 // aimemReads are the hub's reads of the task the snapshot keeps.
 var aimemReads = []string{"task.json", "comments.json", "history.json", "reservation.json"}
 
-func readAimem(dir string, _ scope) (map[string]item, error) {
+func readAimem(dir string, _ scope) (map[string]item, []string, error) {
 	out := map[string]item{}
 	for _, f := range aimemReads {
 		raw, err := os.ReadFile(filepath.Join(dir, "aimem", f))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		var v any
 		if err := json.Unmarshal(raw, &v); err != nil {
-			return nil, fmt.Errorf("%s: %v", f, err)
+			return nil, nil, fmt.Errorf("%s: %v", f, err)
 		}
 		b, err := json.Marshal(v)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		out[f] = item{text: string(b), grown: "exact"}
 	}
-	return out, nil
+	return out, nil, nil
 }
 
 // homeFiles are what the snapshot keeps of each home, with how each
@@ -370,16 +419,16 @@ var homeFiles = []struct{ name, grown string }{
 
 var roles = []string{"coordinator", "worker", "indep"}
 
-func readHomes(dir string, _ scope) (map[string]item, error) {
+func readHomes(dir string, _ scope) (map[string]item, []string, error) {
 	out := map[string]item{}
 	for _, role := range roles {
 		for _, f := range homeFiles {
 			raw, err := os.ReadFile(filepath.Join(dir, "homes", role, f.name))
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			out[role+"/"+f.name] = item{text: string(raw), grown: f.grown}
 		}
 	}
-	return out, nil
+	return out, nil, nil
 }

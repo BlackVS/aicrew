@@ -97,11 +97,11 @@ func TestSameUnchanged(t *testing.T) {
 	exec1(t, after, `INSERT INTO attempt_steps VALUES ('k10', 'A9', 'finalize')`)
 	exec1(t, after, `UPDATE message_recipients SET acknowledged_at = 't' WHERE message_id = 'M9'`)
 	exec1(t, after, `INSERT INTO audit (operation) VALUES ('control.resume')`)
-	diffs, counts, err := same(before, after, false)
+	diffs, _, counts, err := same(before, after, false)
 	if err != nil || len(diffs) > 0 {
 		t.Fatalf("same: %v %v", diffs, err)
 	}
-	if counts != "aicrewd 12, aimem 4, homes 9" {
+	if counts != "aicrewd 42, aimem 4, homes 9" {
 		t.Fatalf("counts %q", counts)
 	}
 }
@@ -132,7 +132,7 @@ func TestSameEachPlace(t *testing.T) {
 		t.Run(p.name, func(t *testing.T) {
 			before, after := pair(t)
 			mutate(t, after)
-			diffs, _, err := same(before, after, false)
+			diffs, _, _, err := same(before, after, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -178,7 +178,7 @@ func TestSameFindsEachKind(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			before, after := pair(t)
 			c.mutate(t, after)
-			diffs, _, err := same(before, after, false)
+			diffs, _, _, err := same(before, after, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -197,24 +197,65 @@ func TestSameGrown(t *testing.T) {
 	write(t, after, "homes/worker/guard.jsonl", "a later line\n")
 	write(t, after, "homes/worker/HANDOFF.md", "# worker\nthe second attempt\n")
 	exec1(t, after, `INSERT INTO audit (operation) VALUES ('attempt.claim')`)
-	if diffs, _, err := same(before, after, true); err != nil || len(diffs) > 0 {
+	if diffs, _, _, err := same(before, after, true); err != nil || len(diffs) > 0 {
 		t.Fatalf("grown: %v %v", diffs, err)
 	}
 	write(t, after, "homes/worker/turns.jsonl", `{"id":"worker-2"}`+"\n")
-	diffs, _, err := same(before, after, true)
+	diffs, _, _, err := same(before, after, true)
 	if err != nil || len(diffs) != 1 || !strings.HasPrefix(diffs[0], "homes: worker/turns.jsonl no longer starts with") {
 		t.Fatalf("a rewritten log: %v %v", diffs, err)
 	}
 	exec1(t, after, `UPDATE attempts SET state = 'running' WHERE id = 'A1'`)
-	if diffs, _, _ := same(before, after, true); len(diffs) < 2 {
+	if diffs, _, _, _ := same(before, after, true); len(diffs) < 2 {
 		t.Fatalf("a changed attempt after a later cycle: %v", diffs)
+	}
+	// A record keyed by name is compared exactly after a later cycle too.
+	before, after = pair(t)
+	write(t, after, "aimem/task.json", `{"id":"T1","state":"READY"}`)
+	diffs, _, _, err = same(before, after, true)
+	if err != nil || len(diffs) != 1 || !strings.HasPrefix(diffs[0], "aimem: task.json changed") {
+		t.Fatalf("a changed task after a later cycle: %v %v", diffs, err)
+	}
+}
+
+// A store migration that adds columns changes no record: the rows are
+// compared on the columns BEFORE had, and each added column is named. A
+// column BEFORE had that is gone, dropped or renamed, is a difference.
+func TestSameStoreMigration(t *testing.T) {
+	before, after := pair(t)
+	exec1(t, after, `ALTER TABLE attempts ADD COLUMN x TEXT NOT NULL DEFAULT ''`)
+	exec1(t, after, `ALTER TABLE messages ADD COLUMN y INTEGER NOT NULL DEFAULT 0`)
+	diffs, notes, _, err := same(before, after, false)
+	if err != nil || len(diffs) > 0 {
+		t.Fatalf("added columns: %v %v", diffs, err)
+	}
+	want := []string{"aicrewd: attempts gained the column x, which is not compared",
+		"aicrewd: messages gained the column y, which is not compared"}
+	if strings.Join(notes, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("notes %q, want %q", notes, want)
+	}
+	for name, stmt := range map[string]string{
+		"dropped": `ALTER TABLE attempts DROP COLUMN delivery_evidence`,
+		"renamed": `ALTER TABLE attempts RENAME COLUMN delivery_evidence TO evidence`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			before, after := pair(t)
+			exec1(t, after, stmt)
+			diffs, _, _, err := same(before, after, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(strings.Join(diffs, "\n"), "aicrewd: attempts column delivery_evidence is gone") {
+				t.Fatalf("a %s column: %v", name, diffs)
+			}
+		})
 	}
 }
 
 func TestSameNeedsTheFirstCycle(t *testing.T) {
 	before, after := pair(t)
 	exec1(t, before, `DELETE FROM attempts WHERE task_id = 'T1'`)
-	if _, _, err := same(before, after, false); err == nil || !strings.Contains(err.Error(), "has no attempt") {
+	if _, _, _, err := same(before, after, false); err == nil || !strings.Contains(err.Error(), "has no attempt") {
 		t.Fatalf("no attempt: %v", err)
 	}
 	before, after = pair(t)
@@ -222,14 +263,14 @@ func TestSameNeedsTheFirstCycle(t *testing.T) {
 		write(t, before, "homes/"+role+"/turns.jsonl", "")
 		write(t, before, "homes/"+role+"/HANDOFF.md", "")
 	}
-	if _, _, err := same(before, after, false); err == nil || !strings.Contains(err.Error(), "homes: nothing of the first cycle") {
+	if _, _, _, err := same(before, after, false); err == nil || !strings.Contains(err.Error(), "homes: nothing of the first cycle") {
 		t.Fatalf("empty homes: %v", err)
 	}
 	before, after = pair(t)
 	if err := os.Remove(filepath.Join(after, "aimem", "history.json")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := same(before, after, false); err == nil || !strings.Contains(err.Error(), "aimem, after") {
+	if _, _, _, err := same(before, after, false); err == nil || !strings.Contains(err.Error(), "aimem, after") {
 		t.Fatalf("a read missing after: %v", err)
 	}
 }

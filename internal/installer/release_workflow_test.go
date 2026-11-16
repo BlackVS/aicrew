@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -341,7 +342,26 @@ func TestWorkflowsPinActionsAndKeepNoCredential(t *testing.T) {
 // skipped "<job>" that passes for a real run.
 func TestSimulationWorkflowsNameEveryCheck(t *testing.T) {
 	space := regexp.MustCompile(`\s+`)
-	for file, job := range map[string]string{"pilot-sim.yml": "pilot-sim", "e2e-real-aimem.yml": "real-aimem"} {
+	checked := map[string][]string{
+		"pilot-sim.yml":      {"pilot-sim", "pilot-sim-upgrade"},
+		"e2e-real-aimem.yml": {"real-aimem"},
+	}
+	// Every job of the simulation workflows is checked: a new one is listed
+	// here or fails.
+	for file, want := range checked {
+		var got []string
+		for job := range workflowJobs(t, read(t, filepath.Join(".github", "workflows", file))) {
+			got = append(got, job)
+		}
+		sort.Strings(got)
+		if strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("%s has the jobs %v; the test checks %v", file, got, want)
+		}
+	}
+	for _, c := range []struct{ file, job string }{
+		{"pilot-sim.yml", "pilot-sim"}, {"pilot-sim.yml", "pilot-sim-upgrade"}, {"e2e-real-aimem.yml", "real-aimem"},
+	} {
+		file, job := c.file, c.job
 		t.Run(job, func(t *testing.T) {
 			body := workflowJobs(t, read(t, filepath.Join(".github", "workflows", file)))[job]
 			if body == "" {

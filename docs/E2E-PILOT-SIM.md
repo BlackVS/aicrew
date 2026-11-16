@@ -15,8 +15,9 @@ record, twice in a row. **I4a** (task `01a17d9b-3a68`) adds the pilot
 cases P1 to P5 and the skip-the-fault matrix. **I4b-1** (task
 `01a18ccf-d95c`) adds the fault proxies and b4's fault cases F1, F2-begin,
 F3, F6 and F7 on the compose stack. **I5** (task `01a17d9b-3a78`) adds
-the run's report, its bounds and the CI workflow. b4's other faults and the
-upgrade scenario come in I4b-2 and I6.
+the run's report, its bounds and the CI workflow. **I6** (task
+`01a17d9b-5c3b`) adds the upgrade scenario ([below](#the-upgrade-scenario)).
+b4's other faults come in I4b-2.
 
 ## Running it
 
@@ -28,7 +29,12 @@ competes with everything else on the desktop for memory.
 ```sh
 [AICREW_SIM_SKIP_FAULT=CASE] [AICREW_SIM_IGNORE_MEMORY=1] [AICREW_SIM_BOUND_MINUTES=N]
 [AICREW_SIM_HANG=SCENARIO[:SECONDS]] scripts/pilot-sim.sh [-keep] [-out DIR]
+[PILOTSIM_PREVIOUS=vX.Y.Z] scripts/pilot-sim.sh -upgrade [-keep] [-out DIR]
 ```
+
+- `-upgrade` runs the upgrade scenario instead of the cycles and the cases
+  (see "The upgrade scenario"). `PILOTSIM_PREVIOUS` overrides the release
+  it upgrades from, for a run by hand.
 
 - `-out` is where the staged image contexts, the logs and the reports go
   (default `.work/pilotsim` in the repository).
@@ -193,6 +199,15 @@ uses. It never runs on every push. The job's timeout is 120 minutes, a
 backstop behind the run's own bound. It keeps `DIR` as the artifact
 `pilot-sim` for 14 days: the report, the events, the step snapshots, the
 logs and the homes, without the staged binaries.
+
+A second job, `pilot-sim-upgrade`, runs `scripts/pilot-sim.sh -upgrade`
+on a runner of its own, so the nightly run takes no longer. It runs under
+the same label and has the same not-requested check of its own
+(`pilot-sim-upgrade (not requested)`). Its checkout is the whole history
+with the tags, which the choice of the previous release reads. Its run
+bound is 30 minutes (`AICREW_SIM_BOUND_MINUTES`) and its timeout 45. Its
+artifact is `pilot-sim-upgrade`. On a host of its own, run the two one
+after the other, never together: each needs the memory above.
 
 ## What I1 builds
 
@@ -464,6 +479,93 @@ itself, as the coordinator ran it, and its `confirmed` evidence
 delivery and terminal evidence and among the task's evidence refs.
 
 The snapshots stay in `DIR/cycle-<n>/<step>/`.
+
+## The upgrade scenario
+
+`scripts/pilot-sim.sh -upgrade` answers the question a release has to
+answer before it is tagged: does it upgrade from the last one? It runs the
+setup, the smoke check and the fixtures as above, but on the previous
+release; then one cycle, the upgrade, a second cycle, and a last read of
+the first cycle.
+
+**The previous release** is the newest `vX.Y.Z` tag merged into HEAD that
+does not sit on HEAD itself (`simupgrade previous`,
+`e2e/pilotsim/cmd/simupgrade`). On a release's own commit, which is main
+right after the release, that is the release before it. Nothing has to be
+moved after a release. `PILOTSIM_PREVIOUS=vX.Y.Z` overrides it for a run
+by hand. Without such a tag (a shallow clone, for one), or when one of
+that release's assets cannot be downloaded, the run fails and names the
+tag; it never skips.
+
+**The previous release is not built.** The runner downloads its release
+assets, as its installers would (`SHA256SUMS`, `install-aicrewd.sh`,
+`boot.sh` and the three Linux binaries), and lays them out as an aiforge
+export (`MANIFEST`, `aicrew/<tag>/`). sim-aicrewd and each member install
+from it with `AICREW_BASE`, by that release's own installers, which check
+every file against its `SHA256SUMS`. The settings are I1's.
+
+**The upgrade** (scenario `upgrade`) uses this tree's installers, with the
+command line of the first install (`AICREW_NO_SERVICE=1`,
+`AICREW_PREBUILT_DIR`), run again over the installed release. That is the
+documented upgrade: run the newer release's installer again.
+`AICREW_PREBUILT_DIR` holds this tree's build, which stands for a release
+that does not exist yet. Every member is paused first, and its turn has
+ended:
+1. Before the upgrade, the runner reads the first cycle (snapshot
+   `cycle-1/upgrade-before`) and checks that sim-aicrewd and every member
+   run the previous release's binaries, by their digests.
+2. aicrewd is stopped, this tree's files are copied into its container,
+   and it is started. At the start `aicrewd.sh` runs the installer, while
+   aicrewd is stopped as the installer's install-only upgrade asks, and
+   then starts aicrewd. The installer keeps a backup of the store and of
+   the configuration and the old binaries as `.prev`; the runner checks
+   that they are there and that aicrewd runs this tree's build.
+3. For each member, this tree's files are copied into its running
+   container, `boot.sh` runs as the member, and the container restarts.
+   The runner checks the new `aicrew-agent`'s digest, waits for serve's
+   model probe after the restart, and runs `aicrew-agent check`, the
+   release notes' step after an upgrade, through the smoke check's
+   checks. `join` does not run again: the home keeps its `agent.json`.
+4. After the upgrade the runner reads the first cycle again
+   (`cycle-1/upgrade-after`), and resumes the members.
+
+**The first cycle reads unchanged.** Both snapshots go through the cycle's
+checks of the step done, and `simupgrade same` compares them, failing on
+any difference. Its output is `DIR/upgrade-same-*.txt`, and its last line
+is an observation in the report. It compares three places:
+- **aicrewd's store**: the task's attempts, everything kept per attempt
+  (its steps, results, pull request and its facts, handoff, block and
+  automation runs; the delivery and terminal evidence are the attempt's
+  own columns), the messages about the task or its attempts with their
+  recipients, and the whole audit up to the upgrade;
+- **aimem**: the hub's reads of the task, its comments, its history and its
+  reservation;
+- **the homes**: each member's turn log, guard log and handoff.
+
+After the second cycle (scenario `upgrade-kept`) the first cycle is read a
+third time (`cycle-1/after-cycle-2`) and compared with the read before the
+upgrade. There the homes' logs need only start with what they held, and
+the handoffs, which each attempt rewrites, are left out. The tool's tests
+change each place alone and require the difference to be found there, so
+a comparison that leaves a place out fails them.
+
+**Where the simulation differs from a host.** aicrewd is its container's
+own process, so the runner stops and starts the container where an
+operator stops and starts the service; with `AICREW_NO_SERVICE=1` boot.sh
+does not restart a member's serve, so the runner restarts the member's
+container where an installed member's service restarts. The copy of this
+tree's files into the containers stands for the download of the new
+release. The installers' command lines are the documented ones,
+unchanged, and nothing in a store, a home or a unit is edited by hand.
+
+The scenario `upgrade` is bounded to 15 minutes and `upgrade-kept` to 5;
+the others keep their bounds above. A green run on a 4-vCPU host took 15
+minutes: the setup 2.2, a cycle 5 to 6, the upgrade itself half a minute.
+
+Today the previous release and this tree have the same store schema, so
+the upgrade migrates nothing, and the scenario proves the upgrade's
+mechanics and that the records stay readable. The first change of the
+schema makes it run a real migration.
 
 ## The pilot cases
 

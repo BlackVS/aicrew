@@ -3396,6 +3396,14 @@ every pull request (`release-build`), publishing nothing.
   `e2e (real aimem)`) must be green at its head
   (`docs/E2E-REAL-AIMEM.md`, "In CI"). The label starts the run, and a
   push reruns it.
+- The pilot simulation's upgrade check (`pilot-sim-upgrade`,
+  `docs/E2E-PILOT-SIM.md`, "The upgrade scenario") upgrades the previous
+  release to the tree under test, and nothing has to be moved after a
+  release: the previous release is the newest `vX.Y.Z` tag merged into
+  HEAD that does not sit on HEAD itself (`PILOTSIM_PREVIOUS` overrides it
+  for a run by hand). So a release-preparation pull request upgrades from
+  the last release, and main's tagged commit upgrades from the release
+  before it, never from itself.
 
 **Cutting a release:**
 

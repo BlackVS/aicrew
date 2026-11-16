@@ -4,6 +4,7 @@
 #
 #   [AICREW_SIM_SKIP_FAULT=CASE] [AICREW_SIM_IGNORE_MEMORY=1] [AICREW_SIM_BOUND_MINUTES=N]
 #   [AICREW_SIM_HANG=SCENARIO[:SECONDS]] scripts/pilot-sim.sh [-keep] [-out DIR]
+#   [PILOTSIM_PREVIOUS=vX.Y.Z] scripts/pilot-sim.sh -upgrade [-keep] [-out DIR]
 #
 # It removes a leftover stack, checks the host's available memory against
 # what a run needs (AICREW_SIM_IGNORE_MEMORY=1 runs anyway), builds this
@@ -26,6 +27,17 @@
 # whose scripted members take a filed task to DONE with its delivery record; otherwise
 # non-zero with the containers' logs.
 #
+# -upgrade runs the upgrade scenario instead of the cycles and the cases
+# (docs/E2E-PILOT-SIM.md, "The upgrade scenario"): the previous release,
+# from its downloaded release assets laid out as an aiforge export, is
+# installed by its own installers; one cycle runs; aicrewd and each member
+# are upgraded to this tree's build by this tree's installers, the way an
+# operator upgrades; the first cycle's records in aicrewd, aimem and the
+# homes must read unchanged; a second cycle runs, and the first cycle's
+# records are compared again after it. The previous release is the newest
+# vX.Y.Z tag merged into HEAD and not on HEAD itself (e2e/pilotsim/cmd/
+# simupgrade), or PILOTSIM_PREVIOUS for a run by hand.
+#
 # Every scenario (the setup, the smoke check, the fixtures, each cycle and
 # each case) has a bound, and so has the whole run (AICREW_SIM_BOUND_MINUTES,
 # 90 by default): a watchdog stops the run's commands at either bound, and
@@ -42,12 +54,14 @@ set -Eeuo pipefail
 # fail writes here, also from a check whose output waitfor discards.
 exec 3>&2
 
-usage() { echo "usage: scripts/pilot-sim.sh [-keep] [-out DIR]" >&2; exit 2; }
+usage() { echo "usage: scripts/pilot-sim.sh [-upgrade] [-keep] [-out DIR]" >&2; exit 2; }
 KEEP=
 OUT=
+UPGRADE=
 while [ $# -gt 0 ]; do
   case "$1" in
     -keep) KEEP=1 ;;
+    -upgrade) UPGRADE=1 ;;
     -out) [ $# -ge 2 ] || usage; OUT=$2; shift ;;
     *) usage ;;
   esac
@@ -64,6 +78,7 @@ case " $(echo $SKIP_CASES) " in
   *" $SKIP "*) [ "$SKIP" = "${SKIP%%[[:space:]]*}" ] || { echo "pilot-sim: AICREW_SIM_SKIP_FAULT names one case" >&2; exit 2; } ;;
   *) [ -z "$SKIP" ] || { echo "pilot-sim: AICREW_SIM_SKIP_FAULT=$SKIP is not one of:" $SKIP_CASES >&2; exit 2; } ;;
 esac
+[ -z "$UPGRADE" ] || [ -z "$SKIP" ] || { echo "pilot-sim: -upgrade runs no case; AICREW_SIM_SKIP_FAULT is not for it" >&2; exit 2; }
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${OUT:-$ROOT/.work/pilotsim}
@@ -91,8 +106,15 @@ TOOLS=$(mktemp -d)
 SIMREPORT=$TOOLS/simreport
 (cd "$ROOT" && go build -trimpath -o "$SIMREPORT" ./e2e/pilotsim/cmd/simreport) ||
   { echo "pilot-sim: the report tool did not build" >&2; rm -rf "$TOOLS"; exit 2; }
+SIMUPGRADE=$TOOLS/simupgrade
+PREVIOUS=
+if [ -n "$UPGRADE" ]; then
+  (cd "$ROOT" && go build -trimpath -o "$SIMUPGRADE" ./e2e/pilotsim/cmd/simupgrade) ||
+    { echo "pilot-sim: the upgrade tool did not build" >&2; rm -rf "$TOOLS"; exit 2; }
+  PREVIOUS=$("$SIMUPGRADE" previous "$ROOT") || { rm -rf "$TOOLS"; exit 2; }
+fi
 # An earlier run's report and snapshots go: each snapshot is taken once.
-rm -rf "$OUT/events.jsonl" "$OUT/report.jsonl" "$OUT/homes" "$OUT"/cycle-* "$OUT"/case-*
+rm -rf "$OUT/events.jsonl" "$OUT/report.jsonl" "$OUT/homes" "$OUT"/cycle-* "$OUT"/case-* "$OUT"/upgrade-*
 # ev TYPE KEY=VALUE...: one event of the run's report.
 ev() { "$SIMREPORT" event "$OUT" "$@" || echo "pilot-sim: the report's $1 event was not recorded" >&3; }
 
@@ -113,28 +135,56 @@ stage() {
   rm -rf "$STAGE"
   mkdir -p "$STAGE"
   cp -r "$SIM/ca" "$SIM/hub" "$SIM/aicrewd" "$SIM/member" "$SIM/stub" "$SIM/proxy" "$STAGE/"
-  mkdir -p "$STAGE/aicrewd/prebuilt" "$STAGE/member/prebuilt" "$STAGE/hub/aimem-release"
-  local arch
+  # The images install from prebuilt/ (this tree), or, for -upgrade, from
+  # export/ (the previous release): the other stays empty. -upgrade keeps
+  # this tree's build and installers in upgrade/, which the runner copies
+  # into the containers in place of a download.
+  mkdir -p "$STAGE/aicrewd/export" "$STAGE/member/export" "$STAGE/hub/aimem-release"
+  local arch tree=$STAGE
   arch=$(docker version --format '{{.Server.Arch}}')
+  [ -z "$UPGRADE" ] || tree=$STAGE/upgrade
+  mkdir -p "$STAGE/aicrewd/prebuilt" "$STAGE/member/prebuilt" "$tree/aicrewd/prebuilt" "$tree/member/prebuilt"
   build() { (cd "$ROOT" && GOOS=linux GOARCH=$arch CGO_ENABLED=0 go build -trimpath -o "$1" "$2"); }
   step "building this tree's binaries (linux/$arch)"
-  build "$STAGE/aicrewd/prebuilt/aicrewd" ./cmd/aicrewd
-  build "$STAGE/aicrewd/prebuilt/aicrew" ./cmd/aicrew
-  build "$STAGE/member/prebuilt/aicrew-agent" ./cmd/aicrew-agent
-  build "$STAGE/member/prebuilt/aicrew" ./cmd/aicrew
+  build "$tree/aicrewd/prebuilt/aicrewd" ./cmd/aicrewd
+  build "$tree/aicrewd/prebuilt/aicrew" ./cmd/aicrew
+  build "$tree/member/prebuilt/aicrew-agent" ./cmd/aicrew-agent
+  build "$tree/member/prebuilt/aicrew" ./cmd/aicrew
   build "$STAGE/member/claude" ./e2e/pilotsim/cmd/aicrew-simclient
   build "$STAGE/ca/simca" ./e2e/pilotsim/cmd/simca
   build "$STAGE/stub/simstub" ./e2e/pilotsim/cmd/simstub
   build "$STAGE/proxy/simproxy" ./e2e/pilotsim/cmd/simproxy
-  (cd "$STAGE/member/prebuilt" && sha256sum aicrew-agent aicrew > SHA256SUMS)
+  (cd "$tree/member/prebuilt" && sha256sum aicrew-agent aicrew > SHA256SUMS)
   cp "$ROOT/install-aicrewd.sh" "$STAGE/aicrewd/"
   cp "$ROOT/boot.sh" "$STAGE/member/"
+  if [ -n "$UPGRADE" ]; then
+    cp "$ROOT/install-aicrewd.sh" "$tree/aicrewd/"
+    cp "$ROOT/boot.sh" "$tree/member/"
+    export_previous "$arch"
+  fi
   step "fetching aimem v$PILOTSIM_AIMEM_VERSION and its install-hub.sh (the installer checks the asset in sim-aimem)"
   local base="https://github.com/BlackVS/aimem/releases/download/v$PILOTSIM_AIMEM_VERSION"
   curl -fsSL "$base/aimem-linux-$arch" -o "$STAGE/hub/aimem-release/aimem-linux-$arch"
   curl -fsSL "$base/SHA256SUMS" -o "$STAGE/hub/aimem-release/SHA256SUMS"
   curl -fsSL "https://raw.githubusercontent.com/BlackVS/aimem/v$PILOTSIM_AIMEM_VERSION/install-hub.sh" \
     -o "$STAGE/hub/install-hub.sh"
+}
+
+# export_previous ARCH: the previous release's assets, as its installers
+# download them, laid out as an aiforge export (format 1) in both image
+# contexts. The installers check every file against the release's
+# SHA256SUMS; nothing of the release is built here.
+export_previous() {
+  local base="https://github.com/BlackVS/aicrew/releases/download/$PREVIOUS" dir=$STAGE/export a
+  step "fetching aicrew $PREVIOUS's release assets as an aiforge export (the release the scenario upgrades from)"
+  mkdir -p "$dir/aicrew/$PREVIOUS"
+  for a in SHA256SUMS install-aicrewd.sh boot.sh "aicrewd-linux-$1" "aicrew-linux-$1" "aicrew-agent-linux-$1"; do
+    curl -fsSL "$base/$a" -o "$dir/aicrew/$PREVIOUS/$a" ||
+      fail "aicrew $PREVIOUS: its release asset $a could not be downloaded ($base/$a)"
+  done
+  printf 'aiforge-export 1\naicrew %s\n' "$PREVIOUS" > "$dir/MANIFEST"
+  cp -r "$dir/." "$STAGE/aicrewd/export/"
+  cp -r "$dir/." "$STAGE/member/export/"
 }
 
 # ---- failure and teardown ----------------------------------------------------
@@ -333,7 +383,7 @@ WATCHDOG=$!
 ev run aicrew_commit="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)" \
   aimem_version="$PILOTSIM_AIMEM_VERSION" aiskills_version="$PILOTSIM_AISKILLS_VERSION" \
   os="$(uname -s)" arch="$(uname -m)" docker="$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)" \
-  bound_minutes="$BOUND_MINUTES" skip="$SKIP" hang="$HANG"
+  bound_minutes="$BOUND_MINUTES" skip="$SKIP" hang="$HANG" ${UPGRADE:+scenario=upgrade previous_release="$PREVIOUS"}
 begin setup 1800
 # A stack an earlier -keep run left up would refuse this run's accounts,
 # and holds memory the check below counts.
@@ -842,10 +892,110 @@ cycle() {
   delivered
   snapshot done
 }
-if [ -z "$SKIP" ]; then
+
+# ---- the upgrade scenario (DESIGN-PILOT-SIMULATION sections 3 and 9) ----------------------
+# installed SERVICE USER PATH: the sha256 of an installed binary.
+installed() { dc exec -T -u "$2" "$1" sha256sum "$3" | cut -d' ' -f1; }
+# digest FILE: the sha256 of a file on the runner's host.
+digest() { sha256sum "$1" | cut -d' ' -f1; }
+# into_container SERVICE DIR: DIR's files into the container at
+# /opt/aicrew-upgrade, running or stopped: the copy stands for the
+# operator's download of the new release.
+into_container() { docker cp "$2/." "$(dc ps -aq "$1")":/opt/aicrew-upgrade; }
+# recheck: cycle.py's checks of the step done on the snapshot D, which reads
+# the first cycle again.
+recheck() {
+  if python3 "$SIM/cycle.py" check done "$D"; then
+    ev check snapshot="${D#"$OUT"/}" result=passed
+  else
+    ev check snapshot="${D#"$OUT"/}" result=failed
+    fail "the first cycle's delivery no longer checks in snapshot $D"
+  fi
+}
+# same BEFORE AFTER [-grown]: the first cycle's records in aicrewd, aimem
+# and the homes read the same in both snapshots (simupgrade same).
+same() {
+  local report=$OUT/upgrade-same-${2##*/}.txt
+  "$SIMUPGRADE" same "$1" "$2" ${3:+"$3"} > "$report" 2>&1 ||
+    fail "the first cycle's records changed between ${1#"$OUT"/} and ${2#"$OUT"/} ($report): $(head -n 5 "$report")"
+  ev observation task="$TASK" what="$(tail -n 1 "$report")"
+}
+# upgrade: aicrewd, then each member, to this tree's build through this
+# tree's installers, with every member held and idle. The installers' command lines are
+# the ones the first install ran (e2e/pilotsim/aicrewd/aicrewd.sh,
+# e2e/pilotsim/member/Dockerfile), each with the new release's files.
+upgrade() {
+  begin upgrade 900
+  local role svc since up=$STAGE/upgrade arch_bin
+  arch_bin=$(docker version --format '{{.Server.Arch}}')
+  for role in coordinator worker indep; do hold "$role" "the upgrade"; done
+  take upgrade-before
+  recheck
+  [ "$(installed sim-aicrewd sessiond $OPS_HOME/aicrew/bin/aicrewd)" = "$(digest "$STAGE/export/aicrew/$PREVIOUS/aicrewd-linux-$arch_bin")" ] ||
+    fail "sim-aicrewd does not run aicrewd $PREVIOUS before the upgrade"
+  # aicrewd: stopped, given the new release's files, started. With
+  # AICREW_NO_SERVICE=1 the installer refuses while aicrewd answers, and
+  # aicrewd is the container's own process here: aicrewd.sh runs the
+  # installer at the start, before it starts aicrewd (an operator's host
+  # stops and starts the service it chose instead).
+  step "the upgrade: aicrewd $PREVIOUS to this tree's build, through install-aicrewd.sh"
+  dc stop sim-aicrewd >/dev/null
+  into_container sim-aicrewd "$up/aicrewd"
+  dc start sim-aicrewd >/dev/null
+  waitfor "aicrewd's start after the upgrade" 120 op curl -fs --cacert /sim/tls/ca.pem https://sim-aicrewd:9443/healthz
+  [ "$(installed sim-aicrewd sessiond $OPS_HOME/aicrew/bin/aicrewd)" = "$(digest "$up/aicrewd/prebuilt/aicrewd")" ] ||
+    fail "sim-aicrewd does not run this tree's aicrewd after the upgrade"
+  op sh -c 'ls "$HOME"/aicrew/lib/aicrew.db.backup-* "$HOME"/aicrew/bin/aicrewd.prev' >/dev/null 2>&1 ||
+    fail "the installer left no store backup and no aicrewd.prev in sim-aicrewd"
+  ev observation task="$TASK" what="aicrewd upgraded from $PREVIOUS to this tree's build by install-aicrewd.sh; the store backup and aicrewd.prev are kept"
+  for role in coordinator worker indep; do
+    svc=sim-$role
+    step "the upgrade: $svc's aicrew-agent $PREVIOUS to this tree's build, through boot.sh"
+    [ "$(installed "$svc" member /home/member/.local/bin/aicrew-agent)" = "$(digest "$STAGE/export/aicrew/$PREVIOUS/aicrew-agent-linux-$arch_bin")" ] ||
+      fail "$svc does not run aicrew-agent $PREVIOUS before the upgrade"
+    into_container "$svc" "$up/member"
+    dc exec -T -u member -e AICREW_PREBUILT_DIR=/opt/aicrew-upgrade/prebuilt -e AICREW_NO_SERVICE=1 "$svc"       bash /opt/aicrew-upgrade/boot.sh > "$OUT/upgrade-boot-$role.log" 2>&1 ||
+      fail "boot.sh did not upgrade $svc ($OUT/upgrade-boot-$role.log)"
+    [ "$(installed "$svc" member /home/member/.local/bin/aicrew-agent)" = "$(digest "$up/member/prebuilt/aicrew-agent")" ] ||
+      fail "$svc's aicrew-agent is not this tree's build after boot.sh"
+    # serve keeps the old binary until it starts again: the restart stands
+    # for an installed member's service restart (with AICREW_NO_SERVICE=1
+    # boot.sh does not restart it).
+    since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    dc restart "$svc" >/dev/null
+    served_since() { dc logs --no-color --since "$since" "$svc" 2>&1 | grep -q 'the turn model is available'; }
+    waitfor "$svc's serve on the new aicrew-agent" 300 served_since
+    dc exec -T -u member "$svc" aicrew-agent check --home /home/member/agent --json > "$OUT/upgrade-check-$role.json" ||
+      fail "aicrew-agent check is not green in $svc after the upgrade ($OUT/upgrade-check-$role.json)"
+    python3 "$SIM/smoke.py" check "$OUT/upgrade-check-$role.json" "$PILOTSIM_AISKILLS_VERSION" ||
+      fail "$svc's check report after the upgrade ($OUT/upgrade-check-$role.json)"
+  done
+  ev observation task="$TASK" what="each member's aicrew-agent upgraded from $PREVIOUS to this tree's build by boot.sh; aicrew-agent check is green"
+  take upgrade-after
+  recheck
+  same "$CYC/upgrade-before" "$CYC/upgrade-after"
+  for role in coordinator worker indep; do member resume "$role"; done
+}
+# kept: after the second cycle, the first cycle's records read again: the
+# homes' logs may only have grown.
+kept() {
+  begin upgrade-kept 300
+  CYCLE=1 CYC=$OUT/cycle-1 TASK=$C1_TASK PULL=$C1_PULL MERGE=$C1_MERGE FIRST=$C1_FIRST
+  take after-cycle-2
+  recheck
+  same "$CYC/upgrade-before" "$CYC/after-cycle-2" -grown
+}
+
+if [ -n "$UPGRADE" ]; then
+  cycle 1
+  C1_TASK=$TASK C1_PULL=$PULL C1_MERGE=$MERGE C1_FIRST=$FIRST
+  upgrade
+  cycle 2
+  kept
+elif [ -z "$SKIP" ]; then
   cycle 1
   cycle 2
 fi
 
 # ---- the pilot cases (DESIGN-PILOT-SIMULATION section 6) --------------------------------
-. "$SIM/cases.sh"
+[ -n "$UPGRADE" ] || . "$SIM/cases.sh"

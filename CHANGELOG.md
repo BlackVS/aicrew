@@ -12,6 +12,25 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+### Changed
+
+- **A release dry run now proves the hand-over and the publishing checks**
+  (01a1e482-3cbb). A dry run used to stop before the artifact was uploaded,
+  so the upload, the download and the publishing job's three checks first
+  ran in a real release, where a failure leaves a tag without a release.
+  The build job now uploads the artifact in every run. A new check job,
+  which holds no permission, downloads it and runs the three checks. The
+  publishing job runs the same steps by YAML alias on its own download
+  before it attests and publishes. A release behaves as before.
+- **Dependabot sends the actions' updates as one pull request**, and its
+  review checks the 7-day rule for each action in it.
+- **The simulation workflows' checks have plain names.** On a pull request
+  event that did not ask for a simulation, the check run was named by the
+  job name's expression text, because GitHub does not evaluate the name of a
+  job a job-level `if` skips. The job now always starts, and when the
+  simulation is not requested it runs one step and is named
+  `pilot-sim (not requested)` or `real-aimem (not requested)`.
+
 ### Fixed
 
 - **The store lock test can no longer fail a release on a collection**

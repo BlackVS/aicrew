@@ -9,13 +9,14 @@ name: e2e (real aimem)
 # A pull request event runs the job only while the label is on the pull
 # request, and a labeled event only when that label is the one added, so
 # another label on a labelled pull request starts no second run. Every
-# other pull request event is skipped, under a concurrency group and a job
-# name of its own. In the shared group its pending run would replace a real
-# run queued behind a running one. Under the shared name its skipped check,
-# newer than the real one at the same head (a hands label change after the
-# run), would stand for it, and skipped counts as passing. GitHub does not
-# evaluate a skipped job's name, so that check shows the expression text;
-# evaluated or not, it is never "real-aimem".
+# other pull request event runs only a step that says so, under a
+# concurrency group and a job name of its own. In the shared group its
+# pending run would replace a real run queued behind a running one. Under
+# the shared name its check, newer than the real one at the same head (a
+# hands label change after the run), would stand for it. The job has no
+# job-level if: GitHub does not evaluate the name of a job an if skips, and
+# its check would show the expression's text. So the job always starts and
+# its check is "real-aimem (not requested)", never "real-aimem".
 on:
   schedule:
     - cron: '17 2 * * *'
@@ -47,34 +48,44 @@ jobs:
       (contains(github.event.pull_request.labels.*.name, 'e2e-real-aimem') &&
       (github.event.action != 'labeled' || github.event.label.name == 'e2e-real-aimem')))
       && 'real-aimem' || 'real-aimem (not requested)' }}
-    if: >-
-      github.event_name != 'pull_request' ||
-      (contains(github.event.pull_request.labels.*.name, 'e2e-real-aimem') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'e2e-real-aimem'))
+    # REQUESTED is the name's condition; every step but the first runs only
+    # when it holds.
+    env:
+      REQUESTED: >-
+        ${{ github.event_name != 'pull_request' ||
+        (contains(github.event.pull_request.labels.*.name, 'e2e-real-aimem') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'e2e-real-aimem')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      - name: not requested
+        if: env.REQUESTED != 'true'
+        run: echo "real-aimem was not requested for this event (label e2e-real-aimem); nothing runs"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.REQUESTED == 'true'
         with:
           path: aicrew
           persist-credentials: false
       # The whole history with its tags: the harness archives the pinned
       # commit and stamps the version `git describe` gives it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.REQUESTED == 'true'
         with:
           repository: BlackVS/aimem
           path: aimem
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: env.REQUESTED == 'true'
         with:
           go-version: '1.26'
           cache-dependency-path: aicrew/go.sum
       - name: real-aimem harness
+        if: env.REQUESTED == 'true'
         working-directory: aicrew
         run: bash scripts/e2e-real-aimem.sh -aimem-src ../aimem -out ../e2e-out
       - name: keep the report and the logs
-        if: always()
+        if: always() && env.REQUESTED == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-real-aimem

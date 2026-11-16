@@ -8,9 +8,10 @@ name: pilot simulation
 # The label gate is e2e-real-aimem.yml's: a pull request event runs the job
 # only while the label is on the pull request, and a labeled event only
 # when that label is the one added, so another label on a labelled pull
-# request starts no second run. Every other pull request event is skipped,
-# under a concurrency group and a job name of its own, so that its skipped
-# check never stands for a real run at the same head.
+# request starts no second run. Every other pull request event runs only a
+# step that says so, under a concurrency group and a job name of its own
+# ("pilot-sim (not requested)"), so that its check never stands for a real
+# run at the same head.
 on:
   schedule:
     - cron: '41 3 * * *'
@@ -42,33 +43,46 @@ jobs:
       (contains(github.event.pull_request.labels.*.name, 'pilot-sim') &&
       (github.event.action != 'labeled' || github.event.label.name == 'pilot-sim')))
       && 'pilot-sim' || 'pilot-sim (not requested)' }}
-    if: >-
-      github.event_name != 'pull_request' ||
-      (contains(github.event.pull_request.labels.*.name, 'pilot-sim') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'pilot-sim'))
+    # No job-level if: GitHub does not evaluate the name of a job an if
+    # skips, and its check run would show the expression's text. The job
+    # always starts, so its name is always evaluated; when the simulation
+    # is not requested it runs one step that says so, and its check is
+    # "pilot-sim (not requested)", never a skipped "pilot-sim" that would
+    # pass for one. REQUESTED is the name's condition.
+    env:
+      REQUESTED: >-
+        ${{ github.event_name != 'pull_request' ||
+        (contains(github.event.pull_request.labels.*.name, 'pilot-sim') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'pilot-sim')) }}
     runs-on: ubuntu-latest
     # The run's own bound (AICREW_SIM_BOUND_MINUTES, 90 by default) stops
     # it first and still writes the report; this is the backstop.
     timeout-minutes: 120
     steps:
+      - name: not requested
+        if: env.REQUESTED != 'true'
+        run: echo "pilot-sim was not requested for this event (label pilot-sim); nothing runs"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.REQUESTED == 'true'
         with:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: env.REQUESTED == 'true'
         with:
           go-version: '1.25'
           cache: true
       - name: pilot simulation
+        if: env.REQUESTED == 'true'
         run: bash scripts/pilot-sim.sh -out "$RUNNER_TEMP/pilotsim"
       - name: the report's summary
-        if: always()
+        if: always() && env.REQUESTED == 'true'
         run: tail -n 1 "$RUNNER_TEMP/pilotsim/report.jsonl" || echo "no report"
       # The report, the step snapshots, the containers' logs and the member
       # homes. Left out: the staged binaries and image contexts, and the
       # run's known secrets, which a run cut off by the job's timeout
       # leaves behind.
       - name: keep the report and the logs
-        if: always()
+        if: always() && env.REQUESTED == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pilot-sim

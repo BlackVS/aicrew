@@ -3421,17 +3421,21 @@ every pull request (`release-build`), publishing nothing.
    reports exactly the tag, in a job with read access only. A second job
    tests and builds the same commit on macOS and checks its sums there; a
    Mac-only failure stops the release.
-   The publish job runs once both have passed. It is the only job allowed
-   to write and to sign, and it checks out nothing and runs no code from
-   the repository. It checks the files the build job handed over:
+   The build job hands its files over as an artifact. A check job, which
+   holds no permission at all, downloads it and checks:
    - `SHA256SUMS` and the notes are the ones the build job produced (their
      digests travel as job outputs, apart from the files);
    - every file matches its line in `SHA256SUMS`;
    - the files are exactly the ones `SHA256SUMS` lists.
 
-   It then attests the build provenance of every file, `SHA256SUMS`
-   included, and creates the release with all of them in one step. A
-   release is marked latest only when no higher tag exists.
+   The publish job runs once the build, macOS and the check have passed.
+   It is the only job allowed to write and to sign, and it checks out
+   nothing and runs no code from the repository. It downloads the files
+   itself and runs the same checks on them: the very steps of the check
+   job, by YAML alias, so the two cannot drift. It then attests the build
+   provenance of every file, `SHA256SUMS` included, and creates the
+   release with all of them in one step. A release is marked latest only
+   when no higher tag exists.
 4. Running the workflow by hand republishes an **existing** tag after a
    failed run. It never creates a tag. The attestation names the ref the run
    started from, so a run that publishes starts from its tag, and a run
@@ -3448,11 +3452,20 @@ every pull request (`release-build`), publishing nothing.
    With `dry_run` (the default), started from main, it checks, builds,
    stamps and prints the sums of a tag that need not exist yet, main's tip
    standing in, and attests and publishes nothing. Use it before the first
-   real tag:
+   real tag, and after a change to the release workflow or to an action it
+   uses:
 
    ```sh
    gh workflow run release.yml --ref main -f tag=vX.Y.Z
    ```
+
+   What a dry run covers, and what only a release covers:
+   - A dry run runs everything up to the publishing job: the ref guard,
+     the release checks, the tests and the build on Linux and macOS, the
+     upload of the artifact, and the check job, which downloads it and
+     runs the publishing job's three checks.
+   - Only a release runs the publishing job itself: its own download and
+     the same checks again, the attestation and `gh release create`.
 
    Its sums are not the release's, by design. Go stamps the main module's
    version from the VCS tag (`go version -m` shows
@@ -3518,4 +3531,8 @@ Releases up to 0.10.0 carry no attestation.
 a full commit SHA with its version in a comment, and every checkout sets
 `persist-credentials: false`; dependabot updates the pins in that form, and
 `internal/installer/release_workflow_test.go` fails on an action named any
-other way or a checkout that keeps the token.
+other way or a checkout that keeps the token. Dependabot groups the
+actions' updates: one pull request a week carries every pin it moves, with
+a table of the versions. Its review checks the 7-day rule for each action
+in that table (the release's date and the commit its tag points at), and a
+group with one action younger than 7 days waits as a whole.

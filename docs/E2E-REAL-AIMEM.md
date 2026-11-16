@@ -80,11 +80,12 @@ needs only the right to label a pull request, not to start workflows.
 Another label added to a labelled pull request starts no second run.
 A pull request event that does not run the harness, such as another label
 added to a labelled pull request or a push to a pull request without the
-label, shows as a skipped check under a name of its own. GitHub does not
-evaluate a skipped job's name, so that check carries the name's expression
-text. A pull request opened without the label gets no run at all. The
-skipped check never takes the name `real-aimem`, so it cannot stand in for
-a real run at the same head.
+label, runs one step that says so and shows as the check
+`real-aimem (not requested)`. A pull request opened without the label gets
+no run at all. That check never takes the name `real-aimem`, so it cannot
+stand in for a real run at the same head. The job has no job-level `if`
+for this: GitHub does not evaluate the name of a job an `if` skips, so a
+skipped job's check would carry the name's expression as text.
 
 A release-preparation pull request carries the label and needs the check
 green at its head (DEVELOPMENT.md, "Releasing").

@@ -1843,6 +1843,9 @@ aicrew-agent service install|uninstall|start|stop|restart|status (--home HOME | 
 
 ### Installing and upgrading: `boot.sh` and `boot.ps1`
 
+To bring up a team's members on hosts of their own, from an empty host to a
+running member, follow [BRING-UP.md](BRING-UP.md).
+
 On a member's machine, `aicrew-agent` and the operator CLI `aicrew` are
 installed and upgraded with the release's one-liner, from any directory,
 as the member's own user. The operator's machine uses the same one-liner:

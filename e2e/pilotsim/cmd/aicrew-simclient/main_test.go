@@ -152,8 +152,21 @@ func TestDiscoveryReachesTheHomesAimem(t *testing.T) {
 	}
 }
 
+// auth status answers as Claude Code 2.1.286 does with a stored login, so
+// the member start's preflight passes.
+func TestAuthStatusIsAStoredLogin(t *testing.T) {
+	code, out, _ := call(t, t.TempDir(), "auth", "status", "--json")
+	var st struct {
+		LoggedIn   bool   `json:"loggedIn"`
+		AuthMethod string `json:"authMethod"`
+	}
+	if code != 0 || json.Unmarshal([]byte(out), &st) != nil || !st.LoggedIn || st.AuthMethod == "" {
+		t.Fatalf("exit %d %q", code, out)
+	}
+}
+
 func TestAnythingElseIsNotSimulated(t *testing.T) {
-	for _, args := range [][]string{nil, {"-p", "do the task", "--output-format", "stream-json"}, {"mcp", "add"}} {
+	for _, args := range [][]string{nil, {"-p", "do the task", "--output-format", "stream-json"}, {"mcp", "add"}, {"auth", "status"}} {
 		code, out, errOut := call(t, t.TempDir(), args...)
 		if code != 2 || out != "" || !strings.Contains(errOut, "not simulated") {
 			t.Errorf("%q: exit %d %q %q", args, code, out, errOut)

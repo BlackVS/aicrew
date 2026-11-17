@@ -3,6 +3,8 @@
 // 3), installed there as `claude` on PATH. It answers only what
 // `aicrew-agent check` and serve's model probe ask a client:
 //   - `--version`: the Claude Code version aicrew is tested with;
+//   - `auth status --json`: a stored login, in the shape Claude Code
+//     2.1.286 prints it, for `aicrew-agent preflight`;
 //   - `mcp list` and the init event of `-p hi --output-format stream-json`:
 //     what the home wires, found the way Claude Code finds it (the home's
 //     .mcp.json, the skill directories) and its aimem server reached with a
@@ -36,6 +38,10 @@ import (
 // simModel is the model the probe's turn reports when none is configured.
 const simModel = "aicrew-sim"
 
+// simAuthStatus is `claude auth status --json` with a stored login, as
+// Claude Code 2.1.286 prints it.
+const simAuthStatus = `{"loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "subscriptionType": "pro"}`
+
 // mcpTimeout bounds the MCP initialize with the home's aimem.
 const mcpTimeout = 30 * time.Second
 
@@ -53,6 +59,9 @@ func run(ctx context.Context, args []string, dir string, stdout, stderr io.Write
 			return 1
 		}
 		fmt.Fprintf(stdout, "%s (Claude Code)\n", v)
+		return 0
+	case slices.Equal(args, []string{"auth", "status", "--json"}):
+		fmt.Fprintln(stdout, simAuthStatus)
 		return 0
 	case slices.Equal(args, []string{"mcp", "list"}):
 		return mcpList(ctx, dir, stdout)

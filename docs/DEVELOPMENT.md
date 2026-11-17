@@ -2177,6 +2177,17 @@ bin/aicrew-agent join --label builder --url https://aicrew.example:8443 \
 bin/aicrew-agent join --home ~/aicrew/agents/builder    # rerun: refresh and check
 ```
 
+Before the first join, `aicrew-agent preflight` takes the same `--url`,
+`--tls-trust-mode` and `--tls-trust-value`, and `--client`. It checks
+that aicrewd answers on `/healthz` with that trust and that the client
+has a login stored. It sends no credential and spends nothing
+(`docs/BRING-UP.md`, step 6):
+
+```sh
+bin/aicrew-agent preflight --url https://aicrew.example:8443 \
+  --tls-trust-mode ca_dns --tls-trust-value aicrew.example --client claude
+```
+
 - **The first `join` provisions the home's aimem installation**
   (`docs/WORKSPACE.md`, "The member's aimem installation"):
 

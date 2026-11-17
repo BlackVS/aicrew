@@ -46,10 +46,10 @@ role is set by the invitation, not by the host.
 | A systemd user manager, with lingering on | `systemctl --user status` and `loginctl show-user "$USER" --property=Linger` | `aicrew-agent service` (a systemd user unit), and the note it prints when lingering is off |
 | About 0.5 GB of disk for the tools | `df -h ~` | the try below: 34 MB for aicrew and aimem, 456 MB for Claude Code; worktrees come on top |
 | 512 MB of memory for the member, plus the client's own | `free -m` | `e2e/pilotsim/compose.yaml` (`mem_limit: 512m` per member, with a stand-in client) |
-| Reaches aicrewd | `curl -sS -o /dev/null -w '%{http_code}\n' --cacert CA https://AICREWD:PORT/healthz` | the `/healthz` check `e2e/pilotsim/compose.yaml` runs against aicrewd |
+| Reaches aicrewd | `aicrew-agent preflight` with join's `--url` and trust, before join (step 6) | join's own client to aicrewd, on its unauthenticated `/healthz` route |
 | Reaches the aimem hub with the member's credential | `aicrew-agent check --home HOME`, after join: no `credential_missing` or `credential_refused` block, and no notice that the hub could not confirm the home's credential | `check` asks the hub about the credential in the home's own aimem installation, never the OS user's |
 | Reaches the forge | `aicrew-agent check --home HOME`, its forge table | `check`'s read-only "who am I" per credential |
-| The client, logged in | `aicrew-agent check --home HOME`, its `turn model:` line | `check` in a `turns` home (one minimal model call, about $0.002) |
+| The client, logged in | before join, `aicrew-agent preflight --client claude` shows a login is stored; after join, `aicrew-agent check --home HOME`, its `turn model:` line, shows it works | `claude auth status`; `check` in a `turns` home (one minimal model call, about $0.002) |
 
 Two notes on these:
 - **A container is not enough by itself.** A container usually has no
@@ -58,11 +58,14 @@ Two notes on these:
   failure ([DEVELOPMENT.md](DEVELOPMENT.md), "Starting a member"). There
   is no product command for that, so a virtual machine is the simpler
   host.
-- **The client's login.** No product command checks the login without a
-  model call. `check`'s client discovery deliberately uses a dummy key and
-  a closed model endpoint. The turn-model call is the check that shows the
-  login works, and `unknown` there means a refused login, a limit or
-  another failure.
+- **The client's login.** No product command checks that the login is
+  valid without a model call. Claude Code's `claude auth status` reads the
+  stored login only: in 2.1.286 it reported a made-up login, an expired
+  one and one on a host without a network all as logged in. So the
+  preflight says only that a login is stored. OpenCode was not observed,
+  and the preflight makes no claim about its login. The turn-model call in
+  `check` is the check that shows the login works, and `unknown` there
+  means a refused login, a limit or another failure.
 
 ## The bring-up, in order
 
@@ -156,7 +159,38 @@ v0.11.0, v0.10.25 and 2.1.286.
 
 ### 6. Join (member host)
 
-On a terminal, so the code is read at a hidden prompt:
+First the preflight, with the same `--url` and trust values join takes:
+
+```sh
+aicrew-agent preflight --url https://AICREWD:PORT --tls-trust-mode ca_dns --tls-trust-value AICREWD --client claude
+```
+
+It spends nothing: no invitation, no session and no model call. It
+sends no credential. It calls aicrewd's `/healthz` with join's own client
+and trust, and runs `claude auth status`. Its `aicrewd:` line is one of:
+- **`reachable`**: aicrewd answers, with its version.
+- **`name`**: the host name does not resolve on this host.
+- **`refused`**: nothing answers at the address, or it times out.
+- **`certificate`**: the certificate does not match the CA and name
+  (`ca_dns`) or the pinned key (`spki_sha256`).
+- **`clock`**: the certificate is not valid at this host's time. Check
+  the clock first. Only `ca_dns` checks the dates: under `spki_sha256`
+  the pin replaces the chain check, so a pinned aicrewd never gives this
+  answer.
+- **`wrong_address`**: something answers, but not aicrewd's health route.
+
+Its `login (claude):` line is `stored`, `none` or `not_found`. `stored`
+means a login is stored, not that it is valid: only the turn-model call
+in `check`, after join, shows that. The login is read without the
+shell's `CLAUDE*` and `ANTHROPIC_*` variables (except
+`CLAUDE_CONFIG_DIR`), since the member's service has none. Each of
+`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and the Bedrock or Vertex
+switch makes `claude auth status` report a login on its own. For
+`--client opencode` the line is `no_check`.
+
+Check: the preflight exits 0. It exits 1 with the line that failed.
+
+Then join, on a terminal, so the code is read at a hidden prompt:
 
 ```sh
 aicrew-agent join --label worker --url https://AICREWD:PORT \
@@ -301,7 +335,8 @@ tried.
 
 These are findings for the architect, not fixed here:
 1. **The client's login has no check without a model call.** The
-   turn-model call is the only product check of the login.
+   preflight shows only that Claude Code has a login stored. The
+   turn-model call is the only product check that the login works.
 2. **`check` does not see a token's missing rights.** It reads the
    account's permission on each repository. Gitea reports that for the
    account, not the token, so a token with `read:repository` only is
@@ -314,8 +349,8 @@ These are findings for the architect, not fixed here:
    says a machine with no service is left alone.
 4. **A container host has no product supervisor.** Without a systemd user
    manager, the member's restart after a failure is left to the host.
-5. **Reaching aicrewd is checked only by join itself.** No product command
-   checks it before join.
+5. **Reaching aicrewd before join.** Answered by `aicrew-agent preflight`
+   (step 6).
 6. **Adding a label on Gitea needs `read:organization` on every
    repository.** The label lookup also reads the owner's organization
    labels. For a user's repository that read is meant to find nothing and

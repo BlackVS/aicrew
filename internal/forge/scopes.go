@@ -71,14 +71,14 @@ type giteaProbe struct {
 	scope, method, path string
 	// status and message are the answer, observed on Gitea 1.27.3, that
 	// shows the scope is there: the route passed the scope check and
-	// stopped at the record or the body.
+	// stopped at the record or the body. Both must match exactly.
 	status  int
 	message string
 }
 
 var giteaProbes = []giteaProbe{
 	{scope: "write:repository", method: http.MethodPatch, path: "/pulls/0", status: http.StatusNotFound, message: "not found"},
-	{scope: "write:issue", method: http.MethodPost, path: "/issues/0/labels", status: http.StatusUnprocessableEntity, message: "Empty Content-Type"},
+	{scope: "write:issue", method: http.MethodPost, path: "/issues/0/labels", status: http.StatusUnprocessableEntity, message: "[]: Empty Content-Type"},
 }
 
 // TokenRights reads what token itself may write to the repository at path,
@@ -122,7 +122,7 @@ func (c *Client) giteaRight(ctx context.Context, host, token, path string, p git
 	json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&body)
 	msg := oneLine(body.Message)
 	switch {
-	case resp.StatusCode == p.status && strings.Contains(msg, p.message):
+	case resp.StatusCode == p.status && msg == p.message:
 		r.State = RightPresent
 	case resp.StatusCode == http.StatusForbidden && slices.Contains(missingScopes(Gitea, msg), p.scope):
 		r.State, r.Detail = RightMissing, "the forge refuses it: "+msg

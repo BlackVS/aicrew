@@ -194,6 +194,44 @@ func TestReportCapabilitiesLowersOnlyNamedMissing(t *testing.T) {
 	}
 }
 
+// A repository two projects bind, one for read and one for write, is
+// reported as read when the write requirement found the token lacking a
+// right, in either order, so aicrewd's capability check refuses a write
+// offer on it.
+func TestReportCapabilitiesLoweredAcrossRequirements(t *testing.T) {
+	const url = "https://github.com/team/shared.git"
+	api := fakeAccess{token: "gh", access: map[string]string{"team/shared": "write"},
+		rights: map[string][]forge.RightCheck{"team/shared": {{Right: "write:issue", State: forge.RightMissing}}}}
+	for name, reqs := range map[string][]Requirement{
+		"read first":  {requirement("reader", url, "read"), requirement("writer", url, "write")},
+		"write first": {requirement("writer", url, "write"), requirement("reader", url, "read")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &reportSession{reqs: reqs}
+			if _, err := ReportCapabilities(context.Background(), forgeHome(t, "gh"), s, api, "session"); err != nil {
+				t.Fatal(err)
+			}
+			var sent struct {
+				Capabilities []store.Capability `json:"capabilities"`
+			}
+			if err := json.Unmarshal(s.sent, &sent); err != nil || len(sent.Capabilities) != 1 {
+				t.Fatalf("sent %s: %v", s.sent, err)
+			}
+			for _, r := range sent.Capabilities[0].Repositories {
+				if r.Access != "read" {
+					t.Errorf("sent %s as %q", r.URL, r.Access)
+				}
+			}
+			if gap := store.CapabilityGap(sent.Capabilities, store.AttemptRepository{URL: url, Access: "write"}); gap != "write" {
+				t.Errorf("aicrewd's check of a write offer: gap %q, want write", gap)
+			}
+			if gap := store.CapabilityGap(sent.Capabilities, store.AttemptRepository{URL: url, Access: "read"}); gap != "" {
+				t.Errorf("aicrewd's check of a read offer: gap %q, want none", gap)
+			}
+		})
+	}
+}
+
 // The launcher's capabilities operation reads the team's requirements,
 // verifies them and reports them to aicrewd as the session, which then
 // holds them; the answer is the check's rows.

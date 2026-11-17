@@ -118,6 +118,10 @@ func tokenRights(checks []forge.RightCheck) (string, string) {
 func VerifyCapabilities(ctx context.Context, home string, api AccessAPI, reqs []Requirement) ([]CapabilityRow, []Capability) {
 	doc, _, err := readAgentDoc(home)
 	byHost := map[string]*Capability{}
+	// lowered are the repositories whose token the forge states lacks a
+	// write right: every entry for them is reported as read, whatever
+	// other requirement bound the same repository.
+	lowered := map[string]bool{}
 	rows := make([]CapabilityRow, 0, len(reqs))
 	for _, r := range reqs {
 		row := CapabilityRow{Project: r.ProjectID, Repository: r.Repository.URL, Required: r.Repository.Access}
@@ -168,7 +172,7 @@ func VerifyCapabilities(ctx context.Context, home string, api AccessAPI, reqs []
 					// The account may push, the token may not: what the
 					// member can do is read.
 					row.State, row.Detail = CapabilityInsufficient, row.TokenDetail
-					access = forge.AccessRead
+					lowered[r.Repository.URL] = true
 				}
 			}
 			c := byHost[host]
@@ -187,7 +191,13 @@ func VerifyCapabilities(ctx context.Context, home string, api AccessAPI, reqs []
 	sort.Strings(hosts)
 	caps := make([]Capability, 0, len(hosts))
 	for _, h := range hosts {
-		caps = append(caps, *byHost[h])
+		c := byHost[h]
+		for i, r := range c.Repositories {
+			if lowered[r.URL] {
+				c.Repositories[i].Access = forge.AccessRead
+			}
+		}
+		caps = append(caps, *c)
 	}
 	return rows, caps
 }

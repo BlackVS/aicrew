@@ -145,13 +145,15 @@ func TestTokenRightsGiteaOtherAnswers(t *testing.T) {
 	ctx := context.Background()
 	full := []string{"write:repository", "write:issue", "read:user"}
 	for name, a := range map[string]answer{
-		"a 403 for another reason":   {http.StatusForbidden, "user should be an owner or a collaborator with write access"},
-		"a 403 naming another scope": {http.StatusForbidden, "token does not have at least one of required scope(s), required=[write:admin], token scope=x"},
-		"a 404 without the message":  {http.StatusNotFound, "the issue does not exist"},
-		"a 422 for another reason":   {http.StatusUnprocessableEntity, "invalid input"},
-		"a 200":                      {http.StatusOK, ""},
-		"a 500":                      {http.StatusInternalServerError, "boom"},
-		"a 401":                      {http.StatusUnauthorized, "token is required"},
+		"a 403 for another reason":                      {http.StatusForbidden, "user should be an owner or a collaborator with write access"},
+		"a 403 naming another scope":                    {http.StatusForbidden, "token does not have at least one of required scope(s), required=[write:admin], token scope=x"},
+		"a 404 without the message":                     {http.StatusNotFound, "the issue does not exist"},
+		"a 404 whose message contains the expected one": {http.StatusNotFound, "repository not found"},
+		"a 422 whose message contains the expected one": {http.StatusUnprocessableEntity, "[]: Empty Content-Type; and more"},
+		"a 422 for another reason":                      {http.StatusUnprocessableEntity, "invalid input"},
+		"a 200":                                         {http.StatusOK, ""},
+		"a 500":                                         {http.StatusInternalServerError, "boom"},
+		"a 401":                                         {http.StatusUnauthorized, "token is required"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := &scopeForge{scopes: full, answers: map[string]answer{

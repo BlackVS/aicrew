@@ -11,6 +11,8 @@
 //	                                        the turn loop as this account's service
 //	aicrew-agent step OP [--home DIR] [--attempt ID] [--task ID] [--body JSON|-]
 //	                                        ask the running launcher for a step
+//	aicrew-agent preflight --url URL --tls-trust-mode M --tls-trust-value V [--client C]
+//	                                        before join: aicrewd reachable, the client's login stored
 //	aicrew-agent join --label LABEL [--home DIR] --url URL --tls-trust-mode M --tls-trust-value V --aimem-hub NAME --client C
 //	                                        redeem an invitation and prepare the agent home
 //	aicrew-agent check (--home DIR | --label LABEL) [--client C]
@@ -60,6 +62,7 @@ const usage = `usage: aicrew-agent session start|status|leave --home DIR   (stat
        aicrew-agent escalations [--home DIR] [--json]   (the open escalations, before raising another)
        aicrew-agent wait-inbox [--home DIR]   (the Claude Code Stop hook join installs)
        aicrew-agent guard [--home DIR]        (the Claude Code PreToolUse hook join installs: the command guard)
+       aicrew-agent preflight --url URL --tls-trust-mode M --tls-trust-value V [--client C] [--json]   (before join; spends nothing)
        aicrew-agent join --label LABEL [--home DIR] --url URL --tls-trust-mode M --tls-trust-value V --aimem-hub NAME --client C
        aicrew-agent check (--home DIR | --label LABEL) [--client C] [--json]
        aicrew-agent clone [--home DIR] --repository HTTPS_URL --attempt ID --base COMMIT --branch NAME [--json]
@@ -236,6 +239,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "inbox" {
 		os.Exit(inbox(context.Background(), os.Args[2:], os.Stdout, os.Stderr, os.Getenv))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "preflight" {
+		os.Exit(preflight(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "join" {
 		os.Exit(join(context.Background(), os.Args[2:], agent.IsTerminal(os.Stdin), os.Stdout, os.Stderr,

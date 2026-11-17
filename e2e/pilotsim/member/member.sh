@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # A member's start: wait (bounded) for the files the scenario writes into
 # /sim/in (the invitation code, the aimem token, the forge token, each
-# owner only, then "ready"), join once with them, and run serve, restarted
-# after a failure as the installed service restarts it. Nothing is
+# owner only, then "ready"), run the preflight, join once with them, and
+# run serve, restarted after a failure as the installed service restarts it. Nothing is
 # typed: join reads the code with --code-file. The member reaches aicrewd
 # and the hub through the fault proxies sim-px-crew and sim-px-aimem
 # (e2e/pilotsim/compose.yaml), and runs aimem through aimem-timed, whose
@@ -20,6 +20,16 @@ set -a
 . /sim/tls/pins.env
 set +a
 if [ ! -f "$home/agent.json" ] || ! grep -q '"agent_id"' "$home/agent.json"; then
+  # The preflight a person runs before join (docs/BRING-UP.md), with join's
+  # own values: it spends nothing, and a member that fails it stops here.
+  # A release before the verb (the upgrade scenario's first install of
+  # v0.11.0) has none, and its own usage tells which.
+  if { aicrew-agent preflight 2>&1 || :; } | grep -q '^usage: aicrew-agent preflight '; then
+    aicrew-agent preflight --url https://sim-px-crew:9443 \
+      --tls-trust-mode spki_sha256 --tls-trust-value "$PIN_SIM_AICREWD" --client claude
+  else
+    echo "member.sh: this aicrew-agent has no preflight; join without it" >&2
+  fi
   aicrew-agent join --label "$SIM_ROLE" --home "$home" --url https://sim-px-crew:9443 \
     --tls-trust-mode spki_sha256 --tls-trust-value "$PIN_SIM_AICREWD" --aimem-hub sim --client claude \
     --wake turns --no-service --code-file "$in/invite" --aimem-command /usr/local/bin/aimem-timed \

@@ -38,10 +38,14 @@ competes with everything else on the desktop for memory.
 
 - `-out` is where the staged image contexts, the logs and the reports go
   (default `.work/pilotsim` in the repository).
-- `-keep` leaves the stack up after the run and prints the
-  `docker compose` command, with its environment, to look inside. Without
-  it the stack and its volumes are removed at the end, green or not. Every
-  run starts by removing a stack an earlier `-keep` left.
+- `-keep` leaves the stack up after the run and prints two `docker
+  compose` commands, each with its environment: `ps`, to look inside, and
+  `down -v --remove-orphans`, which removes the stack with its volumes.
+  Remove a kept stack with that second command, never with `down` alone,
+  which leaves the volumes. Without `-keep` the stack and its volumes are
+  removed at the end, green or not, and the run fails if anything of the
+  project is left (see "On a shared Docker host"). Every run starts by
+  removing a stack an earlier `-keep` left.
 - `AICREW_SIM_SKIP_FAULT=CASE` runs only the case CASE belongs to, without
   CASE's fault. CASE is one of `P1` to `P5` (see "The pilot cases") or a
   part of a fault case, such as `F1-claim-request` (see "The fault
@@ -121,6 +125,46 @@ so the run goes on when the ssh session ends. A trailing `&` instead
 keeps the ssh session open until the run ends. The last
 line of the log is the exit code, and the reports, the snapshots and the
 containers' logs are in `out-<name>`.
+
+### On a shared Docker host
+
+A host whose Docker serves other projects too is shared: what one project
+leaves there, another cannot tell from its own. The simulation's project
+name on such a host is `pilotsim` (the `name` of
+`e2e/pilotsim/compose.yaml`). Every agent and person working for this
+project there keeps to these rules, in the runner and in any command run
+by hand:
+
+- **a. One name.** Everything belongs to the compose project `pilotsim`:
+  its containers carry the compose project label, and its named volumes
+  and its network carry the `pilotsim_` prefix and that label.
+- **b. A label on what compose does not make.** A container started
+  outside compose gets `--label project=pilotsim`. A volume made by hand
+  gets that label and the `pilotsim_` prefix.
+- **c. No anonymous volumes.**
+  - A one-off container runs with `--rm`.
+  - A container removed by hand goes with `docker rm -v`.
+  - A stack whose data is disposable goes down with `docker compose down -v`.
+  - Where an image declares a volume, compose mounts a named volume (or a
+    tmpfs) over that path. The forge image declares `/data`, which the
+    stack mounts as `gitea-data`.
+- **d. Judge only one's own.** Cleanup and checks read only the
+  project's own resources, by its label or prefix. They never compare the
+  host's whole list of containers, volumes or images with a fixed list.
+- **e. Nothing host-wide.** No `docker system prune`, `docker volume
+  prune`, `docker image prune -a` or `docker builder prune`, and no
+  removal of anything that does not carry the project's name or label.
+- **f. Others' leftovers stay.** A leftover that is not the project's is
+  left alone and reported, with its name, creation time and size, to
+  whoever coordinates the host.
+
+The runner checks a and c on its own resources only:
+- After the members start, every volume a container of the stack mounts
+  must carry the project's label, so an anonymous volume fails the run,
+  naming the container and the path.
+- Without `-keep`, after the final `down -v`, nothing carrying the
+  project's label may be left (containers, volumes, the network), and
+  none of the volumes it recorded from the mounts.
 
 ## The report
 

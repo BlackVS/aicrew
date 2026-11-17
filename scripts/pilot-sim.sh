@@ -223,6 +223,43 @@ homes() {
       2>/dev/null | tar -C "$OUT/homes/$role" -xf - 2>/dev/null || true
   done
 }
+# ---- the project's own Docker resources (docs/E2E-PILOT-SIM.md, "On a shared Docker host")
+# DOCKER_PROJECT is compose.yaml's `name`, which the stack's containers, volumes
+# and network carry as their compose project label. The checks below read
+# only what carries it, or what the stack's own containers mount, never the
+# host's whole list.
+DOCKER_PROJECT=pilotsim
+OWN_VOLUMES=$OUT/own-volumes.txt
+# own_volumes: every volume a container of the stack mounts carries the
+# project's label, so none of them is anonymous; their names are recorded
+# for the check after the teardown.
+own_volumes() {
+  local id name dest vol bad=""
+  : > "$OWN_VOLUMES"
+  for id in $(dc ps -aq); do
+    while read -r name dest vol; do
+      [ -n "$vol" ] || continue
+      echo "$vol" >> "$OWN_VOLUMES"
+      [ "$(docker volume inspect -f '{{index .Labels "com.docker.compose.project"}}' "$vol" 2>/dev/null)" = "$DOCKER_PROJECT" ] ||
+        bad="$bad ${name#/}:$dest"
+    done < <(docker inspect -f '{{$n := .Name}}{{range .Mounts}}{{if eq .Type "volume"}}{{$n}} {{.Destination}} {{.Name}}{{println}}{{end}}{{end}}' "$id")
+  done
+  sort -u -o "$OWN_VOLUMES" "$OWN_VOLUMES"
+  [ -z "$bad" ] || fail "a volume of the stack carries no project label (an anonymous volume):$bad; name it in compose.yaml"
+}
+# leftovers: after the teardown, what is still there of the project's own:
+# containers, volumes and networks with its label, and the volumes the run
+# recorded. One line each.
+leftovers() {
+  docker ps -aq --filter "label=com.docker.compose.project=$DOCKER_PROJECT" | sed 's/^/container /'
+  docker volume ls -q --filter "label=com.docker.compose.project=$DOCKER_PROJECT" | sed 's/^/volume /'
+  docker network ls -q --filter "label=com.docker.compose.project=$DOCKER_PROJECT" | sed 's/^/network /'
+  local vol
+  [ -s "$OWN_VOLUMES" ] || return 0
+  while read -r vol; do
+    ! docker volume inspect "$vol" >/dev/null 2>&1 || echo "volume $vol"
+  done < "$OWN_VOLUMES"
+}
 finish() {
   local code=$?
   set +e
@@ -231,18 +268,31 @@ finish() {
   stop_watchdog
   collect
   homes
+  # The teardown and its check come before the report's end event, so that
+  # a run that leaves something of its own ends with a failing code there too.
+  if [ -z "$KEEP" ]; then
+    dc down -v --remove-orphans >/dev/null 2>&1 || true
+    local left
+    left=$(leftovers | sort -u)
+    if [ -n "$left" ]; then
+      echo "pilot-sim: FAILED: the teardown left the project's own resources:" >&3
+      echo "$left" | sed 's/^/  /' >&3
+      ev fail scenario="$SCENARIO" what="the teardown left the project's own resources"
+      code=1
+    fi
+  fi
   ev end code="$code"
   if ! "$SIMREPORT" write "$OUT" "$KNOWN_DIR/secrets"; then
     echo "pilot-sim: the report ($OUT/report.jsonl) could not be written" >&3
     [ "$code" != 0 ] || code=1
   fi
   rm -rf "$KNOWN_DIR" "$TOOLS"
-  if [ -z "$KEEP" ]; then
-    dc down -v --remove-orphans >/dev/null 2>&1 || true
-  else
+  if [ -n "$KEEP" ]; then
+    local env="PILOTSIM_STAGE=$STAGE PILOTSIM_AIMEM_VERSION=$PILOTSIM_AIMEM_VERSION PILOTSIM_AISKILLS_VERSION=$PILOTSIM_AISKILLS_VERSION"
     echo "pilot-sim: -keep: the stack is still up; inspect it with:" >&3
-    echo "  PILOTSIM_STAGE=$STAGE PILOTSIM_AIMEM_VERSION=$PILOTSIM_AIMEM_VERSION" \
-      "PILOTSIM_AISKILLS_VERSION=$PILOTSIM_AISKILLS_VERSION docker compose -f $COMPOSE ps" >&3
+    echo "  $env docker compose -f $COMPOSE ps" >&3
+    echo "pilot-sim: remove it, with its volumes, with:" >&3
+    echo "  $env docker compose -f $COMPOSE down -v --remove-orphans" >&3
   fi
   exit "$code"
 }
@@ -388,6 +438,7 @@ begin setup 1800
 # A stack an earlier -keep run left up would refuse this run's accounts,
 # and holds memory the check below counts.
 dc down -v --remove-orphans >/dev/null 2>&1 || true
+rm -f "$OWN_VOLUMES"
 memory_check
 stage
 step "building the images"
@@ -502,6 +553,7 @@ step "the members: aimem users and tokens, invitations, and their input files"
 # independent member.
 declare -A AICREW_ROLE=([coordinator]=coordinator [worker]=worker [indep]=independent)
 dc up -d sim-coordinator sim-worker sim-indep >/dev/null
+own_volumes
 for role in coordinator worker indep; do
   svc=sim-$role
   uid=$(hub aimem access user-add --user-name "sim-$role" | json_field id)

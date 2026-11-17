@@ -59,6 +59,9 @@ binaries, source checkouts or backups there. Temporary/private artifacts go
 in gitignored `.work/`; reusable reviewed scripts go in `scripts/`.
 Never print secrets, embed them in config/commands, commit local bindings or
 fall back from a refused ordinary credential to an admin/checkpoint token.
+On a Docker host shared with other projects, keep to the rules in
+docs/E2E-PILOT-SIM.md, "On a shared Docker host": one project name, no
+anonymous volumes, nothing host-wide, others' leftovers left and reported.
 Provider authentication stays in client-supported storage.
 
 The future product's agent-home layout is a design requirement, not something

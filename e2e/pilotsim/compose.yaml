@@ -112,7 +112,10 @@ services:
     mem_limit: 768m
     depends_on:
       sim-ca: {condition: service_completed_successfully}
-    volumes: [tls:/sim/tls:ro]
+    # The image declares /data a volume: a named one, so that it carries the
+    # project's name and label and `down -v` removes it, never an anonymous
+    # one (docs/E2E-PILOT-SIM.md, "On a shared Docker host").
+    volumes: [tls:/sim/tls:ro, gitea-data:/data]
     entrypoint:
       - /bin/sh
       - -c
@@ -184,6 +187,7 @@ services:
 
 volumes:
   tls:
+  gitea-data:
   in-coordinator:
   in-worker:
   in-indep:

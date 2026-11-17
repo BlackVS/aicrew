@@ -389,17 +389,24 @@ func (c *Client) do(ctx context.Context, method, host string, k Kind, token, pat
 // doURL is do at the full URL u, for an endpoint outside the dialect's API
 // root (GitHub's GraphQL).
 func (c *Client) doURL(ctx context.Context, method, u string, k Kind, token string, in, out any) error {
+	_, err := c.doURLHeader(ctx, method, u, k, token, in, out)
+	return err
+}
+
+// doURLHeader is doURL that also returns the answer's headers, when the
+// forge answered.
+func (c *Client) doURLHeader(ctx context.Context, method, u string, k Kind, token string, in, out any) (http.Header, error) {
 	var body io.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		body = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 	if in != nil {
@@ -413,37 +420,51 @@ func (c *Client) doURL(ctx context.Context, method, u string, k Kind, token stri
 	case GitLab:
 		req.Header.Set("PRIVATE-TOKEN", token)
 	default:
-		return fmt.Errorf("unknown forge dialect %q", k)
+		return nil, fmt.Errorf("unknown forge dialect %q", k)
 	}
 	resp, err := c.http().Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %s", ErrUnreachable, reason(err))
+		return nil, fmt.Errorf("%w: %s", ErrUnreachable, reason(err))
 	}
 	defer resp.Body.Close()
+	h := resp.Header
 	switch {
 	case resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0":
 		// A rate limit is not a verdict on the token: try again later.
-		return fmt.Errorf("%w: rate limited", ErrUnreachable)
-	case resp.StatusCode == http.StatusForbidden && method != http.MethodGet:
-		return fmt.Errorf("%w%s", ErrForbidden, refusal(resp.Body))
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return ErrRejected
+		return h, fmt.Errorf("%w: rate limited", ErrUnreachable)
+	case resp.StatusCode == http.StatusForbidden:
+		// A write the token may not make is ErrForbidden; a read it may
+		// not make, ErrRejected. Either names the scope Gitea names.
+		msg := refusal(resp.Body)
+		base := ErrRejected
+		if method != http.MethodGet {
+			base = ErrForbidden
+		}
+		if scopes := missingScopes(k, msg); scopes != nil {
+			return h, &ScopeError{Scopes: scopes, base: base}
+		}
+		if base == ErrForbidden {
+			return h, fmt.Errorf("%w%s", ErrForbidden, msg)
+		}
+		return h, ErrRejected
+	case resp.StatusCode == http.StatusUnauthorized:
+		return h, ErrRejected
 	case resp.StatusCode == http.StatusNotFound:
-		return ErrNotFound
+		return h, ErrNotFound
 	case resp.StatusCode >= 500:
-		return fmt.Errorf("%w: status %d", ErrUnreachable, resp.StatusCode)
+		return h, fmt.Errorf("%w: status %d", ErrUnreachable, resp.StatusCode)
 	case resp.StatusCode == http.StatusNoContent:
-		return nil
+		return h, nil
 	case resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated:
-		return fmt.Errorf("the forge answered status %d%s", resp.StatusCode, refusal(resp.Body))
+		return h, fmt.Errorf("the forge answered status %d%s", resp.StatusCode, refusal(resp.Body))
 	}
 	if out == nil {
-		return nil
+		return h, nil
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(out); err != nil {
-		return fmt.Errorf("the forge's answer is not JSON: %w", err)
+		return h, fmt.Errorf("the forge's answer is not JSON: %w", err)
 	}
-	return nil
+	return h, nil
 }
 
 // maxRefusal bounds the forge's message a refusal quotes.

@@ -41,6 +41,9 @@ func (f *fakeForge) WhoAmI(_ context.Context, host string, _ forge.Kind, token s
 	if f.unreachable[host] {
 		return forge.Identity{}, forge.ErrUnreachable
 	}
+	if token == "no-read-user" {
+		return forge.Identity{}, &forge.ScopeError{Scopes: []string{"read:user"}}
+	}
 	id, ok := f.ids[token]
 	if !ok {
 		return forge.Identity{}, forge.ErrRejected
@@ -177,6 +180,7 @@ func TestProvisionForgeRefusals(t *testing.T) {
 		{"up.example", tokenFile(t, dir, "b", "rejected")},
 		{"a.b", tokenFile(t, dir, "c", "good")},
 		{"a-b", tokenFile(t, dir, "d", "good")},
+		{"scope.example", tokenFile(t, dir, "e", "no-read-user")},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -193,6 +197,12 @@ func TestProvisionForgeRefusals(t *testing.T) {
 		states["a.b"].State != ForgeProvisioned || states["a-b"].State != ForgeRefused ||
 		!strings.Contains(states["a-b"].Detail, "a.b") {
 		t.Fatalf("states %+v", states)
+	}
+	// A token Gitea refuses for want of read:user is refused with the scope
+	// named, not as a revoked token.
+	if r := states["scope.example"]; r.State != ForgeRefused || !strings.Contains(r.Detail, "read:user") ||
+		!strings.Contains(r.Detail, "BRING-UP") {
+		t.Fatalf("a token without read:user: %+v", r)
 	}
 	entries := doc.forgeEntries()
 	if len(entries) != 1 || entries["a.b"].File != "a-b.bot.repo-write" {

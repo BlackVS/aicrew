@@ -200,6 +200,9 @@ func provisionForge(ctx context.Context, home string, doc *agentDoc, toks []forg
 		switch {
 		case errors.Is(err, forge.ErrUnreachable):
 			r.State, r.Detail = ForgeUnreachable, err.Error()+"; rerun join with this --cred when the host answers"
+		case errors.As(err, new(*forge.ScopeError)):
+			r.State, r.Detail = ForgeRefused, fmt.Sprintf("%v, which reading the token's account needs: ask the operator "+
+				"for a token with the rights in docs/BRING-UP.md", err)
 		case errors.Is(err, forge.ErrRejected):
 			r.State, r.Detail = ForgeRefused, "the forge rejected the token: ask the operator for a valid one"
 		case err != nil:
@@ -306,6 +309,9 @@ func checkForge(ctx context.Context, home string, doc *agentDoc, api ForgeAPI) [
 				"rerun join with the right --cred", id.Account, e.Account)
 		case errors.Is(err, forge.ErrUnreachable):
 			fc.State, fc.Detail = ForgeUnreachable, err.Error()
+		case errors.As(err, new(*forge.ScopeError)):
+			fc.State, fc.Detail = ForgeRefused, fmt.Sprintf("%v, which reading the token's account needs: ask the operator "+
+				"for a token with the rights in docs/BRING-UP.md", err)
 		case errors.Is(err, forge.ErrRejected):
 			fc.State, fc.Detail = ForgeRefused, "the forge rejected the token (revoked or expired): ask the operator for a new one"
 		default:

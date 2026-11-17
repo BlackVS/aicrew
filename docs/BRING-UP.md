@@ -121,8 +121,9 @@ that permission for each granted project.
 The token needs the rights listed under "The forge token's rights" below.
 
 Check: none until step 6, where `join --cred` asks the forge who the token
-authenticates as before writing it. A missing right shows only later, at
-the first call that needs it (see the gaps).
+authenticates as before writing it, and then `check`, which reads the
+token's own rights where the forge shows them ("What `check` reads of the
+token" below).
 
 ### 4. The invitation (operator)
 
@@ -256,10 +257,10 @@ repository of the team's projects.
 
 | Scope | What needs it |
 | --- | --- |
-| `read:user` | `join --cred` and `check` ask the forge who the token authenticates as |
+| `read:user` | `join --cred` and `check` ask the forge who the token authenticates as. Without it `join` refuses the token, naming the scope |
 | `write:repository` | git's clone and push; `forge pr open`; `forge pr ready` (it edits the title); reading the repository, its branches, the pull request and its reviews and statuses; an automation's base update, which pushes |
 | `write:issue` | `forge pr label` and `forge pr comment`, which go through the issue endpoints; `forge pr show` reads the comments there |
-| `read:organization` | `forge pr label add`: it looks the label up among the owner's organization labels as well as the repository's. Gitea refuses that lookup to a token without this scope even when the owner is a user, so every repository needs it |
+| `read:organization` | only when a label the team uses is defined at the organization and not in the repository: `forge pr label add` reads the organization's labels only for a name the repository does not define |
 
 Tried on 2026-11-17 on the pilot simulation's Gitea (1.27), with tokens of
 the simulation's worker account on its repository, which a user owns. Each
@@ -274,7 +275,8 @@ open, label add, comment, ready, label remove and show were run:
   naming `write:issue` as the scope required.
 - **No issue scope:** label add, comment and show failed.
 - **Without `read:organization`:** label add failed; everything else
-  passed.
+  passed. The label lookup has changed since: a label the repository
+  defines no longer reads the organization's labels.
 
 Gitea has no re-run of a job: its checks are commit statuses, and the
 CI re-run automation reports that nothing was re-run.
@@ -292,7 +294,7 @@ to the team's repositories:
 | Metadata: read | reading the repository and its default branch, including the account's push permission `check` reports (GitHub adds it to every token) |
 | Contents: read and write | git's clone and push; reading a branch's head; an automation's base update, which pushes |
 | Pull requests: read and write | `forge pr open`, `show` and `ready` (marking a draft ready and editing the title); labels and comments (see the next row) |
-| Issues: read and write | `forge pr label` and `forge pr comment` use the issue endpoints. GitHub lists them under both Issues and Pull requests and does not say whether one is enough, so give both |
+| Issues: read and write (an alternative) | `forge pr label` and `forge pr comment` use the issue and label endpoints ([labels](https://docs.github.com/en/rest/issues/labels#add-labels-to-an-issue), [comments](https://docs.github.com/en/rest/issues/comments#create-an-issue-comment)). Each endpoint's page documents that a fine-grained token needs at least one of two permission sets, Issues or Pull requests (write to add, read to list), and [the permissions list](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens) names both for each of them. So Pull requests: read and write, which the row above needs anyway, should be enough; giving Issues as well does no harm. Not tried |
 | Commit statuses: read | the head's CI state, in `forge pr show` and the watch of a pull request |
 | Actions: read and write | read: a failed job's log in `forge pr show`. Write: the CI re-run automation, which is in every member's home by default and re-runs the failed jobs of a runner failure once per head, with the member's own token |
 
@@ -300,14 +302,61 @@ Two more, from GitHub's documentation and not from the code:
 - **Changes to workflow files.** A push that changes a file under
   `.github/workflows` needs Workflows: write. A member whose work touches
   the CI needs it.
-- **Check runs.** The CI state also reads the head's check runs. GitHub's
-  documentation names no fine-grained permission for listing them. On a
-  public repository they need none; on a private one this is not known.
+- **Check runs.** The CI state also reads the head's check runs
+  ([the endpoint](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference)).
+  GitHub's documentation names a permission for it only for GitHub App
+  tokens (Checks: read), and says that a classic token needs `repo` on a
+  private repository. The fine-grained token's list does not name the
+  endpoint, so its case is unverified: on a public repository nothing more
+  should be needed; on a private one it is not known.
 
 The account's own `GET /user` needs no permission.
 
-A classic personal access token covers the same with the `repo` scope,
-and `workflow` for workflow files. GitHub recommends the fine-grained one.
+A classic personal access token covers the same with the `repo` scope
+(`public_repo` on a public repository), and `workflow` for workflow files.
+GitHub recommends the fine-grained one.
+
+### What `check` reads of the token
+
+`check` reads the account's access to each repository, which the forge
+reports for the account, and, for a project that needs write access, what
+the token itself may do. Its project table shows them apart: `access` is
+the account's, `token` is the token's (`verified`, `insufficient` or
+`not_checked`). A row is `insufficient` when either falls short, with the
+missing right named. When the forge's answer names a right as missing from
+the token, the home reports that repository to aicrewd as `read`, so no
+offer needing a write reaches the member. A `not_checked` token keeps the
+account's access.
+- **Gitea.** A token cannot list its own scopes (the token list needs the
+  account's password). `check` sends two requests, each aimed at number 0,
+  which Gitea gives to no issue or pull request (it numbers them from 1),
+  with no body, so a request that did reach a record would carry nothing
+  to change.
+
+  | Scope | Request | Answer with the scope | Answer without it |
+  | --- | --- | --- | --- |
+  | `write:repository` | `PATCH /repos/OWNER/REPO/pulls/0` | 404 `not found` | 403 naming `write:repository` |
+  | `write:issue` | `POST /repos/OWNER/REPO/issues/0/labels` | 422 `[]: Empty Content-Type` | 403 naming `write:issue` |
+
+  These are the answers of Gitea 1.27.3. Only the answer in the third
+  column counts as the scope being there, and only a refusal naming the
+  scope counts as missing. Any other answer, for example from another
+  version that words or orders its checks differently, is `not_checked`
+  with the answer, and `check` adds a notice; it is never read as a
+  verdict either way.
+- **GitHub, classic token.** GitHub sends the token's scopes in the
+  `X-OAuth-Scopes` header of each answer
+  ([scopes](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps)).
+  `check` reads it from the repository's answer it already asks for: `repo`,
+  or `public_repo` on a repository the forge reports as public, is
+  `verified`; a header naming other scopes only is `insufficient`. A header
+  that is absent or names no scope is `not_checked`.
+- **GitHub, fine-grained token.** No answer names its permissions, so
+  `check` says they are not checked and points to the list above.
+- **GitLab.** Not read: `not_checked`.
+
+The Gitea part was tried, the GitHub part was not: it is read from
+GitHub's documentation and tested against a stand-in server only.
 
 ## How far this was tried
 
@@ -337,11 +386,11 @@ These are findings for the architect, not fixed here:
 1. **The client's login has no check without a model call.** The
    preflight shows only that Claude Code has a login stored. The
    turn-model call is the only product check that the login works.
-2. **`check` does not see a token's missing rights.** It reads the
-   account's permission on each repository. Gitea reports that for the
-   account, not the token, so a token with `read:repository` only is
-   `verified` (GitHub was not tried). A missing right shows at the first push or `forge pr`
-   call that needs it, as a refusal naming the scope on Gitea.
+2. **`check` and a token's missing rights.** Closed for Gitea's two write
+   scopes and for a classic GitHub token ("What `check` reads of the
+   token"). Left: a fine-grained GitHub token's permissions, which no
+   answer names, so `check` says they are not checked; a missing right
+   there still shows at the first call that needs it.
 3. **The first install warns about services on a host without systemd.**
    On a fresh host without `systemctl`, the aicrew one-liner prints
    "no supported service manager: systemctl not found" and "not every
@@ -351,11 +400,10 @@ These are findings for the architect, not fixed here:
    manager, the member's restart after a failure is left to the host.
 5. **Reaching aicrewd before join.** Answered by `aicrew-agent preflight`
    (step 6).
-6. **Adding a label on Gitea needs `read:organization` on every
-   repository.** The label lookup also reads the owner's organization
-   labels. For a user's repository that read is meant to find nothing and
-   be skipped, but Gitea refuses it to a token without the scope, and the
-   refusal ends the label's addition.
+6. **Adding a label on Gitea needed `read:organization` on every
+   repository.** Closed: the lookup reads the organization's labels only
+   for a name the repository does not define. Left: a label defined only
+   at the organization still needs the scope.
 7. **On GitHub the CI re-run needs Actions: write in every member's
    token.** The re-run automation is in every member's home by default and
    runs with the member's own token.

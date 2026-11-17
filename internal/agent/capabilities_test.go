@@ -17,6 +17,16 @@ type fakeAccess struct {
 	access map[string]string
 	errs   map[string]error
 	token  string
+	// rights are the token's rights by path; a path without them holds
+	// every right.
+	rights map[string][]forge.RightCheck
+}
+
+func (f fakeAccess) TokenRights(_ context.Context, _ string, _ forge.Kind, _, path string) []forge.RightCheck {
+	if r, ok := f.rights[path]; ok {
+		return r
+	}
+	return []forge.RightCheck{{Right: "repo", State: forge.RightPresent}}
 }
 
 func (f fakeAccess) RepositoryAccess(_ context.Context, _ string, _ forge.Kind, token, path string) (string, error) {
@@ -76,6 +86,149 @@ func TestVerifyCapabilities(t *testing.T) {
 	raw, _ := json.Marshal(rows)
 	if strings.Contains(string(raw), `"gh"`) {
 		t.Fatal("a row carries the token")
+	}
+}
+
+// A write requirement also reads what the token itself may do, apart from
+// the account's access: a right it lacks makes the row insufficient and
+// reports the repository as read, a right the forge does not show is said
+// to be not checked, and a read refused for a scope names it.
+func TestVerifyCapabilitiesTokenRights(t *testing.T) {
+	home := forgeHome(t, "gh")
+	api := fakeAccess{token: "gh",
+		access: map[string]string{"team/full": "write", "team/noissue": "write", "team/fine": "write", "team/docs": "write"},
+		errs:   map[string]error{"team/noread": &forge.ScopeError{Scopes: []string{"read:repository"}}},
+		rights: map[string][]forge.RightCheck{
+			"team/noissue": {{Right: "write:repository", State: forge.RightPresent},
+				{Right: "write:issue", State: forge.RightMissing, Detail: "refused"}},
+			"team/fine": {{Right: "repo", State: forge.RightNotChecked, Detail: "GitHub names no scopes"}},
+			"team/docs": {{Right: "repo", State: forge.RightMissing}},
+		}}
+	rows, caps := VerifyCapabilities(context.Background(), home, api, []Requirement{
+		requirement("full", "https://github.com/team/full.git", "write"),
+		requirement("noissue", "https://github.com/team/noissue.git", "write"),
+		requirement("fine", "https://github.com/team/fine.git", "write"),
+		requirement("read-docs", "https://github.com/team/docs.git", "read"),
+		requirement("noread", "https://github.com/team/noread.git", "read"),
+	})
+	type want struct{ state, access, token, detail string }
+	wants := map[string]want{
+		"full":      {CapabilityVerified, "write", TokenVerified, ""},
+		"noissue":   {CapabilityInsufficient, "write", TokenInsufficient, "write:issue"},
+		"fine":      {CapabilityVerified, "write", TokenNotChecked, "GitHub names no scopes"},
+		"read-docs": {CapabilityVerified, "write", "", ""},
+		"noread":    {CapabilityInsufficient, "", "", "read:repository"},
+	}
+	for _, r := range rows {
+		w := wants[r.Project]
+		if r.State != w.state || r.Access != w.access || r.Token != w.token ||
+			!strings.Contains(r.Detail+r.TokenDetail, w.detail) {
+			t.Errorf("%s: %+v, want %+v", r.Project, r, w)
+		}
+	}
+	got := map[string]string{}
+	for _, r := range caps[0].Repositories {
+		got[r.URL] = r.Access
+	}
+	if got["https://github.com/team/noissue.git"] != "read" || got["https://github.com/team/full.git"] != "write" ||
+		got["https://github.com/team/fine.git"] != "write" {
+		t.Fatalf("reported repositories = %v", got)
+	}
+}
+
+// reportSession answers the requirements and keeps what the report sends.
+type reportSession struct {
+	reqs []Requirement
+	sent []byte
+}
+
+func (s *reportSession) Read(_ context.Context, _, path string) (json.RawMessage, error) {
+	return json.Marshal(map[string]any{"projects": s.reqs})
+}
+
+func (s *reportSession) LocalStep(_ context.Context, _, _, path string, body []byte) (json.RawMessage, error) {
+	if path == capabilitiesPath {
+		s.sent = append([]byte(nil), body...)
+	}
+	return json.RawMessage(`{}`), nil
+}
+
+// What a report sends aicrewd: a repository whose token the forge names as
+// lacking a write right is read; one whose token's rights are not checked
+// keeps the account's write.
+func TestReportCapabilitiesLowersOnlyNamedMissing(t *testing.T) {
+	home := forgeHome(t, "gh")
+	api := fakeAccess{token: "gh",
+		access: map[string]string{"team/missing": "write", "team/unknown": "write", "team/full": "write"},
+		rights: map[string][]forge.RightCheck{
+			"team/missing": {{Right: "write:issue", State: forge.RightMissing}},
+			"team/unknown": {{Right: "write:issue", State: forge.RightNotChecked, Detail: "status 500"}},
+		}}
+	s := &reportSession{reqs: []Requirement{
+		requirement("missing", "https://github.com/team/missing.git", "write"),
+		requirement("unknown", "https://github.com/team/unknown.git", "write"),
+		requirement("full", "https://github.com/team/full.git", "write"),
+	}}
+	if _, err := ReportCapabilities(context.Background(), home, s, api, "session"); err != nil {
+		t.Fatal(err)
+	}
+	var sent struct {
+		Capabilities []Capability `json:"capabilities"`
+	}
+	if err := json.Unmarshal(s.sent, &sent); err != nil || len(sent.Capabilities) != 1 {
+		t.Fatalf("sent %s: %v", s.sent, err)
+	}
+	got := map[string]string{}
+	for _, r := range sent.Capabilities[0].Repositories {
+		got[r.URL] = r.Access
+	}
+	want := map[string]string{"https://github.com/team/missing.git": "read",
+		"https://github.com/team/unknown.git": "write", "https://github.com/team/full.git": "write"}
+	if len(got) != len(want) {
+		t.Fatalf("sent %v", got)
+	}
+	for u, a := range want {
+		if got[u] != a {
+			t.Errorf("%s sent as %q, want %q", u, got[u], a)
+		}
+	}
+}
+
+// A repository two projects bind, one for read and one for write, is
+// reported as read when the write requirement found the token lacking a
+// right, in either order, so aicrewd's capability check refuses a write
+// offer on it.
+func TestReportCapabilitiesLoweredAcrossRequirements(t *testing.T) {
+	const url = "https://github.com/team/shared.git"
+	api := fakeAccess{token: "gh", access: map[string]string{"team/shared": "write"},
+		rights: map[string][]forge.RightCheck{"team/shared": {{Right: "write:issue", State: forge.RightMissing}}}}
+	for name, reqs := range map[string][]Requirement{
+		"read first":  {requirement("reader", url, "read"), requirement("writer", url, "write")},
+		"write first": {requirement("writer", url, "write"), requirement("reader", url, "read")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &reportSession{reqs: reqs}
+			if _, err := ReportCapabilities(context.Background(), forgeHome(t, "gh"), s, api, "session"); err != nil {
+				t.Fatal(err)
+			}
+			var sent struct {
+				Capabilities []store.Capability `json:"capabilities"`
+			}
+			if err := json.Unmarshal(s.sent, &sent); err != nil || len(sent.Capabilities) != 1 {
+				t.Fatalf("sent %s: %v", s.sent, err)
+			}
+			for _, r := range sent.Capabilities[0].Repositories {
+				if r.Access != "read" {
+					t.Errorf("sent %s as %q", r.URL, r.Access)
+				}
+			}
+			if gap := store.CapabilityGap(sent.Capabilities, store.AttemptRepository{URL: url, Access: "write"}); gap != "write" {
+				t.Errorf("aicrewd's check of a write offer: gap %q, want write", gap)
+			}
+			if gap := store.CapabilityGap(sent.Capabilities, store.AttemptRepository{URL: url, Access: "read"}); gap != "" {
+				t.Errorf("aicrewd's check of a read offer: gap %q, want none", gap)
+			}
+		})
 	}
 }
 

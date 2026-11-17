@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/BlackVS/aicrew/internal/forge"
 )
@@ -65,12 +66,48 @@ type CapabilityRow struct {
 	Access     string `json:"access,omitempty"`
 	State      string `json:"state"`
 	Detail     string `json:"detail,omitempty"`
+	// Token is what the token itself may do for a write requirement, apart
+	// from the account's access: verified, insufficient or not_checked.
+	Token       string `json:"token,omitempty"`
+	TokenDetail string `json:"token_detail,omitempty"`
 }
 
 // AccessAPI is what a capability check asks of a forge; forge.Client is
 // the real one.
 type AccessAPI interface {
 	RepositoryAccess(ctx context.Context, host string, k forge.Kind, token, path string) (string, error)
+	TokenRights(ctx context.Context, host string, k forge.Kind, token, path string) []forge.RightCheck
+}
+
+// The states of a token's own rights in a capability row.
+const (
+	TokenVerified     = "verified"     // the forge shows the token holds each right a write needs
+	TokenInsufficient = "insufficient" // the forge names a right the token lacks
+	TokenNotChecked   = "not_checked"  // the forge does not show it; the detail says why
+)
+
+// tokenRights sums the rights a write requirement needs into a row's
+// token state and detail.
+func tokenRights(checks []forge.RightCheck) (string, string) {
+	var missing, unknown []string
+	for _, c := range checks {
+		switch c.State {
+		case forge.RightMissing:
+			missing = append(missing, c.Right)
+		case forge.RightNotChecked:
+			unknown = append(unknown, c.Right+": "+c.Detail)
+		}
+	}
+	switch {
+	case len(checks) == 0:
+		return TokenNotChecked, "the token's own rights are not checked: the forge client read none"
+	case len(missing) > 0:
+		return TokenInsufficient, fmt.Sprintf("the token lacks %s, which a member's writes need "+
+			"(docs/BRING-UP.md, \"The forge token's rights\")", strings.Join(missing, " and "))
+	case len(unknown) > 0:
+		return TokenNotChecked, "the token's own rights are not checked: " + strings.Join(unknown, "; ")
+	}
+	return TokenVerified, ""
 }
 
 // VerifyCapabilities checks every requirement with the home's own
@@ -81,6 +118,10 @@ type AccessAPI interface {
 func VerifyCapabilities(ctx context.Context, home string, api AccessAPI, reqs []Requirement) ([]CapabilityRow, []Capability) {
 	doc, _, err := readAgentDoc(home)
 	byHost := map[string]*Capability{}
+	// lowered are the repositories whose token the forge states lacks a
+	// write right: every entry for them is reported as read, whatever
+	// other requirement bound the same repository.
+	lowered := map[string]bool{}
 	rows := make([]CapabilityRow, 0, len(reqs))
 	for _, r := range reqs {
 		row := CapabilityRow{Project: r.ProjectID, Repository: r.Repository.URL, Required: r.Repository.Access}
@@ -104,7 +145,11 @@ func VerifyCapabilities(ctx context.Context, home string, api AccessAPI, reqs []
 		}
 		row.Account = e.Account
 		access, aerr := api.RepositoryAccess(ctx, host, forge.Kind(e.Kind), tok, path)
+		var scopeErr *forge.ScopeError
 		switch {
+		case errors.As(aerr, &scopeErr):
+			row.State, row.Detail = CapabilityInsufficient, fmt.Sprintf("reading the repository: %v "+
+				"(docs/BRING-UP.md, \"The forge token's rights\")", aerr)
 		case errors.Is(aerr, forge.ErrUnreachable):
 			row.State, row.Detail = CapabilityUnreachable, aerr.Error()
 		case errors.Is(aerr, forge.ErrRejected):
@@ -120,6 +165,15 @@ func VerifyCapabilities(ctx context.Context, home string, api AccessAPI, reqs []
 			row.State = CapabilityVerified
 			if access == forge.AccessRead && r.Repository.Access == forge.AccessWrite {
 				row.State, row.Detail = CapabilityInsufficient, fmt.Sprintf("the account %s can read the repository, not push to it", e.Account)
+			}
+			if access == forge.AccessWrite && r.Repository.Access == forge.AccessWrite {
+				row.Token, row.TokenDetail = tokenRights(api.TokenRights(ctx, host, forge.Kind(e.Kind), tok, path))
+				if row.Token == TokenInsufficient {
+					// The account may push, the token may not: what the
+					// member can do is read.
+					row.State, row.Detail = CapabilityInsufficient, row.TokenDetail
+					lowered[r.Repository.URL] = true
+				}
 			}
 			c := byHost[host]
 			if c == nil {
@@ -137,7 +191,13 @@ func VerifyCapabilities(ctx context.Context, home string, api AccessAPI, reqs []
 	sort.Strings(hosts)
 	caps := make([]Capability, 0, len(hosts))
 	for _, h := range hosts {
-		caps = append(caps, *byHost[h])
+		c := byHost[h]
+		for i, r := range c.Repositories {
+			if lowered[r.URL] {
+				c.Repositories[i].Access = forge.AccessRead
+			}
+		}
+		caps = append(caps, *c)
 	}
 	return rows, caps
 }

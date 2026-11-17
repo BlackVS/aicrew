@@ -917,7 +917,15 @@ A member's capabilities are what its home verified on each forge host: the
 account its credential authenticates as there, and each repository the team
 requires, with the access the forge itself reports for it
 (`capabilities: [{host, kind, account, repositories: [{url, access}]}]`, at
-most 32 hosts of 256 repositories each).
+most 32 hosts of 256 repositories each). `write` stands for what a member's
+work needs: the token may push, open a pull request, and label and comment
+on it. Where the forge states explicitly that the token lacks a right a
+write needs (on Gitea a refusal naming `write:repository` or `write:issue`;
+on GitHub a classic token's scope header that names at least one scope and
+neither `repo` nor, on a public repository, `public_repo`), the account's
+`write` is reported as `read`. Where the forge's answer shows neither, the token's
+rights are not checked and the account's access is reported as it is
+(docs/BRING-UP.md, "What `check` reads of the token").
 - The member's launcher reads the team's requirements, verifies them with
   the home's own credentials, and reports them at its session's start and
   whenever `aicrew-agent check` asks it to; each report replaces the last.

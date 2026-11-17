@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -365,6 +366,11 @@ func (c *Client) giteaLabelIDs(ctx context.Context, host, token, path string, na
 	known := map[string]int64{}
 	owner, _, _ := strings.Cut(path, "/")
 	for _, list := range []string{repoPath(Gitea, path) + "/labels", "/orgs/" + url.PathEscape(owner) + "/labels"} {
+		if strings.HasPrefix(list, "/orgs/") && !slices.ContainsFunc(names, func(n string) bool { _, ok := known[n]; return !ok }) {
+			// Every name is the repository's own: the organization's labels,
+			// which need read:organization, are not read.
+			break
+		}
 		for page := 1; page <= maxLabelPages; page++ {
 			var ls []struct {
 				ID   int64  `json:"id"`

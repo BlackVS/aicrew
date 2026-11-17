@@ -414,6 +414,9 @@ func (c *checker) checkProjects(ctx context.Context) {
 		return
 	}
 	for _, p := range c.rep.Projects {
+		if p.Token == TokenNotChecked {
+			c.notice(fmt.Sprintf("project %s (%s): %s", p.Project, p.Repository, p.TokenDetail))
+		}
 		if p.State != CapabilityVerified {
 			c.notice(fmt.Sprintf("project %s needs %s access to %s (%s): %s: %s; offers that need it are refused, "+
 				"and the home stays usable", p.Project, p.Required, p.Repository, p.Host, p.State, p.Detail))

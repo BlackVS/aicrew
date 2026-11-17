@@ -170,9 +170,13 @@ func printCheck(w io.Writer, rep agent.CheckReport) {
 		}
 	}
 	if len(rep.Projects) > 0 {
-		fmt.Fprintf(w, "%-20s %-44s %-24s %-20s %-8s %s\n", "project", "repository", "host", "account", "required", "state")
+		// "access" is the account's, as the forge reports it; "token" is what
+		// the token itself may do, read apart from it.
+		fmt.Fprintf(w, "%-20s %-44s %-24s %-20s %-8s %-8s %-12s %s\n", "project", "repository", "host", "account", "required",
+			"access", "token", "state")
 		for _, p := range rep.Projects {
-			fmt.Fprintf(w, "%-20s %-44s %-24s %-20s %-8s %s\n", p.Project, p.Repository, p.Host, orNone(p.Account), p.Required, p.State)
+			fmt.Fprintf(w, "%-20s %-44s %-24s %-20s %-8s %-8s %-12s %s\n", p.Project, p.Repository, p.Host, orNone(p.Account),
+				p.Required, cmp.Or(p.Access, "-"), cmp.Or(p.Token, "-"), p.State)
 		}
 	}
 	if a := rep.Automations; a != nil {

@@ -47,7 +47,7 @@ role is set by the invitation, not by the host.
 | About 0.5 GB of disk for the tools | `df -h ~` | the try below: 34 MB for aicrew and aimem, 456 MB for Claude Code; worktrees come on top |
 | 512 MB of memory for the member, plus the client's own | `free -m` | `e2e/pilotsim/compose.yaml` (`mem_limit: 512m` per member, with a stand-in client) |
 | Reaches aicrewd | `curl -sS -o /dev/null -w '%{http_code}\n' --cacert CA https://AICREWD:PORT/healthz` | the `/healthz` check `e2e/pilotsim/compose.yaml` runs against aicrewd |
-| Reaches the aimem hub | `aimem hub credential HUB --json` in the home, after join | `join` and `check` |
+| Reaches the aimem hub with the member's credential | `aicrew-agent check --home HOME`, after join: no `credential_missing` or `credential_refused` block, and no notice that the hub could not confirm the home's credential | `check` asks the hub about the credential in the home's own aimem installation, never the OS user's |
 | Reaches the forge | `aicrew-agent check --home HOME`, its forge table | `check`'s read-only "who am I" per credential |
 | The client, logged in | `aicrew-agent check --home HOME`, its `turn model:` line | `check` in a `turns` home (one minimal model call, about $0.002) |
 
@@ -115,9 +115,11 @@ that permission for each granted project.
   (as a collaborator, or through a team with write). Issue an access token
   for it, under the user's settings, Applications.
 
+The token needs the rights listed under "The forge token's rights" below.
+
 Check: none until step 6, where `join --cred` asks the forge who the token
-authenticates as before writing it. The token rights a member needs are
-not written down in this repository. See "Gaps".
+authenticates as before writing it. A missing right shows only later, at
+the first call that needs it (see the gaps).
 
 ### 4. The invitation (operator)
 
@@ -207,6 +209,72 @@ line. Its `turn model:` line says `available`, and its project table says
 
 This is feature 5's check.
 
+## The forge token's rights
+
+A member's own forge token is used by `join` and `check`, by git through
+`aicrew-agent git-credential`, by `aicrew-agent forge pr` (the commands a
+member's client runs) and by the default automations every member's
+launcher runs (a CI re-run, a base update, labels, comments and marking a
+pull request ready). The lists below are what those calls need, on each
+repository of the team's projects.
+
+### Gitea
+
+| Scope | What needs it |
+| --- | --- |
+| `read:user` | `join --cred` and `check` ask the forge who the token authenticates as |
+| `write:repository` | git's clone and push; `forge pr open`; `forge pr ready` (it edits the title); reading the repository, its branches, the pull request and its reviews and statuses; an automation's base update, which pushes |
+| `write:issue` | `forge pr label` and `forge pr comment`, which go through the issue endpoints; `forge pr show` reads the comments there |
+| `read:organization` | `forge pr label add`: it looks the label up among the owner's organization labels as well as the repository's. Gitea refuses that lookup to a token without this scope even when the owner is a user, so every repository needs it |
+
+Tried on 2026-11-17 on the pilot simulation's Gitea (1.27), with tokens of
+the simulation's worker account on its repository, which a user owns. Each
+token was given to `join --cred`, then `check`, a push, and `forge pr`
+open, label add, comment, ready, label remove and show were run:
+- **All four scopes:** every step passed.
+- **Without `read:user`:** `join` refused the token ("the forge rejected
+  the token") and kept the credential it had.
+- **`read:repository` instead of `write:repository`:** the push and
+  `forge pr open` failed. `check` still said `verified`.
+- **`read:issue` instead of `write:issue`:** label add and comment failed,
+  naming `write:issue` as the scope required.
+- **No issue scope:** label add, comment and show failed.
+- **Without `read:organization`:** label add failed; everything else
+  passed.
+
+Gitea has no re-run of a job: its checks are commit statuses, and the
+CI re-run automation reports that nothing was re-run.
+
+### GitHub
+
+This list is read from the code and from GitHub's documentation of the
+permissions each REST endpoint needs. It was not tried with a token.
+
+A fine-grained personal access token of the member's account, with access
+to the team's repositories:
+
+| Permission | What needs it |
+| --- | --- |
+| Metadata: read | reading the repository and its default branch, including the account's push permission `check` reports (GitHub adds it to every token) |
+| Contents: read and write | git's clone and push; reading a branch's head; an automation's base update, which pushes |
+| Pull requests: read and write | `forge pr open`, `show` and `ready` (marking a draft ready and editing the title); labels and comments (see the next row) |
+| Issues: read and write | `forge pr label` and `forge pr comment` use the issue endpoints. GitHub lists them under both Issues and Pull requests and does not say whether one is enough, so give both |
+| Commit statuses: read | the head's CI state, in `forge pr show` and the watch of a pull request |
+| Actions: read and write | read: a failed job's log in `forge pr show`. Write: the CI re-run automation, which is in every member's home by default and re-runs the failed jobs of a runner failure once per head, with the member's own token |
+
+Two more, from GitHub's documentation and not from the code:
+- **Changes to workflow files.** A push that changes a file under
+  `.github/workflows` needs Workflows: write. A member whose work touches
+  the CI needs it.
+- **Check runs.** The CI state also reads the head's check runs. GitHub's
+  documentation names no fine-grained permission for listing them. On a
+  public repository they need none; on a private one this is not known.
+
+The account's own `GET /user` needs no permission.
+
+A classic personal access token covers the same with the `repo` scope,
+and `workflow` for workflow files. GitHub recommends the fine-grained one.
+
 ## How far this was tried
 
 On 2026-11-16, step 5 and the start of step 6 were run as an unprivileged
@@ -234,9 +302,11 @@ tried.
 These are findings for the architect, not fixed here:
 1. **The client's login has no check without a model call.** The
    turn-model call is the only product check of the login.
-2. **The forge token's rights are not documented.** Neither forge's
-   token scopes or permissions for a member are written down in the
-   repository. `check` reports `insufficient` only after the fact.
+2. **`check` does not see a token's missing rights.** It reads the
+   account's permission on each repository. Gitea reports that for the
+   account, not the token, so a token with `read:repository` only is
+   `verified` (GitHub was not tried). A missing right shows at the first push or `forge pr`
+   call that needs it, as a refusal naming the scope on Gitea.
 3. **The first install warns about services on a host without systemd.**
    On a fresh host without `systemctl`, the aicrew one-liner prints
    "no supported service manager: systemctl not found" and "not every
@@ -246,3 +316,11 @@ These are findings for the architect, not fixed here:
    manager, the member's restart after a failure is left to the host.
 5. **Reaching aicrewd is checked only by join itself.** No product command
    checks it before join.
+6. **Adding a label on Gitea needs `read:organization` on every
+   repository.** The label lookup also reads the owner's organization
+   labels. For a user's repository that read is meant to find nothing and
+   be skipped, but Gitea refuses it to a token without the scope, and the
+   refusal ends the label's addition.
+7. **On GitHub the CI re-run needs Actions: write in every member's
+   token.** The re-run automation is in every member's home by default and
+   runs with the member's own token.

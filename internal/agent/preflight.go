@@ -60,6 +60,8 @@ type PreflightDeps struct {
 	// AuthStatus runs `claude auth status --json` and returns its standard
 	// output and exit code; an error means it could not run.
 	AuthStatus func(ctx context.Context) ([]byte, int, error)
+	// Dial replaces the connection's dialer; nil is join's, the system's.
+	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // PreflightAicrewd is the answer about aicrewd.
@@ -122,6 +124,9 @@ func reachAicrewd(ctx context.Context, o PreflightOptions, d PreflightDeps) Pref
 	crew, err := NewCrew(Config{URL: o.URL, Trust: o.Trust}, d.Roots)
 	if err != nil {
 		return PreflightAicrewd{State: ReachCertificate, Detail: err.Error()}
+	}
+	if d.Dial != nil {
+		crew.client.Transport.(*http.Transport).DialContext = d.Dial
 	}
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()

@@ -89,6 +89,14 @@ func TestPreflightAicrewd(t *testing.T) {
 	}
 	closed := "https://" + ln.Addr().String()
 	ln.Close()
+	// The name case resolves nothing: its dialer fails as Go's dialer does
+	// for a name the resolver does not know, so no resolver of the host
+	// running the test is asked.
+	unknownName := func(_ context.Context, network, addr string) (net.Conn, error) {
+		host, _, _ := net.SplitHostPort(addr)
+		return nil, &net.OpError{Op: "dial", Net: network,
+			Err: &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}}
+	}
 
 	for _, c := range []struct {
 		name  string
@@ -97,21 +105,22 @@ func TestPreflightAicrewd(t *testing.T) {
 		roots *x509.CertPool
 		state string
 		text  string
+		dial  func(context.Context, string, string) (net.Conn, error)
 	}{
-		{"reachable", url, caDNS(), roots, ReachReachable, "aicrewd v0.11.0 answers"},
-		{"reachable by pin", url, tlstrust.Binding{Mode: tlstrust.SPKI, Value: pinOf(leaf)}, nil, ReachReachable, "v0.11.0"},
-		{"name", "https://aicrewd.invalid:8443", tlstrust.Binding{Mode: tlstrust.CADNS, Value: "aicrewd.invalid"}, roots,
-			ReachName, "aicrewd.invalid does not resolve"},
-		{"refused", closed, caDNS(), roots, ReachRefused, "nothing answers"},
-		{"certificate, another CA", url, caDNS(), otherRoots, ReachCertificate, "does not match the CA"},
+		{"reachable", url, caDNS(), roots, ReachReachable, "aicrewd v0.11.0 answers", nil},
+		{"reachable by pin", url, tlstrust.Binding{Mode: tlstrust.SPKI, Value: pinOf(leaf)}, nil, ReachReachable, "v0.11.0", nil},
+		{"name", "https://aicrewd.example:8443", tlstrust.Binding{Mode: tlstrust.CADNS, Value: "aicrewd.example"}, roots,
+			ReachName, "aicrewd.example does not resolve", unknownName},
+		{"refused", closed, caDNS(), roots, ReachRefused, "nothing answers", nil},
+		{"certificate, another CA", url, caDNS(), otherRoots, ReachCertificate, "does not match the CA", nil},
 		{"certificate, another pin", url, tlstrust.Binding{Mode: tlstrust.SPKI, Value: pinOf(other)}, nil,
-			ReachCertificate, "does not match the pinned key"},
-		{"clock", futureURL, caDNS(), futureRoots, ReachClock, "check this host's clock"},
-		{"wrong address", wrongURL, caDNS(), wrongRoots, ReachWrong, "not aicrewd's health route (HTTP 200)"},
+			ReachCertificate, "does not match the pinned key", nil},
+		{"clock", futureURL, caDNS(), futureRoots, ReachClock, "check this host's clock", nil},
+		{"wrong address", wrongURL, caDNS(), wrongRoots, ReachWrong, "not aicrewd's health route (HTTP 200)", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rep, err := Preflight(context.Background(), PreflightOptions{URL: c.url, Trust: c.trust},
-				PreflightDeps{Roots: c.roots})
+				PreflightDeps{Roots: c.roots, Dial: c.dial})
 			if err != nil {
 				t.Fatal(err)
 			}

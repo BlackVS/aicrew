@@ -11,11 +11,15 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -223,6 +227,72 @@ func TestPreflightLogin(t *testing.T) {
 			}
 			if want := map[bool]int{true: 0, false: 1}[c.client == "opencode"]; calls != want {
 				t.Fatalf("auth status ran %d times", calls)
+			}
+		})
+	}
+}
+
+// fakeClaudeAuthEnv makes the test binary answer `claude auth status
+// --json` as Claude Code 2.1.286 does with no login stored: a provider
+// variable alone makes it report a login.
+const fakeClaudeAuthEnv = "AICREW_FAKE_CLAUDE_AUTH"
+
+func init() {
+	if os.Getenv(fakeClaudeAuthEnv) != "1" || len(os.Args) != 4 || os.Args[1] != "auth" {
+		return
+	}
+	for _, k := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+		"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"} {
+		if os.Getenv(k) != "" {
+			fmt.Printf(`{"loggedIn": true, "authMethod": "from %s", "configDirectory": %q}`+"\n", k, os.Getenv("CLAUDE_CONFIG_DIR"))
+			os.Exit(0)
+		}
+	}
+	fmt.Printf(`{"loggedIn": false, "authMethod": "none", "configDirectory": %q}`+"\n", os.Getenv("CLAUDE_CONFIG_DIR"))
+	os.Exit(1)
+}
+
+// A provider variable in the caller's shell does not reach auth status:
+// the member's service has none, so it would report a login the service
+// does not have. CLAUDE_CONFIG_DIR still does.
+func TestPreflightLoginIgnoresProviderVariables(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	name := "claude"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	b, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := filepath.Join(dir, name)
+	if err := os.WriteFile(fake, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv(fakeClaudeAuthEnv, "1")
+	t.Setenv("CLAUDE_CONFIG_DIR", "/members/worker/.claude")
+	for _, k := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+		"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"} {
+		t.Run(k, func(t *testing.T) {
+			t.Setenv(k, "made-up")
+			// The fake does answer to the variable: with the caller's whole
+			// environment it reports a login.
+			if out, err := exec.Command(fake, "auth", "status", "--json").Output(); err != nil ||
+				!strings.Contains(string(out), `"loggedIn": true`) {
+				t.Fatalf("the fake ignores %s: %q %v", k, out, err)
+			}
+			out, code, err := claudeAuthStatus(context.Background())
+			if err != nil || code != 1 || !strings.Contains(string(out), `"loggedIn": false`) ||
+				!strings.Contains(string(out), "/members/worker/.claude") {
+				t.Fatalf("%s reached auth status, or CLAUDE_CONFIG_DIR did not: %q %d %v", k, out, code, err)
+			}
+			if l := clientLogin(context.Background(), "claude", PreflightDeps{}); l.State != LoginNone {
+				t.Fatalf("%+v", l)
 			}
 		})
 	}

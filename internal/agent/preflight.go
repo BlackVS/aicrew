@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -230,7 +231,8 @@ func clientLogin(ctx context.Context, client string, d PreflightDeps) PreflightL
 		"stored (" + st.AuthMethod + "); whether it is valid is not checked here: " + turnModelNote}
 }
 
-// claudeAuthStatus runs `claude auth status --json` from PATH.
+// claudeAuthStatus runs `claude auth status --json` from PATH, with the
+// base environment check's probes have.
 func claudeAuthStatus(ctx context.Context) ([]byte, int, error) {
 	path, err := exec.LookPath("claude")
 	if err != nil {
@@ -238,7 +240,13 @@ func claudeAuthStatus(ctx context.Context) ([]byte, int, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "auth", "status", "--json").Output()
+	cmd := exec.CommandContext(ctx, path, "auth", "status", "--json")
+	// The member's service runs the client without the caller's provider
+	// variables: ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN and the
+	// Bedrock or Vertex switches each make 2.1.286 report a login with none
+	// stored. Without them, the answer is the stored login's.
+	cmd.Env = withoutClientVars(os.Environ())
+	out, err := cmd.Output()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		return out, ee.ExitCode(), nil

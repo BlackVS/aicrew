@@ -181,8 +181,12 @@ and trust, and runs `claude auth status`. Its `aicrewd:` line is one of:
 
 Its `login (claude):` line is `stored`, `none` or `not_found`. `stored`
 means a login is stored, not that it is valid: only the turn-model call
-in `check`, after join, shows that. For `--client opencode` the line is
-`no_check`.
+in `check`, after join, shows that. The login is read without the
+shell's `CLAUDE*` and `ANTHROPIC_*` variables (except
+`CLAUDE_CONFIG_DIR`), since the member's service has none. Each of
+`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and the Bedrock or Vertex
+switch makes `claude auth status` report a login on its own. For
+`--client opencode` the line is `no_check`.
 
 Check: the preflight exits 0. It exits 1 with the line that failed.
 

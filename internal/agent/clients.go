@@ -144,10 +144,16 @@ func modelSink() (string, func(), error) {
 }
 
 // clientEnv is base without the calling session's client and provider
-// variables, plus the closed model endpoint and a dummy key. It keeps
-// CLAUDE_CONFIG_DIR, the member's own Claude Code configuration directory
-// when members share an account, so the probes read that member's client.
+// variables, plus the closed model endpoint and a dummy key.
 func clientEnv(base []string, sink string) []string {
+	return append(withoutClientVars(base), "ANTHROPIC_BASE_URL="+sink, "ANTHROPIC_API_KEY=dummy-not-a-key")
+}
+
+// withoutClientVars is base without the CLAUDE* and ANTHROPIC_* variables.
+// It keeps CLAUDE_CONFIG_DIR, the member's own Claude Code configuration
+// directory when members share an account, so a probe reads that member's
+// client.
+func withoutClientVars(base []string) []string {
 	out := make([]string, 0, len(base)+2)
 	for _, kv := range base {
 		k := strings.ToUpper(kv[:max(strings.IndexByte(kv, '='), 0)])
@@ -160,7 +166,7 @@ func clientEnv(base []string, sink string) []string {
 		}
 		out = append(out, kv)
 	}
-	return append(out, "ANTHROPIC_BASE_URL="+sink, "ANTHROPIC_API_KEY=dummy-not-a-key")
+	return out
 }
 
 // capture runs one command in dir and returns its output.

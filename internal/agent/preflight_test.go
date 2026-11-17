@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -143,15 +144,40 @@ func TestPreflightPinIgnoresDates(t *testing.T) {
 	}
 }
 
+// join's own origin rule: a URL that join refuses is refused before any
+// request, and the error never repeats it. A URL with userinfo would
+// otherwise send it as Basic authorization and print it.
 func TestPreflightRefusesBadInput(t *testing.T) {
+	var hits atomic.Int32
+	url, roots, _ := preflightServer(t, time.Now().Add(-time.Hour), func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		healthOK(w, r)
+	})
+	hostPort := strings.TrimPrefix(url, "https://")
 	for _, o := range []PreflightOptions{
-		{URL: "http://127.0.0.1:1", Trust: caDNS()},
-		{URL: "https://127.0.0.1:1", Trust: tlstrust.Binding{Mode: tlstrust.CADNS, Value: "elsewhere"}},
-		{URL: "https://127.0.0.1:1", Trust: caDNS(), Client: "vim"},
+		{URL: "http://" + hostPort, Trust: caDNS()},
+		{URL: "https://member:s3cret@" + hostPort, Trust: caDNS()},
+		{URL: "https://s3cret@" + hostPort, Trust: caDNS()},
+		{URL: url + "/healthz", Trust: caDNS()},
+		{URL: url + "/?token=s3cret", Trust: caDNS()},
+		{URL: url + "/?", Trust: caDNS()},
+		{URL: url + "/#s3cret", Trust: caDNS()},
+		{URL: url, Trust: tlstrust.Binding{Mode: tlstrust.CADNS, Value: "elsewhere"}},
+		{URL: url, Trust: caDNS(), Client: "vim"},
 	} {
-		if _, err := Preflight(context.Background(), o, PreflightDeps{}); err == nil {
-			t.Fatalf("%+v was accepted", o)
+		rep, err := Preflight(context.Background(), o, PreflightDeps{Roots: roots})
+		if err == nil || rep.URL != "" || strings.Contains(err.Error(), "s3cret") {
+			t.Fatalf("%+v: %+v, %v", o, rep, err)
 		}
+	}
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("a refused URL reached the server %d times", n)
+	}
+	// The same server, with the URL join accepts, answers: the refusals
+	// above are the URL's, not the server's.
+	if rep, err := Preflight(context.Background(), PreflightOptions{URL: url + "/", Trust: caDNS()},
+		PreflightDeps{Roots: roots}); err != nil || rep.Aicrewd.State != ReachReachable || hits.Load() != 1 {
+		t.Fatalf("%+v, %v", rep, err)
 	}
 }
 

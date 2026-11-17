@@ -287,10 +287,9 @@ func (j *joiner) options() error {
 	if o.URL == "" || o.Trust.Mode == "" || o.AimemHub == "" {
 		return errors.New("--url, --tls-trust-mode, --tls-trust-value and --aimem-hub are required to join")
 	}
-	u, err := url.Parse(o.URL)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
-		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return errors.New("--url must be an https origin without credentials, path, query or fragment")
+	u, err := aicrewdOrigin(o.URL)
+	if err != nil {
+		return err
 	}
 	o.URL = strings.TrimSuffix(o.URL, "/")
 	if err := o.Trust.Check(u.Hostname()); err != nil {
@@ -533,6 +532,18 @@ var stops = map[string]string{
 	"credential_inactive": "the aimem hub no longer accepts this installation's credential: ask your aimem " +
 		"operator to reissue it, install it with aimem hub task-token, then rerun",
 	"aimem_unconfigured": "aicrewd cannot verify aimem identities: tell the aicrew operator",
+}
+
+// aicrewdOrigin parses --url as join and preflight take it: an https
+// origin without credentials, path, query or fragment. The error never
+// repeats the URL, which may hold a credential.
+func aicrewdOrigin(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return nil, errors.New("--url must be an https origin without credentials, path, query or fragment")
+	}
+	return u, nil
 }
 
 // redeem runs begin, proof and complete with the contract's recovery

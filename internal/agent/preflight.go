@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -95,9 +94,9 @@ const turnModelNote = "only check's turn-model line, after join, proves that the
 // Preflight checks o before join. An invalid URL or trust is an error; every
 // other finding is in the report.
 func Preflight(ctx context.Context, o PreflightOptions, d PreflightDeps) (PreflightReport, error) {
-	u, err := url.Parse(o.URL)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
-		return PreflightReport{}, errors.New("--url must be an https URL of aicrewd")
+	u, err := aicrewdOrigin(o.URL)
+	if err != nil {
+		return PreflightReport{}, err
 	}
 	if err := o.Trust.Check(u.Hostname()); err != nil {
 		return PreflightReport{}, err

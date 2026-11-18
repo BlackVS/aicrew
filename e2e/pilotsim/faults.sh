@@ -48,12 +48,7 @@ PY
 started() { docker inspect -f '{{.State.StartedAt}}' "$(dc ps -q "$1")"; }
 healthy() { [ "$(docker inspect -f '{{.State.Health.Status}}' "$(dc ps -q "$1")")" = healthy ]; }
 # restart SERVICE: killed outright, started again, and healthy.
-restart() {
-  step "killing $1 and starting it again"
-  dc kill "$1" >/dev/null
-  dc start "$1" >/dev/null
-  waitfor "$1 healthy after its restart" 120 healthy "$1"
-}
+. "$SIM/restart.sh"
 hold_status() {
   hub aimem reservation recover status --task "$TASK" --hub https://sim-aimem:8440 \
     --admin-token-file /home/aimem/admin.token --hub-ca-file /sim/tls/ca.pem

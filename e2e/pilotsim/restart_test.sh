@@ -10,7 +10,8 @@ pass=0
 failures=0
 
 # One case: PLAN is what each `dc start` does to the service, in order
-# (up: it runs afterwards; skip: compose returns 0 and it stays stopped).
+# (up: started and running; skip: compose returns 0 and starts nothing;
+# crash: started, then stopped at once, as a product that dies on start).
 # Prints the helper's output and its exit status as the last line.
 run_case() {
   local name=$1 plan=$2
@@ -19,7 +20,8 @@ run_case() {
     set +e
     OUT=$work/$name DOCKER_PROJECT=pilotsim
     STATE=$work/$name/state PLAN=$work/$name/plan CALLS=$work/$name/calls
-    echo running > "$STATE"
+    STARTS=$work/$name/starts
+    echo running > "$STATE"; echo 0 > "$STARTS"
     tr ' ' '\n' <<<"$plan" > "$PLAN"
     dc() {
       echo "dc $*" >> "$CALLS"
@@ -28,7 +30,10 @@ run_case() {
       start)
         local next
         next=$(head -n1 "$PLAN"); sed -i '1d' "$PLAN"
-        [ "$next" = up ] && echo running > "$STATE"
+        case $next in
+        up) echo running > "$STATE"; echo $(($(cat "$STARTS") + 1)) > "$STARTS" ;;
+        crash) echo stopped > "$STATE"; echo $(($(cat "$STARTS") + 1)) > "$STARTS" ;;
+        esac
         return 0 ;;
       ps) echo "c-$3" ;;
       esac
@@ -36,7 +41,7 @@ run_case() {
     docker() {
       echo "docker $*" >> "$CALLS"
       case $1 in
-      inspect) [ "$(cat "$STATE")" = running ] && echo true || echo false ;;
+      inspect) echo "2026-11-18T00:00:0$(cat "$STARTS")Z" ;;
       events) echo "1 kill pilotsim-sim-aimem-1"; echo "2 start pilotsim-sim-ca-1"; echo "3 die pilotsim-sim-ca-1" ;;
       esac
     }
@@ -90,6 +95,14 @@ check never "the events file named" has never "restart-sim-aimem-1.events"
 check never "events kept" test -s "$work/never/restart-sim-aimem-1.events"
 check never "no health wait" lacks never "waited:"
 check never "exit 1" has never "exit=1"
+
+# The service is started and dies at once (a fault of the product): no
+# retry, and the health wait judges it, as before.
+run_case crash "crash up"
+check crash "no retry line" lacks crash "was skipped"
+check crash "one start" test "$(grep -c '^dc start' "$work/crash/calls")" = 1
+check crash "the health wait's failure" has crash "FAILED: sim-aimem healthy after its restart did not happen"
+check crash "no events file" test ! -e "$work/crash/restart-sim-aimem-1.events"
 
 echo "restart_test: $pass passed, $failures failed"
 [ "$failures" = 0 ]

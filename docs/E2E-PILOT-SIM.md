@@ -791,8 +791,11 @@ F3-aicrewd and F3-hub restart their service with `dc kill`, then `dc start`
 (`e2e/pilotsim/restart.sh`). Compose was seen to return 0 from the start
 without starting the service, after running the one-shot sim-ca again; the
 cause is not known. So the helper reads whether the service's container
-runs after the start. When it does not, the run's output says that the
-start was skipped, and the service is started once more. When that second
+was started at all after the kill: whether Docker's start time for it
+moved. When it did not, the run's output says that the start was skipped,
+and the service is started once more. A container that was started and
+then stopped is not started again: that is the product's, and the health
+wait judges it. When that second
 start does not start it either, the run fails, naming the skipped start
 rather than the service's health. On a skipped start, the project's own
 container events from the kill on are kept in

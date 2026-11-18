@@ -5,6 +5,9 @@
     cases.py hold STORE_DIR AGENT KIND             (the member's hold in aicrewd is KIND; "none" for no hold)
     cases.py has_op STORE_DIR TASK OP              (aicrewd audited OP, e.g. attempt.answer, on the task's attempt)
     cases.py blocked_report STORE_DIR TASK COORDINATOR  (P4: the coordinator has the stall's blocked report)
+    cases.py answer_acked STORE_DIR TASK COORDINATOR WORKER  (E1: both acked the escalation answer's message)
+    cases.py escalation_of STORE_DIR TASK          (E1: the ID of the one escalation on the task)
+    cases.py wait_fact CYCLE_DIR                   (E1: the architect's wait and command log, as JSON)
     cases.py lost STORE_DIR TASK OP                (F1: what a lost OP request leaves in aicrewd)
     cases.py logged CASE OUTCOME < LOG             (a fault proxy's log has a request of CASE with OUTCOME)
     cases.py recover_body VERB HOLD TASK           (F6: the admin's recovery body, from recover status and the task)
@@ -161,6 +164,103 @@ def p4_answered(d, q, ids, a, expect):
     expect("attempt.answer" in ops_of(q, a["id"]), "aicrewd: no attempt.answer among %s" % ops_of(q, a["id"]))
     expect("Answered the blocked report of attempt " + a["id"] in (load(d, "homes/coordinator/HANDOFF.md", "") or ""),
            "coordinator: the handoff does not record the answer")
+
+
+# E1: the escalation case. Two intervals of the wait's --interval 15.
+E1_WAIT_BOUND = 30
+E1_DECISION = "go on"
+
+
+def escalation_on(q, task):
+    return q("SELECT * FROM escalations WHERE task_id = ? ORDER BY created_at", task)
+
+
+def answer_messages(q, task):
+    """The answer's lifecycle message about the task, a row per recipient."""
+    return q("""SELECT m.id, r.agent_id, r.acknowledged_at FROM messages m
+                JOIN message_recipients r ON r.message_id = m.id
+                WHERE m.escalation != '' AND m.task_id = ?""", task)
+
+
+def answer_acked(q, task, coordinator, worker):
+    rows = answer_messages(q, task)
+    return all(any(r["agent_id"] == who and r["acknowledged_at"] for r in rows) for who in (coordinator, worker))
+
+
+def wait_fact(cyc):
+    """The architect session's wait as the runner recorded it, and the runner's log of the session's
+    commands, each "TIME COMMAND"."""
+    read = lambda name: (load(cyc, name, "") or "").strip()
+    code = read("wait.code")
+    return {"code": int(code) if code.isdigit() else None, "returned": read("wait.returned"),
+            "out": read("wait.out"), "err": read("wait.err")[:2000], "log": read("architect.log").splitlines()}
+
+
+def e1_answered(d, q, ids, a, expect):
+    rows = escalation_on(q, ids["task"])
+    expect(len(rows) == 1, "aicrewd: %d escalations on the task, not 1" % len(rows))
+    if not rows:
+        return
+    e = rows[0]
+    comments = [c.get("body", "") for c in items(loadj(d, "aimem/comments.json", []), "comments")]
+    # 1. The coordinator raised it on the blocked attempt, naming the worker, and mirrored it.
+    expect(e["coordinator_agent_id"] == ids["coordinator"], "aicrewd: raised by %s" % e["coordinator_agent_id"])
+    expect(e["attempt_id"] == a["id"], "aicrewd: the escalation names attempt %r" % e["attempt_id"])
+    expect(e["blocked_agent_id"] == ids["worker"], "aicrewd: the escalation's blocked is %r" % e["blocked_agent_id"])
+    # The worker's reservation holds the task, and aimem takes no comment from the coordinator on a
+    # held task: the mirror waits for the hold to end (DESIGN-CONTROL-PLANE.md, 7.7), and the
+    # coordinator's handoff says so. cycle.py checks the comment at the step done.
+    waiting = "Escalation %s: its mirror on task %s waits for the task's hold to end." % (e["id"], ids["task"])
+    expect(any(b.startswith("[escalation.request %s]" % e["id"]) for b in comments) or
+           waiting in (load(d, "homes/coordinator/HANDOFF.md", "") or ""),
+           "aimem: no [escalation.request %s] comment on the task, and the handoff names no waiting mirror" % e["id"])
+    # 2. The wait returned with it within two intervals of the raise, and the runner's log of the
+    # architect's commands has no list or show between the raise and the return (aicrewd's audit
+    # records no reads: this rests on the runner's log).
+    w = loadj(d, "facts.json", {}).get("wait") or {}
+    raised, returned = instant(e["created_at"]), instant(w.get("returned"))
+    expect(w.get("code") == 0, "architect: the wait exited %r: %s" % (w.get("code"), w.get("err")))
+    lines = (w.get("out") or "").splitlines()
+    expect(lines and lines[0].startswith("escalation %s " % e["id"][:13]),
+           "architect: the wait printed %r, not escalation %s" % (lines, e["id"][:13]))
+    expect(raised and returned and 0 <= (returned - raised).total_seconds() <= E1_WAIT_BOUND,
+           "architect: the wait returned at %s, the raise was at %s (bound %ds)" %
+           (w.get("returned"), e["created_at"], E1_WAIT_BOUND))
+    for line in w.get("log") or []:
+        at, _, cmd = line.partition(" ")
+        t = instant(at)
+        if raised and returned and t and raised <= t <= returned:
+            expect(not re.search(r"\bescalations (list|show)\b", cmd),
+                   "architect: %s ran between the raise and the wait's return" % cmd)
+    # 3. Answered under the architect credential, and mirrored.
+    by = e["answered_by"]
+    expect(by.startswith("architect:"), "aicrewd: answered by %r" % by)
+    cred = q("SELECT label FROM architect_credentials WHERE id = ?", by.partition(":")[2])
+    expect(cred and cred[0]["label"] == "sim-e1", "aicrewd: %r is not the case's architect credential" % by)
+    expect(E1_DECISION in e["answer"], "aicrewd: the answer is %s" % e["answer"])
+    expect(any(b.startswith("[escalation.answer %s]" % e["id"]) for b in comments),
+           "aimem: no [escalation.answer %s] comment on the task" % e["id"])
+    # 4. Each member received the answer's message, took a turn from it and acked it; the attempt
+    # left blocked.
+    msgs = answer_messages(q, ids["task"])
+    for role in ("coordinator", "worker"):
+        mine = [r for r in msgs if r["agent_id"] == ids[role]]
+        expect(len(mine) == 1 and mine[0]["acknowledged_at"], "aicrewd: the %s's answer message: %s" %
+               (role, [tuple(r) for r in mine]))
+        turns = [json.loads(l) for l in (load(d, "homes/%s/turns.jsonl" % role, "") or "").splitlines() if l.strip()]
+        expect(mine and any(mine[0]["id"] in (tr.get("trigger") or "") for tr in turns),
+               "%s: no turn started from the answer's message" % role)
+    expect(a["phase"] != "blocked", "aicrewd: the attempt is still %s/%s" % (a["state"], a["phase"]))
+    expect("attempt.answer" in ops_of(q, a["id"]), "aicrewd: no attempt.answer among %s" % ops_of(q, a["id"]))
+    # 5. No operator-credential call between the raise and the answer; the architect's creds/ holds
+    # its credential alone.
+    answered = instant(e["answered_at"])
+    for r in q("SELECT at, operation FROM audit WHERE caller_kind = 'operator'"):
+        t = instant(r["at"])
+        expect(not (raised and answered and t and raised <= t <= answered),
+               "aicrewd: the operator called %s at %s, between the raise and the answer" % (r["operation"], r["at"]))
+    creds = loadj(d, "facts.json", {}).get("architect_creds")
+    expect(creds == ["aicrew.architect"], "architect: creds/ holds %s" % creds)
 
 
 def p5_submit(d, q, ids, a, expect):
@@ -512,6 +612,8 @@ CHECKS = {
     ("P3", "held"): p3_held,
     ("P4", "blocked"): p4_blocked,
     ("P4", "answered"): p4_answered,
+    ("E1", "blocked"): p4_blocked,
+    ("E1", "answered"): e1_answered,
     ("P5", "submit"): p5_submit,
     ("P5", "pending"): p5_pending,
     ("F2-begin", "begin"): f2_begin,
@@ -736,6 +838,17 @@ def main(argv):
         q = db_of(argv[1])
         a = attempt_of(q, argv[2])
         return 0 if a and blocked_reports(q, argv[3], a, argv[2]) else 1
+    if len(argv) == 5 and argv[0] == "answer_acked":
+        return 0 if answer_acked(db_of(argv[1]), argv[2], argv[3], argv[4]) else 1
+    if len(argv) == 3 and argv[0] == "escalation_of":
+        rows = escalation_on(db_of(argv[1]), argv[2])
+        if len(rows) != 1:
+            return 1
+        print(rows[0]["id"])
+        return 0
+    if len(argv) == 2 and argv[0] == "wait_fact":
+        print(json.dumps(wait_fact(argv[1])))
+        return 0
     if len(argv) == 4 and argv[0] == "has_op":
         q = db_of(argv[1])
         a = attempt_of(q, argv[2])

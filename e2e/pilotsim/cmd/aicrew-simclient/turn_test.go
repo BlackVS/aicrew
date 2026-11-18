@@ -43,6 +43,12 @@ type fakeTools struct {
 	calls      []string
 	bodies     map[string]map[string]any // step bodies by op
 	stdin      map[string]string         // stdin by command
+	// escalations are what aicrew-agent escalations answers.
+	escalations []map[string]any
+	// commentHeld makes add_task_comment refuse as aimem does on a held
+	// task; comments are the bodies it was sent.
+	commentHeld bool
+	comments    []string
 	// steps are scripted answers to a step, in order, before the default one.
 	steps map[string][]stepReply
 }
@@ -105,6 +111,11 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 		return nil, 0, nil
 	case args[0] == "inbox":
 		return answer(map[string]any{"messages": f.inbox}), 0, nil
+	case args[0] == "escalations":
+		out, _ := json.Marshal(map[string]any{"escalations": f.escalations})
+		return out, 0, nil
+	case args[0] == "escalate":
+		return answer(map[string]string{"id": tEscalation}), 0, nil
 	case args[0] == "attempts":
 		return answer(agent.OpenAttempts{Attempts: f.attempts}), 0, nil
 	case args[0] == "members":
@@ -167,6 +178,10 @@ func (f *fakeTools) mcp(_ context.Context, tool string, args map[string]any) (st
 		raw, _ := json.Marshal(t)
 		return string(raw), nil
 	case "add_task_comment":
+		f.comments = append(f.comments, args["body"].(string))
+		if f.commentHeld {
+			return "", fmt.Errorf("add_task_comment: error: task_held: The task is under a reservation")
+		}
 		return `{"sequence":1}`, nil
 	case "project_repository":
 		return `{"project":"pilot","repository":{"kind":"gitea","url":"` + tRepo + `","access":"write"}}`, nil

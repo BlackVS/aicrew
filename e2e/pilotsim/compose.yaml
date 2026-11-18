@@ -158,6 +158,19 @@ services:
       GIT_SSL_CAINFO: /sim/tls/ca.pem
       SIM_ROLE: worker
 
+  # The architect's directory of case E1 (docs/E2E-PILOT-SIM.md): aicrewd's
+  # image, which holds this tree's aicrew in /opt/aicrew-prebuilt, idle. The
+  # runner writes the directory with `aicrew architect init` and runs the
+  # session's commands there. It mounts no volume, so the directory lives in
+  # the container and goes with it; the operator credential never enters it.
+  sim-architect:
+    image: pilotsim-sim-aicrewd
+    pull_policy: never
+    mem_limit: 64m
+    depends_on:
+      sim-aicrewd: {condition: service_healthy}
+    entrypoint: ["sleep", "infinity"]
+
   # The independent member: it claims, works and releases tasks of its own.
   # The fault cases F2-settle, F3-launcher, F4 and F5 drive its steps, as
   # b4's harness drives its independent member; its turns only acknowledge.

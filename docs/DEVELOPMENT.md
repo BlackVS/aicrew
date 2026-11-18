@@ -1692,7 +1692,9 @@ command then exits 1 and names the merge to do.
   - `/arch-escalations` lists the coordinator's open escalations with
     `aicrew escalations list --open`, and answers on the operator's word
     (below). Without a connection, it reads them from the tasks' comments
-    headed `[escalation.request ID]`. It also makes sure that
+    headed `[escalation.request ID]`; while the worker holds the task, the
+    coordinator's comment waits for the hold, so this fallback shows such a
+    request only after the delivery. It also makes sure that
     `aicrew escalations wait` runs.
   - `/arch-merges` says in words which pull requests wait for the
     operator's merge, with `aicrew merges` ("Pull requests waiting for the

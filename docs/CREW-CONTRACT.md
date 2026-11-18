@@ -1452,10 +1452,12 @@ message, so it is delivered with the answer or not at all.
 - **What it names:** the task and the attempt, if any.
 - **What it carries:** `escalation {id, category, question, decision,
   rationale}`, and text naming the escalation and the decision.
-- **What wakes the member:** it is an ordinary inbox message. The current
-  keep-alive loop wakes the member on it: the Stop hook's `wait-inbox`
-  polls `GET /v1/crew/inbox/pending`. Once headless turns exist, the same
-  message starts the member's turn (control-plane increment A3).
+- **What wakes the member:** it is an ordinary inbox message. Under the
+  turns model, the launcher's wake sees it in `GET /v1/crew/inbox/pending`
+  and starts the member's turn, whose trigger names the message; the turn
+  reads and acknowledges it. The pilot simulation's case E1 shows this for
+  both recipients, the coordinator and the blocked worker
+  ([E2E-PILOT-SIM.md](E2E-PILOT-SIM.md), "The escalation case").
 
 **Records.** An escalation's record holds:
 - the team and the coordinator's agent and session;

@@ -508,8 +508,9 @@ The merge is the runner's, as the Gitea `operator` person account.
   committed, no `release`), receipts, results, the accepted, delivered and
   finalized result, the watched pull request, the messages about the task,
   each acked once a turn read it, the members' turn reports, no member
-  hold and no escalation, and an audit in which the operator's calls are
-  the script's own and the members' are member operations;
+  hold, no escalation on the task (case E1's one, answered by the
+  architect, excepted) and none open, and an audit in which the operator's
+  calls are the script's own and the members' are member operations;
 - aimem: the task's state, the triage comment, a history that never went
   through BLOCKED or CANCELLED, and the reservation's holder;
 - the forge: sim-hands's RETURN of the older head and its READY at the
@@ -621,7 +622,7 @@ it.
 
 After the two cycles, `e2e/pilotsim/cases.sh` runs the pilot cases of
 [DESIGN-PILOT-SIMULATION.md](DESIGN-PILOT-SIMULATION.md), section 6.2, in
-the order P2, P5, P4, P1 and, after the fault cases below, P3. Each is one fault on a cycle of its own, set
+the order P2, P5, P4, the escalation case E1 (below), P1 and, after the fault cases below, P3. Each is one fault on a cycle of its own, set
 through the stubs' scenario or the member's: `/sim/scenario/member.json`
 in each member's container, which only the script writes, and only while
 the member is paused and its turn has ended. The member's scenario
@@ -629,7 +630,10 @@ the member is paused and its turn has ended. The member's scenario
 (`never_ack`), push once while `hands-reviewing` is on
 (`push_during_review`), do nothing in a working attempt (`stall`), end
 every turn with the provider's 401 or 404 (`result`: `login` or `model`),
-and report a client cost (`cost_usd`). In the cases sim-hands reviews READY
+report a client cost (`cost_usd`), and, for the coordinator, raise an
+escalation on a blocked attempt instead of answering it, then give the
+worker the architect's decision once the answer arrives
+(`escalate_blocked`). In the cases sim-hands reviews READY
 the first time: the plain cycles already run the rework after a
 `RETURN_TO_IMPLEMENTATION`.
 
@@ -644,6 +648,8 @@ cycle's checks at the step done, without the plain cycle's external RETURN.
 | P5 | sim-ci leaves the merge commit pending | pending | verify-delivery answered pending, and the attempt has no delivery, no finalize and no `confirm-delivery` step; the task stays in REVIEW |
 | P4 | the worker stalls after its accept | blocked | the launcher's stall rule blocked the attempt; the coordinator's blocked report; the task BLOCKED in aimem |
 | P4 | | answered | the coordinator's `answer` step and its handoff; the worker then resumes and the cycle reaches DONE |
+| E1 | the worker stalls after its accept, and the coordinator escalates the block | blocked | as P4's |
+| E1 | | answered | the five steps of "The escalation case" below; the worker then resumes and the cycle reaches DONE |
 | P1 | the worker never acks | unacked | the offer delivered to the worker and not acked |
 | P3 | the coordinator's turn costs 60 USD; the worker's ends with a 401 | held | the coordinator's `daily_budget` hold and the worker's `needs_login` hold in aicrewd, in `aicrew status` and in both launchers' turn state; the coordinator told of the worker's hold |
 
@@ -670,11 +676,77 @@ gap is closed and the run fails until the case is updated.
 
 `AICREW_SIM_SKIP_FAULT=CASE` runs the stack and that case only, without its
 fault. The run is green only when the case then fails where its absence
-should show: P2 and P1 at their first check, and P5, P4 and P3 when the
+should show: P2 and P1 at their first check, and P5, P4, E1 and P3 when the
 first head's CI failure, the block or the hold never comes. A case that passes without its
 fault fails the run. The snapshots stay in `DIR/case-<case>/<point>/`, or
 `DIR/case-<case>/<subcase>/` for a subcase such as F1-claim-request: no
 snapshot is taken twice, so the report's diff of each step is its own.
+
+### The escalation case
+
+E1 is the check of the architect role's feature
+([DESIGN-CONTROL-PLANE.md](DESIGN-CONTROL-PLANE.md), section 7.7): a
+running team raises an escalation, the architect is told by the wait and
+answers, and the team acts on the answer, under the turns model.
+
+**The architect's directory.** The compose service `sim-architect` runs
+aicrewd's image, which holds this tree's `aicrew`, idle, with no volume:
+the directory lives in the container and goes with `down -v`. At the
+case's start the runner writes it there with `aicrew architect init --url
+https://sim-aicrewd:9443` and the trust pin of aicrewd's key. The operator
+issues the architect credential where the operator credential lives, in
+sim-aicrewd, with `aicrew architect credential issue --output -`, and the
+runner pipes it into the directory's `creds/aicrew.architect`, owner-only.
+The operator credential never enters sim-architect. The runner plays the
+architect session: it runs the session's commands in the directory with the
+environment the directory's `.claude/settings.json` gives a session.
+
+**The run.** As in P4, the worker stalls and the launcher blocks the
+attempt. Under the member scenario `escalate_blocked`, the coordinator
+raises an escalation on the blocked attempt with `aicrew-agent escalate`,
+naming the worker as blocked. The worker's reservation holds the task, and
+aimem takes no comment from the coordinator on a held task, so the mirror
+on the task waits until the hold ends, and the coordinator's handoff says
+so (DESIGN-CONTROL-PLANE.md, section 7.7); it posts the mirror after the
+finalize. Until then the request is not on the board, so an architect
+without a connection to aicrewd, who reads the `[escalation.request `
+comments, would see nothing of it before the delivery. The runner has
+started `aicrew escalations wait --interval 15` in the directory before
+the raise, and has resumed both members, so that it makes no operator call
+between the raise and the answer: it neither pauses, nudges nor takes a
+snapshot there. When the wait returns, the runner shows the escalation,
+answers it with `aicrew escalations answer`, and mirrors the answer on the
+task. The answer's message wakes both members; the coordinator gives the
+worker the decision with its `answer` step, and the cycle goes on to DONE.
+
+**The five steps** `cases.py` asserts at the point `answered`:
+
+1. The escalation on the task: raised by the coordinator on the attempt,
+   naming the worker as blocked, and the coordinator's handoff naming the
+   mirror that waits for the hold (the task's `[escalation.request ID]`
+   comment is checked at the step done, with the cycle's checks).
+2. The wait exited 0 with that escalation's line, within 30 seconds (two
+   intervals) of its `created_at`, and no `aicrew escalations list` or
+   `show` ran between the raise and the wait's return.
+3. `answered_by` names the case's architect credential (`architect:<ID>`,
+   label `sim-e1`), the answer carries the decision, and the task has the
+   `[escalation.answer ID]` comment.
+4. The answer's message to the coordinator and to the worker, each
+   acknowledged, each the trigger of a turn in the member's
+   `logs/turns.jsonl`; the coordinator's `attempt.answer`, and the attempt
+   no longer blocked.
+5. No call of the operator credential in aicrewd's audit between the raise
+   and the answer, and the directory's `creds/` holding
+   `aicrew.architect` alone. That the members' only inputs are inbox
+   messages is the cycle's own check: no typed input, and an empty guard
+   log.
+
+**What rests on the runner's log.** aicrewd's audit records commands, not
+reads. That no list or show ran between the raise and the wait's return
+is read from the runner's own log of the architect's commands
+(`case-E1/architect.log`, in the snapshot's `facts.json`), not from a
+record of aicrewd; the wait's return time is the runner's clock, which
+the same host shares with aicrewd.
 
 ## The fault cases
 

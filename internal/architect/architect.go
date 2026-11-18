@@ -51,6 +51,12 @@ type Connection struct {
 // in creds/, which the session's deny rules keep it from reading.
 const CredentialFile = "creds/aicrew.architect"
 
+// SeenFile is the seen set of `aicrew escalations wait` (DESIGN-CONTROL-PLANE
+// 7.7, D24): in the directory's state, never in creds/. The settings name
+// it by its full path, so the wait keeps one set whatever directory the
+// session's command runs in.
+const SeenFile = "state/escalations-seen.json"
+
 // Report is what init did.
 type Report struct {
 	Dir     string                `json:"dir"`
@@ -251,10 +257,15 @@ func denyRules() []string {
 	return rules
 }
 
+// StartHookCommand is the managed start hook (DESIGN-CONTROL-PLANE 7.7,
+// D23): every open escalation, up to the list's bound, is in the session's
+// first context, whether this directory's wait told of it before or not.
+const StartHookCommand = "aicrew escalations list --open"
+
 // settingsJSON is the managed settings: the deny rules and, when init
 // names aicrewd, the environment the session's aicrew commands connect
-// with. The credential's file is named by path only; its content stays in
-// creds/.
+// with and the start hook. The credential's file is named by path only;
+// its content stays in creds/.
 func settingsJSON(o Options) string {
 	doc := map[string]any{"permissions": map[string]any{"deny": denyRules()}}
 	if c := o.Crew; c.URL != "" {
@@ -263,7 +274,10 @@ func settingsJSON(o Options) string {
 			"AICREW_TLS_TRUST_MODE":      c.TrustMode,
 			"AICREW_TLS_TRUST_VALUE":     c.TrustValue,
 			"AICREW_OPERATOR_TOKEN_FILE": filepath.Join(o.Dir, filepath.FromSlash(CredentialFile)),
+			"AICREW_ESCALATIONS_SEEN":    filepath.Join(o.Dir, filepath.FromSlash(SeenFile)),
 		}
+		doc["hooks"] = map[string]any{"SessionStart": []any{map[string]any{"hooks": []any{map[string]any{
+			"type": "command", "command": StartHookCommand, "timeout": 30}}}}}
 	}
 	b, _ := json.MarshalIndent(doc, "", "  ")
 	return string(b) + "\n"

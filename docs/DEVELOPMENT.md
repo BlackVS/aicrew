@@ -1692,7 +1692,8 @@ command then exits 1 and names the merge to do.
   - `/arch-escalations` lists the coordinator's open escalations with
     `aicrew escalations list --open`, and answers on the operator's word
     (below). Without a connection, it reads them from the tasks' comments
-    headed `[escalation.request ID]`.
+    headed `[escalation.request ID]`. It also makes sure that
+    `aicrew escalations wait` runs.
   - `/arch-merges` says in words which pull requests wait for the
     operator's merge, with `aicrew merges` ("Pull requests waiting for the
     merge", below). It never merges and never changes a pull request.
@@ -1737,6 +1738,52 @@ An architect credential reads and answers escalations and reads the
 merges list (`aicrew merges`) and the team states (`aicrew status`), and
 nothing else, so the full operator token
 never enters an AI session. It lives 90 days.
+
+**Being told of an escalation.** With the connection, init also writes:
+- `AICREW_ESCALATIONS_SEEN` into the settings' `env`, naming
+  `state/escalations-seen.json` in the directory;
+- a `SessionStart` hook that runs `aicrew escalations list --open`. Every
+  open escalation, up to the list's bound, is then in the session's first
+  context.
+
+Without `--url`, init writes neither.
+
+`docs/ARCHITECT.md` tells the session to keep `aicrew escalations wait`
+running as a background command:
+- When the wait returns, the session reads each escalation with `show`,
+  tells the operator, and answers only on the operator's word.
+- It then starts the wait again.
+
+**A wait left behind.** The client leaves a background command running
+when a session ends, so a directory can have two waits:
+- **The newest takes over.** A wait takes the seen set over as it starts,
+  by writing its own owner mark into it.
+- **An older wait ends.** On its next read it finds another owner. It then
+  ends with exit 3, records nothing and prints nothing, so it never takes
+  an escalation from the session that is there.
+- **With no new wait started,** the one left behind keeps reading. At the
+  next new escalation it records it and returns to nobody. The next
+  session's start hook still lists that escalation, because the hook lists
+  every open escalation, seen or not.
+
+An existing directory gets the hook and the texts by running init again,
+with the same flags. A settings file a person changed is kept, and the new
+version is written beside it as `.claude/settings.json.aicrew-new` to
+merge. Personal settings belong in `.claude/settings.local.json`, which
+init never writes.
+
+**The smoke** with real Claude Code is
+`go test -tags realclaude -run TestRealClaudeArchitectIsTold ./cmd/aicrew`,
+with a logged-in `claude` on PATH:
+- **The setup:** a disposable directory from the built `aicrew architect
+  init --url`, and a stand-in for the list and show routes in the test.
+- **What it shows:** the session starts the wait in the background and
+  goes idle. An escalation raised then is told and shown with no further
+  input, and nothing answers it.
+- **At the end:** the session stops its wait before its input closes, so
+  no wait is left running after the test.
+- **Keeping the log:** `AICREW_SMOKE_KEEP=FILE` keeps the session's event
+  stream.
 
 **First start.** The first `claude` in the directory asks to trust it and
 to approve its `aimem` MCP server, and each aimem tool asks once for
@@ -3277,6 +3324,7 @@ The architect, or the operator, reads and answers:
 bin/aicrew escalations list [--team TEAM] [--open]
 bin/aicrew escalations show --id ID
 bin/aicrew escalations answer --id ID --decision TEXT --rationale TEXT
+bin/aicrew escalations wait [--team TEAM] [--interval SECONDS] [--seen FILE]
 ```
 
 - **Who can run them:** they take the operator credential or an architect
@@ -3289,6 +3337,37 @@ bin/aicrew escalations answer --id ID --decision TEXT --rationale TEXT
   one escalation's ID. An ambiguous prefix is refused, and the refusal
   lists the IDs it starts, at most 10.
 - **Once only:** an answer is recorded once.
+- **The wait** tells the architect's session of a new escalation without a
+  command run by hand (`docs/DESIGN-CONTROL-PLANE.md`, section 7.7). It is
+  a client command on the list route, with no route of its own.
+  - It reads the open escalations every `--interval` seconds: 60 by
+    default, and a value under 15 is refused as a usage error (exit 2).
+  - It returns (exit 0) as soon as an open escalation is not in the
+    directory's seen set. It prints one line for each such escalation,
+    oldest first: the short ID, the team, the task, the category, the
+    urgency and the question, with terminal escapes and line breaks
+    removed.
+  - A failed read is retried. Five in a row end the wait with exit 1 and
+    the last error.
+  - The seen set is a JSON file: `--seen`, else
+    `$AICREW_ESCALATIONS_SEEN`, else `state/escalations-seen.json` under
+    the current directory. The architect directory's settings name its
+    `state/escalations-seen.json`, never `creds/`.
+  - The set holds what the directory was told of and is still open.
+    Answered escalations leave it on each read of every team; a wait
+    narrowed with `--team` sees only that team, so it drops nothing.
+    Restarting the wait keeps the set. Each directory has its own set, so each directory is told once.
+    A set that is not valid JSON is refused, not overwritten.
+  - Only the directory's newest wait records anything. A wait writes its
+    owner mark into the set as it starts. An older wait that finds another
+    owner on its next read ends with exit 3, recording and printing
+    nothing ("A wait left behind", under the architect directory).
+  - The list answers at most 200 open escalations, newest first. With more
+    open, the oldest are left out of each answer and are told only as
+    newer ones are answered. An answer of 200 rows is taken as cut, so an
+    escalation missing from it is never dropped from the set as answered.
+  - Being told is not handling it. Only the recorded answer ends an
+    escalation.
 - **Delivery:** the answer reaches the coordinator's inbox, and the blocked
   member's, as a lifecycle message carrying the escalation. The keep-alive
   loop then wakes them as for any message.

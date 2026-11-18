@@ -21,8 +21,19 @@ const escalationsUsage = `usage:
   aicrew escalations list   [--team TEAM] [--open]
   aicrew escalations show   --id ESCALATION
   aicrew escalations answer --id ESCALATION --decision TEXT --rationale TEXT
+  aicrew escalations wait   [--team TEAM] [--interval SECONDS] [--seen FILE]
 ESCALATION is the ID that list prints, or a prefix of it that starts no
 other escalation's ID, of at least 8 characters.
+wait reads the open escalations every --interval seconds (60 by default, at
+least 15) and returns with those not in the seen set, one line each, oldest
+first. The seen set is --seen, else $AICREW_ESCALATIONS_SEEN (the architect
+directory's settings name it), else state/escalations-seen.json under the
+current directory. Five failed reads in a row end it with exit 1. A wait
+takes the seen set over as it starts; an older wait on the same set then
+ends on its next read with exit 3, recording and printing nothing. The list
+holds at most 200 open escalations, newest first: with more open, the oldest
+are told only as newer ones are answered, and a full list never drops an
+escalation from the seen set.
 ` + connUsage
 
 // runEscalations is aicrew escalations: 0 on success, 1 on a failure, 2 on
@@ -33,6 +44,9 @@ func runEscalations(ctx context.Context, args []string, stdout, stderr io.Writer
 		return 2
 	}
 	verb := args[0]
+	if verb == "wait" {
+		return runEscalationsWait(ctx, args[1:], stdout, stderr)
+	}
 	fs := flag.NewFlagSet("aicrew escalations "+verb, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cn := addConn(fs)

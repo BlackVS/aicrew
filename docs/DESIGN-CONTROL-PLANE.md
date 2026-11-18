@@ -1032,8 +1032,12 @@ second. It changes nothing in 7.5's record, routes or credential.
   failures in a row, the wait ends with the error, so a broken channel is
   reported and never silent.
 - **Bounds.** The route answers at most 200 open escalations, newest
-  first. A new escalation is always among them, so the bound never hides
-  one from the wait.
+  first. Up to 200 open escalations the wait and the start hook see them
+  all. Beyond that the oldest are left out of the answer: the wait tells
+  them only as newer ones are answered, and more than 200 raised between
+  two reads hide the oldest of them for that read. An answer of 200 is
+  taken as cut, so an escalation absent from it is never read as
+  answered.
 - **What it costs.** One read per interval per architect session, and no
   new route or authentication. The architect credential reaches what it
   reaches today.
@@ -1083,8 +1087,8 @@ second. It changes nothing in 7.5's record, routes or credential.
   wait again.
 - **At the session's start.** A start hook in the kit's managed
   `.claude/settings.json` runs one bounded `aicrew escalations list
-  --open`. Every open escalation, already seen or not, is in the session's
-  first context, and the session starts the wait.
+  --open`. Every open escalation up to the route's bound, already seen or
+  not, is in the session's first context, and the session starts the wait.
 - **The alternative not taken: a hook on each prompt.** It tells the
   architect only when the person types, which is not "without anyone
   running a command" for an idle session, and it costs a read per prompt.
@@ -1100,11 +1104,13 @@ second. It changes nothing in 7.5's record, routes or credential.
   is the only state that ends it.
 - **The seen set is local.** The wait keeps, in the architect directory's
   state, the IDs it has returned. It returns only for open escalations
-  outside that set, and drops answered ones from the set on each read, so
-  the set stays as small as the open list.
+  outside that set. It drops answered ones from the set on each read that
+  covers every team and whose answer is under the bound, so the set stays
+  as small as the open list. Only the directory's newest wait writes the
+  set; an older one left running ends on its next read.
   - **Not shown twice:** one directory's wait returns each escalation once.
-  - **Not lost:** the start hook lists every open escalation whether seen
-    or not. One seen in a session that ended before the answer is shown
+  - **Not lost:** the start hook lists every open escalation up to the
+    bound, whether seen or not. One seen in a session that ended before the answer is shown
     again at the next start.
 - **No reminder within a session.** An unanswered escalation is shown
   again only at the next start. Repeating it would only repeat a question

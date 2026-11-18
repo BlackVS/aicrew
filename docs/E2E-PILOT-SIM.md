@@ -787,6 +787,22 @@ its point:
 | F6-unreachable | after the same release, `sim-px-hub` drops aicrewd's reads of the hub's peers, and `sim-aimem` is stopped for 65 seconds, four of aicrewd's ticks | unreachable | nothing closed the attempt while the hub was unreachable; once the hub is back, aicrewd closes it as recovered |
 | F7-leak | (the check itself) | scan | none of the run's secrets appears in the containers' logs, the run's reports and snapshots, or aicrewd's audit |
 
+F3-aicrewd and F3-hub restart their service with `dc kill`, then `dc start`
+(`e2e/pilotsim/restart.sh`). Compose was seen to return 0 from the start
+without starting the service, after running the one-shot sim-ca again; the
+cause is not known. So the helper reads whether the service's container
+was started at all after the kill: whether Docker's start time for it
+moved. When it did not, the run's output says that the start was skipped,
+and the service is started once more. A container that was started and
+then stopped is not started again: that is the product's, and the health
+wait judges it. When that second
+start does not start it either, the run fails, naming the skipped start
+rather than the service's health. On a skipped start, the project's own
+container events from the kill on are kept in
+`DIR/restart-SERVICE-N.events`. What F3 proves is still judged by the
+service's health after the start. `bash e2e/pilotsim/restart_test.sh`
+tests the helper with stand-ins, and CI runs it.
+
 F1, F2 and F3 end with the cycle's checks at the step done. For F1 these
 accept the attempt its lost claim closed and the steps its lost requests
 left not committed. F6 files a task for each verb and keeps its snapshots

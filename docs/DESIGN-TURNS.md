@@ -881,7 +881,15 @@ kinds about these subjects.
 - **A member** gets its own tasks, attempts and pull requests.
 - **A coordinator** gets READY tasks of the team's projects, and every
   worker's blocked reports and spent budgets.
-- **An architect** gets escalations and pull requests awaiting the merge.
+- **An architect** is not a subscriber. It has no session and no inbox on
+  aicrewd, and no default subscription names it.
+  - **Escalations:** the architect learns of open escalations through a
+    client-side wait on the operator API (DESIGN-CONTROL-PLANE 7.7, D21).
+  - **Push:** an `escalation.raised` event with an architect subscriber is
+    planned only as 7.7's third increment, when a run shows the wait is
+    not enough.
+  - **Pull requests awaiting the merge** stay with `aicrew merges` and
+    `/arch-merges` (D25).
 
 **Explicit subscriptions** can be added, for example "this agent watches
 task X". They are data, in the project's process or the team's settings

@@ -3,7 +3,9 @@
 Status: proposed design for review (task `01a11eab-120d`, the first task of
 the control-plane epic `01a11eaa-33e6`; section 7 answers the architect
 role, task `01a11c96-4a15`; section 8 answers the operator's additions on
-kinds of work, capabilities and worker profiles). Nothing here is
+kinds of work, capabilities and worker profiles; section 7.7, added
+2026-11-18 for task `01a1edab-06f6`, decides how an escalation reaches the
+architect's session). Nothing here is
 implemented. The operator and the monitoring session review it before any
 code. Updated 2026-10-09.
 
@@ -958,6 +960,7 @@ The flow:
      credentials, never enters an AI session.
    - Until C2, the architect reads the task's comments through aimem
      directly.
+   - How the session is told without a command run by hand: 7.7.
 3. **The answer.**
    - The architect runs
      `aicrew escalations answer ID --decision ... --rationale ...` with that
@@ -999,6 +1002,187 @@ D1, the architect kit, needs no change to aicrewd's wire. It makes today's
 practice reproducible: the monitoring session has acted as architect by
 hand since 2026-10-05. D2 (ROLES.md) follows with C2, once the escalation
 path exists to be named.
+
+### 7.7 The architect is told: an escalation reaches the session
+
+Added 2026-11-18 (task `01a1edab-06f6`, for the goal's feature "The
+architect is a role in the product"). D1, C2 and D2 are delivered. Two gaps
+remain:
+- **Nothing tells the architect.** An escalation reaches it only when
+  someone runs `/arch-escalations`. Raising one journals no event, and no
+  subscription routes anything to an architect. The architect subscription
+  that DESIGN-TURNS 12.2 planned was never built; 12.2 now points here.
+- **No run shows the return under turns.** The real-aimem scenario E1
+  pins the channel, but it was written for the keep-alive loop. The
+  simulation raises no escalation.
+
+This section closes the first gap and states the run that closes the
+second. It changes nothing in 7.5's record, routes or credential.
+
+**Decision D21: pull first.**
+- **The wait.** `aicrew escalations wait [--team TEAM] [--interval S]` is
+  a new client command. It reads the open escalations on the existing
+  route, `GET /v1/admin/escalations?open=1`, with the architect
+  credential, every interval: 60 seconds by default, never below 15.
+- **When it returns.** The wait returns as soon as an open escalation
+  appears that this architect directory has not been told of (D24). It
+  prints one line per escalation: the short ID, the team, the task, the
+  category, the urgency and the question.
+- **When the channel is down.** A failed read is retried. After five
+  failures in a row, the wait ends with the error, so a broken channel is
+  reported and never silent.
+- **Bounds.** The route answers at most 200 open escalations, newest
+  first. A new escalation is always among them, so the bound never hides
+  one from the wait.
+- **What it costs.** One read per interval per architect session, and no
+  new route or authentication. The architect credential reaches what it
+  reaches today.
+- **The alternative not taken: push.** Push would need:
+  - an `escalation.raised` event, journaled in the raise's transaction;
+  - an architect subscriber in `subscriptions.json`, a kind the event
+    core does not know;
+  - a delivery for a reader that has no session token and no inbox: a
+    long-poll or inbox route on the operator API, under the architect
+    credential.
+
+  That is a new route and a wider credential: aicrewd's routes and
+  authentication, a sensitive surface.
+- **When push is worth that surface.** Only when a run shows that pull is
+  not enough:
+  - the interval's delay is too slow for `now` escalations;
+  - the reads of several architect sessions over many teams load aicrewd;
+  - other events bound for the architect want the same channel.
+
+  None of these holds today.
+
+**Decision D22: the recipient is the architect credential.**
+- **Who is told.** The wait reads what the architect credential reads,
+  which is every team, unless `--team` narrows it. An escalation is
+  addressed to the architect role, not to a person or a team's seat.
+- **Two architect sessions** are both told. The answer is recorded once
+  (`409 escalation_answered` for the second), so the later session learns
+  the escalation is answered. It is a broadcast, not a lock. The operator
+  is one person, and the answer is theirs.
+- **The alternative not taken: an architect per team.** That needs a team
+  field on the credential and a check on every read: a change of what the
+  credential may do, a non-goal here. `--team` gives the narrowing on the
+  client side.
+
+**Decision D23: the client's own wake, and what the person sees.**
+- **The background wait.** The architect kit, which writes for Claude
+  Code, has the session keep `aicrew escalations wait` running as a
+  background command. When it ends, the client gives its output to the
+  session, which acts at once.
+- **What the session shows the person.** It reads each escalation with
+  `aicrew escalations show`, then shows:
+  - the question, the options with their consequences, the
+    recommendation, who is blocked and the urgency;
+  - a request for the operator's decision.
+
+  It answers only on the operator's word, as 7.3 says, and then starts the
+  wait again.
+- **At the session's start.** A start hook in the kit's managed
+  `.claude/settings.json` runs one bounded `aicrew escalations list
+  --open`. Every open escalation, already seen or not, is in the session's
+  first context, and the session starts the wait.
+- **The alternative not taken: a hook on each prompt.** It tells the
+  architect only when the person types, which is not "without anyone
+  running a command" for an idle session, and it costs a read per prompt.
+- **Also not taken: notices outside the client** (a terminal bell, a
+  desktop notification). The product promises only the client's own
+  channel.
+- **Limit.** When no architect session is open, nothing is told until one
+  starts. A `now` escalation with nobody at the seat is the operator
+  seat's case (feature 8), not this one's.
+
+**Decision D24: only the recorded answer means handled.**
+- **On aicrewd,** an escalation is open until it is answered, and answered
+  is the only state that ends it.
+- **The seen set is local.** The wait keeps, in the architect directory's
+  state, the IDs it has returned. It returns only for open escalations
+  outside that set, and drops answered ones from the set on each read, so
+  the set stays as small as the open list.
+  - **Not shown twice:** one directory's wait returns each escalation once.
+  - **Not lost:** the start hook lists every open escalation whether seen
+    or not. One seen in a session that ended before the answer is shown
+    again at the next start.
+- **No reminder within a session.** An unanswered escalation is shown
+  again only at the next start. Repeating it would only repeat a question
+  the person has already seen.
+- **The alternative not taken: a seen or acknowledged mark on aicrewd.**
+  It needs a write the architect credential does not have, which is the
+  same widening D22 declines.
+
+**Decision D25: pull requests awaiting the merge stay out.**
+- **Not questions.** They are not questions to the architect. The merge is
+  the operator's click on the forge, and the forge already tells the
+  person about their own pull requests.
+- **Already covered.** `/arch-merges` and `aicrew status` show what waits.
+- **No action to wake for.** The merge list changes with every accepted
+  result, so a wait on it would wake the session for things it never acts
+  on: it never merges.
+- **The alternative not taken:** a second kind for the wait. That can be
+  added if the operator asks, or when feature 9 changes who merges.
+
+**The feature's check, restated.** The run is the pilot simulation's
+running team on the lab host: members in separate containers, aicrewd and
+aimem as services. The members are scripted, so the run proves the
+product's path, not a model's judgement. A run with real models belongs
+with the goal's features 4 to 6. A scenario asserts each step from the
+run's own records:
+1. The worker blocks its attempt. The coordinator raises an escalation on
+   it with `aicrew-agent escalate`, naming the worker as `blocked`, and
+   mirrors it on the task.
+2. An architect directory written by `aicrew architect init`, with an
+   architect credential issued into its `creds/`, has
+   `aicrew escalations wait` running. The wait returns with that
+   escalation's ID within two intervals of the raise. No list or show
+   command is run between the raise and the return.
+3. The architect answers with `aicrew escalations answer` under the
+   architect credential. The record's `answered_by` is
+   `architect:<credential ID>`. The answer is mirrored on the task.
+4. The coordinator and the worker each receive the `escalation.answer`
+   message. Each has a turn started from it, and each acknowledges it.
+   The attempt leaves `blocked`.
+5. Over the whole run:
+   - the members' only inputs are inbox messages, so nothing is typed
+     into a member's terminal;
+   - the architect directory's `creds/` holds the architect credential
+     and nothing else;
+   - the audit shows no operator-credential call between the raise and
+     the answer.
+
+**The increments that follow.** The architect files them after this
+section is merged.
+1. **The wait and the kit.** S to M, an ordinary surface: the operator
+   CLI, the managed kit and the documents. No aicrewd route, no change of
+   authentication, no wire change.
+   - `aicrew escalations wait` with D24's seen set.
+   - The kit's start hook, ARCHITECT.md and `/arch-escalations` (D23).
+   - DEVELOPMENT.md.
+   - Tests on a fake operator API: a new escalation returns, a seen one
+     does not, an answered one leaves the set, failed reads end the wait.
+   - A smoke with real Claude Code in a disposable directory, as D1's was,
+     showing a session told by the wait.
+2. **The escalation scenario in the simulation.** S to M, an ordinary
+   surface: the simulation's scripts.
+   - The check above, as a cycle of its own.
+   - The "no escalation" expectation stays for the other cycles.
+   - CREW-CONTRACT's sentence on what wakes a member under turns is
+     replaced by what the run shows.
+   - A defect the run finds in the return under turns is a task of its
+     own.
+3. **Push, only if a run shows pull is not enough** (D21). M, a sensitive
+   surface (aicrewd's routes and authentication), with the operator's
+   merge: the `escalation.raised` event, the architect subscriber and its
+   delivery route.
+
+**Non-goals.**
+- The operator's own seat (feature 8), and the product's merge rule
+  (feature 9).
+- Any change of what the architect credential may do.
+- A web or terminal interface, and the runner on other hosts.
+- Pull requests awaiting the merge in the wait (D25).
 
 ## 8. Kinds of work, capabilities and worker profiles
 
@@ -1339,3 +1523,9 @@ Each has a recommendation, and the design above assumes it.
 | D17 | Ops audit | A full, redacted command log of every ops turn, kept on aicrewd (an exception to D7) |
 | D18 | Who approves an ops plan | A human with the full operator credential, never the architect credential; bound to the plan's digest |
 | D19 | Host-side enforcement for ops | The operator prepares sudoers command lists or JEA endpoints; the client's command classes are the first line, not the boundary |
+| D20 | The architect session brings the team up and restarts it | Recorded in the control-plane epic (`01a11eaa-33e6`) by the operator on 2026-10-12 and not taken into this document before; not built. An optional `team-control` scope on the architect credential, enabled at issue, covers team up and down, member restart, pause, resume and nudge, and never invitations or credentials; the epic records it as amending D14 |
+| D21 | How the architect is told of an escalation | Pull first: a client-side `aicrew escalations wait` on the existing list route; push (an event, an architect subscriber and a route) only when a run shows pull is not enough (7.7) |
+| D22 | Who is told | Whatever the architect credential reads, narrowed by `--team` on the client; not an architect per team |
+| D23 | How an idle session wakes | The wait as the client's background command, and a start hook listing every open escalation; not a hook on each prompt |
+| D24 | What counts as handled | Only the recorded answer; a local seen set keeps one directory from being told twice, and the start hook re-shows what is still open |
+| D25 | Pull requests awaiting the merge | Not in the wait: `/arch-merges` and `aicrew status` cover them |

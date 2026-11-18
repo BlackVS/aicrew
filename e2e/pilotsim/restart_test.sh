@@ -11,49 +11,54 @@ failures=0
 
 # One case: PLAN is what each `dc start` does to the service, in order
 # (up: started and running; skip: compose returns 0 and starts nothing;
-# crash: started, then stopped at once, as a product that dies on start).
-# Prints the helper's output and its exit status as the last line.
+# crash: started, then stopped at once, as a product that dies on start;
+# error: compose exits 1 and starts nothing). Each case runs in a bash of its
+# own under the runner's error handling (errexit, pipefail and an ERR trap
+# that fails), which a subshell tested with || would switch off.
+cat > "$work/case.sh" <<'CASE'
+set -Eeuo pipefail
+OUT=$DIR DOCKER_PROJECT=pilotsim
+STATE=$DIR/state PLAN=$DIR/plan CALLS=$DIR/calls STARTS=$DIR/starts
+echo running > "$STATE"; echo 0 > "$STARTS"
+tr ' ' '\n' <<<"$PLANW" > "$PLAN"
+dc() {
+  echo "dc $*" >> "$CALLS"
+  case $1 in
+  kill) echo stopped > "$STATE" ;;
+  start)
+    local next
+    next=$(head -n1 "$PLAN"); sed -i '1d' "$PLAN"
+    case $next in
+    up) echo running > "$STATE"; echo $(($(cat "$STARTS") + 1)) > "$STARTS" ;;
+    crash) echo stopped > "$STATE"; echo $(($(cat "$STARTS") + 1)) > "$STARTS" ;;
+    error) return 1 ;;
+    esac
+    return 0 ;;
+  ps) echo "c-$3" ;;
+  esac
+}
+docker() {
+  echo "docker $*" >> "$CALLS"
+  case $1 in
+  inspect) echo "2026-11-18T00:00:0$(cat "$STARTS")Z" ;;
+  events) echo "1 kill pilotsim-sim-aimem-1"; echo "2 start pilotsim-sim-ca-1"; echo "3 die pilotsim-sim-ca-1" ;;
+  esac
+}
+step() { printf '==> %s\n' "$*"; }
+fail() { echo "FAILED: $*"; exit 1; }
+healthy() { [ "$(cat "$STATE")" = running ]; }
+waitfor() { local what=$1; shift 2; "$@" || fail "$what did not happen"; echo "waited: $what"; }
+trap 'fail "line $LINENO exited $?"' ERR
+# shellcheck source=e2e/pilotsim/restart.sh
+. "$HERE/restart.sh"
+restart sim-aimem
+CASE
+# Prints the helper's output, then its exit status as the last line.
 run_case() {
-  local name=$1 plan=$2
+  local name=$1 rc=0
   mkdir -p "$work/$name"
-  (
-    set +e
-    OUT=$work/$name DOCKER_PROJECT=pilotsim
-    STATE=$work/$name/state PLAN=$work/$name/plan CALLS=$work/$name/calls
-    STARTS=$work/$name/starts
-    echo running > "$STATE"; echo 0 > "$STARTS"
-    tr ' ' '\n' <<<"$plan" > "$PLAN"
-    dc() {
-      echo "dc $*" >> "$CALLS"
-      case $1 in
-      kill) echo stopped > "$STATE" ;;
-      start)
-        local next
-        next=$(head -n1 "$PLAN"); sed -i '1d' "$PLAN"
-        case $next in
-        up) echo running > "$STATE"; echo $(($(cat "$STARTS") + 1)) > "$STARTS" ;;
-        crash) echo stopped > "$STATE"; echo $(($(cat "$STARTS") + 1)) > "$STARTS" ;;
-        esac
-        return 0 ;;
-      ps) echo "c-$3" ;;
-      esac
-    }
-    docker() {
-      echo "docker $*" >> "$CALLS"
-      case $1 in
-      inspect) echo "2026-11-18T00:00:0$(cat "$STARTS")Z" ;;
-      events) echo "1 kill pilotsim-sim-aimem-1"; echo "2 start pilotsim-sim-ca-1"; echo "3 die pilotsim-sim-ca-1" ;;
-      esac
-    }
-    step() { printf '==> %s\n' "$*"; }
-    fail() { echo "FAILED: $*"; exit 1; }
-    healthy() { [ "$(cat "$STATE")" = running ]; }
-    waitfor() { local what=$1; shift 2; "$@" || fail "$what did not happen"; echo "waited: $what"; }
-    # shellcheck source=e2e/pilotsim/restart.sh
-    . "$here/restart.sh"
-    restart sim-aimem
-    echo "exit=$?"
-  ) > "$work/$name/out" 2>&1 || echo "exit=$?" >> "$work/$name/out"
+  DIR=$work/$name PLANW=$2 HERE=$here bash "$work/case.sh" > "$work/$name/out" 2>&1 || rc=$?
+  echo "exit=$rc" >> "$work/$name/out"
 }
 
 check() {
@@ -95,6 +100,15 @@ check never "the events file named" has never "restart-sim-aimem-1.events"
 check never "events kept" test -s "$work/never/restart-sim-aimem-1.events"
 check never "no health wait" lacks never "waited:"
 check never "exit 1" has never "exit=1"
+
+# The first start is skipped and the second exits non-zero: the events are
+# kept before the named failure, not lost to the ERR trap.
+run_case error "skip error"
+check error "the retry line" has error "was skipped (compose returned 0 and did not start it); starting it again"
+check error "the named failure" has error "FAILED: the start of sim-aimem was skipped, and the second start exited 1"
+check error "not the ERR trap" lacks error "FAILED: line"
+check error "events kept" test -s "$work/error/restart-sim-aimem-1.events"
+check error "exit 1" has error "exit=1"
 
 # The service is started and dies at once (a fault of the product): no
 # retry, and the health wait judges it, as before.

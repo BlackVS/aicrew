@@ -884,12 +884,12 @@ kinds about these subjects.
 - **An architect** is not a subscriber. It has no session and no inbox on
   aicrewd, and no default subscription names it.
   - **Escalations:** the architect learns of open escalations through a
-    client-side wait on the operator API (DESIGN-CONTROL-PLANE 7.7, D20).
+    client-side wait on the operator API (DESIGN-CONTROL-PLANE 7.7, D21).
   - **Push:** an `escalation.raised` event with an architect subscriber is
     planned only as 7.7's third increment, when a run shows the wait is
     not enough.
   - **Pull requests awaiting the merge** stay with `aicrew merges` and
-    `/arch-merges` (D24).
+    `/arch-merges` (D25).
 
 **Explicit subscriptions** can be added, for example "this agent watches
 task X". They are data, in the project's process or the team's settings

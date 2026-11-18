@@ -1019,13 +1019,13 @@ remain:
 This section closes the first gap and states the run that closes the
 second. It changes nothing in 7.5's record, routes or credential.
 
-**Decision D20: pull first.**
+**Decision D21: pull first.**
 - **The wait.** `aicrew escalations wait [--team TEAM] [--interval S]` is
   a new client command. It reads the open escalations on the existing
   route, `GET /v1/admin/escalations?open=1`, with the architect
   credential, every interval: 60 seconds by default, never below 15.
 - **When it returns.** The wait returns as soon as an open escalation
-  appears that this architect directory has not been told of (D23). It
+  appears that this architect directory has not been told of (D24). It
   prints one line per escalation: the short ID, the team, the task, the
   category, the urgency and the question.
 - **When the channel is down.** A failed read is retried. After five
@@ -1055,7 +1055,7 @@ second. It changes nothing in 7.5's record, routes or credential.
 
   None of these holds today.
 
-**Decision D21: the recipient is the architect credential.**
+**Decision D22: the recipient is the architect credential.**
 - **Who is told.** The wait reads what the architect credential reads,
   which is every team, unless `--team` narrows it. An escalation is
   addressed to the architect role, not to a person or a team's seat.
@@ -1068,7 +1068,7 @@ second. It changes nothing in 7.5's record, routes or credential.
   credential may do, a non-goal here. `--team` gives the narrowing on the
   client side.
 
-**Decision D22: the client's own wake, and what the person sees.**
+**Decision D23: the client's own wake, and what the person sees.**
 - **The background wait.** The architect kit, which writes for Claude
   Code, has the session keep `aicrew escalations wait` running as a
   background command. When it ends, the client gives its output to the
@@ -1095,7 +1095,7 @@ second. It changes nothing in 7.5's record, routes or credential.
   starts. A `now` escalation with nobody at the seat is the operator
   seat's case (feature 8), not this one's.
 
-**Decision D23: only the recorded answer means handled.**
+**Decision D24: only the recorded answer means handled.**
 - **On aicrewd,** an escalation is open until it is answered, and answered
   is the only state that ends it.
 - **The seen set is local.** The wait keeps, in the architect directory's
@@ -1111,9 +1111,9 @@ second. It changes nothing in 7.5's record, routes or credential.
   the person has already seen.
 - **The alternative not taken: a seen or acknowledged mark on aicrewd.**
   It needs a write the architect credential does not have, which is the
-  same widening D21 declines.
+  same widening D22 declines.
 
-**Decision D24: pull requests awaiting the merge stay out.**
+**Decision D25: pull requests awaiting the merge stay out.**
 - **Not questions.** They are not questions to the architect. The merge is
   the operator's click on the forge, and the forge already tells the
   person about their own pull requests.
@@ -1157,8 +1157,8 @@ section is merged.
 1. **The wait and the kit.** S to M, an ordinary surface: the operator
    CLI, the managed kit and the documents. No aicrewd route, no change of
    authentication, no wire change.
-   - `aicrew escalations wait` with D23's seen set.
-   - The kit's start hook, ARCHITECT.md and `/arch-escalations` (D22).
+   - `aicrew escalations wait` with D24's seen set.
+   - The kit's start hook, ARCHITECT.md and `/arch-escalations` (D23).
    - DEVELOPMENT.md.
    - Tests on a fake operator API: a new escalation returns, a seen one
      does not, an answered one leaves the set, failed reads end the wait.
@@ -1172,7 +1172,7 @@ section is merged.
      replaced by what the run shows.
    - A defect the run finds in the return under turns is a task of its
      own.
-3. **Push, only if a run shows pull is not enough** (D20). M, a sensitive
+3. **Push, only if a run shows pull is not enough** (D21). M, a sensitive
    surface (aicrewd's routes and authentication), with the operator's
    merge: the `escalation.raised` event, the architect subscriber and its
    delivery route.
@@ -1182,7 +1182,7 @@ section is merged.
   (feature 9).
 - Any change of what the architect credential may do.
 - A web or terminal interface, and the runner on other hosts.
-- Pull requests awaiting the merge in the wait (D24).
+- Pull requests awaiting the merge in the wait (D25).
 
 ## 8. Kinds of work, capabilities and worker profiles
 
@@ -1523,8 +1523,9 @@ Each has a recommendation, and the design above assumes it.
 | D17 | Ops audit | A full, redacted command log of every ops turn, kept on aicrewd (an exception to D7) |
 | D18 | Who approves an ops plan | A human with the full operator credential, never the architect credential; bound to the plan's digest |
 | D19 | Host-side enforcement for ops | The operator prepares sudoers command lists or JEA endpoints; the client's command classes are the first line, not the boundary |
-| D20 | How the architect is told of an escalation | Pull first: a client-side `aicrew escalations wait` on the existing list route; push (an event, an architect subscriber and a route) only when a run shows pull is not enough (7.7) |
-| D21 | Who is told | Whatever the architect credential reads, narrowed by `--team` on the client; not an architect per team |
-| D22 | How an idle session wakes | The wait as the client's background command, and a start hook listing every open escalation; not a hook on each prompt |
-| D23 | What counts as handled | Only the recorded answer; a local seen set keeps one directory from being told twice, and the start hook re-shows what is still open |
-| D24 | Pull requests awaiting the merge | Not in the wait: `/arch-merges` and `aicrew status` cover them |
+| D20 | The architect session brings the team up and restarts it | Recorded in the control-plane epic (`01a11eaa-33e6`) by the operator on 2026-10-12 and not taken into this document before; not built. An optional `team-control` scope on the architect credential, enabled at issue, covers team up and down, member restart, pause, resume and nudge, and never invitations or credentials; the epic records it as amending D14 |
+| D21 | How the architect is told of an escalation | Pull first: a client-side `aicrew escalations wait` on the existing list route; push (an event, an architect subscriber and a route) only when a run shows pull is not enough (7.7) |
+| D22 | Who is told | Whatever the architect credential reads, narrowed by `--team` on the client; not an architect per team |
+| D23 | How an idle session wakes | The wait as the client's background command, and a start hook listing every open escalation; not a hook on each prompt |
+| D24 | What counts as handled | Only the recorded answer; a local seen set keeps one directory from being told twice, and the start hook re-shows what is still open |
+| D25 | Pull requests awaiting the merge | Not in the wait: `/arch-merges` and `aicrew status` cover them |

@@ -988,6 +988,8 @@ The flow:
 - **Until the receipts exist,** an answer in a floor category records that
   the human decided it in the conversation. The merge stays a human click
   on the forge in every case.
+- **After the architect role:** `docs/DESIGN-OPERATOR-SEAT.md` says what of
+  the seat is still left, and where the operator answers it.
 
 **Decision D12: pause and resume.**
 - 5598's second criterion makes pause and resume messages that the

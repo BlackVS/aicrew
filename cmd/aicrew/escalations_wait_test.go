@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,7 +41,7 @@ func runWait(t *testing.T, list func(context.Context) ([]opapi.Escalation, error
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var out, errb bytes.Buffer
-	code := waitEscalations(ctx, list, seen, time.Millisecond, &out, &errb)
+	code := waitEscalations(ctx, list, seen, true, time.Millisecond, &out, &errb)
 	return code, out.String(), errb.String()
 }
 
@@ -71,14 +73,14 @@ func TestWaitTellsEachEscalationOnce(t *testing.T) {
 // the route no longer lists as open.
 func TestWaitDropsAnsweredFromSeen(t *testing.T) {
 	seen := filepath.Join(t.TempDir(), "seen.json")
-	if err := writeSeen(seen, []string{"old-answered", "still-open"}); err != nil {
+	if err := writeSeenIDs(seen, []string{"old-answered", "still-open"}); err != nil {
 		t.Fatal(err)
 	}
 	list, _ := lister(openList(esc("new-one", "q"), esc("still-open", "q")))
 	if code, out, _ := runWait(t, list, seen); code != 0 || !strings.Contains(out, "new-one") || strings.Contains(out, "still-open") {
 		t.Fatalf("wait: %d %q", code, out)
 	}
-	got, err := readSeen(seen)
+	got, err := readSeenIDs(seen)
 	if err != nil || strings.Join(got, ",") != "still-open,new-one" {
 		t.Fatalf("seen set: %v %v", got, err)
 	}
@@ -89,7 +91,7 @@ func TestWaitDropsAnsweredFromSeen(t *testing.T) {
 // is not told again when it comes back into the list.
 func TestWaitKeepsSeenBeyondTheBound(t *testing.T) {
 	seen := filepath.Join(t.TempDir(), "seen.json")
-	if err := writeSeen(seen, []string{"oldest-open"}); err != nil {
+	if err := writeSeenIDs(seen, []string{"oldest-open"}); err != nil {
 		t.Fatal(err)
 	}
 	full := make([]opapi.Escalation, waitListBound)
@@ -100,7 +102,7 @@ func TestWaitKeepsSeenBeyondTheBound(t *testing.T) {
 	if code, out, _ := runWait(t, list, seen); code != 0 || strings.Count(out, "\n") != waitListBound || strings.Contains(out, "oldest-open") {
 		t.Fatalf("wait: %d, %d lines", code, strings.Count(out, "\n"))
 	}
-	got, err := readSeen(seen)
+	got, err := readSeenIDs(seen)
 	if err != nil || len(got) != waitListBound+1 || got[0] != "oldest-open" {
 		t.Fatalf("seen set: %d entries, first %v, %v", len(got), got[:1], err)
 	}
@@ -110,7 +112,7 @@ func TestWaitKeepsSeenBeyondTheBound(t *testing.T) {
 	if code, out, _ := runWait(t, list, seen); code != 0 || *reads != 2 || !strings.HasPrefix(out, "escalation later ") || strings.Count(out, "\n") != 1 {
 		t.Fatalf("second wait: %d after %d reads, %q", code, *reads, out)
 	}
-	if got, _ := readSeen(seen); strings.Join(got, ",") != "oldest-open,later" {
+	if got, _ := readSeenIDs(seen); strings.Join(got, ",") != "oldest-open,later" {
 		t.Fatalf("seen set after the answers: %v", got)
 	}
 }
@@ -192,7 +194,78 @@ func TestEscalationsWaitCommand(t *testing.T) {
 	if code != 1 || out != "" || !strings.Contains(errs, "5 times in a row") {
 		t.Fatalf("refused credential: %d %q %q", code, out, errs)
 	}
-	if _, err := os.Stat(seen); err == nil {
-		t.Fatal("a failed wait wrote the seen set")
+	if ids, err := readSeenIDs(seen); err != nil || len(ids) != 0 {
+		t.Fatalf("a failed wait recorded %v %v", ids, err)
 	}
 }
+
+// Two waits on one seen set: a wait left running by an ended session and
+// the new session's wait. Only the newest records anything. The older one
+// ends on its next read (exit 3) without taking the next escalation, and
+// the newest is told of it.
+func TestWaitLeftBehindEndsAndTakesNothing(t *testing.T) {
+	seen := filepath.Join(t.TempDir(), "state", "seen.json")
+	var mu sync.Mutex
+	var open []opapi.Escalation
+	list := func(context.Context) ([]opapi.Escalation, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(open), nil
+	}
+	owner := func() string {
+		f, _ := readSeen(seen)
+		return f.Owner
+	}
+	type result struct {
+		code      int
+		out, errs string
+	}
+	start := func() <-chan result {
+		done := make(chan result, 1)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var out, errb bytes.Buffer
+			code := waitEscalations(ctx, list, seen, true, 5*time.Millisecond, &out, &errb)
+			done <- result{code, out.String(), errb.String()}
+		}()
+		return done
+	}
+	settle := func(what string, ok func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); !ok(); time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("no %s", what)
+			}
+		}
+	}
+
+	old := start()
+	settle("owner for the first wait", func() bool { return owner() != "" })
+	first := owner()
+	newest := start()
+	settle("owner for the second wait", func() bool { return owner() != first })
+
+	left := <-old // ends on its next read, before anything is raised
+	if left.code != waitSuperseded || left.out != "" || !strings.Contains(left.errs, "newer escalations wait") {
+		t.Fatalf("the wait left behind: %+v", left)
+	}
+	mu.Lock()
+	open = []opapi.Escalation{esc("ffffffff-0006", "who is told?")}
+	mu.Unlock()
+	got := <-newest
+	if got.code != 0 || !strings.HasPrefix(got.out, "escalation ffffffff-0006 ") {
+		t.Fatalf("the newest wait: %+v", got)
+	}
+	if ids, _ := readSeenIDs(seen); !slices.Equal(ids, []string{"ffffffff-0006"}) {
+		t.Fatalf("seen set: %v", ids)
+	}
+}
+
+// readSeenIDs and writeSeenIDs are the seen set's IDs, without its owner.
+func readSeenIDs(path string) ([]string, error) {
+	f, err := readSeen(path)
+	return f.Seen, err
+}
+
+func writeSeenIDs(path string, ids []string) error { return writeSeen(path, seenFile{Seen: ids}) }

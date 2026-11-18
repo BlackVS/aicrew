@@ -1726,7 +1726,18 @@ refused, never migrated.
 with `AICREW_OPERATOR_TOKEN_FILE` naming `creds/aicrew.architect`. The
 session's `aicrew escalations` commands then connect with no flags, and
 never name the credential's path in a command, where the deny rules would
-stop them.
+stop them. Put the credential there with the operator credential:
+
+```sh
+bin/aicrew architect credential issue --label planning --output ~/aicrew/architect/creds/aicrew.architect
+bin/aicrew architect credential list
+bin/aicrew architect credential revoke --id ID
+```
+
+An architect credential reads and answers escalations and reads the
+merges list (`aicrew merges`) and the team states (`aicrew status`), and
+nothing else, so the full operator token
+never enters an AI session. It lives 90 days.
 
 **Being told of an escalation.** With the connection, init also writes:
 - `AICREW_ESCALATIONS_SEEN` into the settings' `env`, naming
@@ -1735,11 +1746,25 @@ stop them.
   open escalation, up to the list's bound, is then in the session's first
   context.
 
+Without `--url`, init writes neither.
+
 `docs/ARCHITECT.md` tells the session to keep `aicrew escalations wait`
 running as a background command:
 - When the wait returns, the session reads each escalation with `show`,
   tells the operator, and answers only on the operator's word.
 - It then starts the wait again.
+
+**A wait left behind.** The client leaves a background command running
+when a session ends, so a directory can have two waits:
+- **The newest takes over.** A wait takes the seen set over as it starts,
+  by writing its own owner mark into it.
+- **An older wait ends.** On its next read it finds another owner. It then
+  ends with exit 3, records nothing and prints nothing, so it never takes
+  an escalation from the session that is there.
+- **With no new wait started,** the one left behind keeps reading. At the
+  next new escalation it records it and returns to nobody. The next
+  session's start hook still lists that escalation, because the hook lists
+  every open escalation, seen or not.
 
 An existing directory gets the hook and the texts by running init again,
 with the same flags. A settings file a person changed is kept, and the new
@@ -1755,22 +1780,10 @@ with a logged-in `claude` on PATH:
 - **What it shows:** the session starts the wait in the background and
   goes idle. An escalation raised then is told and shown with no further
   input, and nothing answers it.
-- **At the end:** the client leaves a background command running when the
-  session's input closes, so the smoke has the session stop the wait
-  first.
+- **At the end:** the session stops its wait before its input closes, so
+  no wait is left running after the test.
 - **Keeping the log:** `AICREW_SMOKE_KEEP=FILE` keeps the session's event
-  stream. Put the credential there with the operator credential:
-
-```sh
-bin/aicrew architect credential issue --label planning --output ~/aicrew/architect/creds/aicrew.architect
-bin/aicrew architect credential list
-bin/aicrew architect credential revoke --id ID
-```
-
-An architect credential reads and answers escalations and reads the
-merges list (`aicrew merges`) and the team states (`aicrew status`), and
-nothing else, so the full operator token
-never enters an AI session. It lives 90 days.
+  stream.
 
 **First start.** The first `claude` in the directory asks to trust it and
 to approve its `aimem` MCP server, and each aimem tool asks once for
@@ -3340,10 +3353,15 @@ bin/aicrew escalations wait [--team TEAM] [--interval SECONDS] [--seen FILE]
     `$AICREW_ESCALATIONS_SEEN`, else `state/escalations-seen.json` under
     the current directory. The architect directory's settings name its
     `state/escalations-seen.json`, never `creds/`.
-  - The set holds what the directory was told of and is still open, and
-    answered escalations leave it on each read. Restarting the wait keeps
-    it. Each directory has its own set, so each directory is told once.
+  - The set holds what the directory was told of and is still open.
+    Answered escalations leave it on each read of every team; a wait
+    narrowed with `--team` sees only that team, so it drops nothing.
+    Restarting the wait keeps the set. Each directory has its own set, so each directory is told once.
     A set that is not valid JSON is refused, not overwritten.
+  - Only the directory's newest wait records anything. A wait writes its
+    owner mark into the set as it starts. An older wait that finds another
+    owner on its next read ends with exit 3, recording and printing
+    nothing ("A wait left behind", under the architect directory).
   - The list answers at most 200 open escalations, newest first. With more
     open, the oldest are left out of each answer and are told only as
     newer ones are answered. An answer of 200 rows is taken as cut, so an

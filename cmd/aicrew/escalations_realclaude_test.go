@@ -190,7 +190,7 @@ func TestRealClaudeArchitectIsTold(t *testing.T) {
 	})
 	t.Logf("told %v after the raise", time.Since(told).Round(time.Second))
 
-	seen, err := readSeen(filepath.Join(dir, "state", "escalations-seen.json"))
+	seen, err := readSeenIDs(filepath.Join(dir, "state", "escalations-seen.json"))
 	if err != nil || len(seen) != 1 || seen[0] != raised.ID {
 		t.Fatalf("the seen set: %v %v", seen, err)
 	}

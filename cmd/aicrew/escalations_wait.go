@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -25,8 +27,8 @@ import (
 // 7.7, D21 to D24). It reads the open escalations on the existing list
 // route every interval and returns with those this directory has not been
 // told of. The seen set is a local file: answered escalations leave it on
-// each read, and the only state that ends an escalation is aicrewd's
-// recorded answer.
+// each complete read of every team, and the only state that ends an
+// escalation is aicrewd's recorded answer.
 
 const (
 	// waitDefaultInterval and waitMinInterval are D21's 60 and 15 seconds,
@@ -43,15 +45,24 @@ const (
 // waitUnit is the interval's unit; tests shorten it.
 var waitUnit = time.Second
 
+// waitSuperseded is the exit code of a wait whose seen set a newer wait in
+// the same directory took over.
+const waitSuperseded = 3
+
 // seenFile is the seen set as written: the IDs this directory was told of
-// and that were still open at the last read.
+// and that were still open at the last read, and the wait that owns the
+// set. Only the directory's newest wait records anything: a wait left
+// running by an ended session finds another owner on its next read and
+// ends, so it never takes an escalation from the session that is there.
 type seenFile struct {
-	Seen []string `json:"seen"`
+	Owner string   `json:"owner,omitempty"`
+	Seen  []string `json:"seen"`
 }
 
 // runEscalationsWait is aicrew escalations wait: 0 when it returns with new
 // escalations, 1 when the reads failed waitMaxFailures times in a row or
-// the seen set cannot be kept, 2 on a usage error.
+// the seen set cannot be kept, 2 on a usage error, 3 when a newer wait in
+// the same directory took the seen set over.
 func runEscalationsWait(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("aicrew escalations wait", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -79,13 +90,29 @@ func runEscalationsWait(ctx context.Context, args []string, stdout, stderr io.Wr
 		err := cl.Get(ctx, opapi.EscalationsPath, q, &open)
 		return open, err
 	}
-	return waitEscalations(ctx, list, *seenPath, time.Duration(*interval)*waitUnit, stdout, stderr)
+	return waitEscalations(ctx, list, *seenPath, *team == "", time.Duration(*interval)*waitUnit, stdout, stderr)
 }
 
-// waitEscalations reads the open escalations until one is outside the seen
-// set, records the new ones and prints them, oldest first.
+// waitEscalations takes the seen set over, then reads the open escalations
+// until one is outside the set, records the new ones and prints them,
+// oldest first. It ends without recording anything once a newer wait owns
+// the set. everyTeam says the list is not narrowed to one team: only such a
+// list, when complete, shows which seen escalations were answered.
 func waitEscalations(ctx context.Context, list func(context.Context) ([]opapi.Escalation, error),
-	seenPath string, every time.Duration, stdout, stderr io.Writer) int {
+	seenPath string, everyTeam bool, every time.Duration, stdout, stderr io.Writer) int {
+	var mark [16]byte
+	if _, err := rand.Read(mark[:]); err != nil {
+		return failed(stderr, err)
+	}
+	owner := hex.EncodeToString(mark[:])
+	claim, err := readSeen(seenPath)
+	if err != nil {
+		return failed(stderr, err)
+	}
+	claim.Owner = owner
+	if err := writeSeen(seenPath, claim); err != nil {
+		return failed(stderr, err)
+	}
 	failures := 0
 	for {
 		open, err := list(ctx)
@@ -99,17 +126,21 @@ func waitEscalations(ctx context.Context, list func(context.Context) ([]opapi.Es
 			}
 		} else {
 			failures = 0
-			seen, err := readSeen(seenPath)
+			cur, err := readSeen(seenPath)
 			if err != nil {
 				return failed(stderr, err)
 			}
-			kept, fresh := splitSeen(open, seen, len(open) < waitListBound)
-			if len(fresh) > 0 || len(kept) != len(seen) {
+			if cur.Owner != owner {
+				fmt.Fprintln(stderr, "aicrew: a newer escalations wait took this directory's seen set; this one ends and records nothing")
+				return waitSuperseded
+			}
+			kept, fresh := splitSeen(open, cur.Seen, everyTeam && len(open) < waitListBound)
+			if len(fresh) > 0 || len(kept) != len(cur.Seen) {
 				next := kept
 				for _, e := range fresh {
 					next = append(next, e.ID)
 				}
-				if err := writeSeen(seenPath, next); err != nil {
+				if err := writeSeen(seenPath, seenFile{Owner: owner, Seen: next}); err != nil {
 					return failed(stderr, err)
 				}
 			}
@@ -164,34 +195,45 @@ func escalationLine(e opapi.Escalation) string {
 	return strings.Join(strings.Fields(forge.CleanText(line)), " ")
 }
 
-func readSeen(path string) ([]string, error) {
+func readSeen(path string) (seenFile, error) {
+	f := seenFile{Seen: []string{}}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return []string{}, nil
+		return f, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("the seen set %s: %w", path, err)
+		return f, fmt.Errorf("the seen set %s: %w", path, err)
 	}
-	var f seenFile
 	if err := json.Unmarshal(b, &f); err != nil {
-		return nil, fmt.Errorf("the seen set %s is not readable (remove it to be told of every open escalation again): %w", path, err)
+		return f, fmt.Errorf("the seen set %s is not readable (remove it to be told of every open escalation again): %w", path, err)
 	}
-	return f.Seen, nil
+	if f.Seen == nil {
+		f.Seen = []string{}
+	}
+	return f, nil
 }
 
-// writeSeen replaces the seen set whole, owner-only.
-func writeSeen(path string, ids []string) error {
-	b, _ := json.MarshalIndent(seenFile{Seen: ids}, "", "  ")
+// writeSeen replaces the seen set whole, owner-only, through a temporary
+// file of its own, so two waits writing at once never mix their contents.
+func writeSeen(path string, f seenFile) error {
+	b, _ := json.MarshalIndent(f, "", "  ")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("the seen set %s: %w", path, err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return fmt.Errorf("the seen set %s: %w", path, err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("the seen set %s: %w", path, err)
+	_, werr := tmp.Write(append(b, '\n'))
+	if cerr := tmp.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Rename(tmp.Name(), path)
+	}
+	if werr != nil {
+		os.Remove(tmp.Name())
+		return fmt.Errorf("the seen set %s: %w", path, werr)
 	}
 	return nil
 }

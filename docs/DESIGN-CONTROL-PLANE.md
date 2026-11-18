@@ -1104,9 +1104,10 @@ second. It changes nothing in 7.5's record, routes or credential.
   is the only state that ends it.
 - **The seen set is local.** The wait keeps, in the architect directory's
   state, the IDs it has returned. It returns only for open escalations
-  outside that set, and drops answered ones from the set on each read
-  whose answer is under the bound, so the set stays as small as the open
-  list.
+  outside that set. It drops answered ones from the set on each read that
+  covers every team and whose answer is under the bound, so the set stays
+  as small as the open list. Only the directory's newest wait writes the
+  set; an older one left running ends on its next read.
   - **Not shown twice:** one directory's wait returns each escalation once.
   - **Not lost:** the start hook lists every open escalation up to the
     bound, whether seen or not. One seen in a session that ended before the answer is shown

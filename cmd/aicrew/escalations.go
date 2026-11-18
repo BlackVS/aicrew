@@ -28,7 +28,9 @@ wait reads the open escalations every --interval seconds (60 by default, at
 least 15) and returns with those not in the seen set, one line each, oldest
 first. The seen set is --seen, else $AICREW_ESCALATIONS_SEEN (the architect
 directory's settings name it), else state/escalations-seen.json under the
-current directory. Five failed reads in a row end it with exit 1. The list
+current directory. Five failed reads in a row end it with exit 1. A wait
+takes the seen set over as it starts; an older wait on the same set then
+ends on its next read with exit 3, recording and printing nothing. The list
 holds at most 200 open escalations, newest first: with more open, the oldest
 are told only as newer ones are answered, and a full list never drops an
 escalation from the seen set.

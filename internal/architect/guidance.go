@@ -80,7 +80,8 @@ Then mirror it on the task as a comment whose first line is
 ` + "`[escalation.answer ID]`" + `, so the board keeps the decision. A comment alone
 answers nothing: only the recorded answer reaches the crew.
 
-You are told of a new escalation without anyone running a command:
+When this directory was set up with aicrewd's address, you are told of a
+new escalation without anyone running a command:
 - At the session's start, a hook runs ` + "`aicrew escalations list --open`" + `, so every
   open escalation is in your first context. Tell the operator about each one.
 - Keep ` + "`aicrew escalations wait`" + ` running as a background command for the
@@ -92,7 +93,9 @@ You are told of a new escalation without anyone running a command:
   options and the recommendation, and wait for the operator's decision.
   Being told is not handling it: only the recorded answer is.
 - If the wait ends with an error, tell the operator that aicrewd cannot be
-  read, and start it again when the operator says.
+  read, and start it again when the operator says. If it ends saying a
+  newer wait took this directory over, another wait of yours already runs:
+  do not start one more.
 
 The list holds at most 200 open escalations, newest first. With more open,
 the oldest are left out and appear only as newer ones are answered.

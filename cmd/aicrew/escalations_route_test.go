@@ -184,7 +184,7 @@ func TestWaitPastTheBound(t *testing.T) {
 	if got := waitCmd(t, "--seen", seen); !slices.Equal(got, []string{"esc-000"}) {
 		t.Fatalf("after the answers the wait told %v", got)
 	}
-	ids, err := readSeen(seen)
+	ids, err := readSeenIDs(seen)
 	if err != nil || len(ids) != waitListBound-1 || slices.Contains(ids, "esc-200") || !slices.Contains(ids, "esc-000") {
 		t.Fatalf("the seen set after a complete answer: %d entries, %v", len(ids), err)
 	}
@@ -194,7 +194,69 @@ func TestWaitPastTheBound(t *testing.T) {
 	if got := waitCmd(t, "--seen", seen); !slices.Equal(got, []string{"esc-201", "esc-202"}) {
 		t.Fatalf("the full list told %v", got)
 	}
-	if ids, _ := readSeen(seen); !slices.Contains(ids, "esc-000") || len(ids) != waitListBound+1 {
+	if ids, _ := readSeenIDs(seen); !slices.Contains(ids, "esc-000") || len(ids) != waitListBound+1 {
 		t.Fatalf("a truncated answer dropped seen entries: %d left", len(ids))
+	}
+}
+
+// A wait narrowed with --team reads only that team's escalations, so it
+// drops nothing from the seen set: the other teams' escalations are not
+// answered, only out of its view. Every team, then one, then every team
+// again tells each escalation once.
+func TestWaitTeamFilterKeepsOtherTeams(t *testing.T) {
+	lr := serveListRoute(t)
+	seen := filepath.Join(t.TempDir(), "state", "seen.json")
+	lr.raise(teamEsc("team-1", "esc-a"), teamEsc("team-2", "esc-b"))
+	if got := waitCmd(t, "--seen", seen); !slices.Equal(got, []string{"esc-a", "esc-b"}) {
+		t.Fatalf("every team: %v", got)
+	}
+	lr.raise(teamEsc("team-2", "esc-c"))
+	if got := waitCmd(t, "--team", "team-2", "--seen", seen); !slices.Equal(got, []string{"esc-c"}) {
+		t.Fatalf("--team team-2: %v", got)
+	}
+	if ids, _ := readSeenIDs(seen); !slices.Contains(ids, "esc-a") {
+		t.Fatalf("the filtered wait dropped team-1's open escalation: %v", ids)
+	}
+	lr.raise(teamEsc("team-1", "esc-d"))
+	if got := waitCmd(t, "--seen", seen); !slices.Equal(got, []string{"esc-d"}) {
+		t.Fatalf("every team again: %v", got)
+	}
+	// An unfiltered, complete answer still drops the answered ones.
+	lr.answer("esc-a", "esc-b")
+	lr.raise(teamEsc("team-1", "esc-e"))
+	if got := waitCmd(t, "--seen", seen); !slices.Equal(got, []string{"esc-e"}) {
+		t.Fatalf("after the answers: %v", got)
+	}
+	if ids, _ := readSeenIDs(seen); slices.Contains(ids, "esc-a") || slices.Contains(ids, "esc-b") || len(ids) != 3 {
+		t.Fatalf("seen set after the answers: %v", ids)
+	}
+}
+
+// Writers that overlap each use a temporary file of their own, so the set
+// stays valid JSON whatever the interleaving.
+func TestSeenWritersDoNotMix(t *testing.T) {
+	seen := filepath.Join(t.TempDir(), "state", "seen.json")
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ids := make([]string, 1+i*20)
+			for j := range ids {
+				ids[j] = fmt.Sprintf("w%02d-%03d", i, j)
+			}
+			for range 20 {
+				_ = writeSeen(seen, seenFile{Owner: fmt.Sprint(i), Seen: ids})
+			}
+		}()
+	}
+	wg.Wait()
+	f, err := readSeen(seen)
+	if err != nil || f.Owner == "" || len(f.Seen) == 0 {
+		t.Fatalf("the seen set after overlapping writes: %+v %v", f.Owner, err)
+	}
+	left, _ := filepath.Glob(seen + ".*.tmp")
+	if len(left) != 0 {
+		t.Fatalf("temporary files left: %v", left)
 	}
 }

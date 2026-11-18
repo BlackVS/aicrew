@@ -738,8 +738,10 @@ worker the decision with its `answer` step, and the cycle goes on to DONE.
 5. No call of the operator credential in aicrewd's audit between the raise
    and the answer, and the directory's `creds/` holding
    `aicrew.architect` alone. That the members' only inputs are inbox
-   messages is the cycle's own check: no typed input, and an empty guard
-   log.
+   messages is not asserted. It follows from headless turns, whose every
+   trigger is an inbox message (DESIGN-CONTROL-PLANE.md 1.2, D1). The
+   cycle's own check is that every turn finished and the guard logs stayed
+   empty.
 
 **What rests on the runner's log.** aicrewd's audit records commands, not
 reads. That no list or show ran between the raise and the wait's return

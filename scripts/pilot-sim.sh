@@ -288,11 +288,15 @@ finish() {
   fi
   rm -rf "$KNOWN_DIR" "$TOOLS"
   if [ -n "$KEEP" ]; then
-    local env="PILOTSIM_STAGE=$STAGE PILOTSIM_AIMEM_VERSION=$PILOTSIM_AIMEM_VERSION PILOTSIM_AISKILLS_VERSION=$PILOTSIM_AISKILLS_VERSION"
+    # Each value shell-quoted, so the printed commands can be pasted as they
+    # are, also for an output directory or a checkout with spaces.
+    local dcq
+    printf -v dcq 'PILOTSIM_STAGE=%q PILOTSIM_AIMEM_VERSION=%q PILOTSIM_AISKILLS_VERSION=%q docker compose -f %q' \
+      "$STAGE" "$PILOTSIM_AIMEM_VERSION" "$PILOTSIM_AISKILLS_VERSION" "$COMPOSE"
     echo "pilot-sim: -keep: the stack is still up; inspect it with:" >&3
-    echo "  $env docker compose -f $COMPOSE ps" >&3
+    echo "  $dcq ps" >&3
     echo "pilot-sim: remove it, with its volumes, with:" >&3
-    echo "  $env docker compose -f $COMPOSE down -v --remove-orphans" >&3
+    echo "  $dcq down -v --remove-orphans" >&3
   fi
   exit "$code"
 }

@@ -1,6 +1,7 @@
 # shellcheck shell=bash
-# The pilot cases P1 to P5 and the fault cases F1 to F7 (faults.sh)
-# (docs/DESIGN-PILOT-SIMULATION.md, section 6), sourced by
+# The pilot cases P1 to P5, the escalation case E1 and the fault cases F1 to
+# F7 (faults.sh) (docs/DESIGN-PILOT-SIMULATION.md, section 6;
+# docs/E2E-PILOT-SIM.md for E1), sourced by
 # scripts/pilot-sim.sh after its two cycles: each case is one fault, or a
 # sequence of them, on a cycle of its own, checked by e2e/pilotsim/cases.py
 # at the points it names, and the cycle's own checks at its end. P3 leaves
@@ -240,6 +241,113 @@ case_p4() {
   case_done P4
 }
 
+# E1: the escalation case (docs/E2E-PILOT-SIM.md, "The escalation case").
+# The worker stalls and the launcher blocks the attempt, as in P4; the
+# coordinator raises an escalation on it instead of answering. The runner is
+# the architect session: in sim-architect, the directory `aicrew architect
+# init` wrote holds the architect credential the operator issued in
+# sim-aicrewd, and `aicrew escalations wait` there tells it of the raise. It
+# answers under that credential and mirrors the answer on the task, and the
+# coordinator and the worker act on the answer's message.
+#
+# Between the raise and the answer the runner makes no operator call: it
+# neither pauses, nudges nor snapshots, and reads only the wait's output.
+# aicrewd's audit records commands, not reads, so that no list or show ran
+# between the raise and the wait's return rests on the runner's own log of
+# the architect's commands (CYC/architect.log), not on a record of aicrewd.
+ARCH_DIR=/home/sessiond/architect
+ARCH_ENV=()
+# arch CMD...: the architect session's command, in its directory, with the
+# environment the directory's .claude/settings.json gives the session; each
+# is logged with its start time.
+arch() {
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" "$*" >> "$CYC/architect.log"
+  dc exec -T -u sessiond -w "$ARCH_DIR" -e PATH=/opt/aicrew-prebuilt:/usr/bin:/bin "${ARCH_ENV[@]}" sim-architect "$@"
+}
+# architect_init: the directory, and the architect credential the operator
+# issues where the operator credential lives, piped into its creds/.
+architect_init() {
+  dc exec -T -u sessiond sim-architect /opt/aicrew-prebuilt/aicrew architect init --dir "$ARCH_DIR" \
+    --project "$PROJECT" --url https://sim-aicrewd:9443 --tls-trust-mode spki_sha256 \
+    --tls-trust-value "$PIN_SIM_AICREWD" > /dev/null || fail "case E1: aicrew architect init"
+  op aicrew architect credential issue --label sim-e1 --output - |
+    into sim-architect sessiond "$ARCH_DIR/creds/aicrew.architect" || fail "case E1: the architect credential"
+  mapfile -t ARCH_ENV < <(dc exec -T -u sessiond sim-architect cat "$ARCH_DIR/.claude/settings.json" |
+    python3 -c 'import json,sys
+for k, v in json.load(sys.stdin)["env"].items():
+    print("-e"); print("%s=%s" % (k, v))')
+  [ "${#ARCH_ENV[@]}" -gt 0 ] || fail "case E1: the architect directory's settings name no environment"
+}
+# architect_wait: the session's background wait. Its output, exit code and
+# the time it returned go to CYC/wait.*.
+architect_wait() {
+  rm -f "$CYC"/wait.*
+  (
+    code=0
+    arch aicrew escalations wait --interval 15 > "$CYC/wait.out" 2> "$CYC/wait.err" || code=$?
+    date -u +%Y-%m-%dT%H:%M:%S.%NZ > "$CYC/wait.returned.new"
+    echo "$code" > "$CYC/wait.code"
+    mv "$CYC/wait.returned.new" "$CYC/wait.returned"
+  ) &
+}
+claimed() { dc exec -T -u sessiond sim-architect test -s "$ARCH_DIR/state/escalations-seen.json"; }
+wait_returned() { [ -s "$CYC/wait.returned" ]; }
+answer_acked() { store_copy "$CYC/peek" && python3 "$SIM/cases.py" answer_acked "$CYC/peek" "$TASK" "$COORD_ID" "$WORKER_ID"; }
+not_blocked() { ! at 'running/blocked *'; }
+
+case_e1() {
+  case_start E1
+  scenario "{$CASE_SCENARIO}"
+  architect_init
+  hold coordinator "case E1: its scenario"
+  member_scenario coordinator '{"escalate_blocked":true}'
+  member resume coordinator
+  hold worker "case E1: its scenario"
+  fault E1 member_scenario worker '{"stall":true}'
+  offered
+  hold coordinator "case E1: the block's checks"
+  member resume worker
+  reach E1 blocked 300 "the launcher's block of the stalled attempt" at 'running/blocked *'
+  hold worker "case E1: the block's checks"
+  member_scenario worker '{}'
+  waitfor "the coordinator's blocked report" 120 blocked_report
+  check_case E1 blocked
+  # The architect session's wait runs before the raise; the members are
+  # resumed before it too, so no operator call falls between the raise
+  # and the answer.
+  architect_wait
+  waitfor "the architect's wait to claim its seen set" 60 claimed
+  member resume worker
+  member resume coordinator
+  waitfor "the architect's wait to return" 120 wait_returned
+  local esc
+  esc=$(sed -n 's/^escalation \([0-9a-f-]*\) .*/\1/p' "$CYC/wait.out" | head -n 1)
+  [ -n "$esc" ] || fail "case E1: the wait returned no escalation (exit $(cat "$CYC/wait.code"); $CYC/wait.out, $CYC/wait.err)"
+  arch aicrew escalations show --id "$esc" > "$CYC/show.out" || fail "case E1: aicrew escalations show"
+  arch aicrew escalations answer --id "$esc" --decision "go on" \
+    --rationale "The stall was the case's fault; nothing else blocks the task." > "$CYC/answer.out" ||
+    fail "case E1: aicrew escalations answer"
+  # The mirror of the answer on the task, as the architect session posts it
+  # with the operator's aimem user (here the hub's admin, who files the task).
+  store_copy "$CYC/peek"
+  local full
+  full=$(python3 "$SIM/cases.py" escalation_of "$CYC/peek" "$TASK") || fail "case E1: no escalation on task $TASK"
+  hubapi POST "/v1/tasks/$TASK/comments" "{\"body\":\"[escalation.answer $full]\\n\\ngo on: the stall was the case's fault; nothing else blocks the task.\"}" > /dev/null
+  waitfor "the members' acks of the answer" 300 answer_acked
+  waitfor "the coordinator's answer to the worker" 300 has_op attempt.answer
+  waitfor "the attempt to leave blocked" 300 not_blocked
+  waitfor "sim-coordinator's turn to end" 120 idle coordinator
+  fact wait "$(python3 "$SIM/cases.py" wait_fact "$CYC")"
+  fact architect_creds "$(dc exec -T -u sessiond sim-architect ls -A "$ARCH_DIR/creds" |
+    python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().split()))')"
+  check_case E1 answered
+  case_done E1
+  # The cases after E1 have the plain coordinator.
+  hold coordinator "case E1: its scenario's end"
+  member_scenario coordinator '{}'
+  member resume coordinator
+}
+
 # P5: the CI fails on the first head and the rework's second head carries
 # the gates; then the merge commit's CI stays pending, and verify-delivery's
 # pending answer is never recorded as delivered.
@@ -288,7 +396,7 @@ case_p5() {
 . "$SIM/faults.sh"
 
 # A skipped fault runs only its case: F1-claim-request runs F1.
-for c in P2 P5 P4 P1 F1 F2 F3 F4 F5 F6 F7 P3; do
+for c in P2 P5 P4 E1 P1 F1 F2 F3 F4 F5 F6 F7 P3; do
   [ -z "$SKIP" ] || [ "${SKIP%%-*}" = "$c" ] || continue
   "case_${c,,}"
 done
@@ -298,4 +406,4 @@ ev scenario_end name="$SCENARIO" result=PASS
 SCENARIO=
 
 collect
-step "pilot-sim: green: the three members checked, listed and serving; the stubs' fixtures confirmed, refused and released; two cycles from a filed task to DONE with the delivery record; the pilot cases P1 to P5 and the fault cases F1 to F7, expected-to-fail parts in $XFAIL (reports in $OUT)"
+step "pilot-sim: green: the three members checked, listed and serving; the stubs' fixtures confirmed, refused and released; two cycles from a filed task to DONE with the delivery record; the pilot cases P1 to P5, the escalation case E1 and the fault cases F1 to F7, expected-to-fail parts in $XFAIL (reports in $OUT)"

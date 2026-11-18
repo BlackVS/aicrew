@@ -14,9 +14,10 @@
 # repositories; each member's aimem user, token and invitation), hands each
 # member and stub its input files, and runs the smoke check, the stubs'
 # fixture pull requests, two cycles from a filed task to DONE, checking
-# each step read-only (e2e/pilotsim/cycle.py), the pilot cases P1 to P5
-# and the fault cases F1 to F7 through the fault proxies (e2e/pilotsim/cases.py,
-# faults.sh), each a fault on a cycle of its own. A case the
+# each step read-only (e2e/pilotsim/cycle.py), the pilot cases P1 to P5,
+# the escalation case E1 and the fault cases F1 to F7 through the fault
+# proxies (e2e/pilotsim/cases.py, faults.sh), each a fault on a cycle of its
+# own. A case the
 # board tracks as a gap is checked expected-to-fail, and its outcome is
 # listed in OUT/expected-to-fail.txt. AICREW_SIM_SKIP_FAULT=CASE runs only
 # that case (for a fault case's part, its case up to that part), without its
@@ -70,7 +71,7 @@ done
 
 # The skip-the-fault cases (docs/E2E-PILOT-SIM.md, "The pilot cases" and
 # "The fault cases").
-SKIP_CASES="P1 P2 P3 P4 P5 F1-claim-request F1-claim-reply F1-transfer-request F1-transfer-reply F1-update-request
+SKIP_CASES="P1 P2 P3 P4 P5 E1 F1-claim-request F1-claim-reply F1-transfer-request F1-transfer-reply F1-update-request
 F1-update-reply F1-finalize-request F1-finalize-reply F2-begin F2-settle F3-launcher F3-aicrewd F3-hub F4-second
 F4-busy F4-race F4-lost F5-stale F5-replay F5-resume F5-delay F6-release F6-cancel F6-unreachable F7-leak"
 SKIP=${AICREW_SIM_SKIP_FAULT:-}
@@ -556,7 +557,7 @@ step "the members: aimem users and tokens, invitations, and their input files"
 # The roles' services and their aicrew roles: sim-indep is the team's
 # independent member.
 declare -A AICREW_ROLE=([coordinator]=coordinator [worker]=worker [indep]=independent)
-dc up -d sim-coordinator sim-worker sim-indep >/dev/null
+dc up -d sim-coordinator sim-worker sim-indep sim-architect >/dev/null
 own_volumes
 for role in coordinator worker indep; do
   svc=sim-$role

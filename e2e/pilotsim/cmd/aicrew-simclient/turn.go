@@ -98,6 +98,12 @@ type message struct {
 	Offer *struct {
 		InstructionDigest string `json:"instruction_digest"`
 	} `json:"offer"`
+	// Escalation is an answered escalation's detail, on the answer's
+	// lifecycle message.
+	Escalation *struct {
+		ID       string `json:"id"`
+		Decision string `json:"decision"`
+	} `json:"escalation"`
 	Action *struct {
 		Subjects []struct {
 			Kind      string         `json:"kind"`
@@ -150,6 +156,10 @@ type scenario struct {
 	Result string `json:"result"`
 	// CostUSD is the client's running total the result reports (P3).
 	CostUSD float64 `json:"cost_usd"`
+	// EscalateBlocked makes the coordinator raise an escalation on a
+	// blocked attempt instead of answering it, and give the worker the
+	// architect's decision once the answer arrives (E1).
+	EscalateBlocked bool `json:"escalate_blocked"`
 }
 
 // readScenario reads path; a missing file is the zero scenario.
@@ -692,11 +702,27 @@ func (m *member) coordinator(ctx context.Context, msgs []message) error {
 		}
 	}
 	for _, id := range blocked {
-		if a, ok := phase[id]; ok && a.Phase == "blocked" {
-			if _, err := m.step(ctx, "answer", id, "", map[string]string{"text": stallAnswer}); err != nil {
+		a, ok := phase[id]
+		if !ok || a.Phase != "blocked" {
+			continue
+		}
+		if m.sc.EscalateBlocked {
+			if err := m.escalateBlocked(ctx, a, msgs); err != nil {
 				return err
 			}
-			m.note("Answered the blocked report of attempt %s.", id)
+			continue
+		}
+		if _, err := m.step(ctx, "answer", id, "", map[string]string{"text": stallAnswer}); err != nil {
+			return err
+		}
+		m.note("Answered the blocked report of attempt %s.", id)
+	}
+	for _, ea := range escalationAnswers(msgs) {
+		if a, ok := phase[ea.attempt]; ok && a.Phase == "blocked" {
+			if _, err := m.step(ctx, "answer", ea.attempt, "", map[string]string{"text": ea.decision}); err != nil {
+				return err
+			}
+			m.note("Gave the blocked attempt %s the architect's answer to escalation %s.", ea.attempt, ea.id)
 		}
 	}
 	// Every accepted attempt is checked each turn, not only on a pull
@@ -872,6 +898,141 @@ const pushedInReview = "pushed while the external review ran"
 // stallAnswer is the coordinator's answer to a blocked report.
 const stallAnswer = "Go on with the task as offered; nothing else blocks it."
 
+// escalateBlocked is the coordinator of case E1: a blocked attempt is a
+// question for the architect. It raises one escalation on the attempt,
+// naming its worker as blocked, and mirrors the request on the task. It
+// raises none when the handoff records a raise on the attempt, when the
+// turn's messages carry an answer for it (an answered escalation is no
+// longer open), or when an open one already asks about the task (ROLES.md,
+// "How to escalate").
+func (m *member) escalateBlocked(ctx context.Context, a agent.OpenAttempt, msgs []message) error {
+	if slices.ContainsFunc(escalationAnswers(msgs), func(e escalationAnswer) bool { return e.attempt == a.ID }) {
+		return nil
+	}
+	if id := m.raisedOn(a.ID); id != "" {
+		m.note("Escalation %s already asks about the blocked attempt %s.", id, a.ID)
+		return nil
+	}
+	raw, code, err := m.run(ctx, m.home, "", "aicrew-agent", "escalations", "--json")
+	if err != nil || code != 0 {
+		return fmt.Errorf("aicrew-agent escalations exited %d: %v %.200s", code, err, raw)
+	}
+	var open struct {
+		Escalations []struct {
+			ID   string        `json:"id"`
+			Task agent.TaskRef `json:"task"`
+		} `json:"escalations"`
+	}
+	if err := json.Unmarshal(raw, &open); err != nil {
+		return fmt.Errorf("aicrew-agent escalations: %w", err)
+	}
+	for _, e := range open.Escalations {
+		if e.Task.TaskID == a.Task.TaskID {
+			// A turn that raised it and failed before the mirror leaves the
+			// mirror to this one; the comment's key makes a second one a no-op.
+			return m.mirrorRequest(ctx, a, e.ID)
+		}
+	}
+	body, _ := json.Marshal(map[string]any{
+		"task": a.Task, "attempt_id": a.ID, "category": "scope", "urgency": "now",
+		"question": escalationQuestion,
+		"context":  "The worker's attempt was blocked by the launcher's stall rule; the coordinator cannot tell whether the task still holds.",
+		"options": []map[string]string{
+			{"option": "go on", "consequence": "the worker resumes the task as offered"},
+			{"option": "cancel the attempt", "consequence": "the task goes back to the board"}},
+		"recommendation": "go on", "blocked": a.WorkerAgentID})
+	raw, code, err = m.run(ctx, m.home, string(body), "aicrew-agent", "escalate", "--body", "-")
+	if err != nil {
+		return fmt.Errorf("aicrew-agent escalate: %w", err)
+	}
+	var ans agent.StepAnswer
+	if jerr := json.Unmarshal(raw, &ans); jerr != nil || code != 0 || !ans.OK {
+		return fmt.Errorf("aicrew-agent escalate exited %d: %.400s", code, strings.TrimSpace(string(raw)))
+	}
+	var esc struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(ans.Result, &esc); err != nil || esc.ID == "" {
+		return fmt.Errorf("aicrew-agent escalate: no escalation in %.200s", ans.Result)
+	}
+	m.note("Raised escalation %s on the blocked attempt %s.", esc.ID, a.ID)
+	return m.mirrorRequest(ctx, a, esc.ID)
+}
+
+// mirrorRequest mirrors escalation id on the attempt's task. A task its
+// worker holds takes no comment from the coordinator: the mirror then waits
+// until the hold ends, and the handoff says so (DESIGN-CONTROL-PLANE.md,
+// section 7.7); deliver posts it after the finalize.
+func (m *member) mirrorRequest(ctx context.Context, a agent.OpenAttempt, id string) error {
+	_, err := m.mcp(ctx, "add_task_comment", map[string]any{"id": a.Task.TaskID,
+		"body":            fmt.Sprintf("[escalation.request %s]\n\n%s Raised for the architect; attempt %s was blocked.", id, escalationQuestion, a.ID),
+		"idempotency_key": "sim-escalation-request-" + id})
+	switch {
+	case err != nil && strings.Contains(err.Error(), "task_held"):
+		m.note("Escalation %s: its mirror on task %s waits for the task's hold to end.", id, a.Task.TaskID)
+		return nil
+	case err != nil:
+		return err
+	}
+	m.note("Mirrored escalation %s on task %s.", id, a.Task.TaskID)
+	return nil
+}
+
+var (
+	raisedLine  = regexp.MustCompile(`(?m)Raised escalation (\S+) on the blocked attempt (\S+)\.$`)
+	waitingLine = regexp.MustCompile(`(?m)Escalation (\S+): its mirror on task (\S+) waits for the task's hold to end\.$`)
+)
+
+// notes are the handoff's lines and this turn's.
+func (m *member) notes() string {
+	raw, _ := os.ReadFile(m.handoffPath())
+	return string(raw) + "\n" + strings.Join(m.did, "\n")
+}
+
+// raisedOn is the escalation the handoff records raised on the attempt, ""
+// for none.
+func (m *member) raisedOn(attempt string) string {
+	for _, s := range raisedLine.FindAllStringSubmatch(m.notes(), -1) {
+		if s[2] == attempt {
+			return s[1]
+		}
+	}
+	return ""
+}
+
+// postWaitingMirrors posts the mirrors that waited for the hold on the
+// attempt's task, once the attempt is finalized.
+func (m *member) postWaitingMirrors(ctx context.Context, a agent.OpenAttempt) error {
+	notes := m.notes()
+	for _, s := range waitingLine.FindAllStringSubmatch(notes, -1) {
+		if s[2] != a.Task.TaskID || strings.Contains(notes, "Mirrored escalation "+s[1]+" ") {
+			continue
+		}
+		if err := m.mirrorRequest(ctx, a, s[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// escalationQuestion is the question of case E1's escalation.
+const escalationQuestion = "The worker's attempt is blocked: go on with the task as offered, or cancel the attempt?"
+
+// escalationAnswer is an answered escalation's message to a member.
+type escalationAnswer struct{ id, attempt, decision string }
+
+// escalationAnswers are the answers to escalations among the messages, in
+// the order read.
+func escalationAnswers(msgs []message) []escalationAnswer {
+	var out []escalationAnswer
+	for _, msg := range msgs {
+		if msg.Escalation != nil && msg.Escalation.Decision != "" && msg.AttemptID != "" {
+			out = append(out, escalationAnswer{id: msg.Escalation.ID, attempt: msg.AttemptID, decision: msg.Escalation.Decision})
+		}
+	}
+	return out
+}
+
 // blockedReports are the attempts whose worker reported them blocked, in
 // the order read.
 func blockedReports(msgs []message) []string {
@@ -1036,7 +1197,7 @@ func (m *member) deliver(ctx context.Context, a agent.OpenAttempt) error {
 		return err
 	}
 	m.note("Finalized attempt %s: task %s is DONE.", a.ID, a.Task.TaskID)
-	return nil
+	return m.postWaitingMirrors(ctx, a)
 }
 
 // delivery is what the coordinator reads of verify-delivery's answer.

@@ -80,6 +80,23 @@ Then mirror it on the task as a comment whose first line is
 ` + "`[escalation.answer ID]`" + `, so the board keeps the decision. A comment alone
 answers nothing: only the recorded answer reaches the crew.
 
+You are told of a new escalation without anyone running a command:
+- At the session's start, a hook runs ` + "`aicrew escalations list --open`" + `, so every
+  open escalation is in your first context. Tell the operator about each one.
+- Keep ` + "`aicrew escalations wait`" + ` running as a background command for the
+  whole session: start it at the session's start, and again each time it
+  returns. It reads the open escalations every 60 seconds and returns with
+  one line for each one this directory was not told of before.
+- When it returns, read each escalation with
+  ` + "`aicrew escalations show --id ID`" + `, tell the operator what it asks, with its
+  options and the recommendation, and wait for the operator's decision.
+  Being told is not handling it: only the recorded answer is.
+- If the wait ends with an error, tell the operator that aicrewd cannot be
+  read, and start it again when the operator says.
+
+The list holds at most 200 open escalations, newest first. With more open,
+the oldest are left out and appear only as newer ones are answered.
+
 ## Pull requests waiting for the merge
 
 The merge is the operator's click on the forge, and nothing else tells the
@@ -155,7 +172,8 @@ var commands = []command{
 			"answer. Answer only with the operator's decision: `aicrew escalations answer --id ID --decision " +
 			"TEXT --rationale TEXT`, then mirror it on the task as a comment headed `[escalation.answer ID]`. " +
 			"If the command cannot connect, say so, and list the tasks' comments headed `[escalation.request ` " +
-			"that no `[escalation.answer ` comment with the same ID follows."},
+			"that no `[escalation.answer ` comment with the same ID follows. " +
+			"Then make sure `aicrew escalations wait` runs as a background command, and start it if it does not."},
 	{name: "arch-merges", desc: "Say which pull requests wait for the operator's merge",
 		body: "Run `aicrew merges`. For each entry, say in words: the task (project and ID), the worker, the pull " +
 			"request (`result_ref`, and `pull.url` when present), its head commit, and its gates as the worker last " +

@@ -241,14 +241,34 @@ func TestInitWithTheConnection(t *testing.T) {
 		Permissions struct {
 			Deny []string `json:"deny"`
 		} `json:"permissions"`
+		Hooks map[string][]struct {
+			Matcher string `json:"matcher"`
+			Hooks   []struct {
+				Type    string `json:"type"`
+				Command string `json:"command"`
+				Timeout int    `json:"timeout"`
+			} `json:"hooks"`
+		} `json:"hooks"`
 	}
 	if err := json.Unmarshal([]byte(read(t, dir, ".claude/settings.json")), &s); err != nil {
 		t.Fatal(err)
 	}
 	if s.Env["AICREW_URL"] != o.Crew.URL || s.Env["AICREW_TLS_TRUST_MODE"] != "ca_dns" ||
 		s.Env["AICREW_TLS_TRUST_VALUE"] != "aicrew.example" || s.Env["AICREW_OPERATOR_TOKEN_FILE"] != want ||
-		len(s.Env) != 4 || len(s.Permissions.Deny) != 6 {
+		s.Env["AICREW_ESCALATIONS_SEEN"] != filepath.Join(dir, "state", "escalations-seen.json") ||
+		len(s.Env) != 5 || len(s.Permissions.Deny) != 6 {
 		t.Fatalf("settings: %+v", s)
+	}
+	// The start hook lists the open escalations at every start; the seen
+	// set is in the directory's state, outside creds/.
+	start := s.Hooks["SessionStart"]
+	if len(s.Hooks) != 1 || len(start) != 1 || start[0].Matcher != "" || len(start[0].Hooks) != 1 ||
+		start[0].Hooks[0].Type != "command" || start[0].Hooks[0].Command != "aicrew escalations list --open" ||
+		start[0].Hooks[0].Timeout <= 0 {
+		t.Fatalf("hooks: %+v", s.Hooks)
+	}
+	if strings.Contains(filepath.ToSlash(s.Env["AICREW_ESCALATIONS_SEEN"]), "/creds/") {
+		t.Fatalf("the seen set is under creds/: %s", s.Env["AICREW_ESCALATIONS_SEEN"])
 	}
 	// A rerun without the connection updates the managed settings back.
 	rep, err = Init(Options{Dir: dir, Projects: []string{"crew-app"}})
@@ -313,5 +333,73 @@ func TestInitRerunAddsArchStatus(t *testing.T) {
 	}
 	if !strings.Contains(read(t, dir, "docs/ARCHITECT.md"), "`/arch-status`") {
 		t.Fatal("the guidance does not name /arch-status")
+	}
+}
+
+// A directory written by a release before the start hook, recorded as that
+// release's managed write, gains the hook, the seen set's path and the new
+// guidance on a rerun; one whose settings a person changed keeps them and
+// gets the new version beside them.
+func TestInitRerunAddsTheStartHook(t *testing.T) {
+	o := Options{Projects: []string{"crew-app"},
+		Crew: Connection{URL: "https://aicrew.example:8443", TrustMode: "ca_dns", TrustValue: "aicrew.example"}}
+	before := func(t *testing.T) string {
+		t.Helper()
+		dir := t.TempDir()
+		o.Dir = dir
+		if _, err := Init(o); err != nil {
+			t.Fatal(err)
+		}
+		// The earlier release's settings and guidance, as its managed write.
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(settingsJSON(o)), &doc); err != nil {
+			t.Fatal(err)
+		}
+		delete(doc, "hooks")
+		delete(doc["env"].(map[string]any), "AICREW_ESCALATIONS_SEEN")
+		b, _ := json.MarshalIndent(doc, "", "  ")
+		old := map[string]string{".claude/settings.json": string(b) + "\n",
+			"docs/ARCHITECT.md": strings.Replace(guidance(o.Projects), "aicrew escalations wait", "", -1)}
+		rec, err := readRecord(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for path, content := range old {
+			if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(path)), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			rec.Managed[path] = managedfiles.Digest([]byte(content))
+		}
+		rec.Layout, rec.Projects = Layout, o.Projects
+		if err := writeRecord(dir, rec); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	dir := before(t)
+	rep, err := Init(o)
+	if a := actions(rep); err != nil || rep.Status != "ready" || a[".claude/settings.json"] != "update" || a["docs/ARCHITECT.md"] != "update" {
+		t.Fatalf("rerun: %+v %v", rep, err)
+	}
+	if got := read(t, dir, ".claude/settings.json"); got != settingsJSON(o) || !strings.Contains(got, StartHookCommand) {
+		t.Fatalf("settings after the rerun: %s", got)
+	}
+	if !strings.Contains(read(t, dir, "docs/ARCHITECT.md"), "aicrew escalations wait") {
+		t.Fatal("the guidance does not name the wait")
+	}
+
+	// A person's change to the settings is kept; the hook comes beside it.
+	dir = before(t)
+	mine := strings.Replace(read(t, dir, ".claude/settings.json"), `"deny": [`, `"allow": ["Bash(go test:*)"], "deny": [`, 1)
+	if err := os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte(mine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = Init(o)
+	if err != nil || rep.Status != "conflict" || actions(rep)[".claude/settings.json"] != "conflict" {
+		t.Fatalf("rerun over a changed settings file: %+v %v", rep, err)
+	}
+	if read(t, dir, ".claude/settings.json") != mine || read(t, dir, ".claude/settings.json.aicrew-new") != settingsJSON(o) {
+		t.Fatal("the person's settings were not kept, or the new version is not beside them")
 	}
 }

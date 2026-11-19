@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -252,7 +253,7 @@ func notClosed(home, session string, err error, fail *skillsFailure) *skillsFail
 		return &skillsFailure{SkillsConversation, "the skills are installed, but the team's conversation " + session +
 			" that join opened is no longer join's: its token ended, because the home's member took the session over or " +
 			"the session ended with nobody holding it. " + strings.ToUpper(step[:1]) + step[1:] +
-			"; the skills are installed, so that rerun ends ready"}
+			"; the skills stay installed, so that rerun does not install them again"}
 	}
 	leave := fmt.Sprintf("the team's conversation %s that join opened was not closed: %s; end it with "+
 		"`aicrew-agent session leave --home %s`", session, tail(err.Error(), 300), shellArg(absHome(home)))
@@ -433,11 +434,13 @@ func heldConversation(home string, cfg Config, st State) (Conversation, error) {
 	}
 	team, ok, err := LoadTeam(home)
 	if err != nil || !ok {
-		why := "the home records session " + st.SessionID + " but not its team's projects"
+		// A member's launcher records the team's projects shortly after its
+		// session is bound: a member starting, as with an unbound record.
+		why := "the home records session " + st.SessionID + " but not its team's projects yet"
 		if err != nil {
 			why += ": " + err.Error()
 		}
-		return Conversation{}, &leaveFirst{session: st.SessionID, err: errors.New(why)}
+		return Conversation{}, &leaveFirst{session: st.SessionID, starting: true, err: errors.New(why)}
 	}
 	return Conversation{File: st.AimemFile, SessionID: st.SessionID, Projects: projectIDs(team.Projects)}, nil
 }
@@ -479,6 +482,36 @@ func joinLeave(e *Engine) func(context.Context) error {
 		e.live.Lock()
 		e.token = ""
 		e.live.Unlock()
-		return ClearState(e.Cfg.Home)
+		return clearOwnRecord(e.Cfg.Home, e.session.ID)
 	}
+}
+
+// clearOwnRecord removes the home's session record only while it names
+// session. A member that started during join's close (its resume of join's
+// session answered context_stale) records its own session; that record is
+// never removed. The record is taken aside by a rename, which a member's
+// SaveState (a rename too) cannot interleave with: one that is not join's
+// is put back by a link that refuses to replace a record written since,
+// and a record written since is newer than it.
+func clearOwnRecord(home, session string) error {
+	path := statePath(home)
+	aside := path + ".join-" + newKey("clear")
+	if err := os.Rename(path, aside); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	defer os.Remove(aside)
+	raw, err := os.ReadFile(aside)
+	if err != nil {
+		return err
+	}
+	var st State
+	if json.Unmarshal(raw, &st) == nil && st.SessionID == session {
+		return nil
+	}
+	if err := os.Link(aside, path); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return nil
 }

@@ -172,7 +172,7 @@ func TestJoinSkillsFailures(t *testing.T) {
 			stdout: "installed oh-code-review 1.43.0 (release) for claude: /h/.claude/skills/oh-code-review\n"},
 			SkillsConversation, []string{"the skills are installed, but the team's conversation sess-1 that join opened is no longer join's",
 				"aicrew-agent session status --home ", "aicrew-agent session leave --home ", "aicrew-agent join --home ",
-				"that rerun ends ready"}, true},
+				"the skills stay installed"}, true},
 		// An open that leaves a session recorded: the leave step stays whole
 		// however long the error is.
 		{"open leaves a session", skillsRun{supports: true, openErr: &leaveFirst{session: "sess-9",
@@ -529,5 +529,102 @@ func TestJoinCloseLeaves(t *testing.T) {
 	}
 	if _, ok, _ := LoadState(c.cfg.Home); ok {
 		t.Fatal("the record outlived join's conversation")
+	}
+}
+
+// closeThen runs then after aimem's close: in join's close that is after
+// aicrewd has committed join's leave and before the record is removed.
+type closeThen struct {
+	Aimem
+	then func()
+}
+
+func (c closeThen) Close(ctx context.Context, id string) error {
+	err := c.Aimem.Close(ctx, id)
+	c.then()
+	return err
+}
+
+// A member that starts while join closes its conversation (after aicrewd
+// committed join's leave, so its resume of join's session is context_stale)
+// enters anew and records its own session; join's close removes the home's
+// record only while it names join's session, so the member's survives.
+func TestJoinCloseKeepsAMembersNewRecord(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	j := c.engine(t)
+	conv, err := enterConversation(ctx, c.cfg.Home, c.cfg.AimemHub, j, j.Crew.(SessionReader))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, _, _ := LoadState(c.cfg.Home)
+	j.Aimem = closeThen{Aimem: j.Aimem, then: func() {
+		if sess, _ := c.store.GetSession(ctx, conv.SessionID); sess.State != store.SessionLeft {
+			t.Errorf("aimem was closed before aicrewd's leave: %s", sess.State)
+		}
+		st.SessionID, st.AimemFile = "member-session", "/run/aimem/member-session.json"
+		if err := SaveState(c.cfg.Home, st); err != nil {
+			t.Error(err)
+		}
+	}}
+	if err := conv.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if sess, _ := c.store.GetSession(ctx, conv.SessionID); sess.State != store.SessionLeft {
+		t.Fatalf("join's session after its close: %s", sess.State)
+	}
+	if now, ok, _ := LoadState(c.cfg.Home); !ok || now.SessionID != "member-session" {
+		t.Fatalf("the member's record after join's close: %+v %v", now, ok)
+	}
+}
+
+// A member bound its session but its launcher has not recorded the team's
+// projects yet: join waits for it, and names the leave only for a home
+// where no member runs.
+func TestHeldConversationWithoutTheTeamYet(t *testing.T) {
+	home := t.TempDir()
+	cfg := Config{AgentID: "a1", Home: home}
+	_, err := heldConversation(home, cfg, State{AgentID: "a1", SessionID: "s7", AimemFile: "/f"})
+	var left *leaveFirst
+	if !errors.As(err, &left) || !left.starting || left.session != "s7" {
+		t.Fatalf("a bound session without the team's record: %v", err)
+	}
+	step := left.step(home)
+	status, leave := strings.Index(step, "aicrew-agent session status"), strings.Index(step, "if no member runs in this home")
+	if status < 0 || leave < 0 || status > leave {
+		t.Fatalf("the step does not wait for the member first: %s", step)
+	}
+}
+
+// The record taken aside is put back when it is not join's, and a record
+// written since is never replaced.
+func TestClearOwnRecord(t *testing.T) {
+	home := t.TempDir()
+	save := func(id string) {
+		t.Helper()
+		if err := SaveState(home, State{AgentID: "a1", SessionID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save("join")
+	if err := clearOwnRecord(home, "join"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := LoadState(home); ok {
+		t.Fatal("join's own record outlived its close")
+	}
+	if err := clearOwnRecord(home, "join"); err != nil {
+		t.Fatalf("no record: %v", err)
+	}
+	save("member")
+	if err := clearOwnRecord(home, "join"); err != nil {
+		t.Fatal(err)
+	}
+	if st, ok, _ := LoadState(home); !ok || st.SessionID != "member" {
+		t.Fatalf("the member's record: %+v %v", st, ok)
+	}
+	entries, _ := os.ReadDir(filepath.Join(home, "state"))
+	if len(entries) != 1 {
+		t.Fatalf("files left in state: %v", entries)
 	}
 }

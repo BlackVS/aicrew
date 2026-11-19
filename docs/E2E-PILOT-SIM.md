@@ -347,7 +347,12 @@ the container that makes it to the one that reads it through a pipe.
     installer writes (`.ai-skills.json`) names it, and installed where the
     client reads it.
 
-  The reports are kept as `DIR/check-<role>.json`.
+  The reports are kept as `DIR/check-<role>.json`. In the upgrade
+  scenario this check runs on the previous release, whose `check` knows
+  only its own tested set, so there aimem and ai-skills may also be
+  `newer` (`smoke.py check … previous`); everything else is required as
+  above, and the check after the upgrade requires `supported`. Each check
+  prints its mode on its line in the log.
 - `aicrew status` lists the three members, each holding a session
   (`DIR/status.json`).
 - `verify_delivery.py --help` runs from the coordinator's skill directory.

@@ -81,9 +81,6 @@ func psQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + 
 // installs from the export and names no other host.
 func aimemInstruction(c supportedComponent, found, base string) string {
 	need := fmt.Sprintf("aimem %s or later is required", c.minimum())
-	if c.Note != "" {
-		need += " (" + c.Note + ")"
-	}
 	rel := c.installRelease(found)
 	if rel == "" {
 		return need + ". No aimem release provides it yet: install aimem built from its main branch " +
@@ -91,7 +88,13 @@ func aimemInstruction(c supportedComponent, found, base string) string {
 			"`install.ps1` on Windows), or wait for the next aimem release; then rerun `aicrew-agent check`"
 	}
 	const rerun = "; then rerun `aicrew-agent check`"
-	head := fmt.Sprintf("%s. Install aimem v%s with its verifying installer", need, rel)
+	// The note describes the release installed, a tested one, never the
+	// minimum.
+	release := "v" + rel
+	if c.Note != "" {
+		release += " (" + c.Note + ")"
+	}
+	head := fmt.Sprintf("%s. Install aimem %s with its verifying installer", need, release)
 	if base != "" && atLeast(rel, exportAimem) {
 		return head + ", from the aiforge export " + base + ": " + aimemFromExport(base, rel) + rerun
 	}

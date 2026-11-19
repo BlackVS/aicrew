@@ -789,13 +789,13 @@ func TestCheckOutcomes(t *testing.T) {
 		instruction string
 		notice      string
 	}{
-		{"aimem missing", []string{"claude"}, nil, "1.26.1", JoinBlocked, "aimem_missing", "Install aimem v0.11.4 with its verifying installer", ""},
+		{"aimem missing", []string{"claude"}, nil, "1.26.1", JoinBlocked, "aimem_missing", "Install aimem v0.11.4 (the release this aicrew is tested with) with its verifying installer", ""},
 		{"aimem newer", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.11.5" }, "1.26.1", JoinRestartRequired, "",
 			"", "aimem 0.11.5 is newer than the tested 0.11.4"},
 		{"aimem v0.9.2", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.9.2" }, "1.26.1", JoinBlocked,
 			"aimem_below", "aimem 0.11.0 or later is required", ""},
 		{"aimem v0.10.25", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.10.25" }, "1.26.1", JoinBlocked,
-			"aimem_below", "required (the release this aicrew is tested with). Install aimem v0.11.4 with its verifying installer", ""},
+			"aimem_below", "aimem 0.11.0 or later is required. Install aimem v0.11.4 (the release this aicrew is tested with) with its verifying installer", ""},
 		{"aimem source build", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.7.3-52-gabc1234" }, "1.26.1",
 			JoinRestartRequired, "", "", "aimem v0.7.3-52-gabc1234 is a development build"},
 		{"aimem unstamped source build", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem dev" }, "1.26.1",

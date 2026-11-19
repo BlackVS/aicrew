@@ -591,7 +591,10 @@ for role in coordinator worker indep; do
   waitfor "sim-$role's serve and its model probe" 600 served "sim-$role"
   dc exec -T -u member "sim-$role" aicrew-agent check --home /home/member/agent --json > "$OUT/check-$role.json" ||
     fail "aicrew-agent check is not green in sim-$role (report: $OUT/check-$role.json)"
-  python3 "$SIM/smoke.py" check "$OUT/check-$role.json" "$PILOTSIM_AISKILLS_VERSION" || fail "sim-$role's check report ($OUT/check-$role.json)"
+  # Under -upgrade this check is the previous release's, which knows only its
+  # own tested set (smoke.py, `previous`); the check after the upgrade is strict.
+  python3 "$SIM/smoke.py" check "$OUT/check-$role.json" "$PILOTSIM_AISKILLS_VERSION" ${UPGRADE:+previous} ||
+    fail "sim-$role's check report ($OUT/check-$role.json)"
 done
 op aicrew status --team "$TEAM_ID" > "$OUT/status.json" || fail "aicrew status"
 python3 "$SIM/smoke.py" status "$OUT/status.json" coordinator worker indep || fail "aicrew status ($OUT/status.json)"

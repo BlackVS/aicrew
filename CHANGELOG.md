@@ -12,8 +12,116 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.11.1] - 2026-11-19
+
+Seventeen pull requests since 0.11.0 (#253 to #270). They bring what the
+team's bring-up on its own hosts uses (docs/BRING-UP.md):
+- **`aicrew-agent preflight` (#261, #269).** Before join, it checks
+  whether aicrewd answers with the trust join will record, and whether
+  the client has a login stored.
+- **The forge token's own rights in `aicrew-agent check` (#262).**
+- **`aicrew escalations wait` (#266).** It tells the architect's session
+  of a new escalation.
+- **The tested versions are the hubs' releases (#270):** aimem 0.11.4 and
+  ai-skills 1.43.0, and aimem 0.11.0 is now the minimum.
+
+The store stays at schema 39, and aicrewd's routes are unchanged. An
+aicrewd of 0.11.0 serves members of 0.11.1: the members call only routes
+it has, and their capability report keeps its shape. aimem 0.11.0 or
+later is now required (it was 0.10.0). This release is tested with aimem
+0.11.4, ai-skills 1.43.0 and Claude Code 2.1.286.
+
+### Upgrade steps
+
+All of them use product commands and one-liners. aicrewd and the members
+can be upgraded in either order.
+
+1. **aicrewd.** On the hub host, as root, run the hub one-liner:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.1/install-aicrewd.sh | bash
+   ```
+
+2. **Each member and the operator's machine.** As that user, rerun the
+   member one-liner. It stops the account's registered member services,
+   swaps the binaries and starts them again:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.1/boot.sh | bash
+     ```
+
+   - Windows, in a PowerShell window that is already open:
+
+     ```powershell
+     irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.1/boot.ps1 | iex
+     ```
+
+   - Windows, from cmd or the Run dialog:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.1/boot.ps1 | iex"
+     ```
+
+   In a closed network, install from the aiforge export instead, as
+   README's closed-network forms show (`AICREW_BASE`).
+3. **aimem on each member, where it is older than 0.11.0.** Until it is
+   upgraded, `aicrew-agent check` reports the home `blocked`, with the
+   reason `aimem_below`, and prints aimem's one-liner for the tested
+   release. On Linux and macOS that is, from an empty directory:
+
+   ```sh
+   cd "$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/BlackVS/aimem/v0.11.4/boot.sh | AIMEM_VERSION=v0.11.4 bash
+   ```
+
+   On Windows, `check` prints aimem's PowerShell form. Only `check` and
+   `join` read the minimum: a member service that is already running keeps
+   running on the aimem it has.
+4. **Check each home.** Run `aicrew-agent check --home HOME`.
+   - Its project table now has two columns: `access` (what the account
+     may do) and `token` (what the token itself may do). A token the forge
+     shows lacking a write right is `insufficient`. That repository is
+     then reported to aicrewd as `read`. Replace such a token with one that
+     holds the rights in BRING-UP.md, "The forge token's rights".
+5. **The architect's directory.** To get the escalation wait's start hook
+   and texts, rerun `aicrew architect init` with `--url`. A settings file
+   a person changed is kept, and the new one is written beside it.
+
+### Added
+
+- **`aicrew-agent preflight`** (01a1e7dd-90ed, #261; 01a1e94f-351e, #269).
+  It takes join's `--url` and trust, and calls aicrewd's `/healthz` with
+  join's own client. Its `aicrewd:` line is one of `reachable`, `name`,
+  `refused`, `certificate`, `clock`, `wrong_address` or `interrupted`. The
+  last means an answer began (HTTP 200) but could not be read. It runs
+  `claude auth status` without the shell's provider variables, and so it
+  reports a stored login, never a valid one. It sends no credential and
+  spends nothing. A URL with credentials, a path, a query or a fragment is
+  refused as join refuses it.
+- **The token's own rights in `aicrew-agent check`** (01a1e8ef-cbfe,
+  #262). A write requirement now has a `token` state (`verified`,
+  `insufficient` or `not_checked`) beside the account's access.
+  - Gitea: two probes that change nothing name a missing `write:repository`
+    or `write:issue`.
+  - GitHub: a classic token's scopes are read from its header, and a
+    fine-grained token is `not_checked`.
+  - join refuses a token without `read:user`, naming the scope.
+  - A label the repository defines is added without `read:organization`.
+- **`aicrew escalations wait`** (01a1ee08, #266). It reads the open
+  escalations on the existing list route and returns with one line for
+  each one this directory was not told of. Its seen set is in the
+  directory's state. `aicrew architect init --url` adds a start hook that
+  lists the open escalations, and the kit's texts keep the wait running.
+
 ### Changed
 
+- **The tested versions** (01a1f272-5436, #270). aimem moves to 0.11.4,
+  with 0.11.0 as the minimum, and ai-skills to 1.43.0, the releases the
+  hubs run. The real-aimem harness builds aimem v0.11.4. For a missing or
+  older aimem, `check` now reads "aimem 0.11.0 or later is required.
+  Install aimem v0.11.4 (the release this aicrew is tested with) with its
+  verifying installer". The note now stands beside the tested release,
+  not beside the minimum.
 - **A release dry run now proves the hand-over and the publishing checks**
   (01a1e482-3cbb). A dry run used to stop before the artifact was uploaded,
   so the upload, the download and the publishing job's three checks first
@@ -30,6 +138,15 @@ section, and the release workflow refuses a tag that has none
   job a job-level `if` skips. The job now always starts, and when the
   simulation is not requested it runs one step and is named
   `pilot-sim (not requested)` or `real-aimem (not requested)`.
+- **The pilot simulation** (#258, #263, #264, #267). It gains the upgrade
+  scenario (from the last release through the installers), the run on a
+  shared Docker host (a named volume, no anonymous volume, no leftover),
+  a restart helper that checks the killed service runs again, and the
+  escalation case E1. In the upgrade scenario, the previous release's
+  check may report aimem and ai-skills as `newer`, since it knows only its
+  own tested set; the check after the upgrade requires `supported` (#270).
+- **The actions** `upload-artifact` 7.0.2 and `download-artifact` 8.0.2
+  (#253, #254).
 
 ### Fixed
 
@@ -40,6 +157,15 @@ section, and the release workflow refuses a tag that has none
   opened, so a garbage collection in that process could finalize the lock's
   file and release the lock early. It now keeps the store until the process
   ends. Only the test changed; aicrewd keeps its store for its whole run.
+
+### Docs
+
+- **docs/BRING-UP.md** (#259, #260): what each member's host needs, the
+  team's bring-up in order, and the rights a member's forge token needs on
+  Gitea and GitHub. Step 5 installs aimem v0.11.4 (#270).
+- **Designs** (#265, #268): the architect is told of an escalation by a
+  client-side wait (DESIGN-CONTROL-PLANE 7.7), and the operator's seat
+  (DESIGN-OPERATOR-SEAT.md).
 
 ## [0.11.0] - 2026-11-15
 

@@ -604,6 +604,12 @@ for role in coordinator worker indep; do
 done
 
 # ---- the smoke check -------------------------------------------------------------------
+# verify-delivery as the coordinator's client finds it (the sim client's
+# skillFile): the home's skills, which join installs from the hub, then the
+# user's, where the upgrade scenario's previous release has them.
+VERIFY_DELIVERY='p=/home/member/agent/.claude/skills/verify-delivery/verify_delivery.py
+[ -f "$p" ] || p="$HOME/.claude/skills/verify-delivery/verify_delivery.py"
+python3 "$p"'
 begin smoke 900
 step "the smoke check"
 # served SERVICE: its serve passed the model probe; a member that exited
@@ -626,7 +632,7 @@ done
 op aicrew status --team "$TEAM_ID" > "$OUT/status.json" || fail "aicrew status"
 python3 "$SIM/smoke.py" status "$OUT/status.json" coordinator worker indep || fail "aicrew status ($OUT/status.json)"
 dc exec -T -u member sim-coordinator sh -c \
-  'python3 "$HOME/.claude/skills/verify-delivery/verify_delivery.py" --help >/dev/null' ||
+  "$VERIFY_DELIVERY"' --help >/dev/null' ||
   fail "verify_delivery.py --help does not run in sim-coordinator"
 # ---- the stubs' fixture pull requests ---------------------------------------------------
 begin fixtures 600
@@ -693,7 +699,7 @@ deliver() {
 }
 # verify N: verify-delivery, unchanged, as the coordinator runs it; writes $OUT/verify-N.json, returns its exit code.
 verify() {
-  coord sh -c 'python3 "$HOME/.claude/skills/verify-delivery/verify_delivery.py" \
+  coord sh -c "$VERIFY_DELIVERY"' \
     --pr "https://sim-gitea:3000/operator/fixture/pulls/$1" --api-base https://sim-gitea:3000/api/v1 \
     --review-author local=sim-coordinator --review-author external=sim-hands' sh "$1" > "$OUT/verify-$1.json"
 }
@@ -925,7 +931,7 @@ delivered() {
   waitfor "the members' acks of every message about the task" 120 settled
   waitfor "sim-coordinator's turn to end" 120 idle coordinator
   waitfor "sim-worker's turn to end" 120 idle worker
-  coord sh -c 'python3 "$HOME/.claude/skills/verify-delivery/verify_delivery.py" \
+  coord sh -c "$VERIFY_DELIVERY"' \
     --pr "https://sim-gitea:3000/operator/pilot/pulls/$1" --api-base https://sim-gitea:3000/api/v1 \
     --review-author local=sim-coordinator --review-author external=sim-hands' sh "$PULL" > "$CYC/verify.json" ||
     fail "cycle $CYCLE: verify-delivery did not confirm #$PULL ($CYC/verify.json)"

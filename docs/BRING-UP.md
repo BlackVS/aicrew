@@ -141,7 +141,7 @@ Check: `aicrew invitation list --team-name crew` shows its state.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.0/boot.sh | bash
-cd "$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/BlackVS/aimem/v0.10.25/boot.sh | AIMEM_VERSION=v0.10.25 bash
+cd "$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/BlackVS/aimem/v0.11.4/boot.sh | AIMEM_VERSION=v0.11.4 bash
 npm install -g @anthropic-ai/claude-code@2.1.286
 ```
 
@@ -156,7 +156,7 @@ npm install -g @anthropic-ai/claude-code@2.1.286
 Then the person logs the client in: `claude`, and its login flow.
 
 Check: `aicrew-agent version`, `aimem version` and `claude --version` print
-v0.11.0, v0.10.25 and 2.1.286.
+v0.11.0, v0.11.4 and 2.1.286.
 
 ### 6. Join (member host)
 

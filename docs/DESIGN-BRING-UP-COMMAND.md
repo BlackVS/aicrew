@@ -83,8 +83,12 @@ All three failures of the day came from that copying, not from a decision:
 - a shell without `XDG_RUNTIME_DIR` (finding 4);
 - a value the document did not say where to find (findings 2 and 3).
 
-The joins added a fourth: the skills step that a member cannot run with its
-own credential (finding 14).
+The joins added two more:
+- the skills step, which a member cannot run with its own credential
+  (finding 14);
+- the hub administrator's import of the skills set, which the bring-up
+  needs and which the document does not name (finding 19, comment seq 803
+  on `01a1f297-0ed5`).
 
 ## 2. The command
 
@@ -106,7 +110,7 @@ It has one description of the team, the **plan**, given in one of two ways:
 A rerun with the same plan **converges**: every step first reads whether
 its result is already there, and acts only if it is not. That is also what
 makes a stopped run resumable (section 6). The same rerun later carries
-the work after the set-up (section 8, increment U5).
+the work after the set-up (section 8, increment U4).
 
 **Why not a page of the operator's seat, or aicrewd doing it.**
 - aicrewd holds no shell access to any host and mints no credential
@@ -138,15 +142,24 @@ replaces.
 ### 3.1 The transport to a member's host
 
 A member's host is reached through a **command prefix** the plan names, for
-example `["ssh", "-o", "BatchMode=yes", "crew-worker@host-b"]`.
+example `["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no", "crew-worker@host-b"]`.
 - `aicrew up` runs each member-side command as that prefix plus the
   command, with the data on standard input.
 - It never opens a connection itself, and holds no SSH key, password or
   host key.
 - The operator's own SSH client applies its configuration, agent and
-  `known_hosts`. A host key that SSH does not know fails the step, because
-  `BatchMode=yes` lets SSH ask nothing. The operator adds the key by their
-  own means.
+  `known_hosts`. A host key that SSH does not know fails the step: the
+  prefix sets `StrictHostKeyChecking=yes`, which refuses a host whose key
+  is not already known (OpenSSH's `ssh_config(5)`). `BatchMode=yes` alone
+  is not enough, because an operator's configuration with
+  `StrictHostKeyChecking=accept-new` would record a new key without asking.
+  The prefix also sets `UpdateHostKeys=no`, so no run, a dry run included,
+  writes to the operator's `known_hosts`. The operator verifies and adds a
+  host's key by their own means, before the run.
+- `aicrew up` refuses an SSH prefix (one whose program is `ssh`) that does
+  not carry these three options, and names the missing one. The options
+  are given on the command line, where they override the operator's
+  configuration files.
 - Windows 10 and 11 include an OpenSSH client, so the same prefix works from a Windows workstation.
 - The prefix logs in as the member's OS user, the account the bring-up
   needs anyway (BRING-UP, "What a member's host needs"). It never uses
@@ -154,6 +167,22 @@ example `["ssh", "-o", "BatchMode=yes", "crew-worker@host-b"]`.
 
 The same prefix lets a test reach a container: the pilot simulation names
 `["docker", "exec", "-i", "pilotsim-worker"]` (increment U3).
+
+**One form for every member-side command.** SSH hands the remote side one
+string that the user's login shell parses, while `docker exec` runs its
+arguments as they are. So that both behave alike, `aicrew up` sends every
+member-side command in one form:
+- the prefix, then `sh -c SCRIPT`;
+- SCRIPT is built by `aicrew up` with every argument quoted for a POSIX
+  shell, in single quotes, with each `'` inside written as `'\''`;
+- the plan's values are validated before they reach a script: labels and
+  the team's name by join's own grammar, URLs as https URLs, host names as
+  host names, the forge host as `join --cred` takes it. A value that fails
+  stops the run before anything is created, and names the key.
+
+No value from the plan is ever pasted into a script unquoted. The scripts
+are fixed texts of `aicrew up`, with the quoted values as their only
+variable part.
 
 Data travels over standard input, never in the remote command line, which
 any process on the host can read. That removes finding 7's carriage return
@@ -167,12 +196,15 @@ as well, because no shell pipe between two commands touches the bytes.
 | The hub admin's bearer | a reference in the plan: an owner-only file, or a hidden prompt | the grant and enrollment steps only | passed to the local `aimem` as `--admin-token-file`, which aimem's `identity team grant` and `identity enroll issue` take. A prompted value is written to a new owner-only file in an owner-only temporary directory and removed when the step ends, since aimem's usage names this credential as a file. |
 | A member's aimem enrollment record (replaces the aimem token, section 4) | the standard output of `aimem identity enroll issue --output -`, read through a pipe | from issue to redemption, in memory | the standard input of `aimem enroll redeem` on the member's host |
 | A member's invitation code | aicrewd's answer to the invitation request, which `aicrew up` makes itself | from issue to redemption, in memory | the standard input of `aicrew-agent join --code-file -` |
-| A member's forge token | a reference in the plan: an owner-only file, or a hidden prompt | from the start of the member's steps to its `join` | U1: a new owner-only file in an owner-only temporary directory on the member's host, given to `join --cred HOST=FILE` and removed by the same remote command. U2: join's standard input, with no file at all. |
+| A member's forge token | a reference in the plan: an owner-only file, or a hidden prompt | from the start of the member's steps to its `join` | U1: a new owner-only file in an owner-only temporary directory on the member's host, given to `join --cred FORGE_HOST=forge.token` and removed by the same remote command. U2: join's standard input, with no file at all. |
 | SSH keys and host keys | the operator's SSH client | never | never |
 | The client's login | the person, on the member's host | never | never |
 
 **What none of them is ever in:**
-- standard output or a log;
+- the output the operator sees, or any output that is captured or kept: the
+  terminal, a log, the journal. A private pipe between two processes of
+  one step, which is how the enrollment record and the invitation code
+  travel, is not output in this sense;
 - the plan file or the run's journal;
 - an argument of any process, local or remote;
 - an environment variable.
@@ -208,8 +240,12 @@ in order:
    trust, which `aicrew up` knows from its own connection.
    - A `login (claude): none` stops the run here, before any invitation
      or enrollment is issued for this member (section 6).
-   - This preflight is the client check of PILOT-1-FOLLOWUPS section 7,
-     "an active account with the model provider".
+   - `stored` means only that a login is stored, not that it works: an
+     expired Claude Code login passes, and for `--client opencode` the line
+     is `no_check` (internal/agent/preflight.go; BRING-UP step 6). The
+     evidence of a working account is the turn-model call of `check` after
+     join (step 7). The preflight only stops the run early when the person
+     has not logged in at all.
 3. **The aimem credential, by enrollment.**
    - aimem v0.11.4 has both halves of PILOT-1-FOLLOWUPS 3.9: the admin's
      `aimem identity enroll issue --purpose new-user --output -` (it takes
@@ -219,19 +255,62 @@ in order:
      cmd/aimem/enroll_redeem.go).
    - `aicrew up` pipes the one into the other through the transport, with
      the home's `AIMEM_STATE_DIR` and `AIMEM_SOCKET` set. The hub creates
-     the member's user at redemption, so no user ID is carried and the
-     invitation needs no `--expect-user`.
-   - **Not yet checked:** whether `enroll redeem` writes the hub entry of
-     an installation that has none, or needs `join`'s provisioning first.
-     U1's assessment decides the order of the two steps by trying it.
+     the member's user at redemption, so no user ID is carried by a
+     person.
+   - **A clean installation needs no provisioning first.** On an
+     installation without the hub's entry, redemption creates the entry
+     with the record's hub URL and trust, stores the delivered credential
+     and saves it (aimem v0.11.4, cmd/aimem/enroll_redeem.go, the delivery
+     path). So the enrollment comes before join, and join is given no
+     `--aimem-url`.
+   - **Only into a home without an aimem credential.** Redemption into an
+     installation that already holds a working credential for the hub
+     spends nothing and answers `already_enrolled` with that credential's
+     user, whoever it is (the same file, before the publish step). A home
+     the run did not make could hold another person's credential. So
+     before it issues the enrollment, `aicrew up` reads the home: a home
+     that is not linked but whose aimem installation already holds a
+     credential for the hub stops the run, naming the home. The run never
+     redeems into it.
+   - **The identity is pinned before the invitation.** `enroll redeem
+     --json` reports the outcome, the user ID and the bundle ID. `aicrew
+     up` requires the outcome `enrolled` and the bundle ID it issued;
+     anything else stops the run. The invitation is issued only after
+     that, with `--expect-user` set to the user ID the redemption
+     reported. aicrewd then accepts a proof only from that user, so a
+     credential that changed between the two steps cannot link the
+     member to another identity.
 4. **The join.** `aicrew-agent join --label L --url ... --tls-trust-mode
    ... --tls-trust-value ... --aimem-hub NAME --client claude --wake turns
-   --code-file - --cred HOST=FILE`.
+   --code-file - --cred FORGE_HOST=forge.token`.
    - The code comes on standard input.
    - The aimem credential is already in the home, so join skips its own
      provisioning (`provision` returns at once when the installation holds
      an active credential: internal/agent/provision.go).
-5. **The skills,** by the path the owner chooses (section 9, O3).
+5. **The skills.** The owner decided on 2026-11-19 that a member gets
+   them with no personal grant, by the product's own path:
+   - `aicrew-agent join` installs them from the hub inside a team
+     conversation it opens for that (aicrew task `01a1f3a6-77d3`);
+   - `aimem skills install` acts as the team conversation when
+     `AIMEM_TEAM_SESSION` is set, and never falls back to the personal
+     credential (aimem task `01a1f3a5-e6ed`, expected in aimem v0.11.5).
+
+   join opens that conversation itself, during the join. That matters
+   because a join that ends `blocked` installs no service
+   (cmd/aicrew-agent/join.go), so on a new home the service could never be
+   the one to open it. That sequence is task `01a1f3a6-77d3`'s to settle.
+
+   Both come before U1 (section 8). `aicrew up` runs nothing of its own
+   for the skills and imports nothing: the join of step 4 installs them.
+   The one thing it adds is the hub administrator's import of the skills
+   set (finding 19), which runs only on the hub's host (`aimem skills
+   import --from-archive FILE`, its usage at v0.11.4). `aicrew up` cannot
+   run it from the workstation and does not try. When a member's join
+   reports that the hub has no skills set imported (one of the failures
+   aimem's install tells apart, comment seq 804 on `01a1f3a6-77d3`), the
+   run stops with that step named for the hub's administrator, and resumes
+   after it. Whether the dry run can see a missing set earlier, through a
+   read the command already has, is a question for U1's assessment.
 6. **The service.** Lingering on, if the user may set it (otherwise the
    run stops and names the root command, section 6), then `aicrew-agent
    service status`.
@@ -267,7 +346,7 @@ from what the product already knows is read, never guessed.
 | # | Question | Default | Why the run needs it |
 | --- | --- | --- | --- |
 | 1 | aicrewd's URL, trust and operator credential | the `AICREW_*` variables, if set | every operator step. The answer is checked at once with `aicrew status` |
-| 2 | The hub | the only hub aicrewd has, by its alias | the grant, the enrollment, and the home's hub (finding 2). The hub's ID and URL are read from aicrewd's hub binding |
+| 2 | The hub: its alias, its URL and its TLS trust (a CA file or a pin, as aimem's `--hub-ca-file` and `--hub-pin` take them) | the alias: the only hub aicrewd has. The URL and the trust: none | the grant, the enrollment, and the home's hub (finding 2). See below |
 | 3 | The team's name and its projects | none | `team setup` |
 | 4 | Start the team paused? | yes | finding 5: a coordinator that joins wakes on the board's READY tasks at once. The end table prints the resume command |
 | 5 | The hub admin's bearer | a hidden prompt | the grant and the enrollments. Asked once, used, then gone (3.2) |
@@ -275,6 +354,18 @@ from what the product already knows is read, never guessed.
 | 7 | Per member and forge host: the token's reference | a hidden prompt | `join --cred`. The forge hosts are read from each granted project's repository, which aicrewd's team grants carry (`opapi.TeamGrants`, as `team setup` prints them) |
 | 8 | A closed network's export base | none | section 7 |
 | 9 | Save the plan? | `crew-up.json`, without the secrets | a repeat, a review or a headless run |
+
+**Where the hub's connection comes from.** The operator API gives the
+hub's alias and ID with a team (`opapi.Team`, `hub_id`), but not the hub's
+URL or trust: those are in aicrewd's own configuration
+(`svcconfig.AimemConfig`), and no operator route returns them. So in U1
+they are plan inputs, asked once. Before the admin's bearer is sent
+anywhere, the run reaches the hub at that URL under that trust with a
+request that carries no credential, and stops if the TLS check fails. The
+admin's bearer then goes only to the hub verified this way. An
+authenticated operator route that returns the binding's non-secret fields
+(URL and trust) would remove the question; it is an aicrewd change, left
+to U1's assessment, and until it exists the answer is the operator's.
 
 ### 5.2 The plan file
 
@@ -355,6 +446,34 @@ named, and the exact command for the person:
   revokes them, and issues new ones. In the worst case they expire by
   their own lifetime, 24 hours by default.
 
+**A redemption that was interrupted.** The hub may have redeemed a
+bundle, issuing the member's user and credential, while the member's side
+stopped before it saved the credential. aimem's own retry resumes that
+delivery only with the original record on standard input, because the
+record locates the bundle's pending keys in the home's installation (aimem
+v0.11.4, cmd/aimem/enroll_redeem.go). Revoking a redeemed bundle does not
+revoke the user and token it issued (`aimem identity enroll` usage). So
+the run handles it in two cases:
+- **Within one run.** `aicrew up` holds the record in memory until the
+  redemption has answered `enrolled`. On aimem's exits 4 (retryable) and 5
+  (outcome unknown) it sends the same record again, as aimem's usage
+  says, up to a bound. A run that ends this way names the outcome; it
+  never issues a second bundle for the member in the same run.
+- **After a crash, when the record is gone.** The rerun reads the
+  bundle's state on the hub (`aimem identity enroll list`, with the
+  bundle ID from the journal), and the home's installation:
+  - bundle `issued`: unspent. The rerun revokes it and issues a new one,
+    as above.
+  - bundle `redeemed`, and the home holds the credential: delivered. The
+    rerun checks it with the pin of section 4, step 3, and goes on.
+  - bundle `redeemed`, and the home holds no credential: spent, with the
+    delivery lost. The rerun stops with exit code 5 and names the hub
+    administrator's recovery for the user and token that bundle issued,
+    which `enroll list` names: `aimem access token-revoke` and `aimem
+    access user-set --state disabled`, on the hub's host. Only after that
+    does a rerun issue a new bundle. A spent bundle is never reused, and
+    the identity it created is never left live and unused.
+
 **Resume** is rerunning the same plan. The steps that are done read as
 done, and the first step that is not runs.
 
@@ -389,14 +508,24 @@ Each increment is one task, no larger than M. The surfaces are those of
 AGENTS.md "Delivery"; "credential handling" marks an increment that moves
 a secret, which takes the sensitive gates.
 
+**Before U1: the skills path.** Two tasks that already exist, both on the
+goal's path, come first. They are not increments of this command:
+- aimem `01a1f3a5-e6ed`: `aimem skills install` acts as the team
+  conversation when `AIMEM_TEAM_SESSION` is set, and never falls back.
+- aicrew `01a1f3a6-77d3`: join installs the skills inside a team
+  conversation it opens. The simulation and the real-aimem harness go the
+  documented way: no ai-skills from the archive in the member image, and
+  `claude_skills` no longer a passing end of join.
+
+`aicrew up` then calls what they deliver, through join.
+
 | # | Increment | Size | Surfaces | Depends on |
 | --- | --- | --- | --- | --- |
 | U1 | **`aicrew up` brings a team up.** The questions, the plan and `--save`; `--dry-run`; the journal, the stops and the revocations; the transport; the operator-side steps (team setup, grant, pause, enrollment, invitations); the member-side steps with today's member commands and aimem's enrollment redemption; the end table | M (at its upper end; if U1's assessment finds L, the split is the member-side steps) | operator CLI; credential handling | none |
 | U2 | **`join` reads every secret from one standard-input document:** the code, an enrollment record, the forge tokens. U1's temporary token file on the member's host goes away | S | join; credential handling | U1 |
-| U3 | **The pilot simulation brings its team up with `aicrew up --plan` headless,** over the `docker exec` prefix, in place of its own member scripts. The documented path becomes the tested one, which the rule of a scenario per documented path asks for and finding 14 showed missing | M | test harness | U1, and O3's skills path |
-| U4 | **The skills by the path of O3:** either a read grant the bring-up gives each member's user, or `aimem skills install` inside a team session (an aimem change: processctx reads the team session's credential, as `aimem reservation` does; and an aicrew change: serve installs the missing skills when its session opens, before the first turn) | S (grant) or M across both repositories (team session) | aimem authentication for the second; join and serve | U1 |
-| U5 | **After the set-up:** a rerun converges to the plan. That covers upgrading the members' tools to the tested versions, replacing a member's forge token, and adding or removing a member. `aicrew up --status` prints section 5.4's table. It wraps `aicrew team pause\|resume` and `aicrew status`, and replaces nothing | M | operator CLI; credential handling | U1 |
-| U6 | **With runners:** the member-side step enrols the host's runner, and aicrewd's `ensure-home` does the join | S | operator CLI | DESIGN-CONTROL-PLANE B1 to B3 |
+| U3 | **The pilot simulation brings its team up with `aicrew up --plan` headless,** over the `docker exec` prefix, in place of its own member scripts (section 8.1) | M | test harness | U1 |
+| U4 | **After the set-up:** a rerun converges to the plan. That covers upgrading the members' tools to the tested versions, replacing a member's forge token, and adding or removing a member. `aicrew up --status` prints section 5.4's table. It wraps `aicrew team pause\|resume` and `aicrew status`, and replaces nothing | M | operator CLI; credential handling | U1 |
+| U5 | **With runners:** the member-side step enrols the host's runner, and aicrewd's `ensure-home` does the join | S | operator CLI | DESIGN-CONTROL-PLANE B1 to B3 |
 
 **What U1 removes from the operator's list of 2026-11-19,** step by step
 (the numbers of section 1's table):
@@ -413,7 +542,7 @@ a secret, which takes the sensitive gates.
 | 10 | the one-liners on each host | done by `aicrew up` |
 | 11 | the client's login | still the person's. The run stops before spending anything, and resumes |
 | 12, 13, 15 | preflight, join, join again | done by `aicrew up` |
-| 14 | the skills | done by `aicrew up` once O3 is decided and U4 is delivered. Until then the run stops at this step and names it |
+| 14 | the skills | done by the join that `aicrew up` runs, once `01a1f3a5-e6ed` and `01a1f3a6-77d3` are delivered. The hub's skills set is the administrator's import on the hub's host; a missing set stops the run with that step named |
 | 16 | lingering and the service | done by `aicrew up`, unless the system's policy needs root; then a stop names the command |
 | 17 | the checks | the end table |
 | 18 | deleting the carried files | nothing was carried |
@@ -430,7 +559,41 @@ hand.
 - One end-to-end run uses the real-aimem harness's hub and aicrewd, with
   one member reached by the local shell as its prefix.
 
+### 8.1 A rule of the design: the tests bring a team up the way a person does
+
+The pilot simulation and the real-aimem harness bring their teams up
+through the same commands a person is given, with no stand-in step. It is
+the owner's rule of 2026-11-19 for the skills ("our test has to go the
+same way that is offered to the user; if something on the way is wrong, it
+is fixed, not bypassed"), and it applies to the command itself:
+- Once `aicrew up` exists, the scenarios bring their teams up with
+  `aicrew up --plan` and nothing beside it (U3). The transport's prefix is
+  an input of the plan, as a host's SSH destination is for a person; it
+  is not a step.
+- A step that a scenario cannot take the way a person does is fixed in the
+  product, or named in the scenario's document as not covered. It is never
+  replaced by a step of the scenario's own.
+- Until U3, the scenarios keep their own scripts, and each of those
+  scripts runs the product's documented commands. Task `01a1f3a6-77d3`
+  removes the one stand-in step they have today: ai-skills installed from
+  the archive in the member image.
+
+One stand-in stays, and it is not a step of the bring-up: the
+simulation's client is a stand-in for Claude Code, since a test does not
+call a model provider. The client's login, which only a person can do, is
+therefore the one step of section 1 that no scenario takes. The
+simulation's member image puts the stand-in on `PATH` as `claude`
+(e2e/pilotsim/member/Dockerfile), so no scenario logs a real client in.
+
 ## 9. The questions that are the owner's
+
+**Decided, 2026-11-19: a member's skills** (finding 14). A product fix and
+no personal grant for a member, also not for the first team: aimem task
+`01a1f3a5-e6ed` and aicrew task `01a1f3a6-77d3` (section 8). This was O3 in
+the first draft of this document. The numbers of the other questions are
+kept.
+
+**Still open:**
 
 - **O1, where it lives.** `aicrew up` in today's `aicrew` command
   (proposed), or a separate tool. The proposal needs no new binary,
@@ -440,17 +603,6 @@ hand.
   or waiting for the runner. A library would make `aicrew` read keys and
   host keys itself. Waiting puts the whole bring-up behind the control
   plane's B1 to B3.
-- **O3, a member's skills** (finding 14). Two choices:
-  - (a) Each member's aimem user gets a read grant on the team's
-    projects. It works with the released versions, but contradicts
-    aimem's pilot runbook, where a team member needs no personal grant.
-    It also needs an admin route that works from the workstation: `aimem
-    access grant add` runs only on the hub's host (its usage at v0.11.4).
-  - (b) The skills are installed inside a team session, as U4 describes:
-    no personal grant, but a change in two repositories.
-
-  The design proposes (b), and (a) as the first team's interim if the
-  owner wants the team running before U4.
 - **O4, the forge token's pre-check from the operator's machine.**
   Proposed: the token is used once, read-only, on the operator's machine
   before the invitation is spent. This adds one place that uses the token
@@ -470,4 +622,6 @@ hand.
 - Replace BRING-UP.md. The document stays the description of what the
   command does, and of the way by hand where the command cannot reach a
   host.
-- Decide the skills path (O3) or the size of U1 beyond its assessment.
+- Implement the skills path: that is aimem `01a1f3a5-e6ed` and aicrew
+  `01a1f3a6-77d3`.
+- Decide the size of U1 beyond its assessment.

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -160,6 +161,24 @@ func TestJoinSkillsFailures(t *testing.T) {
 			[]string{"it could not be asked", "file not found", "aimem " + skillsTeamAimem + " or later is required"}, false},
 		{"open refused", skillsRun{supports: true, openErr: errors.New("aicrewd refused the entry: proof_invalid")},
 			SkillsConversation, []string{"could not be opened", "proof_invalid", "aicrew-agent join --home "}, false},
+		// join's own entry refused beside a member's session: nothing of
+		// join's exists, so no leave, only the rerun once the member runs.
+		{"member holds a session", skillsRun{supports: true, openErr: &Refusal{Code: "session_active"}},
+			SkillsConversation, []string{"A member of this home holds a session in the team: rerun `aicrew-agent join --home ",
+				"join then installs inside that session"}, false},
+		// The close finds join's token ended: not ready, and the step for a
+		// member that may hold the session.
+		{"taken over at close", skillsRun{supports: true, projects: []string{"alpha"}, closeErr: errTakenOver,
+			stdout: "installed oh-code-review 1.43.0 (release) for claude: /h/.claude/skills/oh-code-review\n"},
+			SkillsConversation, []string{"the skills are installed, but the team's conversation sess-1 that join opened is no longer join's",
+				"aicrew-agent session status --home ", "aicrew-agent session leave --home ", "aicrew-agent join --home ",
+				"that rerun ends ready"}, true},
+		// An open that leaves a session recorded: the leave step stays whole
+		// however long the error is.
+		{"open leaves a session", skillsRun{supports: true, openErr: &leaveFirst{session: "sess-9",
+			err: errors.New("aimem cannot bind: " + strings.Repeat("x", 600))}},
+			SkillsConversation, []string{"could not be opened", "end session sess-9 with `aicrew-agent session leave --home ",
+				"aicrew-agent join --home "}, false},
 		{"no project", skillsRun{supports: true}, SkillsNoProject,
 			[]string{"granted no project", "aicrew team setup"}, true},
 		{"set missing", skillsRun{supports: true, projects: []string{"alpha"}, stderr: notOnHub, installErr: errors.New("exit status 1")},
@@ -177,7 +196,7 @@ func TestJoinSkillsFailures(t *testing.T) {
 				"`process select`", "aicrew-agent join --home "}, true},
 		// A long list of missing skills keeps its reason and every import line.
 		{"set missing, long", skillsRun{supports: true, projects: []string{"alpha"}, stderr: longNotOnHub(), installErr: errors.New("exit status 1")},
-			SkillsNotImported, []string{"hub's administrator imports", "skill-00 1.43.0 (release)", "skill-39 1.43.0 (release)",
+			SkillsNotImported, []string{"hub's administrator imports", "skill-00 1.43.0 (release)", "skill-99 1.43.0 (release) is not on the hub: not imported; the admin imports the skills release on the hub host: `aimem skills import --from-archive aiskills-1.43.0.tar.gz` (docs/ADMIN-MANUAL.md), or the process pins the current one",
 				"aicrew-agent join --home "}, true},
 		// A recorded session whose binding the hub reports for another
 		// user, team or session: leave it first.
@@ -319,12 +338,12 @@ func TestSkillsMissing(t *testing.T) {
 	}
 }
 
-// longNotOnHub is aimem's answer for a set missing forty skills, longer
-// than the part of an answer join shows for the other reasons.
+// longNotOnHub is aimem's answer for a set missing a hundred skills, over
+// 16 KiB, longer than any part of an answer join shows for another reason.
 func longNotOnHub() string {
 	var b strings.Builder
 	b.WriteString("not every required skill can be installed from the hub:")
-	for i := 0; i < 40; i++ {
+	for i := 0; i < 100; i++ {
 		fmt.Fprintf(&b, "\n  skill-%02d 1.43.0 (release) is not on the hub: not imported; the admin imports the skills release on "+
 			"the hub host: `aimem skills import --from-archive aiskills-1.43.0.tar.gz` (docs/ADMIN-MANUAL.md), or the process pins the current one", i)
 	}
@@ -367,7 +386,148 @@ func TestEnterConversationNamesTheLeave(t *testing.T) {
 	}
 	e := c.engine(t)
 	_, err := enterConversation(ctx, c.cfg.Home, c.cfg.AimemHub, e, e.Crew.(SessionReader))
-	if err == nil || !strings.Contains(err.Error(), "aicrew-agent session leave --home ") || !strings.Contains(err.Error(), e.SessionID()) {
+	var left *leaveFirst
+	if !errors.As(err, &left) || left.session != e.SessionID() || left.starting {
 		t.Fatalf("enter with aimem failing to bind and close: %v", err)
+	}
+	if step := left.step(c.cfg.Home); !strings.HasPrefix(step, "end session "+e.SessionID()+" with `aicrew-agent session leave --home ") {
+		t.Fatalf("the step: %s", step)
+	}
+}
+
+// A member starting in the home records its session before aimem binds it.
+// join, interleaved there, neither enters beside it nor resumes it: the
+// member's session keeps its generation, and join names the wait.
+func TestJoinLeavesAStartingMemberAlone(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	flag := filepath.Join(c.root, "fail-open")
+	if err := os.WriteFile(flag, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	member := c.engine(t)
+	if err := member.Start(ctx); err == nil {
+		t.Fatal("the member's start was to stop before aimem's binding")
+	}
+	os.Remove(flag)
+	st, ok, err := LoadState(c.cfg.Home)
+	if err != nil || !ok || st.AimemFile != "" {
+		t.Fatalf("no session recorded without its binding: %+v %v %v", st, ok, err)
+	}
+	before := c.sessionsOf(t)
+	_, err = holdConversation(ctx, c.cfg.Home, c.cfg)
+	var left *leaveFirst
+	if !errors.As(err, &left) || !left.starting || left.session != st.SessionID {
+		t.Fatalf("join beside a starting member: %v", err)
+	}
+	if step := left.step(c.cfg.Home); !strings.Contains(step, "aicrew-agent session status --home ") ||
+		!strings.Contains(step, "aicrew-agent session leave --home ") || !strings.Contains(step, "aicrew-agent join --home ") {
+		t.Fatalf("the step: %s", step)
+	}
+	if sess, _ := c.store.GetSession(ctx, st.SessionID); strconv.FormatInt(sess.Generation, 10) != member.session.Generation || sess.State == store.SessionLeft {
+		t.Fatalf("the member's session moved: generation %d, state %s", sess.Generation, sess.State)
+	}
+	if c.sessionsOf(t) != before {
+		t.Fatal("join entered beside the member")
+	}
+	// The member's own restart resumes the session it recorded.
+	if err := c.engine(t).Start(ctx); err != nil {
+		t.Fatalf("the member's restart: %v", err)
+	}
+}
+
+// A session recorded for another agent is never used or entered.
+func TestHeldConversationOfAnotherAgent(t *testing.T) {
+	cfg := Config{AgentID: "a1", Home: t.TempDir()}
+	_, err := heldConversation(cfg.Home, cfg, State{AgentID: "a2", SessionID: "s9", AimemFile: "/f"})
+	var left *leaveFirst
+	if !errors.As(err, &left) || left.starting || left.session != "s9" {
+		t.Fatalf("another agent's session: %v", err)
+	}
+}
+
+// (i) A member enters and records its session after join read the home:
+// join's entry is fresh only, so aicrewd refuses it (session_active) and the
+// member's session keeps its generation and its record. Reverting join to
+// the engine's Start (which resumes the record) fails this test.
+func TestJoinEntryBesideAMemberIsRefused(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	member := c.engine(t)
+	if err := member.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, _, _ := LoadState(c.cfg.Home)
+	j := c.engine(t)
+	_, err := enterConversation(ctx, c.cfg.Home, c.cfg.AimemHub, j, j.Crew.(SessionReader))
+	if codeOf(err) != "session_active" {
+		t.Fatalf("join's entry beside the member: %v", err)
+	}
+	sess, _ := c.store.GetSession(ctx, member.SessionID())
+	if sess.State != store.SessionActive || strconv.FormatInt(sess.Generation, 10) != member.session.Generation {
+		t.Fatalf("the member's session: %s at generation %d", sess.State, sess.Generation)
+	}
+	if now, ok, _ := LoadState(c.cfg.Home); !ok || now != st {
+		t.Fatalf("the member's record changed: %+v", now)
+	}
+	if !c.handleActive(t, c.fileHandle(t, member.SessionID())) {
+		t.Fatal("the member's binding was touched")
+	}
+}
+
+// (ii) A member starting after join entered resumes join's recorded
+// session, which fences join's token: join's close then leaves nothing,
+// takes nothing back and reports it. Reverting join's close to the engine's
+// Leave (which proves again and leaves) fails this test.
+func TestJoinCloseLeavesATakenOverSessionAlone(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	j := c.engine(t)
+	conv, err := enterConversation(ctx, c.cfg.Home, c.cfg.AimemHub, j, j.Crew.(SessionReader))
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := c.engine(t)
+	if err := member.Start(ctx); err != nil || member.SessionID() != conv.SessionID {
+		t.Fatalf("the member's start: %v (session %s, join's %s)", err, member.SessionID(), conv.SessionID)
+	}
+	st, _, _ := LoadState(c.cfg.Home)
+	if err := conv.Close(ctx); !errors.Is(err, errTakenOver) {
+		t.Fatalf("join's close of a session taken over: %v", err)
+	}
+	sess, _ := c.store.GetSession(ctx, member.SessionID())
+	if sess.State != store.SessionActive || strconv.FormatInt(sess.Generation, 10) != member.session.Generation {
+		t.Fatalf("the member's session: %s at generation %d", sess.State, sess.Generation)
+	}
+	if now, ok, _ := LoadState(c.cfg.Home); !ok || now != st {
+		t.Fatalf("the member's record changed: %+v %v", now, ok)
+	}
+	if !c.handleActive(t, c.fileHandle(t, member.SessionID())) {
+		t.Fatal("the member's binding was closed or fenced")
+	}
+}
+
+// join's own close of a conversation nobody took over ends it as the
+// engine's Leave does: aicrewd's session left, aimem's binding closed, the
+// record cleared.
+func TestJoinCloseLeaves(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	j := c.engine(t)
+	conv, err := enterConversation(ctx, c.cfg.Home, c.cfg.AimemHub, j, j.Crew.(SessionReader))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conv.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if sess, _ := c.store.GetSession(ctx, conv.SessionID); sess.State != store.SessionLeft {
+		t.Fatalf("join's session after its close: %s", sess.State)
+	}
+	if _, err := os.Stat(sessionFile(c.root, conv.SessionID)); !os.IsNotExist(err) {
+		t.Fatal("aimem's binding was not closed")
+	}
+	if _, ok, _ := LoadState(c.cfg.Home); ok {
+		t.Fatal("the record outlived join's conversation")
 	}
 }

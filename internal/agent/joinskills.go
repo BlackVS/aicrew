@@ -128,8 +128,19 @@ func (j *joiner) installSkills(ctx context.Context, crep CheckReport) (rep Skill
 	fmt.Fprintln(j.deps.Out, "Skills: installing them from the hub inside the team's conversation.")
 	conv, err := j.skills.Open(ctx, home)
 	if err != nil {
+		next := rerun
+		var left *leaveFirst
+		switch {
+		case errors.As(err, &left):
+			next = "; " + left.step(home)
+		case codeOf(err) == "session_active":
+			// aicrewd refused join's own entry: nothing of join's exists, so
+			// there is nothing to leave.
+			next = ". A member of this home holds a session in the team: rerun `" + joinRerun(home) +
+				"` when it has started, and join then installs inside that session"
+		}
 		return SkillsReport{}, &skillsFailure{SkillsConversation, "the team's conversation for the skills could not be " +
-			"opened: " + tail(err.Error(), 300) + rerun}
+			"opened: " + tail(err.Error(), 300) + next}
 	}
 	rep = SkillsReport{Session: conv.SessionID, Opened: conv.Close != nil}
 	defer func() {
@@ -174,13 +185,14 @@ func skillsInstallFailure(home string, conv Conversation, project, stdout, stder
 		said = err.Error()
 	}
 	// The whole answer is classified, and a missing set keeps every line:
-	// each one is a skill's import command. The others show its end.
+	// each one is a skill's import command, one per skill the process pins.
+	// The others show its end.
 	rerun := "; then rerun `" + joinRerun(home) + "`"
 	switch {
 	case strings.Contains(said, "not every required skill can be installed from the hub"):
 		return &skillsFailure{SkillsNotImported, fmt.Sprintf("the hub holds no skills set with every skill the process of "+
 			"project %s pins. The hub's administrator imports the set on the hub's host, as aimem names it here: %s%s",
-			project, head(said, 16<<10), rerun)}
+			project, said, rerun)}
 	case strings.Contains(said, "grant_denied") || strings.Contains(said, "needs a grant on the project"):
 		return &skillsFailure{SkillsGrant, fmt.Sprintf("the hub refused project %s to the team's conversation: the team's "+
 			"access profile needs a grant on it, which `aicrew team setup` prints for the hub's administrator. "+
@@ -229,6 +241,19 @@ func conversationRefused(said string) bool {
 // close: the session stays recorded in the home, so the step that ends it
 // comes first, and join is run again after it.
 func notClosed(home, session string, err error, fail *skillsFailure) *skillsFailure {
+	if errors.Is(err, errTakenOver) {
+		// join cannot tell a member that resumed its conversation from a
+		// token that ended with nobody holding the session.
+		step := (&leaveFirst{session: session, starting: true}).step(home)
+		if fail != nil {
+			return &skillsFailure{fail.reason, "the team's conversation " + session + " that join opened is no longer " +
+				"join's (its token ended): " + step + ", after: " + fail.instruction}
+		}
+		return &skillsFailure{SkillsConversation, "the skills are installed, but the team's conversation " + session +
+			" that join opened is no longer join's: its token ended, because the home's member took the session over or " +
+			"the session ended with nobody holding it. " + strings.ToUpper(step[:1]) + step[1:] +
+			"; the skills are installed, so that rerun ends ready"}
+	}
 	leave := fmt.Sprintf("the team's conversation %s that join opened was not closed: %s; end it with "+
 		"`aicrew-agent session leave --home %s`", session, tail(err.Error(), 300), shellArg(absHome(home)))
 	if fail != nil {
@@ -237,12 +262,30 @@ func notClosed(home, session string, err error, fail *skillsFailure) *skillsFail
 	return &skillsFailure{SkillsConversation, "the skills are installed, but " + leave + ", then rerun `" + joinRerun(home) + "`"}
 }
 
-// head keeps the start of s, at most n bytes.
-func head(s string, n int) string {
-	if len(s) > n {
-		return s[:n] + "…"
+// leaveFirst is a failure to hold the conversation that leaves a session
+// recorded in the home: the report names the step that ends it before the
+// rerun, outside the part of the error it shortens.
+type leaveFirst struct {
+	err     error
+	session string
+	// starting is a session recorded without aimem's binding: a member may
+	// be starting in the home, and then its own start ends it.
+	starting bool
+}
+
+func (l *leaveFirst) Error() string { return l.err.Error() }
+func (l *leaveFirst) Unwrap() error { return l.err }
+
+// step is what a person does before join runs again.
+func (l *leaveFirst) step(home string) string {
+	leave := "end session " + l.session + " with `aicrew-agent session leave --home " + shellArg(absHome(home)) + "`"
+	if l.starting {
+		leave = "when the home's member has started (`aicrew-agent session status --home " + shellArg(absHome(home)) +
+			"` shows `aimem_bound` true), or, if no member runs in this home, after you " + leave + ","
+	} else {
+		leave += ","
 	}
-	return s
+	return leave + " then rerun `" + joinRerun(home) + "`"
 }
 
 // joinRerun is the join that resumes a home: its home is enough, since
@@ -302,17 +345,18 @@ func openConversation(ctx context.Context, home string) (Conversation, error) {
 	if err != nil {
 		return Conversation{}, err
 	}
+	return holdConversation(ctx, home, cfg)
+}
+
+// holdConversation decides whose conversation the install runs in: a
+// session recorded in the home is never entered beside or resumed.
+func holdConversation(ctx context.Context, home string, cfg Config) (Conversation, error) {
 	st, held, err := LoadState(home)
 	if err != nil {
 		return Conversation{}, err
 	}
-	if held && st.AgentID == cfg.AgentID && st.AimemFile != "" {
-		team, ok, err := LoadTeam(home)
-		if err != nil || !ok {
-			return Conversation{}, fmt.Errorf("the home records session %s but not its team's projects; "+
-				"end it with `aicrew-agent session leave --home %s` and rerun join", st.SessionID, shellArg(absHome(home)))
-		}
-		return Conversation{File: st.AimemFile, SessionID: st.SessionID, Projects: projectIDs(team.Projects)}, nil
+	if held {
+		return heldConversation(home, cfg, st)
 	}
 	crew, err := NewCrew(cfg, nil)
 	if err != nil {
@@ -333,16 +377,24 @@ func enterConversation(ctx context.Context, home, hub string, e *Engine, crew Se
 		if e.SessionID() == "" {
 			return Conversation{}, err
 		}
-		if lerr := e.Leave(context.WithoutCancel(ctx)); lerr != nil {
-			return Conversation{}, fmt.Errorf("%w; the conversation %s join entered was not left either (%s): end it with "+
-				"`aicrew-agent session leave --home %s` first", err, e.SessionID(), tail(lerr.Error(), 200), shellArg(absHome(home)))
+		if lerr := joinLeave(e)(context.WithoutCancel(ctx)); lerr != nil {
+			return Conversation{}, &leaveFirst{session: e.SessionID(), starting: errors.Is(lerr, errTakenOver),
+				err: fmt.Errorf("%w; the conversation %s join entered was not left either: %s", err, e.SessionID(),
+					tail(lerr.Error(), 200))}
 		}
 		return Conversation{}, err
 	}
-	if err := e.Start(ctx); err != nil {
+	// A fresh entry only, never the engine's Start: Start resumes a session
+	// recorded in the home, which would fence a member that recorded one
+	// since join read the home. Beside a member's active session aicrewd
+	// refuses this entry (session_active), and nothing of join's exists.
+	if err := e.enter(ctx, ""); err != nil {
 		return abandon(err)
 	}
-	conv := Conversation{File: e.AimemFile(), SessionID: e.SessionID(), Close: e.Leave}
+	if err := e.bind(ctx); err != nil {
+		return abandon(err)
+	}
+	conv := Conversation{File: e.AimemFile(), SessionID: e.SessionID(), Close: joinLeave(e)}
 	if err := RecordTeam(ctx, home, hub, crew, e.stepToken()); err != nil {
 		return abandon(fmt.Errorf("the team's projects: %w", err))
 	}
@@ -362,4 +414,71 @@ func projectIDs(ps []TeamProject) []string {
 		}
 	}
 	return out
+}
+
+// heldConversation is the conversation a session recorded in the home
+// stands for. join never enters beside it nor resumes it: either would
+// fence whoever holds it. A session aimem has bound is used as it is; one
+// recorded without the binding belongs to a member still starting, or to a
+// start that failed, and join stops.
+func heldConversation(home string, cfg Config, st State) (Conversation, error) {
+	switch {
+	case st.AgentID != cfg.AgentID:
+		return Conversation{}, &leaveFirst{session: st.SessionID,
+			err: fmt.Errorf("the home records session %s of another agent (%s)", st.SessionID, st.AgentID)}
+	case st.AimemFile == "":
+		return Conversation{}, &leaveFirst{session: st.SessionID, starting: true,
+			err: fmt.Errorf("the home records session %s without aimem's binding: a member is starting in it, or "+
+				"its start failed", st.SessionID)}
+	}
+	team, ok, err := LoadTeam(home)
+	if err != nil || !ok {
+		why := "the home records session " + st.SessionID + " but not its team's projects"
+		if err != nil {
+			why += ": " + err.Error()
+		}
+		return Conversation{}, &leaveFirst{session: st.SessionID, err: errors.New(why)}
+	}
+	return Conversation{File: st.AimemFile, SessionID: st.SessionID, Projects: projectIDs(team.Projects)}, nil
+}
+
+// errTakenOver is join's leave refused for its token: a member resumed the
+// conversation (a resume fences the earlier token), or the session ended
+// with nobody holding it. join cannot tell which.
+var errTakenOver = errors.New("join's token for the conversation has ended")
+
+// joinLeave ends the conversation join entered, with join's own token only.
+// Unlike the engine's Leave it never proves again to take the session back:
+// a member that resumed it holds it now, and its binding and the home's
+// record are the member's. A leave refused for open work, or not answered,
+// is an error as in the engine's Leave.
+func joinLeave(e *Engine) func(context.Context) error {
+	return func(ctx context.Context) error {
+		key := newKey("leave")
+		for attempt := 0; ; attempt++ {
+			_, err := e.Crew.Leave(ctx, key, e.token)
+			if err == nil {
+				break
+			}
+			var r *Refusal
+			switch code := codeOf(err); {
+			case code == "invalid_token":
+				return errTakenOver
+			case code == "work_outstanding" && errors.As(err, &r):
+				return &WorkOutstanding{NextAction: r.NextAction}
+			case !Retryable(err) || attempt+1 >= leaveAttempts:
+				return err
+			}
+			if err := e.Sleep(ctx, backoff(attempt, retryAfter(err))); err != nil {
+				return err
+			}
+		}
+		if err := e.Aimem.Close(ctx, e.session.ID); err != nil {
+			return fmt.Errorf("left the session, but aimem kept its binding: %w", err)
+		}
+		e.live.Lock()
+		e.token = ""
+		e.live.Unlock()
+		return ClearState(e.Cfg.Home)
+	}
 }

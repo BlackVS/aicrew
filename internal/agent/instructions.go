@@ -156,9 +156,10 @@ func skillsInstruction(c supportedComponent, found string, skills []string, home
 func shellArg(s string) string {
 	special := " \t'\"$`&;|()<>{}#*?[]~!"
 	if goos != "windows" {
-		// A POSIX shell drops an unquoted backslash; PowerShell keeps it,
-		// and every Windows path holds one.
-		special += "\\"
+		// A POSIX shell drops an unquoted backslash, and a line break ends
+		// the command; PowerShell keeps a backslash, and every Windows path
+		// holds one.
+		special += "\\\n\r"
 	}
 	if !strings.ContainsAny(s, special) {
 		return s

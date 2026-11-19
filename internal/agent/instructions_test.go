@@ -334,8 +334,9 @@ func TestAimemExportFormRuns(t *testing.T) {
 func TestSkillsCommandRunsWithAQuotedHome(t *testing.T) {
 	homes := []string{filepath.Join(t.TempDir(), "my team's", "worker")}
 	if runtime.GOOS != "windows" {
-		// A backslash alone needs quoting for a POSIX shell.
-		homes = append(homes, filepath.Join(t.TempDir(), `team\west`, "worker"))
+		// A backslash, or a line break, alone needs quoting for a POSIX shell.
+		homes = append(homes, filepath.Join(t.TempDir(), `team\west`, "worker"),
+			filepath.Join(t.TempDir(), "team\nwest", "worker"))
 	}
 	for _, home := range homes {
 		skillsCommandRuns(t, home)
@@ -347,6 +348,9 @@ func TestShellArgQuotesABackslashForPOSIX(t *testing.T) {
 	withGOOS(t, "linux")
 	if got := shellArg(`/tmp/team\west`); got != `'/tmp/team\west'` {
 		t.Fatalf("POSIX: %s", got)
+	}
+	if got := shellArg("/tmp/team\nwest"); got != "'/tmp/team\nwest'" {
+		t.Fatalf("POSIX, a line break: %q", got)
 	}
 	withGOOS(t, "windows")
 	if got := shellArg(`C:\agents\worker`); got != `C:\agents\worker` {

@@ -84,8 +84,10 @@ can be upgraded in either order.
      then reported to aicrewd as `read`. Replace such a token with one that
      holds the rights in BRING-UP.md, "The forge token's rights".
 5. **The architect's directory.** To get the escalation wait's start hook
-   and texts, rerun `aicrew architect init` with `--url`. A settings file
-   a person changed is kept, and the new one is written beside it.
+   and texts, rerun `aicrew architect init` with `--url`,
+   `--tls-trust-mode` and `--tls-trust-value` (they go together). A
+   settings file a person changed is kept, and the new one is written
+   beside it.
 
 ### Added
 
@@ -110,8 +112,10 @@ can be upgraded in either order.
 - **`aicrew escalations wait`** (01a1ee08, #266). It reads the open
   escalations on the existing list route and returns with one line for
   each one this directory was not told of. Its seen set is in the
-  directory's state. `aicrew architect init --url` adds a start hook that
-  lists the open escalations, and the kit's texts keep the wait running.
+  directory's state. `aicrew architect init` with `--url`,
+  `--tls-trust-mode` and `--tls-trust-value` (they go together) adds a
+  start hook that lists the open escalations, and the kit's texts keep the
+  wait running.
 
 ### Changed
 

@@ -30,7 +30,7 @@ scripts/e2e-real-aimem.sh -aimem-src ../aimem -runs 3
   each run directory.
 - `-skip-faults` runs the skip-the-fault matrix instead (see "Faults").
 
-It needs Go 1.26 or later (aimem v0.11.4 builds with the Go 1.26
+It needs Go 1.26 or later (aimem v0.11.5 builds with the Go 1.26
 toolchain), git, tar, and network access the first time, to download both
 modules' dependencies. Windows is best effort and not wired yet: the
 harness skips there.
@@ -38,11 +38,11 @@ harness skips there.
 ## The pin
 
 `aimemPin` in `e2e/realaimem/harness_test.go` is the aimem commit the
-harness builds: the merge of aimem's pull request #404 (1df30e3), whose
-`aimem skills install` acts as the team conversation `AIMEM_TEAM_SESSION`
-names. A member's join installs its skills with it. The release that
-carries it, v0.11.5, which `internal/agent/supported.json` names as the
-tested aimem, replaces the commit here once it exists. The minimum is
+harness builds: the v0.11.5 release (1496b6c), which
+`internal/agent/supported.json` names as the tested aimem. Its `aimem
+skills install` acts as the team conversation `AIMEM_TEAM_SESSION` names
+(aimem #404), and a member's join installs its skills with it. The
+minimum is
 0.11.0: aimem's own upgrade rule ("hubs first, then workstations") starts
 there, a 0.11 hub is the hubs' release, and it carries the client fixes of
 0.10.26 (the document and record tools confirm the pinned project) and
@@ -63,9 +63,8 @@ there, a 0.11 hub is the hubs' release, and it carries the client fixes of
   members' `report-*` documents. aicrew reads none of them yet.
 
 The build stamps the commit's `git describe` as aimem's version, as aimem's
-release build stamps the tag. At the pin that is `v0.11.4-1-g1df30e3`,
-which `aicrew-agent`'s dependency check reads as a development build, a
-notice and not a block, until the pin is the v0.11.5 release. The
+release build stamps the tag. At the pin that is `v0.11.5`, which
+`aicrew-agent`'s dependency check reads as the tested release. The
 source clone must hold the commit and the tag (`git fetch --tags`).
 
 ## In CI

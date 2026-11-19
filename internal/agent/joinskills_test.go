@@ -35,6 +35,8 @@ func init() {
 	case len(args) == 1 && args[0] == "skills" && mode == "team":
 		fmt.Fprintln(os.Stderr, "usage: aimem skills install ... With AIMEM_TEAM_SESSION set, list and install read the hub as that team conversation")
 		os.Exit(1)
+	case len(args) == 1 && args[0] == "skills" && mode == "silent":
+		os.Exit(1)
 	case len(args) == 1 && args[0] == "skills":
 		fmt.Fprintln(os.Stderr, "usage: aimem skills install [-p <project>] [--user] [--tool <claude>]")
 		os.Exit(1)
@@ -53,6 +55,7 @@ func init() {
 // skillsRun is one join's use of the skills collaborators.
 type skillsRun struct {
 	supports    bool
+	supportsErr error
 	openErr     error
 	projects    []string
 	held        bool // the conversation was found held, not opened
@@ -68,7 +71,7 @@ type skillsRun struct {
 
 func (r *skillsRun) deps() SkillsDeps {
 	return SkillsDeps{
-		Supports: func(context.Context, string, string) (bool, error) { return r.supports, nil },
+		Supports: func(context.Context, string, string) (bool, error) { return r.supports, r.supportsErr },
 		Open: func(context.Context, string) (Conversation, error) {
 			if r.openErr != nil {
 				return Conversation{}, r.openErr
@@ -150,6 +153,10 @@ func TestJoinSkillsFailures(t *testing.T) {
 	}{
 		{"aimem below", skillsRun{}, SkillsAimemBelow,
 			[]string{"aimem " + skillsTeamAimem + " or later is required", "verifying installer", "aicrew-agent join --home "}, false},
+		// An aimem that cannot be asked counts as one without the team path,
+		// also when the question somehow said yes: it is never run.
+		{"aimem not asked", skillsRun{supports: true, supportsErr: errors.New("exec: \"aimem\": file not found")}, SkillsAimemBelow,
+			[]string{"it could not be asked", "file not found", "aimem " + skillsTeamAimem + " or later is required"}, false},
 		{"open refused", skillsRun{supports: true, openErr: errors.New("aicrewd refused the entry: proof_invalid")},
 			SkillsConversation, []string{"could not be opened", "proof_invalid", "aicrew-agent join --home "}, false},
 		{"no project", skillsRun{supports: true}, SkillsNoProject,
@@ -233,6 +240,16 @@ func TestExecSkillsInstallAndCapability(t *testing.T) {
 	t.Setenv(skillsFakeEnv, "old")
 	if ok, err := aimemSkillsTeam(context.Background(), exe, home); err != nil || ok {
 		t.Fatalf("an aimem without the team path: %v %v", ok, err)
+	}
+	// A usage worded otherwise, or silent, is no team path.
+	t.Setenv(skillsFakeEnv, "silent")
+	if ok, err := aimemSkillsTeam(context.Background(), exe, home); err != nil || ok {
+		t.Fatalf("an aimem whose usage says nothing: %v %v", ok, err)
+	}
+	// An aimem that cannot be run is an error, which join reports as
+	// skills_aimem_below without running anything.
+	if ok, err := aimemSkillsTeam(context.Background(), filepath.Join(t.TempDir(), "no-aimem"), home); err == nil || ok {
+		t.Fatalf("an aimem that cannot be run: %v %v", ok, err)
 	}
 	t.Setenv(skillsFakeEnv, "team")
 	if ok, err := aimemSkillsTeam(context.Background(), exe, home); err != nil || !ok {

@@ -48,7 +48,7 @@ func TestSkillsInstructionNamesNoForgeURL(t *testing.T) {
 			if forgeText.MatchString(s) || strings.Contains(s, "<") {
 				t.Fatalf("%s %q names a forge or a placeholder: %s", g, found, s)
 			}
-			for _, want := range []string{"`aicrew-agent join --home " + home + "`", "inside the team's conversation",
+			for _, want := range []string{"`aicrew-agent join --home " + shellArg(home) + "`", "inside the team's conversation",
 				"aimem " + skillsTeamAimem + " or later", "oh-code-review", "the hub's administrator imported"} {
 				if !strings.Contains(s, want) {
 					t.Fatalf("%s %q lacks %q: %s", g, found, want, s)

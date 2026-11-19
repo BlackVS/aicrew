@@ -11,8 +11,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/BlackVS/aicrew/internal/filelock"
 	"github.com/BlackVS/aicrew/internal/store"
 )
 
@@ -172,7 +175,7 @@ func TestJoinSkillsFailures(t *testing.T) {
 			stdout: "installed oh-code-review 1.43.0 (release) for claude: /h/.claude/skills/oh-code-review\n"},
 			SkillsConversation, []string{"the skills are installed, but the team's conversation sess-1 that join opened is no longer join's",
 				"aicrew-agent session status --home ", "aicrew-agent session leave --home ", "aicrew-agent join --home ",
-				"the skills stay installed"}, true},
+				"the skills are installed, but"}, true},
 		// An open that leaves a session recorded: the leave step stays whole
 		// however long the error is.
 		{"open leaves a session", skillsRun{supports: true, openErr: &leaveFirst{session: "sess-9",
@@ -596,35 +599,156 @@ func TestHeldConversationWithoutTheTeamYet(t *testing.T) {
 	}
 }
 
-// The record taken aside is put back when it is not join's, and a record
-// written since is never replaced.
-func TestClearOwnRecord(t *testing.T) {
-	home := t.TempDir()
-	save := func(id string) {
-		t.Helper()
-		if err := SaveState(home, State{AgentID: "a1", SessionID: id}); err != nil {
-			t.Fatal(err)
+// The reviewer's reader: polling the record while join closes its
+// conversation, after a member recorded its own session during the close,
+// it sees join's record and then the member's, never nothing.
+func TestJoinCloseNeverHidesAMembersRecord(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	j := c.engine(t)
+	conv, err := enterConversation(ctx, c.cfg.Home, c.cfg.AimemHub, j, j.Crew.(SessionReader))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, _, _ := LoadState(c.cfg.Home)
+	var recorded atomic.Bool
+	j.Aimem = closeThen{Aimem: j.Aimem, then: func() {
+		st.SessionID, st.AimemFile = "member-session", "/run/aimem/member-session.json"
+		if err := SaveState(c.cfg.Home, st); err != nil {
+			t.Error(err)
 		}
-	}
-	save("join")
-	if err := clearOwnRecord(home, "join"); err != nil {
+		recorded.Store(true)
+	}}
+	stop, done := make(chan struct{}), make(chan struct{})
+	var seen []string
+	var missing atomic.Bool
+	go func() {
+		defer close(done)
+		for {
+			after := recorded.Load()
+			now, ok, err := LoadState(c.cfg.Home)
+			if err == nil && ok && (len(seen) == 0 || seen[len(seen)-1] != now.SessionID) {
+				seen = append(seen, now.SessionID)
+			}
+			if after && (err != nil || !ok) {
+				missing.Store(true)
+			}
+			select {
+			case <-stop:
+				return
+			default:
+			}
+		}
+	}()
+	err = conv.Close(ctx)
+	close(stop)
+	<-done
+	if err != nil {
 		t.Fatal(err)
 	}
+	if missing.Load() {
+		t.Fatal("the reader found no record after the member had recorded its own")
+	}
+	if len(seen) < 2 || seen[0] != conv.SessionID || seen[len(seen)-1] != "member-session" {
+		t.Fatalf("the reader saw %v", seen)
+	}
+}
+
+// A writer that meets the record's lock waits for it, then writes.
+func TestSaveStateWaitsForTheRecordsLock(t *testing.T) {
+	home := t.TempDir()
+	unlock, err := lockRecord(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrote := make(chan error, 1)
+	go func() { wrote <- SaveState(home, State{AgentID: "a1", SessionID: "s1"}) }()
+	select {
+	case err := <-wrote:
+		t.Fatalf("SaveState wrote while the lock was held: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	unlock()
+	if err := <-wrote; err != nil {
+		t.Fatal(err)
+	}
+	if st, ok, _ := LoadState(home); !ok || st.SessionID != "s1" {
+		t.Fatalf("the record after the wait: %+v %v", st, ok)
+	}
+}
+
+// ClearStateOf removes join's own record, keeps any other, and releases the
+// lock on every return, an error included.
+func TestClearStateOf(t *testing.T) {
+	home := t.TempDir()
+	free := func(what string) {
+		t.Helper()
+		unlock, err := filelock.TryLock(recordLockPath(home))
+		if err != nil {
+			t.Fatalf("the record's lock after %s: %v", what, err)
+		}
+		unlock()
+	}
+	if err := ClearStateOf(home, "join"); err != nil {
+		t.Fatalf("a home without state: %v", err)
+	}
+	if err := SaveState(home, State{AgentID: "a1", SessionID: "join"}); err != nil {
+		t.Fatal(err)
+	}
+	free("SaveState")
+	if err := ClearStateOf(home, "join"); err != nil {
+		t.Fatal(err)
+	}
+	free("removing join's record")
 	if _, ok, _ := LoadState(home); ok {
-		t.Fatal("join's own record outlived its close")
+		t.Fatal("join's record outlived ClearStateOf")
 	}
-	if err := clearOwnRecord(home, "join"); err != nil {
-		t.Fatalf("no record: %v", err)
-	}
-	save("member")
-	if err := clearOwnRecord(home, "join"); err != nil {
+	if err := SaveState(home, State{AgentID: "a1", SessionID: "member"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := ClearStateOf(home, "join"); err != nil {
+		t.Fatal(err)
+	}
+	free("keeping the member's record")
 	if st, ok, _ := LoadState(home); !ok || st.SessionID != "member" {
 		t.Fatalf("the member's record: %+v %v", st, ok)
 	}
+	if err := os.WriteFile(statePath(home), []byte("not a record"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClearStateOf(home, "join"); err == nil {
+		t.Fatal("an unreadable record was not reported")
+	}
+	free("an unreadable record")
+	if _, err := os.Stat(statePath(home)); err != nil {
+		t.Fatalf("an unreadable record was removed: %v", err)
+	}
+	if err := ClearState(home); err != nil {
+		t.Fatal(err)
+	}
+	free("ClearState")
 	entries, _ := os.ReadDir(filepath.Join(home, "state"))
-	if len(entries) != 1 {
-		t.Fatalf("files left in state: %v", entries)
+	for _, e := range entries {
+		if e.Name() != "aicrew-session.lock" {
+			t.Fatalf("a file left in state: %s", e.Name())
+		}
+	}
+}
+
+// A held lock that does not end is reported with the lock's path.
+func TestRecordLockTimeoutNamesTheLock(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits for the record lock's bound")
+	}
+	home := t.TempDir()
+	unlock, err := lockRecord(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	err = SaveState(home, State{AgentID: "a1", SessionID: "s1"})
+	if err == nil || !strings.Contains(err.Error(), recordLockPath(home)) ||
+		!strings.Contains(err.Error(), "another aicrew process has held the home's session record") {
+		t.Fatalf("the error: %v", err)
 	}
 }

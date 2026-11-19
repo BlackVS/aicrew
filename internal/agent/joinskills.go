@@ -3,7 +3,6 @@ package agent
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -252,8 +251,7 @@ func notClosed(home, session string, err error, fail *skillsFailure) *skillsFail
 		}
 		return &skillsFailure{SkillsConversation, "the skills are installed, but the team's conversation " + session +
 			" that join opened is no longer join's: its token ended, because the home's member took the session over or " +
-			"the session ended with nobody holding it. " + strings.ToUpper(step[:1]) + step[1:] +
-			"; the skills stay installed, so that rerun does not install them again"}
+			"the session ended with nobody holding it. " + strings.ToUpper(step[:1]) + step[1:]}
 	}
 	leave := fmt.Sprintf("the team's conversation %s that join opened was not closed: %s; end it with "+
 		"`aicrew-agent session leave --home %s`", session, tail(err.Error(), 300), shellArg(absHome(home)))
@@ -482,36 +480,8 @@ func joinLeave(e *Engine) func(context.Context) error {
 		e.live.Lock()
 		e.token = ""
 		e.live.Unlock()
-		return clearOwnRecord(e.Cfg.Home, e.session.ID)
+		// Only while the record still names join's session: a member that
+		// started during the close has recorded its own (state.go).
+		return ClearStateOf(e.Cfg.Home, e.session.ID)
 	}
-}
-
-// clearOwnRecord removes the home's session record only while it names
-// session. A member that started during join's close (its resume of join's
-// session answered context_stale) records its own session; that record is
-// never removed. The record is taken aside by a rename, which a member's
-// SaveState (a rename too) cannot interleave with: one that is not join's
-// is put back by a link that refuses to replace a record written since,
-// and a record written since is newer than it.
-func clearOwnRecord(home, session string) error {
-	path := statePath(home)
-	aside := path + ".join-" + newKey("clear")
-	if err := os.Rename(path, aside); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	defer os.Remove(aside)
-	raw, err := os.ReadFile(aside)
-	if err != nil {
-		return err
-	}
-	var st State
-	if json.Unmarshal(raw, &st) == nil && st.SessionID == session {
-		return nil
-	}
-	if err := os.Link(aside, path); err != nil && !errors.Is(err, os.ErrExist) {
-		return err
-	}
-	return nil
 }

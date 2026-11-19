@@ -619,30 +619,37 @@ func TestJoinCloseNeverHidesAMembersRecord(t *testing.T) {
 		}
 		recorded.Store(true)
 	}}
-	stop, done := make(chan struct{}), make(chan struct{})
+	stop, done, first := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var seen []string
 	var missing atomic.Bool
+	sample := func() {
+		after := recorded.Load()
+		now, ok, err := LoadState(c.cfg.Home)
+		if err == nil && ok && (len(seen) == 0 || seen[len(seen)-1] != now.SessionID) {
+			seen = append(seen, now.SessionID)
+		}
+		if after && (err != nil || !ok) {
+			missing.Store(true)
+		}
+	}
 	go func() {
 		defer close(done)
+		sample()
+		close(first) // join's record is seen before the close starts
 		for {
-			after := recorded.Load()
-			now, ok, err := LoadState(c.cfg.Home)
-			if err == nil && ok && (len(seen) == 0 || seen[len(seen)-1] != now.SessionID) {
-				seen = append(seen, now.SessionID)
-			}
-			if after && (err != nil || !ok) {
-				missing.Store(true)
-			}
 			select {
 			case <-stop:
 				return
 			default:
 			}
+			sample()
 		}
 	}()
+	<-first
 	err = conv.Close(ctx)
 	close(stop)
 	<-done
+	sample() // the record once the close has returned
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -750,5 +757,50 @@ func TestRecordLockTimeoutNamesTheLock(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), recordLockPath(home)) ||
 		!strings.Contains(err.Error(), "another aicrew process has held the home's session record") {
 		t.Fatalf("the error: %v", err)
+	}
+}
+
+// A reader and a writer of the record overlapping in two goroutines (two
+// opens of the file, as two processes are): neither fails. On Windows an
+// unlocked read made the writer's rename fail with "Access is denied".
+func TestRecordReaderAndWriterOverlap(t *testing.T) {
+	home := t.TempDir()
+	if err := SaveState(home, State{AgentID: "a1", SessionID: "s0"}); err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 2)
+	go func() {
+		for i := 0; i < 200; i++ {
+			if err := SaveState(home, State{AgentID: "a1", SessionID: fmt.Sprintf("s%d", i)}); err != nil {
+				errs <- fmt.Errorf("write %d: %w", i, err)
+				return
+			}
+		}
+		errs <- nil
+	}()
+	go func() {
+		for i := 0; i < 200; i++ {
+			if _, ok, err := LoadState(home); err != nil || !ok {
+				errs <- fmt.Errorf("read %d: %v %v", i, ok, err)
+				return
+			}
+		}
+		errs <- nil
+	}()
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A home without a state directory reads as no record and gets none.
+func TestLoadStateCreatesNothing(t *testing.T) {
+	home := t.TempDir()
+	if _, ok, err := LoadState(home); err != nil || ok {
+		t.Fatalf("a home without state: %v %v", ok, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "state")); !os.IsNotExist(err) {
+		t.Fatalf("the read created the state directory: %v", err)
 	}
 }

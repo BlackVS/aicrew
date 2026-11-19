@@ -32,8 +32,27 @@ type State struct {
 
 func statePath(home string) string { return filepath.Join(home, "state", "aicrew-session.json") }
 
-// LoadState reads the record; ok is false when there is none.
+// LoadState reads the record under its lock; ok is false when there is
+// none. A home without a state directory has none, and nothing is created;
+// in an existing one the read creates the lock file. A read that cannot
+// take the lock fails with the lock's error, never "no record": a member
+// that read no record by mistake would enter beside its own session. On
+// Windows the lock also keeps a reader's open file from refusing a
+// writer's rename.
 func LoadState(home string) (State, bool, error) {
+	if _, err := os.Stat(filepath.Dir(statePath(home))); errors.Is(err, os.ErrNotExist) {
+		return State{}, false, nil
+	}
+	unlock, err := lockRecord(home)
+	if err != nil {
+		return State{}, false, err
+	}
+	defer unlock()
+	return loadState(home)
+}
+
+// loadState reads the record; the caller holds its lock.
+func loadState(home string) (State, bool, error) {
 	raw, err := os.ReadFile(statePath(home))
 	if errors.Is(err, os.ErrNotExist) {
 		return State{}, false, nil
@@ -48,8 +67,8 @@ func LoadState(home string) (State, bool, error) {
 	return s, true, nil
 }
 
-// recordLockPath is the lock every writer of the record takes: SaveState,
-// ClearState and ClearStateOf. The engine was the record's only writer;
+// recordLockPath is the lock every access to the record takes: LoadState,
+// SaveState, ClearState and ClearStateOf. The engine was the record's only writer;
 // join, ending its own conversation, is a second (joinskills.go).
 func recordLockPath(home string) string { return filepath.Join(home, "state", "aicrew-session.lock") }
 
@@ -139,7 +158,7 @@ func ClearStateOf(home, session string) error {
 		return err
 	}
 	defer unlock()
-	st, ok, err := LoadState(home)
+	st, ok, err := loadState(home)
 	if err != nil || !ok || st.SessionID != session {
 		return err
 	}

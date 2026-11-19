@@ -44,12 +44,12 @@ func TestSkillsInstructionNamesNoForgeURL(t *testing.T) {
 	for _, g := range []string{"linux", "darwin", "windows"} {
 		withGOOS(t, g)
 		for _, found := range []string{"", "1.20.0"} {
-			s := skillsInstruction(set.Components["ai-skills"], found, []string{"oh-code-review"}, home, "aimem")
-			if forgeText.MatchString(s) {
-				t.Fatalf("%s %q names a forge: %s", g, found, s)
+			s := skillsInstruction(set.Components["ai-skills"], found, []string{"oh-code-review"}, home)
+			if forgeText.MatchString(s) || strings.Contains(s, "<") {
+				t.Fatalf("%s %q names a forge or a placeholder: %s", g, found, s)
 			}
-			for _, want := range []string{"`aimem skills install -p <project> --tool claude`", "aimem " + skillsInstallAimem + " or later",
-				"AIMEM_STATE_DIR=" + AimemDir(home), "AIMEM_SOCKET=" + AimemSocket(home), "oh-code-review", "rerun `aicrew-agent check`"} {
+			for _, want := range []string{"`aicrew-agent join --home " + home + "`", "inside the team's conversation",
+				"aimem " + skillsTeamAimem + " or later", "oh-code-review", "the hub's administrator imported"} {
 				if !strings.Contains(s, want) {
 					t.Fatalf("%s %q lacks %q: %s", g, found, want, s)
 				}
@@ -93,7 +93,7 @@ func TestCheckSkillsInstructionsNameNoForgeURL(t *testing.T) {
 						continue
 					}
 					n++
-					if forgeText.MatchString(s) || !strings.Contains(s, "aimem skills install -p <project> --tool claude") {
+					if forgeText.MatchString(s) || strings.Contains(s, "<project>") || !strings.Contains(s, "aicrew-agent join --home ") {
 						t.Fatalf("skills instruction: %s", s)
 					}
 				}
@@ -328,42 +328,41 @@ func TestAimemExportFormRuns(t *testing.T) {
 	}
 }
 
-// The skills command runs as printed when the home's aimem is a path that
-// needs quoting: a space and an apostrophe, under PowerShell on Windows and
-// bash elsewhere.
-func TestSkillsCommandRunsWithAQuotedAimemPath(t *testing.T) {
+// The skills command runs as printed when the home is a path that needs
+// quoting: a space and an apostrophe, under PowerShell on Windows and bash
+// elsewhere. A stand-in aicrew-agent records the arguments it got.
+func TestSkillsCommandRunsWithAQuotedHome(t *testing.T) {
 	withGOOS(t, runtime.GOOS)
-	dir := filepath.Join(t.TempDir(), "my tool's")
-	os.MkdirAll(dir, 0o755)
+	home := filepath.Join(t.TempDir(), "my team's", "worker")
+	bin := t.TempDir()
 	seen := filepath.Join(t.TempDir(), "seen.txt")
-	exe := filepath.Join(dir, "aimem")
 	if runtime.GOOS == "windows" {
-		exe += ".cmd"
-		os.WriteFile(exe, []byte("@echo %* > \"%SEEN%\"\r\n"), 0o755)
+		os.WriteFile(filepath.Join(bin, "aicrew-agent.cmd"), []byte("@echo %* > \"%SEEN%\"\r\n"), 0o755)
 	} else {
-		os.WriteFile(exe, []byte("#!/bin/sh\nprintf '%s ' \"$@\" > \"$SEEN\"\n"), 0o755)
+		os.WriteFile(filepath.Join(bin, "aicrew-agent"), []byte("#!/bin/sh\nprintf '%s|' \"$@\" > \"$SEEN\"\n"), 0o755)
 	}
 	set, _ := LoadSupported()
-	s := skillsInstruction(set.Components["ai-skills"], "", []string{"oh-code-review"}, t.TempDir(), exe)
-	m := regexp.MustCompile("`([^`]*skills install[^`]*)`").FindStringSubmatch(s)
+	s := skillsInstruction(set.Components["ai-skills"], "", []string{"oh-code-review"}, home)
+	m := regexp.MustCompile("`(aicrew-agent join[^`]*)`").FindStringSubmatch(s)
 	if m == nil {
 		t.Fatalf("no command: %s", s)
 	}
-	line := strings.ReplaceAll(m[1], "<project>", "proj")
 	var cmd *exec.Cmd
+	want := "join|--home|" + home + "|"
 	if runtime.GOOS == "windows" {
 		ps, err := exec.LookPath("powershell.exe")
 		if err != nil {
 			t.Skip("no Windows PowerShell")
 		}
-		cmd = exec.Command(ps, "-NoProfile", "-NonInteractive", "-Command", line)
+		cmd = exec.Command(ps, "-NoProfile", "-NonInteractive", "-Command", m[1])
+		want = "join --home \"" + home + "\""
 	} else {
-		cmd = exec.Command("bash", "-c", line)
+		cmd = exec.Command("bash", "-c", m[1])
 	}
-	cmd.Env = append(os.Environ(), "SEEN="+seen)
+	cmd.Env = append(os.Environ(), "SEEN="+seen, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := cmd.CombinedOutput()
 	got, _ := os.ReadFile(seen)
-	if err != nil || strings.TrimSpace(string(got)) != "skills install -p proj --tool claude" {
-		t.Fatalf("%s ran %q: %v\n%s", line, got, err, out)
+	if err != nil || strings.TrimSpace(string(got)) != want {
+		t.Fatalf("%s ran %q, want %q: %v\n%s", m[1], got, want, err, out)
 	}
 }

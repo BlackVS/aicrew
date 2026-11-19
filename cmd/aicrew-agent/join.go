@@ -231,6 +231,12 @@ func printJoinReport(w io.Writer, out joinOutput) {
 		}
 		fmt.Fprintln(w, line)
 	}
+	if s := rep.Skills; s != nil && s.Project != "" {
+		fmt.Fprintf(w, "skills: from the hub for project %s, inside the team's conversation %s\n", s.Project, s.Session)
+		for _, l := range s.Installed {
+			fmt.Fprintln(w, "  "+l)
+		}
+	}
 	if rep.Check != nil {
 		printCheck(w, *rep.Check)
 	}

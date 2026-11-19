@@ -3,7 +3,9 @@
 package realaimem
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -80,7 +82,12 @@ func (h *harness) bootstrap(specs ...memberSpec) {
 	host := h.hostEnv()
 
 	// 3. The project, and its process: a real repository, so the instruction
-	// digest is the manifest's at the pinned commit.
+	// digest is the manifest's at the pinned commit. The process pins a
+	// skill, and the hub holds the skills set by the hub administrator's
+	// documented import (`aimem skills import --from-archive`), so a member
+	// gets the skill the way a person's members do: join installs it inside
+	// the team's conversation (task 01a1f3a6-77d3).
+	h.importSkills(host)
 	h.makeProcess()
 	h.must(host, nil, h.aimem(), "tasks", "on", "-p", projectID)
 	// The process repository has no tag: aimem takes its commit with --commit.
@@ -454,9 +461,15 @@ func (h *harness) join(mem *member, code string, extra ...string) {
 	}
 	var rep struct {
 		Status   string `json:"status"`
+		Reason   string `json:"reason"`
 		AgentID  string `json:"agent_id"`
 		Redeemed bool   `json:"redeemed"`
-		Check    *struct {
+		Skills   *struct {
+			Project   string   `json:"project"`
+			Installed []string `json:"installed"`
+			Opened    bool     `json:"opened"`
+		} `json:"skills"`
+		Check *struct {
 			Status     string `json:"status"`
 			Reason     string `json:"reason"`
 			Components []struct {
@@ -468,15 +481,30 @@ func (h *harness) join(mem *member, code string, extra ...string) {
 	if err := json.Unmarshal(out.Bytes(), &rep); err != nil || !rep.Redeemed || rep.AgentID == "" {
 		t.Fatalf("join %s did not redeem and link the home: %v %s", mem.name, err, out.String())
 	}
+	// The member's user holds no personal grant, so join got the skill only
+	// inside the team's conversation: it opened one, installed the skill the
+	// process pins from the hub for the team's project, and closed it.
+	if rep.Skills == nil || !rep.Skills.Opened || rep.Skills.Project != projectID || len(rep.Skills.Installed) == 0 ||
+		!strings.HasPrefix(rep.Skills.Installed[0], "installed "+skillName+" "+skillsVersion+" ") {
+		t.Fatalf("join %s did not install the skills inside the team's conversation: %s", mem.name, out.String())
+	}
+	if _, err := os.Stat(filepath.Join(mem.home, ".claude", "skills", skillName, "SKILL.md")); err != nil {
+		t.Fatalf("join %s: the skill is not in the home: %v", mem.name, err)
+	}
 	// The home is linked before join checks its dependencies and client
 	// (1a81-5a). The run's client is a stand-in, not Claude Code, so a check
-	// blocked on the client alone is expected; anything else is not.
+	// blocked on the client alone is expected; anything else is not, and a
+	// skills reason never is.
 	switch {
 	case rep.Status == "ready" || rep.Status == "restart_required":
-	case rep.Status == "blocked" && rep.Check != nil && strings.HasPrefix(rep.Check.Reason, "claude_"):
+	case rep.Status == "blocked" && rep.Check != nil && strings.HasPrefix(rep.Check.Reason, "claude_") &&
+		rep.Check.Reason != "claude_skills" && rep.Reason == rep.Check.Reason:
 		for _, c := range rep.Check.Components {
 			if c.Name == "aimem" && c.State != "supported" && c.State != "newer" && c.State != "unknown" {
 				t.Fatalf("join %s: the check judged aimem %s: %s", mem.name, c.State, out.String())
+			}
+			if c.Name == "ai-skills" && c.State != "supported" && c.State != "newer" {
+				t.Fatalf("join %s: the check judged the installed skills %s: %s", mem.name, c.State, out.String())
 			}
 		}
 		mem.checkNote = "linked; the client check is blocked on the stand-in client (" + rep.Check.Reason + ")"
@@ -543,6 +571,51 @@ func (h *harness) restartAicrewd() {
 	})
 }
 
+// The skill the process pins, and the release set the hub imports with it:
+// laid out as an ai-skills release archive (one leading directory, VERSION
+// at its root, skills/<name>/SKILL.md), beside its SHA256SUMS.
+const (
+	skillName     = "oh-code-review"
+	skillsVersion = "1.43.0"
+)
+
+// importSkills writes the set's archive and SHA256SUMS and imports it on
+// the hub's host as its administrator does.
+func (h *harness) importSkills(host []string) {
+	h.t.Helper()
+	dir := h.mkdir(filepath.Join(h.root, "skills-set"))
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	top := "aiskills-" + skillsVersion + "/"
+	for _, f := range []struct{ name, body string }{
+		{top + "VERSION", skillsVersion + "\n"},
+		{top + "skills/" + skillName + "/SKILL.md", "---\nname: " + skillName + "\ndescription: the e2e run's review skill\n---\n\n# Review\n"},
+	} {
+		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: 0o644, Size: int64(len(f.body)), Typeflag: tar.TypeReg}); err != nil {
+			h.t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(f.body)); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		h.t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		h.t.Fatal(err)
+	}
+	archive := filepath.Join(dir, "aiskills-"+skillsVersion+".tar.gz")
+	sum := sha256.Sum256(buf.Bytes())
+	if err := os.WriteFile(archive, buf.Bytes(), 0o644); err != nil {
+		h.t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(hex.EncodeToString(sum[:])+"  "+filepath.Base(archive)+"\n"), 0o644); err != nil {
+		h.t.Fatal(err)
+	}
+	h.must(host, nil, h.aimem(), "skills", "import", "--from-archive", archive)
+}
+
 // makeProcess commits a process set aimem accepts (a manifest and its
 // handbook) to a repository of its own, sets processCommit and
 // instructionHash from it, and points the hub host's git at it: aimem
@@ -556,7 +629,8 @@ func (h *harness) makeProcess() {
 		h.t.Fatal(err)
 	}
 	files := map[string]string{
-		processManifest:       "{\n  \"version\": 1,\n  \"handbook\": \"process/HANDBOOK.md\"\n}\n",
+		processManifest: "{\n  \"version\": 2,\n  \"handbook\": \"process/HANDBOOK.md\",\n  \"skills\": [{\"name\": \"" +
+			skillName + "\", \"version\": \"" + skillsVersion + "\", \"source\": \"release\"}]\n}\n",
 		"process/HANDBOOK.md": "# e2e process\n\nThe roles are coordinator, worker and independent.\n",
 	}
 	for p, body := range files {

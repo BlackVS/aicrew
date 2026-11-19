@@ -21,8 +21,6 @@ import (
 var goos = runtime.GOOS
 
 const (
-	// skillsInstallAimem is the first aimem with `aimem skills install`.
-	skillsInstallAimem = "0.10.7"
 	// exportAimem is the first aimem whose boot scripts read AIMEM_BASE.
 	exportAimem = "0.10.23"
 	// BaseEnv names an aiforge export, as the installers read it.
@@ -137,20 +135,32 @@ func aimemFromExport(base, rel string) string {
 	return fmt.Sprintf("`cd \"$(mktemp -d)\" && %s bash %s`", vars, script)
 }
 
-// skillsInstruction installs the required skills from the aimem hub into
-// the home, where Claude Code and OpenCode both read them, with the home's
-// own aimem installation. The hub serves the version the project's process
-// pins, so the text names no ai-skills version to download and no URL.
-func skillsInstruction(c supportedComponent, found string, skills []string, home, aimem string) string {
+// skillsInstruction gets the required skills the documented way: a rerun of
+// join, which installs them from the aimem hub inside the team's
+// conversation with the home's own aimem (joinskills.go). The hub serves the
+// version the project's process pins, so the text names no ai-skills
+// version to download and no URL, and the command is complete as printed.
+func skillsInstruction(c supportedComponent, found string, skills []string, home string) string {
 	need := ""
 	if found != "" {
 		need = fmt.Sprintf("ai-skills %s or later is required (found %s): ", c.minimumFor(found), found)
 	}
-	return fmt.Sprintf("%sinstall the skills %s from the aimem hub, with aimem %s or later: in the home (%s), with "+
-		"the home's variables AIMEM_STATE_DIR=%s and AIMEM_SOCKET=%s, run `%s skills install -p <project> --tool claude`, "+
-		"where <project> is the aimem project your team works on (the hub serves the version the project's process "+
-		"pins); then rerun `aicrew-agent check`", need, strings.Join(skills, ", "), skillsInstallAimem,
-		absHome(home), AimemDir(home), AimemSocket(home), commandWord(aimem))
+	return fmt.Sprintf("%sinstall the skills %s from the aimem hub with `%s`: join installs them inside the team's "+
+		"conversation, under the team's grant, with the home's aimem %s or later; the hub serves the versions "+
+		"the process of the team's project pins, from the set the hub's administrator imported",
+		need, strings.Join(skills, ", "), joinRerun(home), skillsTeamAimem)
+}
+
+// shellArg quotes s, when it needs it, for the shell a printed command is
+// pasted into: PowerShell on Windows, a POSIX shell elsewhere.
+func shellArg(s string) string {
+	if !strings.ContainsAny(s, " \t'\"$`&;|()<>{}#*?[]~!") {
+		return s
+	}
+	if goos == "windows" {
+		return psQuote(s)
+	}
+	return shQuote(s)
 }
 
 // commandWord is an executable as the first word of a command the reader

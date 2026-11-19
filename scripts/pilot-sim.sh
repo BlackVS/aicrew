@@ -169,6 +169,16 @@ stage() {
   curl -fsSL "$base/SHA256SUMS" -o "$STAGE/hub/aimem-release/SHA256SUMS"
   curl -fsSL "https://raw.githubusercontent.com/BlackVS/aimem/v$PILOTSIM_AIMEM_VERSION/install-hub.sh" \
     -o "$STAGE/hub/install-hub.sh"
+  # The ai-skills release the hub's administrator imports (the hub serves
+  # it to the members, whose join installs it), checked here as aimem's
+  # import checks it again.
+  step "fetching ai-skills v$PILOTSIM_AISKILLS_VERSION's release archive for the hub's import"
+  local skills="https://github.com/BlackVS/aiskills/releases/download/v$PILOTSIM_AISKILLS_VERSION"
+  mkdir -p "$STAGE/aiskills"
+  curl -fsSL "$skills/aiskills-$PILOTSIM_AISKILLS_VERSION.tar.gz" -o "$STAGE/aiskills/aiskills-$PILOTSIM_AISKILLS_VERSION.tar.gz"
+  curl -fsSL "$skills/SHA256SUMS" -o "$STAGE/aiskills/SHA256SUMS"
+  (cd "$STAGE/aiskills" && sha256sum --ignore-missing -c SHA256SUMS >/dev/null) ||
+    { echo "pilot-sim: the ai-skills archive does not match its SHA256SUMS" >&2; exit 2; }
 }
 
 # export_previous ARCH: the previous release's assets, as its installers
@@ -486,8 +496,17 @@ done
 # publishes one: the hub imports its set from it, the members' automations
 # read their points from it.
 forge POST /user/repos '{"name":"process","auto_init":true,"default_branch":"main","private":false}' >/dev/null
+# The manifest pins the skills the image no longer carries, at the tested
+# ai-skills release, which the hub's set below holds.
+pinned_manifest() {
+  python3 -c 'import json,sys
+m = json.load(open(sys.argv[1]))
+m["skills"] = [{"name": n, "version": sys.argv[2], "source": "release"} for n in ("oh-code-review", "verify-delivery")]
+print(json.dumps(m, indent=2))' "$SIM/hub/process/process/manifest.json" "$PILOTSIM_AISKILLS_VERSION"
+}
 for f in process/manifest.json process/HANDBOOK.md; do
-  forge POST "/repos/operator/process/contents/$f"     '{"content":"'"$(base64 -w0 < "$SIM/hub/process/$f")"'","message":"add '$f'","branch":"main"}' >/dev/null
+  if [ "$f" = process/manifest.json ]; then content=$(pinned_manifest | base64 -w0); else content=$(base64 -w0 < "$SIM/hub/process/$f"); fi
+  forge POST "/repos/operator/process/contents/$f"     '{"content":"'"$content"'","message":"add '$f'","branch":"main"}' >/dev/null
 done
 PROCESS_URL=https://sim-gitea:3000/operator/process.git
 PROCESS_COMMIT=$(forge GET /repos/operator/process/branches/main | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"]["id"])')
@@ -497,6 +516,14 @@ step "the hub: the project, its process and repository, and aicrewd's peer"
 PROJECT=pilot
 REPO_URL=https://sim-gitea:3000/operator/pilot.git
 hub aimem tasks on -p "$PROJECT" >/dev/null
+# The skills set, by the hub administrator's documented import on the hub's
+# host (docs/BRING-UP.md); the members' joins install from it.
+hub mkdir -p /home/aimem/aiskills
+for f in "aiskills-$PILOTSIM_AISKILLS_VERSION.tar.gz" SHA256SUMS; do
+  hub sh -c 'cat > "/home/aimem/aiskills/$1"' sh "$f" < "$STAGE/aiskills/$f"
+done
+hub aimem skills import --from-archive "/home/aimem/aiskills/aiskills-$PILOTSIM_AISKILLS_VERSION.tar.gz" >/dev/null ||
+  fail "aimem skills import on the hub's host"
 # The sim's process repository has no tag, so the commit is selected with
 # --commit (aimem 0.10.17 takes a bare commit only with it).
 hub aimem process select "$PROCESS_URL" "$PROCESS_COMMIT" process/manifest.json --commit -p "$PROJECT" >/dev/null

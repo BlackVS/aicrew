@@ -38,8 +38,11 @@ harness skips there.
 ## The pin
 
 `aimemPin` in `e2e/realaimem/harness_test.go` is the aimem commit the
-harness builds: the v0.11.4 release (bce8d87), which
-`internal/agent/supported.json` names as the tested aimem. The minimum is
+harness builds: the merge of aimem's pull request #404 (1df30e3), whose
+`aimem skills install` acts as the team conversation `AIMEM_TEAM_SESSION`
+names. A member's join installs its skills with it. The release that
+carries it, v0.11.5, which `internal/agent/supported.json` names as the
+tested aimem, replaces the commit here once it exists. The minimum is
 0.11.0: aimem's own upgrade rule ("hubs first, then workstations") starts
 there, a 0.11 hub is the hubs' release, and it carries the client fixes of
 0.10.26 (the document and record tools confirm the pinned project) and
@@ -60,8 +63,9 @@ there, a 0.11 hub is the hubs' release, and it carries the client fixes of
   members' `report-*` documents. aicrew reads none of them yet.
 
 The build stamps the commit's `git describe` as aimem's version, as aimem's
-release build stamps the tag. At the pin that is `v0.11.4`, which
-`aicrew-agent`'s dependency check reads as the tested release. The
+release build stamps the tag. At the pin that is `v0.11.4-1-g1df30e3`,
+which `aicrew-agent`'s dependency check reads as a development build, a
+notice and not a block, until the pin is the v0.11.5 release. The
 source clone must hold the commit and the tag (`git fetch --tags`).
 
 ## In CI
@@ -166,9 +170,17 @@ Every listener is on 127.0.0.1.
      The token is on standard input, never an argument.
    - The member then runs the real `aicrew-agent join` at a pseudo-terminal,
      where the harness types the invitation code.
+   - The project's process pins a skill, and the hub holds the set by
+     the hub administrator's documented import (`aimem skills import
+     --from-archive`, of an archive laid out as an ai-skills release). The
+     member's user has no grant of its own, so join must install the skill
+     inside a team conversation it opens, for the team's project, and
+     close it. The run fails if join does not, or if it ends blocked on the
+     skills (`claude_skills`, or a `skills_` reason).
    - The client is a stand-in, not Claude Code, so join's dependency and
-     client check may block on the client alone. The harness accepts only
-     that, once the home is linked, and records it.
+     client check may still block on the client alone. The harness
+     accepts only that, once the home is linked and the skill installed,
+     and records it.
    - Each member's launcher (`aicrew-agent run`) then keeps the session
      open, with `/bin/sleep` as its client, and the scenarios drive the
      steps through its step channel.

@@ -108,6 +108,9 @@ type JoinDeps struct {
 	// check runs the dependency and client check at the end of a run; nil
 	// means the real one (runCheck). Package tests replace it.
 	check func(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) (CheckReport, error)
+	// skills installs the skills inside a team conversation; nil fields
+	// mean the real ones. Package tests replace them.
+	skills SkillsDeps
 }
 
 // JoinAimem is what the bootstrap asks of aimem.
@@ -138,6 +141,9 @@ type JoinReport struct {
 	Next  string            `json:"next,omitempty"`
 	// Check is the dependency and client check of the home (1a81-5a).
 	Check *CheckReport `json:"check,omitempty"`
+	// Skills is the install of the required skills inside a team
+	// conversation, when the check found them missing (joinskills.go).
+	Skills *SkillsReport `json:"skills,omitempty"`
 }
 
 // ErrJoinUsage is an invalid option; the report's instruction says which.
@@ -158,6 +164,8 @@ type joiner struct {
 	doc   agentDoc
 	aimem JoinAimem    // set by precheck for an unlinked home
 	toks  []forgeToken // the --cred tokens, read before anything changes
+	// skills installs the required skills inside a team conversation.
+	skills SkillsDeps
 }
 
 func blocked(o JoinOptions, reason, instruction string) JoinReport {
@@ -195,7 +203,17 @@ func Join(ctx context.Context, o JoinOptions, deps JoinDeps) (JoinReport, error)
 			"creates and understands version %d and migrates nothing. Use a matching aicrew-agent or a new --home.",
 			string(doc.top["layout"]), LayoutVersion)), nil
 	}
-	j := &joiner{o: o, deps: deps, doc: doc}
+	j := &joiner{o: o, deps: deps, doc: doc, skills: deps.skills}
+	sd := realSkillsDeps()
+	if j.skills.Supports == nil {
+		j.skills.Supports = sd.Supports
+	}
+	if j.skills.Open == nil {
+		j.skills.Open = sd.Open
+	}
+	if j.skills.Install == nil {
+		j.skills.Install = sd.Install
+	}
 	if err := j.options(); err != nil {
 		return blocked(o, "usage", err.Error()), ErrJoinUsage
 	}
@@ -756,8 +774,29 @@ func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error)
 	if err := j.doc.write(o.Home); err != nil {
 		return JoinReport{}, err
 	}
+	var skillsFail *skillsFailure
+	if crep.Status == JoinBlocked && skillsMissing(crep) {
+		srep, fail := j.installSkills(ctx, crep)
+		rep.Skills, skillsFail = &srep, fail
+		if fail == nil {
+			// The check again, now with the skills where the clients look.
+			fmt.Fprintln(j.deps.Out, "Client wiring, after the skills:")
+			if crep, err = j.deps.check(ctx, CheckOptions{Home: o.Home, Clients: o.Clients, Out: j.deps.Out, Forge: j.deps.Forge},
+				&j.doc, redeemed); err != nil {
+				return JoinReport{}, err
+			}
+			if err := j.doc.write(o.Home); err != nil {
+				return JoinReport{}, err
+			}
+		}
+	}
 	rep.Check = &crep
 	switch {
+	case skillsFail != nil:
+		// The skills are the step that failed: the report names its reason
+		// and what a person does, not the check's line for them.
+		rep.Status, rep.Reason = JoinBlocked, skillsFail.reason
+		rep.Instruction = strings.TrimPrefix(rep.Instruction+"; ", "; ") + skillsFail.instruction
 	case crep.Status == JoinBlocked:
 		rep.Status, rep.Reason = JoinBlocked, crep.Reason
 	case crep.Status == JoinRestartRequired && rep.Status == JoinReady:

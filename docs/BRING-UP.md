@@ -20,8 +20,9 @@ page says so. Such gaps are listed at the end, under "Gaps".
 Only a person can:
 - provide each host and its OS user;
 - log the client in on each host;
-- grant the team its projects on the hub, and create each member's aimem
-  user and issue its token there (the hub's admin);
+- grant the team its projects on the hub, import the skills set there,
+  and create each member's aimem user and issue its token there (the
+  hub's admin);
 - create the member's forge account and issue its token;
 - issue each invitation with the operator credential.
 
@@ -92,6 +93,19 @@ Check: the rerun exits 0 and prints
 still needs that done on the hub first; rerun after it until neither line
 appears.
 
+The hub also needs the skills set that the project's process pins: the
+members get their skills from the hub in step 6. The hub's admin imports
+the ai-skills release on the hub's host, from its release archive and the
+SHA256SUMS beside it:
+
+```sh
+aimem skills import --from-archive aiskills-1.43.0.tar.gz
+```
+
+The archive and SHA256SUMS are the assets of that ai-skills release, or
+the same files from an aiforge export in a closed network. Check:
+`aimem skills list --hub` on the hub's host names the release set.
+
 ### 2. The member's aimem user and token (operator, on the hub)
 
 On the hub's host, with aimem's admin commands:
@@ -141,7 +155,7 @@ Check: `aicrew invitation list --team-name crew` shows its state.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.1/boot.sh | bash
-cd "$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/BlackVS/aimem/v0.11.4/boot.sh | AIMEM_VERSION=v0.11.4 bash
+cd "$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/BlackVS/aimem/v0.11.5/boot.sh | AIMEM_VERSION=v0.11.5 bash
 npm install -g @anthropic-ai/claude-code@2.1.286
 ```
 
@@ -156,7 +170,7 @@ npm install -g @anthropic-ai/claude-code@2.1.286
 Then the person logs the client in: `claude`, and its login flow.
 
 Check: `aicrew-agent version`, `aimem version` and `claude --version` print
-v0.11.1, v0.11.4 and 2.1.286.
+v0.11.1, v0.11.5 and 2.1.286.
 
 ### 6. Join (member host)
 
@@ -215,15 +229,35 @@ aicrew-agent join --label worker --url https://AICREWD:PORT \
 - **The service.** In `turns` mode, join installs and starts the member's
   service itself when the home is ready.
 
-The first join may end `blocked` because the skills are missing. Its
-`to do:` line is `aimem skills install -p PROJECT --tool claude`, to run
-in the home with the home's `AIMEM_STATE_DIR` and `AIMEM_SOCKET`, which
-the line names. Run it as printed, then run `aicrew-agent join --home
-HOME` again.
+- **The skills.** When the client does not see the skills the team's
+  process pins, join installs them from the hub itself. It opens a
+  conversation in the team as the member, has the home's aimem install
+  the skills of the team's first granted project as that conversation,
+  closes it, and checks again. The member's aimem user needs no grant of
+  its own: the hub reads under the team's grant. This needs aimem 0.11.5
+  or later in the home. A paused team is no obstacle, since a pause holds
+  the member's turns, not its conversation.
 
-Check: join's report is `ready`. Its forge table shows the host
-`provisioned`, and `aicrew invitation list` shows step 4's invitation
-redeemed.
+When join cannot install the skills, it ends `blocked` with one of these
+reasons, the step that fixes it, and the rerun, `aicrew-agent join --home
+HOME`:
+- `skills_not_on_hub`: the hub holds no set with every pinned skill. The
+  hub's admin imports it (step 1); aimem's own lines name each skill and
+  its import command.
+- `skills_grant`: the team's grant does not cover the project. Step 1's
+  `aicrew team setup` prints the grant.
+- `skills_no_process`: the project selects no process on the hub.
+- `skills_aimem_below`: the home's aimem predates the team path. The line
+  installs the release that has it.
+- `skills_conversation`: the conversation could not be opened, or the
+  hub did not accept it. For a session the home recorded earlier, the
+  line names `aicrew-agent session leave --home HOME` first.
+- `skills_no_project` and `skills_install_failed`: the team has no
+  project yet, or aimem failed otherwise, with its own text.
+
+Check: join's report is `ready`, and its `skills:` lines name what it
+installed. Its forge table shows the host `provisioned`, and `aicrew
+invitation list` shows step 4's invitation redeemed.
 
 ### 7. The service (member host)
 

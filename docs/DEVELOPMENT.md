@@ -2507,12 +2507,25 @@ member's user-level skills under it. It reports:
     and run there. aimem reads `AIMEM_BASE` from 0.10.23; for an older
     tested release the line stays the connected one;
   - the skills from the aimem hub, with no URL (docs/DESIGN-INSTANCE-BOUNDARY.md,
-    D4): in the home, with the home's `AIMEM_STATE_DIR` and `AIMEM_SOCKET`,
-    `aimem skills install -p <project> --tool claude`, which writes them
-    into the home's `.claude/skills` (where Claude Code and OpenCode both
-    read them) with the `.ai-skills.json` record the check judges. The
-    hub serves the version the project's process pins. The command needs
-    aimem 0.10.7 or later, and the line says so;
+    D4): `aicrew-agent join --home HOME`, complete as printed. The check
+    only reports; join installs. It opens a conversation in the team as
+    the home's agent, runs the home's aimem as that conversation
+    (`AIMEM_TEAM_SESSION`), in the home with its `AIMEM_STATE_DIR` and
+    `AIMEM_SOCKET`: `aimem skills install -p PROJECT --tool claude` for
+    the team's first granted project, in the order aicrewd lists them. That
+    writes the skills into the home's `.claude/skills` (where Claude Code
+    and OpenCode both read them) with the `.ai-skills.json` record the
+    check judges. join closes the conversation it opened, also after a
+    failure, and checks again. The hub serves the versions the project's
+    process pins, from the set the hub's administrator imported (`aimem
+    skills import --from-archive`). The member's aimem user needs no grant
+    of its own: the hub reads under the team's grant, and the home's aimem
+    never asks with its own credential. That needs aimem 0.11.5 or later in
+    the home; join asks the home's aimem whether its `skills` command takes
+    the team conversation and runs no older one. A home whose member runs
+    (a session recorded in the home) is not entered again, since a new
+    proof would fence the running member: join installs inside that
+    session. Each reason join stops with is listed in BRING-UP.md, step 6;
   - the client's npm package at the tested version.
 
   **The export base.** `aicrew-agent join` records `AICREW_BASE`, when it

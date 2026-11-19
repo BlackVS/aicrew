@@ -1,7 +1,7 @@
 # aicrew-agent installer for Windows: installs or upgrades the member's
 # aicrew-agent, and the operator CLI aicrew beside it, from any directory:
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.0/boot.ps1 | iex"
+#   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.1/boot.ps1 | iex"
 #
 # In a closed network, from an aiforge export (README.txt in the export has
 # the commands with its tags filled in). From a directory or a share, copy
@@ -58,7 +58,7 @@ $ErrorActionPreference = 'Stop'
 
 # The release this script installs. Bumped together with the CHANGELOG
 # when a release is cut (internal/installer checks they agree).
-$release = 'v0.11.0'
+$release = 'v0.11.1'
 
 # BEGIN release-source
 # Where the release's files come from, and their verification; the same

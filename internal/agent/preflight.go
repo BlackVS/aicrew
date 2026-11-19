@@ -142,6 +142,11 @@ func reachAicrewd(ctx context.Context, o PreflightOptions, d PreflightDeps) Pref
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err == nil && resp.StatusCode == http.StatusOK {
+		// Only the first 4 KiB are parsed, but a 200 is read to its end
+		// (up to 1 MiB), so a cut past them is still a failed read.
+		_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	}
 	if err != nil && resp.StatusCode == http.StatusOK {
 		return PreflightAicrewd{State: ReachInterrupted, Detail: fmt.Sprintf("an answer at %s began (HTTP 200), but "+
 			"reading it failed: %v: check the network between this host and aicrewd, any proxy, and aicrewd's log",

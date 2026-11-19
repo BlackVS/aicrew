@@ -32,6 +32,7 @@ const (
 	ReachCertificate = "certificate" // the certificate does not match the trust
 	ReachClock       = "clock"       // the certificate is not valid at this host's time
 	ReachWrong       = "wrong_address"
+	ReachInterrupted = "interrupted" // an answer began (HTTP 200) but could not be read
 )
 
 // Preflight answers about the client's login.
@@ -140,7 +141,12 @@ func reachAicrewd(ctx context.Context, o PreflightOptions, d PreflightDeps) Pref
 		return reachFailure(err, o, d.Now())
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil && resp.StatusCode == http.StatusOK {
+		return PreflightAicrewd{State: ReachInterrupted, Detail: fmt.Sprintf("an answer at %s began (HTTP 200), but "+
+			"reading it failed: %v: check the network between this host and aicrewd, any proxy, and aicrewd's log",
+			crew.base, err)}
+	}
 	var h struct {
 		Status  string `json:"status"`
 		Version string `json:"version"`

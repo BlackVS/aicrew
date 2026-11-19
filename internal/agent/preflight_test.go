@@ -72,6 +72,21 @@ func healthOK(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"ok","version":"v0.11.0"}` + "\n"))
 }
 
+// cutAfterStatus sends a status line and a Content-Length the body never
+// reaches, then closes the connection.
+func cutAfterStatus(t *testing.T, status int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"status\"",
+			status, http.StatusText(status))
+	}
+}
+
 func caDNS() tlstrust.Binding { return tlstrust.Binding{Mode: tlstrust.CADNS, Value: "127.0.0.1"} }
 
 func pinOf(c *x509.Certificate) string {
@@ -87,6 +102,8 @@ func TestPreflightAicrewd(t *testing.T) {
 	wrongURL, wrongRoots, _ := preflightServer(t, now.Add(-time.Hour), func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>a web server</html>`))
 	})
+	cutURL, cutRoots, _ := preflightServer(t, now.Add(-time.Hour), cutAfterStatus(t, http.StatusOK))
+	cut404URL, cut404Roots, _ := preflightServer(t, now.Add(-time.Hour), cutAfterStatus(t, http.StatusNotFound))
 	_, otherRoots, other := preflightServer(t, now.Add(-time.Hour), healthOK)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -122,6 +139,8 @@ func TestPreflightAicrewd(t *testing.T) {
 			ReachCertificate, "does not match the pinned key", nil},
 		{"clock", futureURL, caDNS(), futureRoots, ReachClock, "check this host's clock", nil},
 		{"wrong address", wrongURL, caDNS(), wrongRoots, ReachWrong, "not aicrewd's health route (HTTP 200)", nil},
+		{"interrupted", cutURL, caDNS(), cutRoots, ReachInterrupted, "began (HTTP 200), but reading it failed: unexpected EOF", nil},
+		{"wrong address, cut", cut404URL, caDNS(), cut404Roots, ReachWrong, "not aicrewd's health route (HTTP 404)", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rep, err := Preflight(context.Background(), PreflightOptions{URL: c.url, Trust: c.trust},

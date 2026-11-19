@@ -179,6 +179,9 @@ and trust, and runs `claude auth status`. Its `aicrewd:` line is one of:
   the pin replaces the chain check, so a pinned aicrewd never gives this
   answer.
 - **`wrong_address`**: something answers, but not aicrewd's health route.
+- **`interrupted`**: an answer began (HTTP 200) but could not be read:
+  the connection broke or timed out during it. Check the network between
+  the hosts, any proxy, and aicrewd's log.
 
 Its `login (claude):` line is `stored`, `none` or `not_found`. `stored`
 means a login is stored, not that it is valid: only the turn-model call

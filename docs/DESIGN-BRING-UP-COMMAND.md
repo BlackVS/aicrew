@@ -99,6 +99,10 @@ command-line tool.
 - It reaches each member's host through a shell access the operator
   already has (section 3).
 - It does every step of the table above except 5, 6, 11 and the hosts.
+  Two more can still need a person, and the run stops for them: the hub
+  administrator's import of the skills set (section 4, step 5), and a
+  root user's `loginctl enable-linger` where the system's policy refuses
+  it (section 6).
 
 It has one description of the team, the **plan**, given in one of two ways:
 
@@ -212,7 +216,7 @@ as well, because no shell pipe between two commands touches the bytes.
 | Credential | Where it comes from | How long the command holds it | How it reaches its use |
 | --- | --- | --- | --- |
 | The operator credential of aicrewd | its owner-only file, as for every `aicrew` command (`AICREW_OPERATOR_TOKEN_FILE` or `--token-file`) | the run | read by `aicrew` itself, as today |
-| The hub admin's bearer | a reference in the plan: an owner-only file, or a hidden prompt | the grant and enrollment steps only | passed to the local `aimem` as `--admin-token-file`, which aimem's `identity team grant` and `identity enroll issue` take. A prompted value is written to a new owner-only file in an owner-only temporary directory and removed when the step ends, since aimem's usage names this credential as a file. |
+| The hub admin's bearer | a reference in the plan: an owner-only file, or a hidden prompt | the grant and enrollment steps only | passed to the local `aimem` as `--admin-token-file`, which aimem's `identity team grant` and `identity enroll issue` take. A prompted value is written to a new owner-only file in an owner-only temporary directory and removed when the step ends, since aimem's usage names this credential as a file. Where the bearer is used, on the workstation or on the hub's own host, is open question O7 (section 9). |
 | A member's aimem enrollment record (replaces the aimem token, section 4) | the standard output of `aimem identity enroll issue --output -`, read through a pipe | from issue to redemption, in memory | the standard input of `aimem enroll redeem` on the member's host |
 | A member's invitation code | aicrewd's answer to the invitation request, which `aicrew up` makes itself | from issue to redemption, in memory | the standard input of `aicrew-agent join --code-file -` |
 | A member's forge token | a reference in the plan: an owner-only file, or a hidden prompt | from the start of the member's steps to its `join` | U1: a new owner-only file in an owner-only temporary directory on the member's host, given to `join --cred FORGE_HOST=forge.token` and removed by the same remote command. U2: join's standard input, with no file at all. |
@@ -385,7 +389,7 @@ from what the product already knows is read, never guessed.
 | 2 | The hub: its alias, its URL and its TLS trust (a CA file or a pin, as aimem's `--hub-ca-file` and `--hub-pin` take them) | the alias: the only hub aicrewd has. The URL and the trust: none | the grant, the enrollment, and the home's hub (finding 2). See below |
 | 3 | The team's name and its projects | none | `team setup` |
 | 4 | Start the team paused? | yes | finding 5: a coordinator that joins wakes on the board's READY tasks at once. The end table prints the resume command |
-| 5 | The hub admin's bearer | a hidden prompt | the grant and the enrollments. Asked once, used, then gone (3.2) |
+| 5 | The hub admin's bearer | a hidden prompt | the grant and the enrollments. Asked once, used, then gone (3.2). Whether it is asked on the workstation at all is O7 (section 9) |
 | 6 | Per member: its label, role, host access (the command prefix of 3.1) and client | first a coordinator, then workers; client `claude` | each member |
 | 7 | Per member and forge host: the token's reference | a hidden prompt | `join --cred`. The forge hosts are read from each granted project's repository, which aicrewd's team grants carry (`opapi.TeamGrants`, as `team setup` prints them) |
 | 8 | A closed network's export base | none | section 7 |
@@ -652,6 +656,33 @@ kept.
 - **O6, forge deposits through aicrewd** (PILOT-1-FOLLOWUPS 3.8).
   Proposed: not for hosts the operator reaches. Deposits wait for hosts
   reached only through a runner.
+- **O7, where the hub admin's bearer is used.** Today it is used only on
+  the hub's own host, where it lives in the hub's environment file
+  (finding 3).
+  - **Proposed: on the operator's workstation.** `aicrew up` asks for it
+    at every run that grants or enrolls (question 5), and the local `aimem`
+    sends it to the hub's TLS listener, verified as section 5.1 says
+    (`identity team grant` and `identity enroll issue` take `--hub` and
+    `--admin-token-file`). Its cost: the bearer leaves the hub's host for
+    each such run. It reaches the workstation's memory and, when prompted,
+    an owner-only temporary file there, and it crosses the network to the
+    hub's listener. The workstation needs its own aimem for these two
+    commands. The gain: no shell on the hub's host is needed (section 8,
+    step 2 of the removal table).
+  - **The alternative: on the hub's own host.** The grant and the
+    enrollment issue run on the hub's host through a transport prefix
+    that the plan names, as the member-side steps do, as the hub's service
+    user. The bearer never leaves that host. `aicrew up` receives only the
+    enrollment record, on the transport's standard output, and the
+    grant's result. Its cost: the command holds a shell on the hub's host
+    for those steps, through the operator's own access, which the
+    operator must have and the plan must name. The shell must also reach
+    the hub's local service, which a `su -` shell did not (finding 4).
+    Whether a host-local run reads the bearer from the hub's environment
+    file by itself, or needs it given, is a question for U1's assessment.
+
+  The design proposes the workstation, as written above, and the owner
+  decides between the two.
 
 ## 10. What this design does not do
 

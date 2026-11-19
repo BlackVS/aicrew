@@ -30,7 +30,7 @@ scripts/e2e-real-aimem.sh -aimem-src ../aimem -runs 3
   each run directory.
 - `-skip-faults` runs the skip-the-fault matrix instead (see "Faults").
 
-It needs Go 1.26 or later (aimem v0.10.25 builds with the Go 1.26
+It needs Go 1.26 or later (aimem v0.11.4 builds with the Go 1.26
 toolchain), git, tar, and network access the first time, to download both
 modules' dependencies. Windows is best effort and not wired yet: the
 harness skips there.
@@ -38,9 +38,12 @@ harness skips there.
 ## The pin
 
 `aimemPin` in `e2e/realaimem/harness_test.go` is the aimem commit the
-harness builds: the v0.10.25 release (448e34b), which
-`internal/agent/supported.json` names as the tested aimem; the minimum stays
-0.10.0, the first release with every prerequisite:
+harness builds: the v0.11.4 release (bce8d87), which
+`internal/agent/supported.json` names as the tested aimem. The minimum is
+0.11.0: aimem's own upgrade rule ("hubs first, then workstations") starts
+there, a 0.11 hub is the hubs' release, and it carries the client fixes of
+0.10.26 (the document and record tools confirm the pinned project) and
+0.10.27 (group sync). 0.10.0 was the first release with every prerequisite:
 - C5b, C6, C5-w3 and `aimem hub credential`;
 - the reservation fixture's corrected fences;
 - `hub add --ca-file` with token files;
@@ -57,7 +60,7 @@ harness builds: the v0.10.25 release (448e34b), which
   members' `report-*` documents. aicrew reads none of them yet.
 
 The build stamps the commit's `git describe` as aimem's version, as aimem's
-release build stamps the tag. At the pin that is `v0.10.25`, which
+release build stamps the tag. At the pin that is `v0.11.4`, which
 `aicrew-agent`'s dependency check reads as the tested release. The
 source clone must hold the commit and the tag (`git fetch --tags`).
 

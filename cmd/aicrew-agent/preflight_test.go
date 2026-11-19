@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,5 +48,33 @@ func TestPreflightCommand(t *testing.T) {
 		if code := preflight(context.Background(), args, &out, &errb); code != exitUsage || errb.Len() == 0 {
 			t.Fatalf("%v: %d %q", args, code, errb.String())
 		}
+	}
+}
+
+// A 200 whose body breaks off is a failed read, not a wrong address, and
+// the command exits 1.
+func TestPreflightCommandInterrupted(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		fmt.Fprint(conn, "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{\"status\"")
+	}))
+	defer srv.Close()
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
+	old := preflightDeps
+	t.Cleanup(func() { preflightDeps = old })
+	preflightDeps = agent.PreflightDeps{Roots: roots}
+
+	var out, errb bytes.Buffer
+	code := preflight(context.Background(), []string{"--url", srv.URL, "--tls-trust-mode", "ca_dns",
+		"--tls-trust-value", "127.0.0.1"}, &out, &errb)
+	if code != exitFailed || !strings.HasPrefix(out.String(), "aicrewd: interrupted: ") ||
+		!strings.Contains(out.String(), "reading it failed") {
+		t.Fatalf("%d %q %q", code, out.String(), errb.String())
 	}
 }

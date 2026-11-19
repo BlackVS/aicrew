@@ -229,14 +229,17 @@ aicrew-agent join --label worker --url https://AICREWD:PORT \
 - **The service.** In `turns` mode, join installs and starts the member's
   service itself when the home is ready.
 
-- **The skills.** When the client does not see the skills the team's
-  process pins, join installs them from the hub itself. It opens a
-  conversation in the team as the member, has the home's aimem install
-  the skills of the team's first granted project as that conversation,
-  closes it, and checks again. The member's aimem user needs no grant of
-  its own: the hub reads under the team's grant. This needs aimem 0.11.5
-  or later in the home. A paused team is no obstacle, since a pause holds
-  the member's turns, not its conversation.
+- **The skills.** From aicrew 0.11.2 on, when the client does not see
+  the skills the team's process pins, join installs them from the hub
+  itself. It opens a conversation in the team as the member, has the
+  home's aimem install the skills of the team's first granted project as
+  that conversation, closes it, and checks again. The member's aimem user
+  needs no grant of its own: the hub reads under the team's grant. This
+  needs aimem 0.11.5 or later in the home. A paused team is no obstacle,
+  since a pause holds the member's turns, not its conversation.
+  Until 0.11.2 is released, step 5's tag installs aicrew 0.11.1, whose
+  join ends blocked on the skills and installs none: wait for 0.11.2, or
+  build aicrew from main.
 
 When join cannot install the skills, it ends `blocked` with one of these
 reasons, the step that fixes it, and the rerun, `aicrew-agent join --home

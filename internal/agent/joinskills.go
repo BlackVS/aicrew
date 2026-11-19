@@ -113,7 +113,7 @@ type skillsFailure struct{ reason, instruction string }
 
 // installSkills installs the skills inside a team conversation. It returns
 // the report, or the failure to report instead.
-func (j *joiner) installSkills(ctx context.Context, crep CheckReport) (SkillsReport, *skillsFailure) {
+func (j *joiner) installSkills(ctx context.Context, crep CheckReport) (rep SkillsReport, fail *skillsFailure) {
 	home, aimem := j.o.Home, j.aimemCommand()
 	rerun := "; then rerun `" + joinRerun(home) + "`"
 	ok, err := j.skills.Supports(ctx, aimem, home)
@@ -131,13 +131,13 @@ func (j *joiner) installSkills(ctx context.Context, crep CheckReport) (SkillsRep
 		return SkillsReport{}, &skillsFailure{SkillsConversation, "the team's conversation for the skills could not be " +
 			"opened: " + tail(err.Error(), 300) + rerun}
 	}
-	rep := SkillsReport{Session: conv.SessionID, Opened: conv.Close != nil}
+	rep = SkillsReport{Session: conv.SessionID, Opened: conv.Close != nil}
 	defer func() {
 		if conv.Close == nil {
 			return
 		}
 		if err := conv.Close(context.WithoutCancel(ctx)); err != nil {
-			fmt.Fprintf(j.deps.Out, "  the conversation %s was not closed: %s\n", conv.SessionID, tail(err.Error(), 200))
+			fail = notClosed(home, conv.SessionID, err, fail)
 		}
 	}()
 	if len(conv.Projects) == 0 {
@@ -173,21 +173,25 @@ func skillsInstallFailure(home string, conv Conversation, project, stdout, stder
 	if said == "" {
 		said = err.Error()
 	}
-	said = tail(said, 1500)
+	// The whole answer is classified, and a missing set keeps every line:
+	// each one is a skill's import command. The others show its end.
 	rerun := "; then rerun `" + joinRerun(home) + "`"
 	switch {
 	case strings.Contains(said, "not every required skill can be installed from the hub"):
 		return &skillsFailure{SkillsNotImported, fmt.Sprintf("the hub holds no skills set with every skill the process of "+
 			"project %s pins. The hub's administrator imports the set on the hub's host, as aimem names it here: %s%s",
-			project, said, rerun)}
+			project, head(said, 16<<10), rerun)}
 	case strings.Contains(said, "grant_denied") || strings.Contains(said, "needs a grant on the project"):
 		return &skillsFailure{SkillsGrant, fmt.Sprintf("the hub refused project %s to the team's conversation: the team's "+
 			"access profile needs a grant on it, which `aicrew team setup` prints for the hub's administrator. "+
-			"aimem said: %s%s", project, said, rerun)}
+			"aimem said: %s%s", project, tail(said, 1500), rerun)}
 	case strings.Contains(said, "no process is selected for project"):
+		// aimem's own step names the selection with placeholders; the
+		// administrator's step is said here in words instead.
 		return &skillsFailure{SkillsNoProcess, fmt.Sprintf("project %s selects no process on the hub, so nothing names the "+
-			"skills: %s%s", project, said, rerun)}
-	case strings.Contains(said, "team context is not verified") || strings.Contains(said, "team session file cannot be used"):
+			"skills: the hub's administrator selects the team's process for project %s on the hub's host (aimem's "+
+			"`process select`, with the process repository and the release the team works with)%s", project, project, rerun)}
+	case conversationRefused(said):
 		next := rerun
 		if conv.Close == nil {
 			// A session recorded in the home that the hub no longer knows:
@@ -196,9 +200,49 @@ func skillsInstallFailure(home string, conv Conversation, project, stdout, stder
 				"`, then rerun `" + joinRerun(home) + "`"
 		}
 		return &skillsFailure{SkillsConversation, "the hub did not accept the team's conversation " + conv.SessionID +
-			": " + said + next}
+			": " + tail(said, 1500) + next}
 	}
-	return &skillsFailure{SkillsFailed, fmt.Sprintf("aimem did not install the skills for project %s: %s%s", project, said, rerun)}
+	return &skillsFailure{SkillsFailed, fmt.Sprintf("aimem did not install the skills for project %s: %s%s", project,
+		tail(said, 1500), rerun)}
+}
+
+// conversationRefused recognises aimem's answers that the team session
+// cannot be used (aimem PR #404): not verified by the hub, a binding the hub
+// reports for another user, team or session, a file it cannot read, or a
+// hub the file names that is not this machine's. Each ends with aimem's
+// own step, to restart the conversation through aicrew.
+func conversationRefused(said string) bool {
+	for _, s := range []string{
+		"team context is not verified",
+		"team session file cannot be used",
+		"reports a different user, team or session",
+		"restart the conversation through aicrew",
+	} {
+		if strings.Contains(said, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// notClosed is the failure of a conversation join opened and could not
+// close: the session stays recorded in the home, so the step that ends it
+// comes first, and join is run again after it.
+func notClosed(home, session string, err error, fail *skillsFailure) *skillsFailure {
+	leave := fmt.Sprintf("the team's conversation %s that join opened was not closed: %s; end it with "+
+		"`aicrew-agent session leave --home %s`", session, tail(err.Error(), 300), shellArg(absHome(home)))
+	if fail != nil {
+		return &skillsFailure{fail.reason, leave + ", then: " + fail.instruction}
+	}
+	return &skillsFailure{SkillsConversation, "the skills are installed, but " + leave + ", then rerun `" + joinRerun(home) + "`"}
+}
+
+// head keeps the start of s, at most n bytes.
+func head(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }
 
 // joinRerun is the join that resumes a home: its home is enough, since
@@ -276,18 +320,35 @@ func openConversation(ctx context.Context, home string) (Conversation, error) {
 	}
 	e := NewEngine(cfg, crew, ExecAimem{Command: cfg.AimemCommand, Hub: cfg.AimemHub, Home: cfg.Home},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err := e.Start(ctx); err != nil {
+	return enterConversation(ctx, home, cfg.AimemHub, e, crew)
+}
+
+// enterConversation enters the team with e and reads its projects. The
+// conversation is join's from the moment aicrewd let it in: the engine
+// records the session before aimem binds it, so a failure after the entry
+// (the binding, the projects) leaves the session again, and says how to
+// end it when that fails too.
+func enterConversation(ctx context.Context, home, hub string, e *Engine, crew SessionReader) (Conversation, error) {
+	abandon := func(err error) (Conversation, error) {
+		if e.SessionID() == "" {
+			return Conversation{}, err
+		}
+		if lerr := e.Leave(context.WithoutCancel(ctx)); lerr != nil {
+			return Conversation{}, fmt.Errorf("%w; the conversation %s join entered was not left either (%s): end it with "+
+				"`aicrew-agent session leave --home %s` first", err, e.SessionID(), tail(lerr.Error(), 200), shellArg(absHome(home)))
+		}
 		return Conversation{}, err
 	}
+	if err := e.Start(ctx); err != nil {
+		return abandon(err)
+	}
 	conv := Conversation{File: e.AimemFile(), SessionID: e.SessionID(), Close: e.Leave}
-	if err := RecordTeam(ctx, home, cfg.AimemHub, crew, e.stepToken()); err != nil {
-		_ = e.Leave(context.WithoutCancel(ctx))
-		return Conversation{}, fmt.Errorf("the team's projects: %w", err)
+	if err := RecordTeam(ctx, home, hub, crew, e.stepToken()); err != nil {
+		return abandon(fmt.Errorf("the team's projects: %w", err))
 	}
 	team, _, err := LoadTeam(home)
 	if err != nil {
-		_ = e.Leave(context.WithoutCancel(ctx))
-		return Conversation{}, err
+		return abandon(err)
 	}
 	conv.Projects = projectIDs(team.Projects)
 	return conv, nil

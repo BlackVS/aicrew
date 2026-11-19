@@ -62,6 +62,7 @@ type skillsRun struct {
 	stdout      string
 	stderr      string
 	installErr  error
+	closeErr    error
 	opened      int
 	closed      int
 	installs    []string // "file project"
@@ -79,7 +80,7 @@ func (r *skillsRun) deps() SkillsDeps {
 			r.opened++
 			c := Conversation{File: "/run/aimem/sess-1.json", SessionID: "sess-1", Projects: r.projects}
 			if !r.held {
-				c.Close = func(context.Context) error { r.closed++; return nil }
+				c.Close = func(context.Context) error { r.closed++; return r.closeErr }
 			}
 			return c, nil
 		},
@@ -169,9 +170,30 @@ func TestJoinSkillsFailures(t *testing.T) {
 				"the team's access profile needs a grant on the project (on the hub host: aimem identity team grant); " +
 				"nothing was read outside the team conversation"},
 			SkillsGrant, []string{"aicrew team setup", "grant_denied", "aicrew-agent join --home "}, true},
+		// aimem's own answer at the pinned release, placeholders included.
 		{"no process", skillsRun{supports: true, projects: []string{"alpha"}, installErr: errors.New("exit status 1"),
-			stderr: "no process is selected for project alpha (on the hub host: aimem process select ...)"},
-			SkillsNoProcess, []string{"selects no process", "aimem process select"}, true},
+			stderr: "no process is selected for project alpha; an admin selects one on the hub host: aimem process select <repo> <tag> -p alpha"},
+			SkillsNoProcess, []string{"selects no process", "the hub's administrator selects the team's process for project alpha",
+				"`process select`", "aicrew-agent join --home "}, true},
+		// A long list of missing skills keeps its reason and every import line.
+		{"set missing, long", skillsRun{supports: true, projects: []string{"alpha"}, stderr: longNotOnHub(), installErr: errors.New("exit status 1")},
+			SkillsNotImported, []string{"hub's administrator imports", "skill-00 1.43.0 (release)", "skill-39 1.43.0 (release)",
+				"aicrew-agent join --home "}, true},
+		// A recorded session whose binding the hub reports for another
+		// user, team or session: leave it first.
+		{"held and mismatched", skillsRun{supports: true, held: true, projects: []string{"alpha"}, installErr: errors.New("exit status 1"),
+			stderr: "team conversation sess-1 of team t: the hub reports a different user, team or session than the team session file names; " +
+				"restart the conversation through aicrew"},
+			SkillsConversation, []string{"aicrew-agent session leave --home ", "aicrew-agent join --home "}, false},
+		// The close failing after an install that worked: not ready.
+		{"close fails", skillsRun{supports: true, projects: []string{"alpha"}, closeErr: errors.New("aicrewd cannot be reached"),
+			stdout: "installed oh-code-review 1.43.0 (release) for claude: /h/.claude/skills/oh-code-review\n"},
+			SkillsConversation, []string{"the skills are installed, but the team's conversation sess-1 that join opened was not closed",
+				"aicrewd cannot be reached", "aicrew-agent session leave --home ", "aicrew-agent join --home "}, true},
+		// The close failing after an install that failed: both, the leave first.
+		{"install and close fail", skillsRun{supports: true, projects: []string{"alpha"}, closeErr: errors.New("aicrewd cannot be reached"),
+			installErr: errors.New("exit status 1"), stderr: "disk full"},
+			SkillsFailed, []string{"was not closed", "aicrew-agent session leave --home ", "did not install the skills for project alpha: disk full"}, true},
 		{"not verified", skillsRun{supports: true, projects: []string{"alpha"}, installErr: errors.New("exit status 1"),
 			stderr: "team conversation sess-1 of team t: the team context is not verified: context_stale; restart the conversation " +
 				"through aicrew; nothing was read outside the team conversation"},
@@ -194,7 +216,7 @@ func TestJoinSkillsFailures(t *testing.T) {
 					t.Fatalf("the instruction lacks %q: %s", w, rep.Instruction)
 				}
 			}
-			if strings.Contains(rep.Instruction, "<project>") {
+			if strings.ContainsAny(rep.Instruction, "<>") {
 				t.Fatalf("the instruction has a placeholder: %s", rep.Instruction)
 			}
 			if c.opened && (r.opened != 1 || r.closed != 1) {
@@ -294,5 +316,58 @@ func TestSkillsMissing(t *testing.T) {
 	client := CheckReport{Clients: []ClientReport{{MissingSkills: []string{"oh-code-review"}}}}
 	if !skillsMissing(client) || skillsMissing(CheckReport{}) {
 		t.Fatal("a client's missing skill decides")
+	}
+}
+
+// longNotOnHub is aimem's answer for a set missing forty skills, longer
+// than the part of an answer join shows for the other reasons.
+func longNotOnHub() string {
+	var b strings.Builder
+	b.WriteString("not every required skill can be installed from the hub:")
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&b, "\n  skill-%02d 1.43.0 (release) is not on the hub: not imported; the admin imports the skills release on "+
+			"the hub host: `aimem skills import --from-archive aiskills-1.43.0.tar.gz` (docs/ADMIN-MANUAL.md), or the process pins the current one", i)
+	}
+	return b.String()
+}
+
+// A conversation join entered is left again when aimem cannot bind it: the
+// engine records the session before the binding, so nobody else would.
+func TestEnterConversationLeavesAfterAFailedBind(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	if err := os.WriteFile(filepath.Join(c.root, "fail-open"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := c.engine(t)
+	_, err := enterConversation(ctx, c.cfg.Home, c.cfg.AimemHub, e, e.Crew.(SessionReader))
+	if err == nil || !strings.Contains(err.Error(), "cannot be reached") {
+		t.Fatalf("enter with aimem failing: %v", err)
+	}
+	if e.SessionID() == "" {
+		t.Fatal("the test did not reach the entry")
+	}
+	if sess, _ := c.store.GetSession(ctx, e.SessionID()); sess.State != store.SessionLeft {
+		t.Fatalf("the session join entered is %s, not left", sess.State)
+	}
+	if _, ok, _ := LoadState(c.cfg.Home); ok {
+		t.Fatal("the home still records the session")
+	}
+}
+
+// When the leave after a failed entry fails too, the error names the step
+// that ends the session.
+func TestEnterConversationNamesTheLeave(t *testing.T) {
+	c := setupCrew(t)
+	ctx := context.Background()
+	for _, f := range []string{"fail-open", "fail-close"} {
+		if err := os.WriteFile(filepath.Join(c.root, f), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := c.engine(t)
+	_, err := enterConversation(ctx, c.cfg.Home, c.cfg.AimemHub, e, e.Crew.(SessionReader))
+	if err == nil || !strings.Contains(err.Error(), "aicrew-agent session leave --home ") || !strings.Contains(err.Error(), e.SessionID()) {
+		t.Fatalf("enter with aimem failing to bind and close: %v", err)
 	}
 }

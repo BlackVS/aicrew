@@ -154,7 +154,13 @@ func skillsInstruction(c supportedComponent, found string, skills []string, home
 // shellArg quotes s, when it needs it, for the shell a printed command is
 // pasted into: PowerShell on Windows, a POSIX shell elsewhere.
 func shellArg(s string) string {
-	if !strings.ContainsAny(s, " \t'\"$`&;|()<>{}#*?[]~!") {
+	special := " \t'\"$`&;|()<>{}#*?[]~!"
+	if goos != "windows" {
+		// A POSIX shell drops an unquoted backslash; PowerShell keeps it,
+		// and every Windows path holds one.
+		special += "\\"
+	}
+	if !strings.ContainsAny(s, special) {
 		return s
 	}
 	if goos == "windows" {

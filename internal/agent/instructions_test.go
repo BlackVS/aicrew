@@ -332,8 +332,31 @@ func TestAimemExportFormRuns(t *testing.T) {
 // quoting: a space and an apostrophe, under PowerShell on Windows and bash
 // elsewhere. A stand-in aicrew-agent records the arguments it got.
 func TestSkillsCommandRunsWithAQuotedHome(t *testing.T) {
+	homes := []string{filepath.Join(t.TempDir(), "my team's", "worker")}
+	if runtime.GOOS != "windows" {
+		// A backslash alone needs quoting for a POSIX shell.
+		homes = append(homes, filepath.Join(t.TempDir(), `team\west`, "worker"))
+	}
+	for _, home := range homes {
+		skillsCommandRuns(t, home)
+	}
+}
+
+// The quoting decision for each platform, without running a shell.
+func TestShellArgQuotesABackslashForPOSIX(t *testing.T) {
+	withGOOS(t, "linux")
+	if got := shellArg(`/tmp/team\west`); got != `'/tmp/team\west'` {
+		t.Fatalf("POSIX: %s", got)
+	}
+	withGOOS(t, "windows")
+	if got := shellArg(`C:\agents\worker`); got != `C:\agents\worker` {
+		t.Fatalf("PowerShell: %s", got)
+	}
+}
+
+func skillsCommandRuns(t *testing.T, home string) {
+	t.Helper()
 	withGOOS(t, runtime.GOOS)
-	home := filepath.Join(t.TempDir(), "my team's", "worker")
 	bin := t.TempDir()
 	seen := filepath.Join(t.TempDir(), "seen.txt")
 	if runtime.GOOS == "windows" {

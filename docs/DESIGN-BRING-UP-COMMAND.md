@@ -141,8 +141,8 @@ replaces.
 
 ### 3.1 The transport to a member's host
 
-A member's host is reached through a **command prefix** the plan names, for
-example `["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no", "crew-worker@host-b"]`.
+A member's host is reached through a **command prefix** the plan names,
+with its kind (`ssh` or `exec`, below), for example `["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no", "crew-worker@host-b"]`.
 - `aicrew up` runs each member-side command as that prefix plus the
   command, with the data on standard input.
 - It never opens a connection itself, and holds no SSH key, password or
@@ -168,17 +168,36 @@ example `["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o",
 The same prefix lets a test reach a container: the pilot simulation names
 `["docker", "exec", "-i", "pilotsim-worker"]` (increment U3).
 
-**One form for every member-side command.** SSH hands the remote side one
-string that the user's login shell parses, while `docker exec` runs its
-arguments as they are. So that both behave alike, `aicrew up` sends every
-member-side command in one form:
-- the prefix, then `sh -c SCRIPT`;
-- SCRIPT is built by `aicrew up` with every argument quoted for a POSIX
-  shell, in single quotes, with each `'` inside written as `'\''`;
-- the plan's values are validated before they reach a script: labels and
-  the team's name by join's own grammar, URLs as https URLs, host names as
-  host names, the forge host as `join --cred` takes it. A value that fails
-  stops the run before anything is created, and names the key.
+**How a member-side command crosses the transport.** Every member-side
+step is one SCRIPT, a fixed text of `aicrew up` run by `sh -c`. The two
+kinds of prefix cross the boundary differently, so the plan names the
+kind beside the prefix, and `aicrew up` builds the call for each:
+- **`exec`** (for example `docker exec -i NAME`): the program receives
+  its arguments as they are. `aicrew up` appends three arguments, `sh`,
+  `-c` and SCRIPT, and nothing parses them again.
+- **`ssh`**: OpenSSH joins every argument after the destination with
+  spaces into one string, which the user's login shell on the host parses
+  ([OpenSSH, ssh.c](https://github.com/openssh/openssh-portable/blob/V_9_9_P2/ssh.c#L1179-L1184)).
+  Three separate arguments would lose SCRIPT's boundary: `sh -c` would get
+  only its first word. So `aicrew up` passes exactly one remote-command
+  argument, `sh -c ` followed by SCRIPT quoted as one word. The login
+  shell removes that one level of quoting and hands `sh` the whole SCRIPT.
+- **Quoting.** Inside SCRIPT every argument is quoted for a POSIX shell,
+  in single quotes, with each `'` inside written as `'\''`; for `ssh`,
+  SCRIPT itself is quoted again the same way.
+- **The login shell.** The `ssh` form relies on a login shell that parses
+  POSIX single quotes (sh, bash, dash, zsh). Before any other step,
+  `aicrew up` runs a fixed probe through the prefix, a quoted string that
+  holds a space, a `'` and a `$`, and requires it back unchanged. A login
+  shell that changes it (csh or fish, for example) stops the run and is
+  named.
+- **The plan's values** are validated before they reach a script: labels
+  and the team's name by join's own grammar, URLs as https URLs, host
+  names as host names, the forge host as `join --cred` takes it. A value
+  that fails stops the run before anything is created, and names the key.
+- **Tests.** U1's tests run the same scripts through both kinds, with
+  values that hold spaces, quotes and `$`, and require each command to
+  receive its arguments exactly.
 
 No value from the plan is ever pasted into a script unquoted. The scripts
 are fixed texts of `aicrew up`, with the quoted values as their only
@@ -263,23 +282,40 @@ in order:
      and saves it (aimem v0.11.4, cmd/aimem/enroll_redeem.go, the delivery
      path). So the enrollment comes before join, and join is given no
      `--aimem-url`.
-   - **Only into a home without an aimem credential.** Redemption into an
-     installation that already holds a working credential for the hub
-     spends nothing and answers `already_enrolled` with that credential's
-     user, whoever it is (the same file, before the publish step). A home
-     the run did not make could hold another person's credential. So
-     before it issues the enrollment, `aicrew up` reads the home: a home
-     that is not linked but whose aimem installation already holds a
-     credential for the hub stops the run, naming the home. The run never
-     redeems into it.
-   - **The identity is pinned before the invitation.** `enroll redeem
-     --json` reports the outcome, the user ID and the bundle ID. `aicrew
-     up` requires the outcome `enrolled` and the bundle ID it issued;
-     anything else stops the run. The invitation is issued only after
-     that, with `--expect-user` set to the user ID the redemption
-     reported. aicrewd then accepts a proof only from that user, so a
-     credential that changed between the two steps cannot link the
-     member to another identity.
+   - **Only into a home without a credential of its own making.**
+     Redemption into an installation that already holds a working
+     credential for the hub spends nothing and answers `already_enrolled`
+     with that credential's user, whoever it is (the same file, before the
+     publish step). A home the run did not make could hold another
+     person's credential. So before it issues an enrollment, `aicrew up`
+     reads the home: a home that is not linked but whose aimem
+     installation already holds a credential for the hub stops the run,
+     naming the home, unless that credential is the one this plan's own
+     bundle delivered (the match below). The run never redeems a new
+     bundle into such a home.
+   - **The identity is pinned before the invitation, by a match.** The
+     identity the member is linked to is the one the plan's bundle
+     created, and it is established in one of two ways:
+     - the redemption answers `enrolled` with the bundle ID the run issued
+       (`enroll redeem --json` reports the outcome, the user ID, the token
+       ID and the bundle ID);
+     - or the bundle is `redeemed` on the hub, and the user ID and token ID
+       that `aimem identity enroll list` names for it ("redeemed: user ...,
+       token ...", cmd/aimem/identity_enroll.go) equal the user and token
+       that the home's stored credential authenticates as: `aimem hub
+       credential NAME --json` with the home's `AIMEM_STATE_DIR`, which
+       reports `user_id` and `token_id` from the hub's live answer
+       (cmd/aimem/hub_credential.go). This covers a redemption that saved
+       the credential and then answered `already_enrolled` on a retry,
+       since aimem saves the credential before its last identity check
+       (cmd/aimem/enroll_redeem.go, the delivery path), and a rerun after
+       a crash, when the record and its answer are gone.
+
+     Anything else stops the run, a credential of an unrelated user
+     included. The invitation is issued only after the match, with
+     `--expect-user` set to the matched user ID. aicrewd then accepts a
+     proof only from that user, so a credential that changed between the
+     two steps cannot link the member to another identity.
 4. **The join.** `aicrew-agent join --label L --url ... --tls-trust-mode
    ... --tls-trust-value ... --aimem-hub NAME --client claude --wake turns
    --code-file - --cred FORGE_HOST=forge.token`.
@@ -455,17 +491,21 @@ v0.11.4, cmd/aimem/enroll_redeem.go). Revoking a redeemed bundle does not
 revoke the user and token it issued (`aimem identity enroll` usage). So
 the run handles it in two cases:
 - **Within one run.** `aicrew up` holds the record in memory until the
-  redemption has answered `enrolled`. On aimem's exits 4 (retryable) and 5
-  (outcome unknown) it sends the same record again, as aimem's usage
-  says, up to a bound. A run that ends this way names the outcome; it
-  never issues a second bundle for the member in the same run.
+  identity is matched (section 4, step 3). On aimem's exits 4 (retryable)
+  and 5 (outcome unknown) it sends the same record again, as aimem's usage
+  says, up to a bound. A retry that answers `already_enrolled` goes to the
+  match by the bundle's redeemed IDs, never straight to a stop. A run that
+  ends without a match names the outcome; it never issues a second bundle
+  for the member in the same run.
 - **After a crash, when the record is gone.** The rerun reads the
   bundle's state on the hub (`aimem identity enroll list`, with the
   bundle ID from the journal), and the home's installation:
   - bundle `issued`: unspent. The rerun revokes it and issues a new one,
     as above.
-  - bundle `redeemed`, and the home holds the credential: delivered. The
-    rerun checks it with the pin of section 4, step 3, and goes on.
+  - bundle `redeemed`, and the home holds a credential: the rerun
+    applies the match of section 4, step 3, by the bundle's redeemed user
+    and token IDs. A match is delivered, and the run goes on. A credential
+    of another user stops the run and names the home.
   - bundle `redeemed`, and the home holds no credential: spent, with the
     delivery lost. The rerun stops with exit code 5 and names the hub
     administrator's recovery for the user and token that bundle issued,

@@ -3,9 +3,11 @@ name: pilot simulation
 # The pilot simulation (docs/E2E-PILOT-SIM.md): nightly on main, by hand on
 # any branch, and on a pull request that carries the label pilot-sim. The
 # stack is too heavy for every push, so it is kept out of the ordinary
-# pull-request run. Two jobs, each on a runner of its own: pilot-sim (the
-# cycles and the cases) and pilot-sim-upgrade (the upgrade scenario from the
-# previous release, scripts/pilot-sim.sh -upgrade).
+# pull-request run. Three jobs, each on a runner of its own: pilot-sim (the
+# cycles and the cases), pilot-sim-upgrade (the upgrade scenario from the
+# previous release, scripts/pilot-sim.sh -upgrade) and
+# pilot-sim-upgrade-below-minimum (the same scenario from a home whose aimem
+# is below this tree's minimum, -upgrade -below-minimum).
 #
 # The label gate is e2e-real-aimem.yml's: a pull request event runs the job
 # only while the label is on the pull request, and a labeled event only
@@ -140,6 +142,58 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pilot-sim-upgrade
+          path: |
+            ${{ runner.temp }}/pilotsim-upgrade
+            !${{ runner.temp }}/pilotsim-upgrade/stage
+            !${{ runner.temp }}/pilotsim-upgrade/.known
+          if-no-files-found: warn
+          retention-days: 14
+
+  pilot-sim-upgrade-below-minimum:
+    name: >-
+      ${{ (github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'pilot-sim') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'pilot-sim')))
+      && 'pilot-sim-upgrade-below-minimum' || 'pilot-sim-upgrade-below-minimum (not requested)' }}
+    # The pattern of pilot-sim above: no job-level if, REQUESTED is the
+    # name's condition, and every step but the first is gated by it.
+    env:
+      REQUESTED: >-
+        ${{ github.event_name != 'pull_request' ||
+        (contains(github.event.pull_request.labels.*.name, 'pilot-sim') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'pilot-sim')) }}
+      AICREW_SIM_BOUND_MINUTES: '30'
+    runs-on: ubuntu-latest
+    # The run's own bound (30 minutes, above) stops it first and still
+    # writes the report; this is the backstop.
+    timeout-minutes: 45
+    steps:
+      - name: not requested
+        if: env.REQUESTED != 'true'
+        run: echo "pilot-sim-upgrade-below-minimum was not requested for this event (label pilot-sim); nothing runs"
+      # The start is the pinned pair of `simupgrade below-minimum`; the
+      # history is fetched whole as in pilot-sim-upgrade.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.REQUESTED == 'true'
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: env.REQUESTED == 'true'
+        with:
+          go-version: '1.25'
+          cache: true
+      - name: the upgrade scenario from aimem below the minimum
+        if: env.REQUESTED == 'true'
+        run: bash scripts/pilot-sim.sh -upgrade -below-minimum -out "$RUNNER_TEMP/pilotsim-upgrade"
+      - name: the report's summary
+        if: always() && env.REQUESTED == 'true'
+        run: tail -n 1 "$RUNNER_TEMP/pilotsim-upgrade/report.jsonl" || echo "no report"
+      - name: keep the report and the logs
+        if: always() && env.REQUESTED == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pilot-sim-upgrade-below-minimum
           path: |
             ${{ runner.temp }}/pilotsim-upgrade
             !${{ runner.temp }}/pilotsim-upgrade/stage

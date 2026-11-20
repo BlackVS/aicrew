@@ -30,7 +30,12 @@ if [ ! -f "$home/agent.json" ] || ! grep -q '"agent_id"' "$home/agent.json"; the
   else
     echo "member.sh: this aicrew-agent has no preflight; join without it" >&2
   fi
-  aicrew-agent join --label "$SIM_ROLE" --home "$home" --url https://sim-px-crew:9443 \
+  # A member installed from the export (the upgrade scenario's previous
+  # release) joins the closed-network way, with the export named, so that
+  # its check's instructions name the export (docs/E2E-PILOT-SIM.md).
+  base=
+  [ ! -f /opt/aicrew-export/MANIFEST ] || base=/opt/aicrew-export
+  AICREW_BASE=$base aicrew-agent join --label "$SIM_ROLE" --home "$home" --url https://sim-px-crew:9443 \
     --tls-trust-mode spki_sha256 --tls-trust-value "$PIN_SIM_AICREWD" --aimem-hub sim --client claude \
     --wake turns --no-service --code-file "$in/invite" --aimem-command /usr/local/bin/aimem-timed \
     --aimem-url https://sim-px-aimem:8440 --aimem-token-file "$in/aimem.token" --aimem-ca-file /sim/tls/ca.pem \

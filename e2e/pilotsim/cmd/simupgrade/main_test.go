@@ -2,12 +2,60 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// The below-minimum run shows its state only while the pinned aimem is below
+// the minimum of this tree's supported set.
+func TestBelowMinimumIsBelow(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "internal", "agent", "supported.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var set struct {
+		Components map[string]struct {
+			Ranges []struct{ Min string }
+		}
+	}
+	if err := json.Unmarshal(raw, &set); err != nil {
+		t.Fatal(err)
+	}
+	r := set.Components["aimem"].Ranges
+	if len(r) == 0 {
+		t.Fatal("supported.json has no aimem range")
+	}
+	if !versionBelow(belowMinimumAimem, r[0].Min) {
+		t.Fatalf("aimem %s is not below this tree's minimum %s: the below-minimum run would show nothing; "+
+			"pick a new pair (simupgrade, belowMinimumAicrew and belowMinimumAimem)", belowMinimumAimem, r[0].Min)
+	}
+	if !releaseTag.MatchString(belowMinimumAicrew) {
+		t.Fatalf("%q is not a release tag", belowMinimumAicrew)
+	}
+}
+
+// versionBelow compares two X.Y.Z versions.
+func versionBelow(a, b string) bool {
+	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < 3; i++ {
+		var x, y int
+		if _, err := fmt.Sscan(pa[i], &x); err != nil {
+			return false
+		}
+		if _, err := fmt.Sscan(pb[i], &y); err != nil {
+			return false
+		}
+		if x != y {
+			return x < y
+		}
+	}
+	return false
+}
 
 // snapshot writes a step snapshot of a first cycle in dir, as
 // pilot-sim.sh's take writes one: ids.json, aicrewd's store with every

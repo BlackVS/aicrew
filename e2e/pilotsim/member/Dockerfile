@@ -2,8 +2,7 @@
 # Go from the distribution's package (a worker's host has the build tools of
 # the project it works on, docs/BRING-UP.md; the stand-in client runs
 # `go version` in a worker's worktree),
-# the client stand-in as `claude` on PATH, b4's aimem-timed wrapper that
-# the home joins with as its aimem command, then each component by its own
+# the client stand-in as `claude` on PATH, then each component by its own
 # installer (DESIGN-PILOT-SIMULATION section 3): aicrew's boot.sh from this
 # tree's binaries, or in the upgrade scenario the previous release's own
 # boot.sh from its export (AICREW_BASE, every file checked against its
@@ -27,8 +26,7 @@ COPY prebuilt/ /opt/aicrew-prebuilt/
 COPY export/ /opt/aicrew-export/
 COPY boot.sh /opt/aicrew-boot.sh
 COPY member.sh /usr/local/bin/member.sh
-COPY aimem-timed /usr/local/bin/aimem-timed
-RUN chmod 755 /usr/local/bin/aimem-timed
+COPY doclines.sh /usr/local/bin/doclines.sh
 USER member
 WORKDIR /home/member
 ENV PATH=/home/member/.local/bin:/usr/local/bin:/usr/bin:/bin
@@ -41,4 +39,9 @@ RUN if [ -f /opt/aicrew-export/MANIFEST ]; then cd "$(mktemp -d)" \
     && sha256sum --ignore-missing -c SHA256SUMS \
     && mkdir src && tar -xzf "aiskills-$AISKILLS_VERSION.tar.gz" -C src --strip-components=1 \
     && bash ./src/install.sh --user -t claude -s "$AISKILLS"; fi
+# Last, b4's aimem-timed wrapper as `aimem`, ahead of the real one on PATH:
+# join, run in docs/BRING-UP.md's form, records no aimem command, and the
+# home's commands find the wrapper by name.
+COPY --chmod=755 aimem-timed /usr/local/bin/aimem
+ENV PATH=/usr/local/bin:/home/member/.local/bin:/usr/bin:/bin
 ENTRYPOINT ["bash", "/usr/local/bin/member.sh"]

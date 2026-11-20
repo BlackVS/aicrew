@@ -50,15 +50,15 @@ set by the invitation, not by the host.
 | Linux on amd64 or arm64 | `uname -sm` | `boot.sh` refuses any other system or architecture |
 | One OS user per member, not root, with a home directory | `id` | `e2e/pilotsim/member/Dockerfile` (`useradd -m`); `boot.sh` installs into `~/.local/bin` |
 | `curl`, `ca-certificates`, `git`, `jq`, `python3` | `command -v curl git jq python3` | the member image's package list; `boot.sh` needs curl, aimem's installer needs jq, and git is used for each worktree |
-| On a worker's host, the project's build tools: for aicrew, Go at go.mod's `go` version or later, and git | `go version` and `git --version`, before join; after join, the worker's `aicrew-agent check --home HOME` has no `toolchain_tool_missing` block | the toolchain the operator selects in step 1 runs them in the worker's turns, and `check` looks for its first tool on its PATH. The worker's service runs with the PATH of the shell that installed or last restarted it, so install the tools before join (step 5) |
+| On a worker's host, the project's build tools: for aicrew, Go at go.mod's `go` version or later, and git | `go version` and `git --version`, before join; after join, the worker's `aicrew-agent check --home HOME` <!-- run: check --> has no `toolchain_tool_missing` block | the toolchain the operator selects in step 1 runs them in the worker's turns, and `check` looks for its first tool on its PATH. The worker's service runs with the PATH of the shell that installed or last restarted it, so install the tools before join (step 5). Seen on the first team's worker host on 2026-11-20: Go built aicrew only with `CGO_ENABLED=0`, since the host had a C compiler without the C library's headers; and three of aicrew's tests of file modes failed under the host's umask, on the unchanged base too |
 | Node.js with npm, for the client | `npm --version` | `aicrew-agent check`'s instruction for a missing client is `npm install -g @anthropic-ai/claude-code@<tested>` |
 | A systemd user manager, with lingering on | `systemctl --user status` and `loginctl show-user "$USER" --property=Linger` | `aicrew-agent service` (a systemd user unit), and the note it prints when lingering is off |
 | About 0.5 GB of disk for the tools | `df -h ~` | the try below: 34 MB for aicrew and aimem, 456 MB for Claude Code; worktrees come on top |
-| 512 MB of memory for the member, plus the client's own | `free -m` | `e2e/pilotsim/compose.yaml` (`mem_limit: 512m` per member, with a stand-in client) |
+| 512 MB of memory for the member, plus the client's own; on a worker's host, 2 GiB is recommended for the project's tests | `free -m` | `e2e/pilotsim/compose.yaml` (`mem_limit: 512m` per member, with a stand-in client). Seen on 2026-11-20: the first team's worker host had 1 GiB, and its `go test ./...` of aicrew ran with swap in use |
 | Reaches aicrewd | `aicrew-agent preflight` with join's `--url` and trust, before join (step 6) | join's own client to aicrewd, on its unauthenticated `/healthz` route |
 | Reaches the aimem hub with the member's credential | `aicrew-agent check --home HOME`, after join: no `credential_missing` or `credential_refused` block, and no notice that the hub could not confirm the home's credential | `check` asks the hub about the credential in the home's own aimem installation, never the OS user's |
 | Reaches the forge | `aicrew-agent check --home HOME`, its forge table | `check`'s read-only "who am I" per credential |
-| The client, logged in | before join, `aicrew-agent preflight --client claude` shows a login is stored; after join, `aicrew-agent check --home HOME`, its `turn model:` line, shows it works | `claude auth status`; `check` in a `turns` home (one minimal model call, about $0.002) |
+| The client, logged in | before join, the preflight's `login (claude):` line (step 6) shows a login is stored; after join, `aicrew-agent check --home HOME`, its `turn model:` line, shows it works | `claude auth status`; `check` in a `turns` home (one minimal model call, about $0.002) |
 
 Two notes on these:
 - **A container is not enough by itself.** A container usually has no
@@ -81,8 +81,29 @@ Two notes on these:
 The operator's steps run two kinds of command, and each needs its
 connection set up first.
 
-**`aicrew`, on the operator's machine, reaches aicrewd** through four
-values, as flags on each command or, once, as variables of the shell:
+**Where the operator's `aicrew` commands run.** The operator is a person
+at their own machine. Their `aicrew` commands run in one of two places, and
+the difference is where the operator credential lies:
+1. **On aicrewd's host, reached by SSH.** This is what `install-aicrewd.sh`
+   leaves: it installs `aicrew` beside aicrewd in the service user's
+   `~/aicrew/bin` (the user is `sessiond` unless `AICREW_HUB_USER` named
+   another) and writes the operator credential to that user's
+   `~/aicrew/etc/operator.token`, owner-only. The operator logs in to the
+   host by SSH, becomes the service user (`sudo -iu sessiond`), and runs
+   the commands there. The credential never leaves that host. An AI
+   session on the operator's machine reaches it only through a shell on
+   that host as that user, so no such session needs one: an architect
+   session gets its own, narrower credential (DEVELOPMENT.md, "The
+   architect directory").
+2. **On the operator's own machine.** The operator copies
+   `operator.token` to their machine, owner-only, and installs `aicrew`
+   there with the member one-liner (step 5). The commands are the same.
+   The credential then lies on that machine too, where every process of
+   their OS user, an AI session they start included, can read it.
+
+The rest of this page is the same for both. `aicrew` reaches aicrewd
+through four values, as flags on each command or, once, as variables of
+the shell:
 
 ```sh
 export AICREW_URL=https://AICREWD:PORT
@@ -91,10 +112,11 @@ export AICREW_TLS_TRUST_VALUE=AICREWD          # the host name, or sha256- and t
 export AICREW_OPERATOR_TOKEN_FILE=operator.token
 ```
 
-The flags are `--url`, `--tls-trust-mode`, `--tls-trust-value` and
-`--token-file`. The token file holds the operator credential, owner-only.
-The commands of this page show neither: they assume the variables.
-Check: `aicrew status` answers.
+On aicrewd's host, `AICREW_OPERATOR_TOKEN_FILE` is
+`~/aicrew/etc/operator.token`. The flags are `--url`,
+`--tls-trust-mode`, `--tls-trust-value` and `--token-file`. The commands
+of this page show neither: they assume the variables.
+Check: `aicrew status` <!-- run: status --> answers.
 
 **aimem's admin commands run on the hub's host, as the hub's service
 user.** They reach the hub in two ways:
@@ -141,6 +163,7 @@ team works on.
 
 ### 1. The team on its hub (operator and the hub's admin, once)
 
+<!-- run: team-setup -->
 ```sh
 aicrew team setup crew --hub main --project PROJECT
 ```
@@ -149,6 +172,7 @@ A new team has no project yet. `team setup` creates or registers it, then
 prints `not granted yet; on the hub's host, as its admin, run:` followed by
 one line per project, and exits 3:
 
+<!-- run: hub-grant -->
 ```text
   aimem identity team grant --peer SERVICE --team-name crew --project PROJECT --hub HUB_URL --admin-token-file ADMIN_TOKEN_FILE
 ```
@@ -161,7 +185,7 @@ address, so the line cannot:
 - `ADMIN_TOKEN_FILE` is the file with the hub admin's bearer ("Before
   step 1"): `"$ADMIN_TOKEN_FILE"` in that shell. After the grants, remove
   it: `rm -f "$ADMIN_TOKEN_FILE"`.
-- A hub on a private CA also takes `--hub-ca-file FILE` or
+- A hub on a private CA also takes `--hub-ca-file FILE` <!-- run-add: hub-grant --> or
   `--hub-pin sha256-PIN`.
 
 Without `--hub` the command stops with "--hub must be the hub's TLS
@@ -181,6 +205,7 @@ for the project. Without one, its turns deny `go test` and the like, and
 the worker cannot test its change. For aicrew, and any project built with
 Go:
 
+<!-- run: team-toolchain -->
 ```sh
 aicrew team toolchain --team-name crew --project PROJECT --toolchain dev-go
 ```
@@ -189,7 +214,7 @@ aicrew team toolchain --team-name crew --project PROJECT --toolchain dev-go
 the repository's `scripts/*.sh` (`internal/toolchain`). A worker's launcher
 records the team's projects when it starts, so select the toolchain before
 the worker joins. A selection made later takes effect when the worker's
-service restarts: `aicrew-agent service restart --home HOME` on the
+service restarts: `aicrew-agent service restart --home HOME` <!-- run: service-restart --> on the
 worker's host. The restarted service records the team's projects after
 its model probe and its session's start, and only then writes
 `msg="the turn loop runs"` to `HOME/logs/serve.log`. A check run before
@@ -202,9 +227,12 @@ record the team, and `HOME/logs/serve.log` then holds `msg="the team's
 projects were not recorded"` with the cause in its `error=` field.
 Restart the service again once that cause is gone.
 
-Check: `aicrew team show --team-name crew` names `dev-go` for the project
-under `toolchains`. After step 6, the worker's `aicrew-agent check --home
-HOME` prints no `warning:` line under its status line. A worker's check
+Check: `aicrew team show --team-name crew` <!-- run: team-show --> names `dev-go` for the project
+under `toolchains`. After step 6, the worker's `aicrew-agent check --home HOME`
+says `ready` with no warning that names the project just selected. A team
+with several projects keeps a warning for each project without a
+selection. Such a warning names the operator's command with the team's ID,
+`--team ID`: it names the same team as `--team-name crew`. A worker's check
 reports the toolchain from aicrew 0.11.3 on, the release step 5 installs.
 
 The hub also needs the skills set that the project's process pins: the
@@ -212,18 +240,20 @@ members get their skills from the hub in step 6. The hub's admin imports
 the ai-skills release on the hub's host, from its release archive and the
 SHA256SUMS beside it:
 
+<!-- run: skills-import -->
 ```sh
 aimem skills import --from-archive aiskills-1.43.0.tar.gz
 ```
 
 The archive and SHA256SUMS are the assets of that ai-skills release, or
 the same files from an aiforge export in a closed network. Check:
-`aimem skills list --hub` on the hub's host names the release set.
+`aimem skills list --hub` <!-- run: skills-list --> on the hub's host names the release set.
 
 **A new team works as soon as a member joins.** A coordinator that joins
 wakes on the READY tasks of the team's projects. To bring the team up
 first and start its work later, pause it now:
 
+<!-- run: team-pause-bring-up -->
 ```sh
 aicrew team pause --team-name crew --reason "bring-up"
 ```
@@ -236,16 +266,18 @@ joins: the first team's members joined it paused on 2026-11-19, and ended
 
 On the hub's host, with aimem's admin commands ("Before step 1"):
 
+<!-- run: user-add member-token per=worker -->
 ```sh
 aimem access user-add --user-name crew-worker
-aimem access token-issue-user --user-name crew-worker --label crew-worker --expires 2027-01-01T00:00:00Z --output member.token
+aimem access token-issue-user --user-name crew-worker --label crew-worker --expires +90d --output member.token
 ```
 
-The member's aimem user gets no grant of its own: the hub serves it under
+`--expires` takes a time (`2027-03-01T00:00:00Z`) or a span from now
+(`+90d`). The member's aimem user gets no grant of its own: the hub serves it under
 the team's grant (step 6, "The skills").
 
 Check: `user-add` prints the user's ID, which step 4's `--expect-user`
-needs. `aimem access list` shows the users and their live tokens; there is
+needs. `aimem access list` <!-- run: access-list --> shows the users and their live tokens; there is
 no separate user list. The token file is owner-only.
 
 **Carrying a file to the member's host.** Steps 2 to 4 each make a file
@@ -301,6 +333,7 @@ token" below).
 
 ### 4. The invitation (operator)
 
+<!-- run: invitation-issue per=worker -->
 ```sh
 aicrew invitation issue --team-name crew --role worker --hub HUB_ID --label worker --expect-user USER_ID --output invite.code
 ```
@@ -310,7 +343,7 @@ code is written only to `--output` and is never an argument later. Give it
 privately to whoever runs `join`. It lives 24 hours by default and at most
 72 (`--expires 72h`); a bring-up spread over days issues it last, or again.
 
-Check: `aicrew invitation list --team-name crew` shows its state.
+Check: `aicrew invitation list --team-name crew` <!-- run: invitation-list --> shows its state.
 
 ### 5. The tools (member host, as the member's user)
 
@@ -346,13 +379,14 @@ npm install -g @anthropic-ai/claude-code@2.1.286
 
 Then the person logs the client in: `claude`, and its login flow.
 
-Check: `aicrew-agent version`, `aimem version` and `claude --version` print
+Check: `aicrew-agent version` <!-- run: agent-version -->, `aimem version` <!-- run: aimem-version --> and `claude --version` <!-- run: client-version --> print
 v0.11.3, v0.11.5 and 2.1.286.
 
 ### 6. Join (member host)
 
 First the preflight, with the same `--url` and trust values join takes:
 
+<!-- run: preflight -->
 ```sh
 aicrew-agent preflight --url https://AICREWD:PORT --tls-trust-mode ca_dns --tls-trust-value AICREWD --client claude
 ```
@@ -387,6 +421,7 @@ Check: the preflight exits 0. It exits 1 with the line that failed.
 
 Then join, on a terminal, so the code is read at a hidden prompt:
 
+<!-- run: join per=worker -->
 ```sh
 aicrew-agent join --label worker --url https://AICREWD:PORT \
   --tls-trust-mode ca_dns --tls-trust-value AICREWD --aimem-hub main --client claude --wake turns \
@@ -398,10 +433,14 @@ aicrew-agent join --label worker --url https://AICREWD:PORT \
   its port. With `--cred FORGE_HOST=-` the token is typed at a hidden
   prompt instead of read from a file.
 - **The hub's CA.** A hub on a private CA adds
-  `--aimem-ca-file hub-ca.pem`. Pin aicrewd as its trust mode requires
+  `--aimem-ca-file hub-ca.pem` <!-- run-add: join -->. Pin aicrewd as its trust mode requires
   ([DEVELOPMENT.md](DEVELOPMENT.md), "Joining a team").
+- **A pinned aicrewd.** With aicrewd's key pinned instead of its CA and
+  name, the preflight and join both take
+  `--tls-trust-mode spki_sha256 --tls-trust-value sha256-PIN` <!-- run-alt: preflight join -->
+  in place of their two trust flags.
 - **Without a terminal.** A run with no terminal gives the code with
-  `--code-file PATH`, an owner-only file. Otherwise it stops with
+  `--code-file PATH` <!-- run-add: join -->, an owner-only file. Otherwise it stops with
   `no_terminal` and says so.
 - **The service.** In `turns` mode, join installs and starts the member's
   service itself when the home is ready.
@@ -416,8 +455,8 @@ aicrew-agent join --label worker --url https://AICREWD:PORT \
   since a pause holds the member's turns, not its conversation.
 
 When join cannot install the skills, it ends `blocked` with one of these
-reasons, the step that fixes it, and the rerun, `aicrew-agent join --home
-HOME`:
+reasons, the step that fixes it, and the rerun,
+`aicrew-agent join --home HOME` <!-- run: join-rerun -->:
 - `skills_not_on_hub`: the hub holds no set with every pinned skill. The
   hub's admin imports it (step 1); aimem's own lines name each skill and
   its import command.
@@ -428,7 +467,7 @@ HOME`:
   installs the release that has it.
 - `skills_conversation`: the conversation could not be opened, or the
   hub did not accept it. For a session the home recorded earlier, the
-  line names `aicrew-agent session leave --home HOME` first.
+  line names `aicrew-agent session leave --home HOME` <!-- run: session-leave --> first.
 - `skills_no_project` and `skills_install_failed`: the team has no
   project yet, or aimem failed otherwise, with its own text.
 
@@ -436,8 +475,8 @@ On a worker's host, join also ends `blocked` with the reason
 `toolchain_tool_missing` when a toolchain is selected for the team's
 project (step 1) and its tool, `go` for `dev-go`, is not on the PATH.
 Join then installs no service. Install the tool (the host table above),
-then rerun join from a shell that finds it: `aicrew-agent join --home
-HOME`. The rerun installs the service, which runs with that shell's PATH.
+then rerun join from a shell that finds it:
+`aicrew-agent join --home HOME`. The rerun installs the service, which runs with that shell's PATH.
 
 Check: join's report is `ready`, and its `skills:` lines name what it
 installed. Its forge table shows the host `provisioned`, and `aicrew
@@ -478,6 +517,7 @@ Two lines of join's and `check`'s output are not faults:
 
 ### 7. The service (member host)
 
+<!-- run: enable-linger service-status -->
 ```sh
 loginctl enable-linger "$USER"
 aicrew-agent service status --home HOME
@@ -492,13 +532,15 @@ Check: `service status` says `running`.
 ### 8. The team (operator)
 
 If the team was paused in step 1, resume it when every member is
-`ready`: `aicrew team resume --team-name crew`.
+`ready`: `aicrew team resume --team-name crew` <!-- run: team-resume -->.
 
 Check: `aicrew team show --team-name crew` lists the coordinator and the
 worker. `aicrew-agent check --home HOME` on each host has no `blocked`
-line, and on the worker's host no `warning:` line. Its `turn model:` line
+line, and on the worker's host no warning for a project whose toolchain
+was selected. Its `turn model:` line
 says `available`, and its project table says `verified` for each
-repository. `aicrew status` shows both members.
+repository; with `--json` <!-- run-add: check --> it prints the same
+report as JSON, for a script. `aicrew status` shows both members.
 
 This is feature 5's check.
 
@@ -511,7 +553,9 @@ the attempt, and the coordinator escalates. Nothing in the worker's home
 is edited by hand. In this order:
 1. On the worker's host, `aicrew-agent check --home HOME` prints
    `warning: project PROJECT has no toolchain selected` under its status
-   line, with the operator's command. A worker's check reports the
+   line, with the operator's command. That command names the team by its
+   ID, `--team ID`, which is the same team as `--team-name crew` in step
+   2 below. A worker's check reports the
    toolchain from aicrew-agent 0.11.3 on; an older one prints no such
    line: upgrade the member to v0.11.3 first (step 5's one-liner). The
    upgrade restarts its service, which records the team again: run check
@@ -539,9 +583,107 @@ is edited by hand. In this order:
    instruction says, and wait for the line again. A worker whose join
    ended blocked has no service yet: there, rerun join from that shell
    (`aicrew-agent join --home HOME`), which installs it.
-6. `aicrew-agent check --home HOME` says `ready`, with no `warning:` line.
+6. `aicrew-agent check --home HOME` says `ready`, with no warning that
+   names the project just selected.
 7. Only then is the open escalation answered, so that the worker's
    resumed attempt runs its tests under the new selection.
+
+## The operator during a cycle
+
+Once the team is resumed, the coordinator offers a task, the worker works
+on it and opens its pull request, and the reviews and CI decide when a
+person merges it. The operator watches and answers with these commands,
+on the host where the operator's commands run ("Before step 1"). Each
+prints JSON.
+
+**The team's state.**
+
+<!-- run: team-state -->
+```sh
+aicrew team state --team-name crew
+```
+
+It lists each member under `members`:
+- `state` is `working` (a turn runs), `waiting` (the member waits for
+  its next message), `paused`, `offline` (aicrewd has not heard from it
+  lately), `needs_login` or `limit_reached`. A member's `hold`, when
+  present, says why it takes no turn and until when, with the command
+  that logs a client in.
+- `unacknowledged` counts the messages in the member's inbox that it
+  has not acknowledged yet, delivered or not. A member acknowledges a
+  message once a turn has handled it, so the count says only that these
+  messages are not handled yet. It stays above zero for one of two
+  causes: a turn is still working on them (on 2026-11-20 a
+  coordinator's turns ran for twelve minutes on one message with the
+  count at one), or no turn runs. `state` tells them apart: `working` is
+  the first; `waiting` with the same count for several minutes, or a
+  `hold`, points to the second.
+- `open_attempt` is the attempt the member works on: its `phase` is
+  `working`, `blocked` (the worker stopped and said why), `submitted`
+  (the coordinator reviews it), `rework`, `accepted` or `finalized`. A
+  blocked attempt carries `block` with the worker's reason and since
+  when.
+- `stalled` is true for an attempt that has not changed for longer than
+  aicrewd's stall window and waits for no merge and no answer.
+
+Check: the command exits 0 and names the coordinator and the worker.
+`paused` at the top says the team is paused, with its reason.
+
+**An escalation.** A question the coordinator cannot settle within its
+role becomes an escalation, and the team's work on that task waits for
+the answer. Find the open ones:
+
+<!-- run: escalations-list -->
+```sh
+aicrew escalations list --open
+```
+
+Each has an `id`, the `task`, the coordinator's `question`, its
+`options` and `recommendation`, and what is `blocked` until the answer.
+Read one whole by its ID, or by a prefix of at least eight characters
+that starts no other escalation's ID:
+
+<!-- run: escalations-show -->
+```sh
+aicrew escalations show --id ESCALATION
+```
+
+Answer it once:
+
+<!-- run: escalations-answer -->
+```sh
+aicrew escalations answer --id ESCALATION --decision "DECISION" --rationale "RATIONALE"
+```
+
+A good decision is one the coordinator can act on without asking again:
+it names one of the options, or what to do instead, in a sentence. The
+rationale says why, with the facts it rests on: the coordinator reads both.
+Check: the answer prints the escalation with its
+`answer`, and `aicrew escalations list --open` no longer lists it. The
+coordinator and the worker act on it in their next turns: the attempt
+leaves `blocked` in the team's state.
+
+**Pause and resume.** A pause holds every member's turns, not their
+sessions, for example while the operator looks at something by hand:
+
+<!-- run: team-pause -->
+```sh
+aicrew team pause --team-name crew --reason "REASON"
+```
+
+and `aicrew team resume --team-name crew` lets them go on. Check: the
+team's state shows `paused` with the reason, and no longer after the
+resume.
+
+**On the forge.** The worker's pull request carries the worker's review,
+the external reviewer's and the coordinator's, each naming the head it
+read, and CI's checks. When all three are `READY_FOR_HUMAN_MERGE` at the
+same head and CI is green, the pull request is marked ready, and a person
+merges it: neither the members nor the operator's commands merge. Until
+task 01a1fa07-5db2 is done, the readiness check does not read the
+worker's and the coordinator's reviews, whose headers are not yet in the
+form it reads, so the pull request waits for the person's own look at
+the three reviews.
 
 ## The forge token's rights
 

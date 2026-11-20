@@ -267,7 +267,7 @@ after the other, never together: each needs the memory above.
 | `sim-gitea` | Gitea 1.27 with TLS from the run's CA | the pinned image, configured by its own CLI and API |
 | `sim-hands`, `sim-ci` | the stub reviewer and the stub CI ([below](#the-stub-reviewer-and-the-stub-ci)) | `simstub` (`e2e/pilotsim/cmd/simstub`) in one image, `e2e/pilotsim/stub/` |
 | `sim-px-aimem`, `sim-px-crew`, `sim-px-peer`, `sim-px-hub` | the fault proxies ([below](#the-fault-cases)) | `simproxy` (`e2e/pilotsim/cmd/simproxy`) in one image, `e2e/pilotsim/proxy/` |
-| `sim-coordinator`, `sim-worker`, `sim-indep` | one member home each, `aicrew-agent serve`; `sim-indep` is an independent member, whose steps the fault cases drive ([below](#the-direct-steps)) | `boot.sh` with `AICREW_PREBUILT_DIR`; aimem's verifying boot script taken at the tested tag, as `aicrew-agent check` instructs; no ai-skills; then `aicrew-agent join … --wake turns --no-service --code-file … --aimem-command /usr/local/bin/aimem-timed`, which installs the skills from the hub inside the team's conversation, as on a person's hosts (BRING-UP.md, step 6). Only the upgrade scenario's previous release, which has no such path, installs ai-skills from its release archive checked against `SHA256SUMS`, as that release's homes had them |
+| `sim-coordinator`, `sim-worker`, `sim-indep` | one member home each, `aicrew-agent serve`; `sim-indep` is an independent member, whose steps the fault cases drive ([below](#the-direct-steps)) | `boot.sh` with `AICREW_PREBUILT_DIR`; aimem's verifying boot script taken at the tested tag, as `aicrew-agent check` instructs; no ai-skills; then docs/BRING-UP.md's preflight and join (member.sh, [below](#where-the-simulation-differs-from-the-document)), which installs the skills from the hub inside the team's conversation, as on a person's hosts (BRING-UP.md, step 6). Only the upgrade scenario's previous release, which has no such path, installs ai-skills from its release archive checked against `SHA256SUMS`, as that release's homes had them |
 
 The member's client is `aicrew-simclient` (`e2e/pilotsim/cmd/aicrew-simclient`),
 installed as `claude` on the image's `PATH`, where a member finds its
@@ -295,7 +295,19 @@ TLS is real everywhere:
 ## The operator's steps
 
 `scripts/pilot-sim.sh` plays the operator, each step with the product's own
-command on the host it belongs to:
+command on the host it belongs to. Where [BRING-UP.md](BRING-UP.md) writes
+the step, the runner runs the document's own line: each is marked there
+with a step id (`<!-- run: ID -->`, which leaves the rendered page as it
+was), and the runner reads it with `e2e/docsteps` and fills in its
+placeholders. A scenario declares the ids it runs
+(`e2e/docsteps/scenarios.json`), and a full run fails at its end when it
+did not run one of them; `go test ./e2e/docsteps` checks that the
+scenarios together run every marked line but the exemptions below, and
+parses every `aicrew` and `aicrew-agent` line with this tree's binaries.
+The simulation uses the document's names: the team `crew`, aicrewd's hub
+alias and the members' `main`, the aimem users `crew-coordinator`,
+`crew-worker` and `crew-independent`, and each member home at join's
+default, `~/aicrew/agents/LABEL`.
 1. In Gitea:
    - the `operator` account, one account per member and one per stub
      (`sim-hands`, `sim-ci`), each with its own token;
@@ -311,23 +323,31 @@ command on the host it belongs to:
    `aimem identity peer provision`. The peer's credential directory is then
    copied to aicrewd's host.
 3. On aicrewd's host:
-   - `aicrew hub add`, then a restart of aicrewd;
-   - `aicrew team setup`, with the grant it prints run by the hub's admin,
+   - `aicrew status`, `aicrew hub add`, then a restart of aicrewd;
+   - `aicrew team setup`, the document's grant run by the hub's admin,
      then setup again;
-   - `aicrew team toolchain --team-name sim --project pilot --toolchain dev-go`,
+   - `aicrew team toolchain --team-name crew --project pilot --toolchain dev-go`,
      the toolchain step of docs/BRING-UP.md, with its check: `aicrew team
      show` must name `dev-go` for the project. It runs before any member
      joins, so each worker's launcher records the selection when it starts;
    - `aicrew hub-credential issue` for the hub's introspection credential.
 4. Each stub's token in its own `/sim/in`, then the scenario file.
-5. Per member:
+5. `aicrew team pause` for the bring-up, then per member:
    - an aimem user and a user token, `aicrew invitation issue`;
-   - the member's input files.
+   - the member's input files, among them the document's lines it runs:
+     `aicrew-agent version`, `aimem version`, `claude --version`, the
+     preflight and join;
+   - the simulation's CA in the member's system trust;
+   then `aimem access list` and `aicrew invitation list`.
+6. After the smoke check, each member's `aicrew-agent join --home HOME`
+   on its linked home, `aicrew status`, and `aicrew team resume`.
 
 Every input a person would give is a file written before the member
-starts: the invitation code, the aimem token and the forge token. Each is
-owner-only in the member's `/sim/in`, and the script then writes `ready`
-there. The member joins with them and removes them, then runs serve. As
+starts: the invitation code, the aimem token, the forge token and the
+hub's CA, under the names the document gives them (`invite.code`,
+`member.token`, `forge.token`, `hub-ca.pem`). Each is owner-only in the
+member's `/sim/in`, and the script then writes `ready` there. The member
+runs the document's lines there. The member joins with them and removes them, then runs serve. As
 an installed member's service does, the container starts serve again
 10 seconds after a failure, but not after a clean stop or exit 2: a
 member whose session refresh meets the hub stopped (case F6-unreachable)
@@ -338,6 +358,63 @@ smoke check fails at once on member.sh's line for it.
 
 No secret is printed or passed as an argument. A token or code goes from
 the container that makes it to the one that reads it through a pipe.
+
+### Where the simulation differs from the document
+
+Each difference is in one place in the scripts, named in the table.
+
+| Difference | Where | Why |
+| --- | --- | --- |
+| join and its rerun run with `AICREW_NO_SERVICE=1` | `member/member.sh`, `mrejoin` in `scripts/pilot-sim.sh` | the containers have no systemd user manager; member.sh restarts serve as the installed service would |
+| join runs with `AICREW_BASE` naming the export, when the member was installed from it | `member/member.sh` | the upgrade scenario's previous release is installed from the aiforge export, as on a closed network |
+| the simulation's CA is added to each member's system trust | the members' loop in `scripts/pilot-sim.sh` | the document's `ca_dns` trusts the system roots; a host on a private CA has it there |
+| aimem-timed is `/usr/local/bin/aimem`, ahead of the real aimem on PATH | `member/Dockerfile`, `member/aimem-timed` | join in the document's form records no aimem command, and the fault cases' gates need the wrapper |
+| sim-indep joins with the document's pinned alternative (`spki_sha256`) | `member_lines` in `scripts/pilot-sim.sh` | one scenario runs the alternative the document marks |
+| the below-minimum run's first join is the simulation's own | `member/member.sh` | its start, aicrew v0.11.0, predates the document's form (no preflight); it runs no member line of the document |
+| aicrew-agent check runs with `--json` | `mcheck` in `scripts/pilot-sim.sh` | the runner reads the report; the flag is document text (step 8) |
+
+The marked lines no scenario runs, each with its reason (also in
+`e2e/docsteps/docsteps_test.go`), are still parsed:
+- `aicrew-agent service restart` and `service status`: no systemd user
+  manager in the members' containers;
+- `loginctl enable-linger`: a systemd login setting of a real host;
+- `aicrew-agent session leave`: named only in join's
+  `skills_conversation` reason, which needs the hub to refuse a
+  conversation for a session the home recorded earlier, a hub fault no
+  harness injects.
+
+### What the document check covers
+
+`go test ./e2e/docsteps` reads every line of docs/BRING-UP.md that runs
+`aicrew`, `aicrew-agent` or `aimem`, wherever the tool's name stands in
+it: in a fenced block or an inline span, after `sudo -iu USER`, a
+variable's assignment or shell punctuation (a command substitution, a
+pipe), a substitution or backquotes inside double quotes included. It
+over-approximates rather than parses shell: any word that
+is the tool's name counts, so a lookup such as `command -v aicrew` would
+ask for a marker or an exemption. Each such line is marked, or repeats a
+marked line. An inline span that starts with the tool's name and has no
+flag and no placeholder (`aicrew team setup`) names a command: it needs
+no marker, and for `aicrew` and `aicrew-agent` its whole verb sequence
+must be one the tool's usage names, with a word after it only where the
+usage has a placeholder. A marked line's verbs must complete its usage
+line's verb sequence.
+
+Other programs' lines are outside the check, and no scenario has to run
+them. `claude --version` is marked anyway and run by every member
+(`client-version`), and `loginctl enable-linger` is marked and exempted
+(above). The others are:
+- the host checks of "What a member's host needs": `uname -sm`,
+  `useradd -m`, `command -v curl git jq python3`, `go version`,
+  `git --version`, `npm --version`, `systemctl --user status`,
+  `loginctl show-user`, `df -h ~`, `free -m`, `go test ./...`;
+- the installers and the client's set-up: the `boot.sh` one-liner,
+  `npm install -g @anthropic-ai/claude-code@…`, `npm config set prefix`;
+- the hub admin's credential file, made with `sed` and removed with
+  `rm -f` around the grant;
+- `sudo -iu sessiond` and `su - USER`, the shells the commands run in;
+- `claude auth status` and `claude mcp list`, which the page names to
+  explain what the preflight and the client report.
 
 ## The smoke check
 
@@ -772,6 +849,22 @@ fault fails the run. The snapshots stay in `DIR/case-<case>/<point>/`, or
 `DIR/case-<case>/<subcase>/` for a subcase such as F1-claim-request: no
 snapshot is taken twice, so the report's diff of each step is its own.
 
+### The operator case
+
+O1 runs [BRING-UP.md](BRING-UP.md)'s "The operator during a cycle" by
+its own lines, in sim-aicrewd, where the operator's commands run
+(arrangement 1). The worker stalls and the coordinator raises an
+escalation on the blocked attempt, as in E1. The operator reads the
+team's state (the worker's attempt `blocked`, with its reason), finds the
+escalation with `aicrew escalations list --open`, reads it with `show`
+and answers it; the list then no longer has it, and the team's state
+shows the attempt out of `blocked`. The operator pauses the team, the
+state shows the pause and its reason, and resumes it. The cycle then ends
+as every case's does: the coordinator's review, the operator's merge and
+the delivery record, with the cycle's checks at the step done (the one
+escalation on the task answered by the operator). No mirror is posted on
+the task: the document asks none of the operator.
+
 ### The escalation case
 
 E1 is the check of the architect role's feature
@@ -856,7 +949,7 @@ of [DESIGN-PILOT-SIMULATION.md](DESIGN-PILOT-SIMULATION.md), section 6.1:
 | Proxy | The link | Its certificate |
 | --- | --- | --- |
 | `sim-px-aimem` | the members' aimem to the hub | the hub's, issued for `sim-aimem` and `sim-px-aimem`: the members name `sim-px-aimem` as their hub, and their aimem checks the name against the run's CA |
-| `sim-px-crew` | the members to aicrewd | aicrewd's, which the members pin by key |
+| `sim-px-crew` | the members to aicrewd | aicrewd's, its name among the leaf's; sim-indep pins it by key, the others trust it by `ca_dns` |
 | `sim-px-peer` | the hub to aicrewd, its peer endpoint | aicrewd's, which the hub pins by key |
 | `sim-px-hub` | aicrewd to the hub, its peer lookups | the hub's, also issued for `sim-px-hub`: aicrewd's hub binding names it, and aicrewd pins the hub by key |
 
@@ -911,8 +1004,8 @@ offers go to the worker only, and its scripted client takes no step of its
 own.
 
 Each member's home runs aimem through `aimem-timed`
-(`e2e/pilotsim/member/aimem-timed`), b4's wrapper, joined with the real
-`--aimem-command` flag. It logs each aimem command's leading arguments and
+(`e2e/pilotsim/member/aimem-timed`), b4's wrapper, which the image
+installs as `aimem` ahead of the real one on PATH. It logs each aimem command's leading arguments and
 exit, never its input. The runner sets its gates with files in the
 member's gate directory: hold a command before or after it runs, or keep
 its input, owner only, so that F5 can replay a coordination proof inside

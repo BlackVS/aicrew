@@ -630,7 +630,8 @@ fails if the pinned aimem is ever not below this tree's minimum. The run
 differs from the upgrade above in three places:
 1. After each member's restart on the new `aicrew-agent`, what serve does
    is recorded (`DIR/upgrade-below-serve-ROLE.txt`: whether its model probe
-   ran and whether it runs), not required. `aicrew-agent check` must exit
+   ran, and whether it runs, read both from the process list and from
+   serve's own log line that its turn loop runs), not required. `aicrew-agent check` must exit
    non-zero, `blocked` with the reason `aimem_below`, aimem `below`, and
    this exact instruction (`smoke.py below`):
 
@@ -649,7 +650,23 @@ differs from the upgrade above in three places:
    check's strict assertions. The second cycle and the comparisons follow
    as above.
 
-**Observed:** not yet; written here from the job's first run.
+**Observed** in the first green run (2026-11-20, CI run 44709262641, the
+job 14 minutes 49 seconds):
+- With aimem 0.10.25, the members set up on v0.11.0 against the hub's
+  aimem 0.11.5, and the first cycle passed. That cycle is what ran the old
+  client against the new hub.
+- After the restart on the new `aicrew-agent`, serve ran in each member:
+  its model probe ran within 120 s, its process was found, and its log
+  said its turn loop runs. Check was blocked on `aimem_below` in all
+  three, with the exact instruction above.
+- Nudged by the operator while check was blocked, the coordinator started
+  a turn: its inbox's lifecycle message, finished, one message acked,
+  0 steps. With no steps, the turn exercised the old aimem client no
+  further than the inbox.
+- The command between the instruction's backticks, run as printed in each
+  member, brought check to `supported` with aimem 0.11.5, offline from
+  the export. The first cycle's records read the same, and the second
+  cycle and the kept-records check passed.
 
 The scenario `upgrade` is bounded to 15 minutes and `upgrade-kept` to 5;
 the others keep their bounds above. A green run on a 6-vCPU host took 15

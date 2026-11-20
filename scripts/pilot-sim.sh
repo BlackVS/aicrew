@@ -1111,7 +1111,7 @@ upgrade() {
 # the restart, recorded and not required, and check, which must be blocked on
 # aimem with the exact instruction (smoke.py below).
 below_check() {
-  local svc=sim-$1 rc=0 i served=no
+  local svc=sim-$1 rc=0 i served=no log
   for ((i = 0; i < 120; i += 2)); do
     if served_since; then served=yes; break; fi
     sleep 2
@@ -1120,10 +1120,13 @@ below_check() {
     echo "serve's model probe after the restart: $served (within 120 s)"
     # The image has no procps: the process list is read from /proc.
     echo "serve running: $(dc exec -T -u member "$svc" sh -c 'for f in /proc/[0-9]*/cmdline; do tr "\0" " " < "$f"; echo; done 2>/dev/null | grep -q "^[^ ]*aicrew-agent serve " && echo yes || echo no')"
+    # The second source: serve's own line that its turn loop runs.
+    log=$(dc logs --no-color --since "$2" "$svc" 2>&1 || true)
+    echo "serve's log since the restart says the turn loop runs: $(grep -q 'msg="the turn loop runs"' <<<"$log" && echo yes || echo no)"
     echo "serve's log since the restart:"
-    dc logs --no-color --since "$2" "$svc" 2>&1 | tail -n 40
+    tail -n 40 <<<"$log"
   } > "$OUT/upgrade-below-serve-$1.txt"
-  ev observation task="$TASK" what="$svc after the upgrade with aimem below the minimum: $(head -n 2 "$OUT/upgrade-below-serve-$1.txt" | tr '\n' ';')"
+  ev observation task="$TASK" what="$svc after the upgrade with aimem below the minimum: $(head -n 3 "$OUT/upgrade-below-serve-$1.txt" | tr '\n' ';')"
   dc exec -T -u member "$svc" aicrew-agent check --home /home/member/agent --json > "$OUT/upgrade-check-$1.json" || rc=$?
   [ "$rc" != 0 ] || fail "aicrew-agent check exited 0 in $svc with aimem below the minimum ($OUT/upgrade-check-$1.json)"
   python3 "$SIM/smoke.py" below "$OUT/upgrade-check-$1.json" "$ROOT/internal/agent/supported.json" \

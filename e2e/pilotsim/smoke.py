@@ -8,11 +8,19 @@ keeps (docs/E2E-PILOT-SIM.md, "The smoke check").
                                  previous release, whose check knows only
                                  its own tested set: aimem and ai-skills may
                                  be `newer` there, nothing else is relaxed
+  smoke.py below REPORT SUPPORTED FOUND BASE
+                                 the below-minimum run's check after the
+                                 upgrade: blocked on aimem FOUND, below
+                                 SUPPORTED's minimum, with the exact
+                                 instruction to install the tested aimem
+                                 from the export BASE; prints the
+                                 instruction's command, as printed
   smoke.py status REPORT LABEL…  `aicrew status --team …`: every label listed
 
 Exit 0 when the report holds, 1 with the reasons otherwise.
 """
 import json
+import re
 import sys
 
 def check(report, skills_version, previous=False):
@@ -46,6 +54,30 @@ def check(report, skills_version, previous=False):
     return errs
 
 
+def below(report, supported, found, base):
+    d = json.load(open(report))
+    comp = json.load(open(supported))["components"]["aimem"]
+    minimum, tested = comp["ranges"][0]["min"], comp["ranges"][-1]["tested"]
+    release = "v" + tested + (" (" + comp["note"] + ")" if comp.get("note") else "")
+    command = ('cd "$(mktemp -d)" && AIMEM_BASE=\'%s\' AIMEM_VERSION=v%s bash \'%s/aimem/v%s/boot.sh\''
+               % (base, tested, base, tested))
+    want = ("aimem %s or later is required. Install aimem %s with its verifying installer, from the aiforge "
+            "export %s: `%s`; then rerun `aicrew-agent check`" % (minimum, release, base, command))
+    errs = []
+    if d.get("status") != "blocked" or d.get("reason") != "aimem_below":
+        errs.append("status %r, reason %r: not blocked on aimem_below" % (d.get("status"), d.get("reason")))
+    comps = {c["name"]: c for c in d.get("components", [])}
+    a = comps.get("aimem", {})
+    if a.get("state") != "below" or not re.search(r"(?<![\w.])v?%s(?![\w.-])" % re.escape(found), a.get("found", "")):
+        errs.append("aimem: %r" % a)
+    if want not in d.get("instructions", []):
+        errs.append("the aimem instruction is not the expected one; instructions: %r; expected: %r"
+                    % (d.get("instructions"), want))
+    if not errs:
+        print(command)
+    return errs
+
+
 def status(report, labels):
     teams = json.load(open(report))
     members = {m.get("label"): m for t in teams for m in t.get("members", [])}
@@ -62,6 +94,8 @@ def status(report, labels):
 def main(argv):
     if argv[:1] == ["check"] and (len(argv) == 3 or (len(argv) == 4 and argv[3] == "previous")):
         errs = check(argv[1], argv[2], len(argv) == 4)
+    elif argv[:1] == ["below"] and len(argv) == 5:
+        errs = below(*argv[1:])
     elif len(argv) >= 3 and argv[0] == "status":
         errs = status(argv[1], argv[2:])
     else:

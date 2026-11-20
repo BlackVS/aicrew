@@ -4,7 +4,7 @@
 #
 #   [AICREW_SIM_SKIP_FAULT=CASE] [AICREW_SIM_IGNORE_MEMORY=1] [AICREW_SIM_BOUND_MINUTES=N]
 #   [AICREW_SIM_HANG=SCENARIO[:SECONDS]] scripts/pilot-sim.sh [-keep] [-out DIR]
-#   [PILOTSIM_PREVIOUS=vX.Y.Z] scripts/pilot-sim.sh -upgrade [-keep] [-out DIR]
+#   [PILOTSIM_PREVIOUS=vX.Y.Z] scripts/pilot-sim.sh -upgrade [-below-minimum] [-keep] [-out DIR]
 #
 # It removes a leftover stack, checks the host's available memory against
 # what a run needs (AICREW_SIM_IGNORE_MEMORY=1 runs anyway), builds this
@@ -39,6 +39,14 @@
 # vX.Y.Z tag merged into HEAD and not on HEAD itself (e2e/pilotsim/cmd/
 # simupgrade), or PILOTSIM_PREVIOUS for a run by hand.
 #
+# -upgrade -below-minimum starts instead from the pinned pair of
+# `simupgrade below-minimum`, an aicrew release with an aimem below this
+# tree's minimum: after the upgrade each member's check must be blocked on
+# aimem with the instruction to install the tested aimem from the export,
+# the coordinator is offered a turn in that state and what it does is
+# recorded, and the printed instruction, run as printed, must bring check
+# to supported before the second cycle.
+#
 # Every scenario (the setup, the smoke check, the fixtures, each cycle and
 # each case) has a bound, and so has the whole run (AICREW_SIM_BOUND_MINUTES,
 # 90 by default): a watchdog stops the run's commands at either bound, and
@@ -55,14 +63,16 @@ set -Eeuo pipefail
 # fail writes here, also from a check whose output waitfor discards.
 exec 3>&2
 
-usage() { echo "usage: scripts/pilot-sim.sh [-upgrade] [-keep] [-out DIR]" >&2; exit 2; }
+usage() { echo "usage: scripts/pilot-sim.sh [-upgrade [-below-minimum]] [-keep] [-out DIR]" >&2; exit 2; }
 KEEP=
 OUT=
 UPGRADE=
+BELOW=
 while [ $# -gt 0 ]; do
   case "$1" in
     -keep) KEEP=1 ;;
     -upgrade) UPGRADE=1 ;;
+    -below-minimum) BELOW=1 ;;
     -out) [ $# -ge 2 ] || usage; OUT=$2; shift ;;
     *) usage ;;
   esac
@@ -80,6 +90,9 @@ case " $(echo $SKIP_CASES) " in
   *) [ -z "$SKIP" ] || { echo "pilot-sim: AICREW_SIM_SKIP_FAULT=$SKIP is not one of:" $SKIP_CASES >&2; exit 2; } ;;
 esac
 [ -z "$UPGRADE" ] || [ -z "$SKIP" ] || { echo "pilot-sim: -upgrade runs no case; AICREW_SIM_SKIP_FAULT is not for it" >&2; exit 2; }
+[ -z "$BELOW" ] || [ -n "$UPGRADE" ] || { echo "pilot-sim: -below-minimum is a run of -upgrade" >&2; exit 2; }
+[ -z "$BELOW" ] || [ -z "${PILOTSIM_PREVIOUS:-}" ] ||
+  { echo "pilot-sim: -below-minimum starts from its pinned pair; PILOTSIM_PREVIOUS is not for it" >&2; exit 2; }
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${OUT:-$ROOT/.work/pilotsim}
@@ -112,8 +125,13 @@ PREVIOUS=
 if [ -n "$UPGRADE" ]; then
   (cd "$ROOT" && go build -trimpath -o "$SIMUPGRADE" ./e2e/pilotsim/cmd/simupgrade) ||
     { echo "pilot-sim: the upgrade tool did not build" >&2; rm -rf "$TOOLS"; exit 2; }
-  PREVIOUS=$("$SIMUPGRADE" previous "$ROOT") || { rm -rf "$TOOLS"; exit 2; }
+  # -below-minimum starts from its pinned pair (below), so a shallow
+  # checkout without the release tags runs it too.
+  [ -n "$BELOW" ] || PREVIOUS=$("$SIMUPGRADE" previous "$ROOT") || { rm -rf "$TOOLS"; exit 2; }
 fi
+# The operator's nudges outside a case that the second cycle's audit check
+# allows (cycle.py): only the below-minimum run sets it, after its nudge.
+export PILOTSIM_OFFERED_NUDGES=0
 # An earlier run's report and snapshots go: each snapshot is taken once.
 rm -rf "$OUT/events.jsonl" "$OUT/report.jsonl" "$OUT/homes" "$OUT"/cycle-* "$OUT"/case-* "$OUT"/upgrade-*
 # ev TYPE KEY=VALUE...: one event of the run's report.
@@ -126,7 +144,15 @@ tested() {
 }
 PILOTSIM_AIMEM_VERSION=$(tested aimem)
 PILOTSIM_AISKILLS_VERSION=$(tested ai-skills)
-export PILOTSIM_STAGE=$STAGE PILOTSIM_AIMEM_VERSION PILOTSIM_AISKILLS_VERSION
+# The members' own aimem: the tested one, or for -below-minimum the pinned
+# start's, below the minimum (the hub keeps the tested one, as a team's hub
+# is upgraded first).
+PILOTSIM_MEMBER_AIMEM_VERSION=$PILOTSIM_AIMEM_VERSION
+if [ -n "$BELOW" ]; then
+  read -r PREVIOUS PILOTSIM_MEMBER_AIMEM_VERSION < <("$SIMUPGRADE" below-minimum) ||
+    { echo "pilot-sim: simupgrade below-minimum" >&2; rm -rf "$TOOLS"; exit 2; }
+fi
+export PILOTSIM_STAGE=$STAGE PILOTSIM_AIMEM_VERSION PILOTSIM_AISKILLS_VERSION PILOTSIM_MEMBER_AIMEM_VERSION
 
 dc() { docker compose -f "$COMPOSE" "$@"; }
 step() { printf '==> %s\n' "$*"; }
@@ -183,17 +209,24 @@ stage() {
 
 # export_previous ARCH: the previous release's assets, as its installers
 # download them, laid out as an aiforge export (format 1) in both image
-# contexts. The installers check every file against the release's
-# SHA256SUMS; nothing of the release is built here.
+# contexts, with the tested aimem release beside it as an export holds it
+# (the members' check after the upgrade names it in its instruction when
+# their aimem is below the minimum). The installers check every file
+# against the release's SHA256SUMS; nothing of the release is built here.
 export_previous() {
   local base="https://github.com/BlackVS/aicrew/releases/download/$PREVIOUS" dir=$STAGE/export a
+  local aimem="https://github.com/BlackVS/aimem/releases/download/v$PILOTSIM_AIMEM_VERSION"
   step "fetching aicrew $PREVIOUS's release assets as an aiforge export (the release the scenario upgrades from)"
-  mkdir -p "$dir/aicrew/$PREVIOUS"
+  mkdir -p "$dir/aicrew/$PREVIOUS" "$dir/aimem/v$PILOTSIM_AIMEM_VERSION"
   for a in SHA256SUMS install-aicrewd.sh boot.sh "aicrewd-linux-$1" "aicrew-linux-$1" "aicrew-agent-linux-$1"; do
     curl -fsSL "$base/$a" -o "$dir/aicrew/$PREVIOUS/$a" ||
       fail "aicrew $PREVIOUS: its release asset $a could not be downloaded ($base/$a)"
   done
-  printf 'aiforge-export 1\naicrew %s\n' "$PREVIOUS" > "$dir/MANIFEST"
+  for a in SHA256SUMS boot.sh install.sh aimem-opencode.ts "aimem-linux-$1"; do
+    curl -fsSL "$aimem/$a" -o "$dir/aimem/v$PILOTSIM_AIMEM_VERSION/$a" ||
+      fail "aimem v$PILOTSIM_AIMEM_VERSION: its release asset $a could not be downloaded ($aimem/$a)"
+  done
+  printf 'aiforge-export 1\naicrew %s\naimem v%s\n' "$PREVIOUS" "$PILOTSIM_AIMEM_VERSION" > "$dir/MANIFEST"
   cp -r "$dir/." "$STAGE/aicrewd/export/"
   cp -r "$dir/." "$STAGE/member/export/"
 }
@@ -302,8 +335,8 @@ finish() {
     # Each value shell-quoted, so the printed commands can be pasted as they
     # are, also for an output directory or a checkout with spaces.
     local dcq
-    printf -v dcq 'PILOTSIM_STAGE=%q PILOTSIM_AIMEM_VERSION=%q PILOTSIM_AISKILLS_VERSION=%q docker compose -f %q' \
-      "$STAGE" "$PILOTSIM_AIMEM_VERSION" "$PILOTSIM_AISKILLS_VERSION" "$COMPOSE"
+    printf -v dcq 'PILOTSIM_STAGE=%q PILOTSIM_AIMEM_VERSION=%q PILOTSIM_MEMBER_AIMEM_VERSION=%q PILOTSIM_AISKILLS_VERSION=%q docker compose -f %q' \
+      "$STAGE" "$PILOTSIM_AIMEM_VERSION" "$PILOTSIM_MEMBER_AIMEM_VERSION" "$PILOTSIM_AISKILLS_VERSION" "$COMPOSE"
     echo "pilot-sim: -keep: the stack is still up; inspect it with:" >&3
     echo "  $dcq ps" >&3
     echo "pilot-sim: remove it, with its volumes, with:" >&3
@@ -448,7 +481,8 @@ WATCHDOG=$!
 ev run aicrew_commit="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)" \
   aimem_version="$PILOTSIM_AIMEM_VERSION" aiskills_version="$PILOTSIM_AISKILLS_VERSION" \
   os="$(uname -s)" arch="$(uname -m)" docker="$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)" \
-  bound_minutes="$BOUND_MINUTES" skip="$SKIP" hang="$HANG" ${UPGRADE:+scenario=upgrade previous_release="$PREVIOUS"}
+  bound_minutes="$BOUND_MINUTES" skip="$SKIP" hang="$HANG" ${UPGRADE:+scenario=upgrade previous_release="$PREVIOUS"} \
+  ${BELOW:+member_aimem_version="$PILOTSIM_MEMBER_AIMEM_VERSION"}
 begin setup 1800
 # A stack an earlier -keep run left up would refuse this run's accounts,
 # and holds memory the check below counts.
@@ -613,12 +647,18 @@ python3 "$p"'
 begin smoke 900
 step "the smoke check"
 # served SERVICE: its serve passed the model probe; a member that exited
-# (a failed join) fails the run at once.
+# (a failed join), or whose serve exited 2 (member.sh), fails the run at
+# once.
 served() {
+  local log
   if dc ps -a --status exited --services 2>/dev/null | grep -qx "$1"; then
     fail "$1 exited before serving"
   fi
-  dc logs --no-color "$1" 2>&1 | grep -q 'the turn model is available'
+  log=$(dc logs --no-color "$1" 2>&1 || true)
+  if grep -q 'member.sh: serve exited 2' <<<"$log"; then
+    fail "$1's serve exited 2 before serving"
+  fi
+  grep -q 'the turn model is available' <<<"$log"
 }
 for role in coordinator worker indep; do
   waitfor "sim-$role's serve and its model probe" 600 served "sim-$role"
@@ -1019,7 +1059,7 @@ same() {
 # e2e/pilotsim/member/Dockerfile), each with the new release's files.
 upgrade() {
   begin upgrade 900
-  local role svc since up=$STAGE/upgrade arch_bin
+  local role svc since restarted up=$STAGE/upgrade arch_bin
   arch_bin=$(docker version --format '{{.Server.Arch}}')
   for role in coordinator worker indep; do hold "$role" "the upgrade"; done
   take upgrade-before
@@ -1055,19 +1095,161 @@ upgrade() {
     # for an installed member's service restart (with AICREW_NO_SERVICE=1
     # boot.sh does not restart it).
     since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    restarted=$SECONDS
     dc restart "$svc" >/dev/null
     served_since() { dc logs --no-color --since "$since" "$svc" 2>&1 | grep -q 'the turn model is available'; }
+    if [ -n "$BELOW" ]; then
+      below_check "$role" "$since" "$restarted"
+      continue
+    fi
     waitfor "$svc's serve on the new aicrew-agent" 300 served_since
     dc exec -T -u member "$svc" aicrew-agent check --home /home/member/agent --json > "$OUT/upgrade-check-$role.json" ||
       fail "aicrew-agent check is not green in $svc after the upgrade ($OUT/upgrade-check-$role.json)"
     python3 "$SIM/smoke.py" check "$OUT/upgrade-check-$role.json" "$PILOTSIM_AISKILLS_VERSION" ||
       fail "$svc's check report after the upgrade ($OUT/upgrade-check-$role.json)"
   done
-  ev observation task="$TASK" what="each member's aicrew-agent upgraded from $PREVIOUS to this tree's build by boot.sh; aicrew-agent check is green"
+  if [ -n "$BELOW" ]; then
+    ev observation task="$TASK" what="each member's aicrew-agent upgraded from $PREVIOUS to this tree's build by boot.sh; aicrew-agent check is blocked on aimem $PILOTSIM_MEMBER_AIMEM_VERSION with the instruction to install aimem $PILOTSIM_AIMEM_VERSION from the export"
+  else
+    ev observation task="$TASK" what="each member's aicrew-agent upgraded from $PREVIOUS to this tree's build by boot.sh; aicrew-agent check is green"
+  fi
   take upgrade-after
   recheck
   same "$CYC/upgrade-before" "$CYC/upgrade-after"
+  [ -z "$BELOW" ] || below_turn_and_fix
   for role in coordinator worker indep; do member resume "$role"; done
+}
+# below_check ROLE SINCE STARTED (-below-minimum): what the member's serve
+# does after the restart (at SINCE, when $SECONDS was STARTED), recorded and
+# not required, and check, which must be blocked on aimem with the exact
+# instruction (smoke.py below).
+below_check() {
+  local svc=sim-$1 rc=0 probe="no probe line" settled=no cur log= deadline=$(($3 + 120))
+  # The probe's outcome is serve's line for it (internal/agent/serve.go
+  # serveModel, cmd/aicrew-agent's exit 2 on an unavailable model); none
+  # within the deadline is no evidence of a probe, not a failed one. The
+  # probe's line comes before the loop's line or serve's exit (member.sh's
+  # line, written once serve has exited), so the wait goes on for one of
+  # them. A log read after the deadline is not counted.
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    cur=$(dc logs --no-color --since "$2" "$svc" 2>&1 || true)
+    [ "$SECONDS" -le "$deadline" ] || break
+    log=$cur
+    probe=$(probe_outcome "$log")
+    if [ "$probe" != "no probe line" ] &&
+      grep -q -e 'msg="the turn loop runs"' -e 'member.sh: serve exited' <<<"$log"; then
+      settled=yes
+      break
+    fi
+    sleep 2
+  done
+  {
+    echo "serve's model probe after the restart: $probe (within 120 s)"
+    echo "serve running: $(serve_runs "$svc")"
+    # The second source: serve's own line that its turn loop runs.
+    echo "serve's log since the restart says the turn loop runs: $(grep -q 'msg="the turn loop runs"' <<<"$log" && echo yes || echo no) (the loop's line or serve's exit within 120 s: $settled)"
+    echo "serve's log since the restart, read within 120 s:"
+    tail -n 40 <<<"$log"
+  } > "$OUT/upgrade-below-serve-$1.txt"
+  ev observation task="$TASK" what="$svc after the upgrade with aimem below the minimum: $(head -n 3 "$OUT/upgrade-below-serve-$1.txt" | tr '\n' ';')"
+  dc exec -T -u member "$svc" aicrew-agent check --home /home/member/agent --json > "$OUT/upgrade-check-$1.json" || rc=$?
+  [ "$rc" != 0 ] || fail "aicrew-agent check exited 0 in $svc with aimem below the minimum ($OUT/upgrade-check-$1.json)"
+  python3 "$SIM/smoke.py" below "$OUT/upgrade-check-$1.json" "$ROOT/internal/agent/supported.json" \
+    "$PILOTSIM_MEMBER_AIMEM_VERSION" /opt/aicrew-export > "$OUT/upgrade-instruction-$1.txt" ||
+    fail "$svc's check report with aimem below the minimum ($OUT/upgrade-check-$1.json)"
+}
+# serve_runs SERVICE: yes when an aicrew-agent serve runs in it. The image
+# has no procps: the process list is read from /proc.
+serve_runs() {
+  dc exec -T -u member "$1" sh -c 'for f in /proc/[0-9]*/cmdline; do tr "\0" " " < "$f"; echo; done 2>/dev/null | grep -q "^[^ ]*aicrew-agent serve " && echo yes || echo no'
+}
+# serving_since SERVICE SINCE: its serve, started at SINCE, passed the model
+# probe; a serve that exited 2 since fails the run at once.
+serving_since() {
+  local log
+  log=$(dc logs --no-color --since "$2" "$1" 2>&1 || true)
+  if grep -q 'member.sh: serve exited 2' <<<"$log"; then
+    fail "$1's serve exited 2 after it started again"
+  fi
+  grep -q 'the turn model is available' <<<"$log"
+}
+# probe_outcome LOG: the model probe's outcome as serve logged it.
+probe_outcome() {
+  case $1 in
+    *'the turn model is not available'*) echo "ran: the model is not available (serve exits 2)" ;;
+    *'the turn model could not be verified'*) echo "ran: the model could not be verified (the loop starts)" ;;
+    *'the turn model is available'*) echo "ran: the model is available" ;;
+    *) echo "no probe line" ;;
+  esac
+}
+# below_turn_and_fix (-below-minimum): the coordinator, resumed while its
+# check is blocked, is offered a turn by the operator's nudge, and what it
+# does is recorded from its turn log, serve's log and a snapshot of the
+# store and the homes (upgrade-offered); then it is held again. Each member
+# then runs the instruction its check printed, as printed and nothing else,
+# and its check must be green; a member whose serve stopped (exit 2) has its
+# service started again, as the operator starts a stopped service
+# (`aicrew-agent service start`, cmd/aicrew-agent/service.go) once check is
+# green, and must serve before the members resume.
+below_turn_and_fix() {
+  local role svc since before after deadline runs up ran=no
+  before=$(turn_mark coordinator)
+  since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  member resume coordinator
+  deadline=$((SECONDS + 120))
+  member nudge coordinator "an offered turn while aimem is below the minimum"
+  # The audit keeps this nudge: the second cycle's checks allow it (cycle.py).
+  export PILOTSIM_OFFERED_NUDGES=1
+  # A sample taken after the deadline is not counted.
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    after=$(turn_mark coordinator)
+    [ "$SECONDS" -le "$deadline" ] || break
+    if [ "$after" != "$before" ]; then ran=yes; break; fi
+    sleep 2
+  done
+  hold coordinator "the below-minimum instruction"
+  after=$(turn_mark coordinator)
+  {
+    echo "a turn was offered (operator nudge) while check was blocked; turns before: ${before#* }, after: ${after#* }; a turn started within 120 s: $ran"
+    echo "the coordinator's last turn record:"
+    dc exec -T -u member sim-coordinator sh -c 'tail -n 1 /home/member/agent/logs/turns.jsonl 2>/dev/null || true'
+    echo "serve's log since the nudge:"
+    dc logs --no-color --since "$since" sim-coordinator 2>&1 | tail -n 40
+  } > "$OUT/upgrade-below-turn.txt"
+  take upgrade-offered
+  ev observation task="$TASK" what="$(head -n 1 "$OUT/upgrade-below-turn.txt")"
+  for role in coordinator worker indep; do
+    svc=sim-$role
+    step "the below-minimum instruction in $svc, as check printed it"
+    dc exec -T -u member "$svc" bash -c "$(cat "$OUT/upgrade-instruction-$role.txt")" > "$OUT/upgrade-below-fix-$role.log" 2>&1 ||
+      fail "the instruction check printed did not run in $svc ($OUT/upgrade-below-fix-$role.log)"
+    dc exec -T -u member "$svc" aicrew-agent check --home /home/member/agent --json > "$OUT/upgrade-check-fixed-$role.json" ||
+      fail "aicrew-agent check is not green in $svc after the instruction ($OUT/upgrade-check-fixed-$role.json)"
+    python3 "$SIM/smoke.py" check "$OUT/upgrade-check-fixed-$role.json" "$PILOTSIM_AISKILLS_VERSION" ||
+      fail "$svc's check report after the instruction ($OUT/upgrade-check-fixed-$role.json)"
+    runs=$(serve_runs "$svc") || fail "the process list of $svc could not be read after the instruction"
+    case $runs in
+      yes) continue ;;
+      no) ;;
+      *) fail "the process list of $svc after the instruction: $runs" ;;
+    esac
+    step "$svc's service started again after the instruction: its serve had stopped"
+    since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    deadline=$((SECONDS + 300))
+    up=no
+    dc restart "$svc" >/dev/null
+    # Elapsed time, and a sample read after the deadline is not counted.
+    while [ "$SECONDS" -lt "$deadline" ]; do
+      if serving_since "$svc" "$since"; then
+        [ "$SECONDS" -gt "$deadline" ] || up=yes
+        break
+      fi
+      sleep 2
+    done
+    [ "$up" = yes ] || fail "$svc's serve did not pass the model probe within 300 s after it started again"
+    ev observation task="$TASK" what="$svc's serve had stopped after the upgrade, and the instruction check printed names no service start: the run started its service again after the instruction (dc restart, the operator's start of a stopped service), and it serves"
+  done
+  ev observation task="$TASK" what="the instruction check printed, run as printed in each member, brought check to supported (aimem $PILOTSIM_AIMEM_VERSION)"
 }
 # kept: after the second cycle, the first cycle's records read again: the
 # homes' logs may only have grown.

@@ -4,6 +4,7 @@
 // runs it on the host:
 //
 //	simupgrade previous REPO            prints the release the scenario upgrades from
+//	simupgrade below-minimum            prints the below-minimum run's start: aicrew tag, aimem version
 //	simupgrade same BEFORE AFTER [-grown]  compares the first cycle's records
 //
 // previous is PILOTSIM_PREVIOUS when that is set (a manual run's override),
@@ -54,6 +55,9 @@ func run(args []string) error {
 		}
 		fmt.Println(tag)
 		return nil
+	case len(args) == 1 && args[0] == "below-minimum":
+		fmt.Println(belowMinimumAicrew, belowMinimumAimem)
+		return nil
 	case (len(args) == 3 || len(args) == 4 && args[3] == "-grown") && args[0] == "same":
 		diffs, notes, counts, err := same(args[1], args[2], len(args) == 4)
 		if err != nil {
@@ -71,8 +75,22 @@ func run(args []string) error {
 		fmt.Printf("the first cycle's records read the same: %s\n", counts)
 		return nil
 	}
-	return errors.New("usage: simupgrade previous REPO | simupgrade same BEFORE AFTER [-grown]")
+	return errors.New("usage: simupgrade previous REPO | simupgrade below-minimum | simupgrade same BEFORE AFTER [-grown]")
 }
+
+// The below-minimum run's start (docs/E2E-PILOT-SIM.md, "The upgrade
+// scenario"): a home on aicrew v0.11.0 with aimem 0.10.25, upgraded to this
+// tree, whose aimem minimum is 0.11.0. v0.11.0 is the last release whose
+// minimum was below 0.11.0 (it was 0.10.0), and 0.10.25 is the aimem it was
+// tested with, so the home starts supported and is below the minimum once
+// aicrew is upgraded. The pair is pinned, not derived: it stays a valid
+// start for as long as the minimum only rises, and is looked at again when
+// it is next raised. TestBelowMinimumIsBelow fails if HEAD's minimum ever
+// stops being above the pinned aimem.
+const (
+	belowMinimumAicrew = "v0.11.0"
+	belowMinimumAimem  = "0.10.25"
+)
 
 var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 

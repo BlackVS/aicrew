@@ -24,6 +24,10 @@ it drops the plain cycle's external RETURN and its rework, allows the
 operator's nudges, for P4 the block the case caused, and for F1 the attempts
 and steps its lost requests left not committed. Prints each failed
 expectation and exits 1 when there is one; the snapshot stays for the report.
+
+PILOTSIM_OFFERED_NUDGES is the number of the operator's nudges the run made
+outside a case: the below-minimum upgrade run's offered turn, one, before
+the second cycle. The audit may hold that many control.nudge calls.
 """
 import json
 import os
@@ -163,8 +167,11 @@ def check(step, d, case=""):
     # The audit: the operator's calls are the runner's own, and a member
     # calls only member operations.
     allowed = OPERATOR_OPS | (CASE_OPS if case else set())
+    offered = max(int(os.environ.get("PILOTSIM_OFFERED_NUDGES") or 0), 0)
     for r in q("SELECT caller_kind, caller_id, operation FROM audit"):
-        if r["caller_kind"] == "operator":
+        if r["caller_kind"] == "operator" and r["operation"] == "control.nudge" and not case and offered > 0:
+            offered -= 1
+        elif r["caller_kind"] == "operator":
             expect(r["operation"] in allowed, "aicrewd: the audit has the operator call %s" % r["operation"])
         elif r["caller_id"] in (ids["coordinator"], ids["worker"]):
             expect(r["caller_kind"] == "agent" and r["operation"] not in OPERATOR_OPS | CASE_OPS,

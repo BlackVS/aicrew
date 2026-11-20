@@ -12,7 +12,7 @@ x-member: &member
   build:
     context: ${PILOTSIM_STAGE:?run scripts/pilot-sim.sh}/member
     args:
-      AIMEM_VERSION: ${PILOTSIM_AIMEM_VERSION:?}
+      AIMEM_VERSION: ${PILOTSIM_MEMBER_AIMEM_VERSION:?}
       AISKILLS_VERSION: ${PILOTSIM_AISKILLS_VERSION:?}
       AISKILLS: oh-code-review,verify-delivery
   image: pilotsim-member

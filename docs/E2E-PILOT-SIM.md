@@ -327,7 +327,10 @@ there. The member joins with them and removes them, then runs serve. As
 an installed member's service does, the container starts serve again
 10 seconds after a failure, but not after a clean stop or exit 2: a
 member whose session refresh meets the hub stopped (case F6-unreachable)
-comes back once the hub does.
+comes back once the hub does. A clean stop ends the container. After
+exit 2 the container stays up with serve stopped, as a host stays up when
+its service stops, so check and an instruction still run in the home; the
+smoke check fails at once on member.sh's line for it.
 
 No secret is printed or passed as an argument. A token or code goes from
 the container that makes it to the one that reads it through a pipe.
@@ -552,9 +555,14 @@ tag; it never skips.
 **The previous release is not built.** The runner downloads its release
 assets, as its installers would (`SHA256SUMS`, `install-aicrewd.sh`,
 `boot.sh` and the three Linux binaries), and lays them out as an aiforge
-export (`MANIFEST`, `aicrew/<tag>/`). sim-aicrewd and each member install
-from it with `AICREW_BASE`, by that release's own installers, which check
-every file against its `SHA256SUMS`. The settings are I1's.
+export (`MANIFEST`, `aicrew/<tag>/`). Beside it the export holds the tested
+aimem release (`aimem/<tag>/`: `SHA256SUMS`, `boot.sh`, `install.sh`,
+`aimem-opencode.ts` and the Linux binary), as a real export holds all its
+products. sim-aicrewd and each member install from it with `AICREW_BASE`,
+by that release's own installers, which check every file against its
+`SHA256SUMS`, and each member joins with `AICREW_BASE` too, the documented
+join in a closed network: the home records the export as `export_base`,
+and its check's instructions name the export. The settings are I1's.
 
 **The upgrade** (scenario `upgrade`) uses this tree's installers, with the
 command line of the first install (`AICREW_NO_SERVICE=1`,
@@ -609,6 +617,67 @@ container where an installed member's service restarts. The copy of this
 tree's files into the containers stands for the download of the new
 release. The installers' command lines are the documented ones,
 unchanged, and nothing in a store, a home or a unit is edited by hand.
+
+**From aimem below the minimum** (`scripts/pilot-sim.sh -upgrade
+-below-minimum`, CI job `pilot-sim-upgrade-below-minimum`). The same
+scenario, from a home whose aimem is below this tree's minimum at the
+moment aicrew is upgraded, which is what a team meets when a release
+raises the minimum and its members' aimem stays behind. The start is a
+pinned pair, `simupgrade below-minimum`: aicrew v0.11.0, the last release
+whose aimem minimum (0.10.0) was below this tree's (0.11.0), with aimem
+0.10.25, the release v0.11.0 was tested with. The members' image is built
+with that aimem; the hub keeps the tested one, as a team's hub is upgraded
+first. The pair stays a valid start for as long as the minimum only rises,
+and is looked at again when the minimum is next raised; a test of the tool
+fails if the pinned aimem is ever not below this tree's minimum. The run
+differs from the upgrade above in three places:
+1. After each member's restart on the new `aicrew-agent`, what serve does
+   is recorded (`DIR/upgrade-below-serve-ROLE.txt`: the model probe's
+   outcome as serve logged it, available, could not be verified, or not
+   available with serve's exit 2, or no probe line within 120 s; and
+   whether serve runs, read both from the process list and from serve's
+   own log line that its turn loop runs), not required. A serve that
+   exited leaves the member's host up, so check and the instruction below
+   still run. `aicrew-agent check` must exit
+   non-zero, `blocked` with the reason `aimem_below`, aimem `below`, and
+   this exact instruction (`smoke.py below`):
+
+   ```text
+   aimem 0.11.0 or later is required. Install aimem v0.11.5 (the release this aicrew is tested with) with its verifying installer, from the aiforge export /opt/aicrew-export: `cd "$(mktemp -d)" && AIMEM_BASE='/opt/aicrew-export' AIMEM_VERSION=v0.11.5 bash '/opt/aicrew-export/aimem/v0.11.5/boot.sh'`; then rerun `aicrew-agent check`
+   ```
+
+2. After the first cycle reads unchanged (`upgrade-after`), the
+   coordinator, still blocked, is resumed and offered a turn by the
+   operator's nudge. What follows within two minutes is recorded from its
+   turn log, serve's log (`DIR/upgrade-below-turn.txt`) and a snapshot of
+   the store and the homes (`cycle-1/upgrade-offered`); then it is held
+   again.
+3. Each member runs the command between the instruction's backticks, as
+   printed and nothing else, and its check must then pass the smoke
+   check's strict assertions. A member whose serve is not running then
+   (it exited 2 after the restart) has its service started again, as the
+   operator starts a stopped service once check is green, and its serve
+   must pass the model probe within 300 s. The second cycle and the
+   comparisons follow as above.
+
+**Observed** in the first green run (2026-11-20, CI run 44709262641, the
+job 14 minutes 49 seconds):
+- With aimem 0.10.25, the members set up on v0.11.0 against the hub's
+  aimem 0.11.5, and the first cycle passed. That cycle is what ran the old
+  client against the new hub.
+- After the restart on the new `aicrew-agent`, serve ran in each member:
+  its model probe ran and found the model available, its process was
+  found, and its log
+  said its turn loop runs. Check was blocked on `aimem_below` in all
+  three, with the exact instruction above.
+- Nudged by the operator while check was blocked, the coordinator started
+  a turn: its inbox's lifecycle message, finished, one message acked,
+  0 steps. With no steps, the turn exercised the old aimem client no
+  further than the inbox.
+- The command between the instruction's backticks, run as printed in each
+  member, brought check to `supported` with aimem 0.11.5, offline from
+  the export. The first cycle's records read the same, and the second
+  cycle and the kept-records check passed.
 
 The scenario `upgrade` is bounded to 15 minutes and `upgrade-kept` to 5;
 the others keep their bounds above. A green run on a 6-vCPU host took 15

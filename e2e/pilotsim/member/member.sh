@@ -30,7 +30,12 @@ if [ ! -f "$home/agent.json" ] || ! grep -q '"agent_id"' "$home/agent.json"; the
   else
     echo "member.sh: this aicrew-agent has no preflight; join without it" >&2
   fi
-  aicrew-agent join --label "$SIM_ROLE" --home "$home" --url https://sim-px-crew:9443 \
+  # A member installed from the export (the upgrade scenario's previous
+  # release) joins the closed-network way, with the export named, so that
+  # its check's instructions name the export (docs/E2E-PILOT-SIM.md).
+  base=
+  [ ! -f /opt/aicrew-export/MANIFEST ] || base=/opt/aicrew-export
+  AICREW_BASE=$base aicrew-agent join --label "$SIM_ROLE" --home "$home" --url https://sim-px-crew:9443 \
     --tls-trust-mode spki_sha256 --tls-trust-value "$PIN_SIM_AICREWD" --aimem-hub sim --client claude \
     --wake turns --no-service --code-file "$in/invite" --aimem-command /usr/local/bin/aimem-timed \
     --aimem-url https://sim-px-aimem:8440 --aimem-token-file "$in/aimem.token" --aimem-ca-file /sim/tls/ca.pem \
@@ -40,8 +45,11 @@ fi
 # serve runs as an installed member's service runs it (internal/service/
 # render.go: Restart=on-failure, RestartSec=10, RestartPreventExitStatus=2):
 # after a failure, such as a session refresh that met the hub stopped in
-# case F6-unreachable, it starts again 10 seconds later; a clean stop or
-# exit 2 ends the container. A stop signal goes to serve.
+# case F6-unreachable, it starts again 10 seconds later; a clean stop ends
+# the container. After exit 2 the service stays stopped and the host stays
+# up, so check and an instruction still run in the home, as an operator
+# runs them on a host whose service stopped. A stop signal goes to serve,
+# or ends the wait.
 pid=
 trap '[ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null; [ -z "$pid" ] || wait "$pid"; exit 0' TERM INT
 while :; do
@@ -50,7 +58,18 @@ while :; do
   rc=0
   wait "$pid" || rc=$?
   pid=
-  case $rc in 0 | 2) exit "$rc" ;; esac
+  case $rc in
+    0) exit 0 ;;
+    2)
+      echo "member.sh: serve exited 2; the service stays stopped, as the installed service's does, and the host stays up" >&2
+      # A stop signal now ends only the wait.
+      trap '[ -z "$pid" ] || kill "$pid" 2>/dev/null; exit 0' TERM INT
+      while :; do
+        sleep 3600 &
+        pid=$!
+        wait "$pid" || true
+      done ;;
+  esac
   echo "member.sh: serve exited $rc; it starts again in 10 s, as the installed service's does" >&2
   sleep 10
 done

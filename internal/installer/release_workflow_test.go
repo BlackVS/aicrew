@@ -343,7 +343,7 @@ func TestWorkflowsPinActionsAndKeepNoCredential(t *testing.T) {
 func TestSimulationWorkflowsNameEveryCheck(t *testing.T) {
 	space := regexp.MustCompile(`\s+`)
 	checked := map[string][]string{
-		"pilot-sim.yml":      {"pilot-sim", "pilot-sim-upgrade"},
+		"pilot-sim.yml":      {"pilot-sim", "pilot-sim-upgrade", "pilot-sim-upgrade-below-minimum"},
 		"e2e-real-aimem.yml": {"real-aimem"},
 	}
 	// Every job of the simulation workflows is checked: a new one is listed
@@ -359,7 +359,8 @@ func TestSimulationWorkflowsNameEveryCheck(t *testing.T) {
 		}
 	}
 	for _, c := range []struct{ file, job string }{
-		{"pilot-sim.yml", "pilot-sim"}, {"pilot-sim.yml", "pilot-sim-upgrade"}, {"e2e-real-aimem.yml", "real-aimem"},
+		{"pilot-sim.yml", "pilot-sim"}, {"pilot-sim.yml", "pilot-sim-upgrade"},
+		{"pilot-sim.yml", "pilot-sim-upgrade-below-minimum"}, {"e2e-real-aimem.yml", "real-aimem"},
 	} {
 		file, job := c.file, c.job
 		t.Run(job, func(t *testing.T) {

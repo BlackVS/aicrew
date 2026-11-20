@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
 # A member's start: wait (bounded) for the files the scenario writes into
-# /sim/in (the invitation code, the aimem token, the forge token, each
-# owner only, then "ready"), run the preflight, join once with them, and
-# run serve, restarted after a failure as the installed service restarts it. Nothing is
-# typed: join reads the code with --code-file. The member reaches aicrewd
-# and the hub through the fault proxies sim-px-crew and sim-px-aimem
-# (e2e/pilotsim/compose.yaml), and runs aimem through aimem-timed, whose
-# gates the fault cases set.
+# /sim/in (the invitation code, the aimem token, the forge token and the
+# hub's CA, each owner only, the preflight's and join's command lines, then
+# "ready"), run the preflight and join once with them, and run serve,
+# restarted after a failure as the installed service restarts it.
+#
+# The two command lines are docs/BRING-UP.md's own (step 6), which the
+# runner reads from the document with e2e/docsteps and fills in; this
+# script records each id it ran in $HOME/docsteps.ran for the runner's
+# check. join runs in /sim/in, where its input files have the document's
+# names, with AICREW_NO_SERVICE=1, since the container has no systemd user
+# manager (docs/E2E-PILOT-SIM.md, "Where the simulation differs from the
+# document"). Nothing is typed: join reads the code with --code-file. The
+# member reaches aicrewd and the hub through the fault proxies sim-px-crew
+# and sim-px-aimem (e2e/pilotsim/compose.yaml), and runs aimem through
+# aimem-timed, whose gates the fault cases set.
 set -euo pipefail
 : "${SIM_ROLE:?}" "${SIM_WAIT:=900}"
-home=$HOME/agent
+label=$SIM_ROLE
+[ "$label" != indep ] || label=independent
+home=$HOME/aicrew/agents/$label
 in=/sim/in
 for _ in $(seq "$SIM_WAIT"); do
   [ -f "$in/ready" ] && break
@@ -20,27 +30,33 @@ set -a
 . /sim/tls/pins.env
 set +a
 if [ ! -f "$home/agent.json" ] || ! grep -q '"agent_id"' "$home/agent.json"; then
-  # The preflight a person runs before join (docs/BRING-UP.md), with join's
-  # own values: it spends nothing, and a member that fails it stops here.
-  # A release before the verb (the upgrade scenario's first install of
-  # v0.11.0) has none, and its own usage tells which.
-  if { aicrew-agent preflight 2>&1 || :; } | grep -q '^usage: aicrew-agent preflight '; then
-    aicrew-agent preflight --url https://sim-px-crew:9443 \
-      --tls-trust-mode spki_sha256 --tls-trust-value "$PIN_SIM_AICREWD" --client claude
-  else
-    echo "member.sh: this aicrew-agent has no preflight; join without it" >&2
-  fi
   # A member installed from the export (the upgrade scenario's previous
   # release) joins the closed-network way, with the export named, so that
   # its check's instructions name the export (docs/E2E-PILOT-SIM.md).
   base=
   [ ! -f /opt/aicrew-export/MANIFEST ] || base=/opt/aicrew-export
-  AICREW_BASE=$base aicrew-agent join --label "$SIM_ROLE" --home "$home" --url https://sim-px-crew:9443 \
-    --tls-trust-mode spki_sha256 --tls-trust-value "$PIN_SIM_AICREWD" --aimem-hub sim --client claude \
-    --wake turns --no-service --code-file "$in/invite" --aimem-command /usr/local/bin/aimem-timed \
-    --aimem-url https://sim-px-aimem:8440 --aimem-token-file "$in/aimem.token" --aimem-ca-file /sim/tls/ca.pem \
-    --cred "sim-gitea:3000=$in/forge.token"
-  rm -f "$in/invite" "$in/aimem.token" "$in/forge.token"
+  cd "$in"
+  if [ -f "$in/join.line" ]; then
+    # The versions (step 5), then the preflight a person runs before join,
+    # with join's own values: it spends nothing, and a member that fails it
+    # stops here; then join (step 6).
+    for id in agent-version aimem-version preflight join; do
+      AICREW_BASE=$base AICREW_NO_SERVICE=1 sh -c "$(cat "$in/$id.line")" < /dev/null
+      echo "$id" >> "$HOME/docsteps.ran"
+    done
+    rm -f "$in"/*.line
+  else
+    # A release older than the document's form (the below-minimum run's
+    # start, which has neither the preflight nor AICREW_NO_SERVICE) joins
+    # in the simulation's own form; the runner writes no lines for it.
+    AICREW_BASE=$base aicrew-agent join --label "$label" --url https://sim-px-crew:9443 \
+      --tls-trust-mode spki_sha256 --tls-trust-value "$PIN_SIM_AICREWD" --aimem-hub main --client claude \
+      --wake turns --no-service --code-file invite.code --aimem-command /usr/local/bin/aimem \
+      --aimem-url https://sim-px-aimem:8440 --aimem-token-file member.token --aimem-ca-file hub-ca.pem \
+      --cred "sim-gitea:3000=forge.token"
+  fi
+  rm -f invite.code member.token forge.token hub-ca.pem
+  cd "$HOME"
 fi
 # serve runs as an installed member's service runs it (internal/service/
 # render.go: Restart=on-failure, RestartSec=10, RestartPreventExitStatus=2):

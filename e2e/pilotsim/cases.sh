@@ -110,7 +110,7 @@ pilot_reviewing() {
     python3 -c 'import json,sys; sys.exit("hands-reviewing" not in [l["name"] for l in json.load(sys.stdin)["labels"]])'
 }
 # noted ROLE TEXT: the member's handoff has TEXT.
-noted() { dc exec -T -u member "sim-$1" grep -qF "$2" /home/member/agent/docs/HANDOFF.md; }
+noted() { dc exec -T -u member "sim-$1" grep -qF "$2" "$(mhome "$1")/docs/HANDOFF.md"; }
 # nudged_hold ROLE KIND: the operator nudges the member, and its hold in
 # aicrewd is KIND ("none" for no hold) a few seconds later.
 nudged_hold() {
@@ -348,6 +348,86 @@ case_e1() {
   member resume coordinator
 }
 
+# O1: the operator during a cycle (docs/BRING-UP.md, "The operator during a
+# cycle"), by the document's own lines in sim-aicrewd, where the operator's
+# commands run (arrangement 1). The worker stalls and the coordinator raises
+# an escalation on the blocked attempt, as in E1; the operator reads the
+# team's state, finds the escalation, reads and answers it, and pauses and
+# resumes the team; the cycle then ends with its pull request merged and
+# delivered. No mirror is posted on the task: the document asks none of the
+# operator.
+# opjson ID FILE [docstep options]: step ID by op, its JSON into CYC/FILE.
+opjson() {
+  local id=$1 file=$2
+  shift 2
+  doc op /home/sessiond "$id" "$@" > "$CYC/$file" || fail "case O1: docs/BRING-UP.md's step $id"
+}
+# open_escalation: aicrew escalations list --open lists one for the task;
+# its id goes to CYC/escalation.
+open_escalation() {
+  opjson escalations-list list.json
+  python3 -c 'import json,sys
+ids = [e["id"] for e in json.load(open(sys.argv[1])) or [] if e["task"]["task_id"] == sys.argv[2]]
+assert len(ids) == 1
+print(ids[0])' "$CYC/list.json" "$TASK" > "$CYC/escalation" 2>/dev/null
+}
+# team_state WHAT PY: aicrew team state; PY, a Python expression over the
+# state `s` and the members by label `m`, holds.
+team_state() {
+  opjson team-state "state-$1.json"
+  python3 -c 'import json,sys
+s = json.load(open(sys.argv[1]))
+m = {x["label"]: x for x in s["members"]}
+sys.exit(0 if eval(sys.argv[2]) else 1)' "$CYC/state-$1.json" "$2"
+}
+attempt_unblocked() {
+  team_state unblocked '(m["worker"].get("open_attempt") or {}).get("phase") not in (None, "blocked")'
+}
+case_o1() {
+  case_start O1
+  scenario "{$CASE_SCENARIO}"
+  hold coordinator "case O1: its scenario"
+  member_scenario coordinator '{"escalate_blocked":true}'
+  member resume coordinator
+  hold worker "case O1: its scenario"
+  member_scenario worker '{"stall":true}'
+  offered
+  member resume worker
+  waitfor "the launcher's block of the stalled attempt" 300 at 'running/blocked *'
+  hold worker "case O1: the block"
+  member_scenario worker '{}'
+  member resume worker
+  # The team's state shows the blocked attempt with its reason.
+  team_state blocked 'm["worker"]["open_attempt"]["phase"] == "blocked" and m["worker"]["open_attempt"].get("block") and "coordinator" in m' ||
+    fail "case O1: aicrew team state does not show the worker's attempt blocked ($CYC/state-blocked.json)"
+  waitfor "the coordinator's escalation in aicrew escalations list --open" 300 open_escalation
+  local esc
+  esc=$(cat "$CYC/escalation")
+  opjson escalations-show show.json -set "ESCALATION=$esc"
+  python3 -c 'import json,sys; e = json.load(open(sys.argv[1])); assert e["id"] == sys.argv[2] and e["question"] and not e.get("answer")' \
+    "$CYC/show.json" "$esc" || fail "case O1: aicrew escalations show ($CYC/show.json)"
+  opjson escalations-answer answer.json -set "ESCALATION=$esc" -set "DECISION=go on" \
+    -set "RATIONALE=The stall was the case's fault; nothing else blocks the task."
+  python3 -c 'import json,sys; e = json.load(open(sys.argv[1])); assert e["id"] == sys.argv[2] and e["answer"]' \
+    "$CYC/answer.json" "$esc" || fail "case O1: the answer printed no answer ($CYC/answer.json)"
+  opjson escalations-list list-after.json
+  python3 -c 'import json,sys; assert sys.argv[2] not in [e["id"] for e in json.load(open(sys.argv[1])) or []]' \
+    "$CYC/list-after.json" "$esc" || fail "case O1: the answered escalation is still open ($CYC/list-after.json)"
+  waitfor "the attempt to leave blocked in aicrew team state" 300 attempt_unblocked
+  waitfor "sim-coordinator's turn to end" 120 idle coordinator
+  # The pause holds the members' turns and shows in the team's state; the
+  # resume lifts it.
+  opjson team-pause pause.json -set "REASON=case O1: the operator looks"
+  team_state paused 's.get("paused") and s["paused"].get("reason") == "case O1: the operator looks"' ||
+    fail "case O1: aicrew team state does not show the pause ($CYC/state-paused.json)"
+  opjson team-resume resume.json
+  team_state resumed 'not s.get("paused")' || fail "case O1: the team is still paused ($CYC/state-resumed.json)"
+  case_done O1
+  hold coordinator "case O1: its scenario's end"
+  member_scenario coordinator '{}'
+  member resume coordinator
+}
+
 # P5: the CI fails on the first head and the rework's second head carries
 # the gates; then the merge commit's CI stays pending, and verify-delivery's
 # pending answer is never recorded as delivered.
@@ -396,7 +476,7 @@ case_p5() {
 . "$SIM/faults.sh"
 
 # A skipped fault runs only its case: F1-claim-request runs F1.
-for c in P2 P5 P4 E1 P1 F1 F2 F3 F4 F5 F6 F7 P3; do
+for c in P2 P5 P4 E1 O1 P1 F1 F2 F3 F4 F5 F6 F7 P3; do
   [ -z "$SKIP" ] || [ "${SKIP%%-*}" = "$c" ] || continue
   "case_${c,,}"
 done
@@ -405,5 +485,6 @@ scenario "{$SCENARIO_REPOS}"
 ev scenario_end name="$SCENARIO" result=PASS
 SCENARIO=
 
+docsteps_verify pilot-sim
 collect
-step "pilot-sim: green: the three members checked, listed and serving; the stubs' fixtures confirmed, refused and released; two cycles from a filed task to DONE with the delivery record; the pilot cases P1 to P5, the escalation case E1 and the fault cases F1 to F7, expected-to-fail parts in $XFAIL (reports in $OUT)"
+step "pilot-sim: green: the three members checked, listed and serving; the stubs' fixtures confirmed, refused and released; two cycles from a filed task to DONE with the delivery record; the pilot cases P1 to P5, the escalation case E1, the operator case O1 and the fault cases F1 to F7, expected-to-fail parts in $XFAIL (reports in $OUT)"

@@ -59,7 +59,6 @@ hold_status() {
 # themselves, as b4's harness does, with both scripted members held so that
 # no turn of theirs takes a step on the cases' tasks.
 
-MHOME=/home/member/agent
 # mstep_run ROLE OP NAME BODY [FLAG...]: `aicrew-agent step OP` in
 # sim-ROLE, BODY (JSON, or empty for none) on its standard input; its
 # answer in CYC/NAME.json and its exit in CYC/NAME.exit. Two can run at
@@ -68,10 +67,10 @@ mstep_run() {
   local role=$1 op=$2 name=$3 body=$4 code=0
   shift 4
   if [ -n "$body" ]; then
-    printf '%s\n' "$body" | dc exec -T -u member "sim-$role" aicrew-agent step "$op" --home $MHOME --body - "$@" \
+    printf '%s\n' "$body" | dc exec -T -u member "sim-$role" aicrew-agent step "$op" --home "$(mhome "$role")" --body - "$@" \
       > "$CYC/$name.json" 2> "$CYC/$name.err" || code=$?
   else
-    dc exec -T -u member "sim-$role" aicrew-agent step "$op" --home $MHOME "$@" < /dev/null \
+    dc exec -T -u member "sim-$role" aicrew-agent step "$op" --home "$(mhome "$role")" "$@" < /dev/null \
       > "$CYC/$name.json" 2> "$CYC/$name.err" || code=$?
   fi
   echo "$code" > "$CYC/$name.exit"
@@ -97,7 +96,7 @@ attempt_of_task() { store_copy "$CYC/peek" && python3 "$SIM/cases.py" attempt_of
 # settled_as STATE: TASK's latest attempt is STATE with no step pending.
 settled_as() { store_copy "$CYC/peek" && python3 "$SIM/cases.py" settled "$CYC/peek" "$TASK" "$1"; }
 # channel_up ROLE: sim-ROLE's launcher answers a step.
-channel_up() { dc exec -T -u member "sim-$1" aicrew-agent step pending --home $MHOME < /dev/null > /dev/null; }
+channel_up() { dc exec -T -u member "sim-$1" aicrew-agent step pending --home "$(mhome "$1")" < /dev/null > /dev/null; }
 # step_body offer|claim: the body of an offer to the worker, or of a claim,
 # of TASK at its current revision; the process pin is the one the cycles'
 # offers carried, from aicrewd's store, and --repository fills the rest.
@@ -165,7 +164,7 @@ replay_claim() {
   local rev
   rev=$(hubapi GET "/v1/tasks/$TASK" | json_field revision)
   dc exec -T -u member "sim-$1" sh -c '
-cd /home/member/agent || exit 2
+cd "$4" || exit 2
 f=/home/member/gate/captured-reservation-claim
 sf=$(python3 -c "import json; print(json.load(open(\"state/aicrew-session.json\"))[\"aimem_session_file\"])")
 key=$3
@@ -173,8 +172,8 @@ key=$3
 python3 -c "import json, sys; b = json.load(open(sys.argv[1])); b[\"expected_revision\"] = int(sys.argv[2]); print(json.dumps(b))" \
   "$f" "$2" > "$f.replay"
 code=0
-AIMEM_STATE_DIR=/home/member/agent/aimem AIMEM_SOCKET=/home/member/agent/aimem/aimem.sock AIMEM_TEAM_SESSION=$sf \
-  aimem reservation claim --task "$1" --key "$key" < "$f.replay" > "$f.out" 2>/dev/null || code=$?
+AIMEM_STATE_DIR=$4/aimem AIMEM_SOCKET=$4/aimem/aimem.sock AIMEM_TEAM_SESSION=$sf \
+  /home/member/.local/bin/aimem reservation claim --task "$1" --key "$key" < "$f.replay" > "$f.out" 2>/dev/null || code=$?
 rm -f "$f" "$f.replay"
 python3 - "$code" "$f.out" <<"PY"
 import json, sys
@@ -184,11 +183,11 @@ except (OSError, ValueError, AttributeError):
     code = ""
 print(json.dumps({"exit": int(sys.argv[1]), "code": code}))
 PY
-rm -f "$f.out"' sh "$TASK" "$rev" "$2"
+rm -f "$f.out"' sh "$TASK" "$rev" "$2" "$(mhome "$1")"
 }
 # pending_key ROLE: the request key of sim-ROLE's recorded step on TASK.
 pending_key() {
-  dc exec -T -u member "sim-$1" sh -c 'cat /home/member/agent/state/steps/step-*.json 2>/dev/null' |
+  dc exec -T -u member "sim-$1" sh -c 'cat "$1"/state/steps/step-*.json 2>/dev/null' sh "$(mhome "$1")" |
     python3 "$SIM/cases.py" pending_key "$TASK"
 }
 
@@ -667,7 +666,7 @@ case_f7() {
   done
   dc exec -T sim-px-crew sh -c 'cat /var/lib/simproxy/proofs 2>/dev/null || true' >> "$known"
   for role in coordinator worker indep; do
-    dc exec -T -u member "sim-$role" sh -c 'cat /home/member/agent/aimem/aicrew-sessions/*.json 2>/dev/null || true' |
+    dc exec -T -u member "sim-$role" sh -c 'cat "$1"/aimem/aicrew-sessions/*.json 2>/dev/null || true' sh "$(mhome "$role")" |
       python3 "$SIM/cases.py" handles >> "$known"
   done
   collect

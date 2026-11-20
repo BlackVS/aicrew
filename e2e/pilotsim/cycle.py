@@ -58,10 +58,10 @@ EXPECT = {
 # fails the check. The architect's answer is audited under its own caller
 # kind.
 OPERATOR_OPS = {"control.pause", "control.resume", "introspection.credential.issue", "invitation.issue",
-                "team.create", "team.record_registration", "team.set_toolchain"}
-CASE_OPS = {"control.nudge", "architect.credential.issue"}
+                "team.create", "team.record_registration", "team.set_toolchain", "team.pause", "team.resume"}
+CASE_OPS = {"control.nudge", "architect.credential.issue", "escalation.answer"}
 # The cases whose cycle cycle.py checks at the step done.
-CASES = ("P1", "P2", "P4", "E1", "P5", "F1", "F2", "F3")
+CASES = ("P1", "P2", "P4", "E1", "O1", "P5", "F1", "F2", "F3")
 REVIEW_HEAD = re.compile(r"^\[(oh-code-review \(high\) review|hands-bot review)\] reviewed at head ([0-9a-f]{40})$", re.M)
 VERDICT = re.compile(r"^VERDICT\n(\S+)$", re.M)
 
@@ -143,12 +143,14 @@ def check(step, d, case=""):
         expect(a["finalized_result"] == 1 and a["delivery_result"] == 1,
                "aicrewd: result finalized %d, delivered %d" % (a["finalized_result"], a["delivery_result"]))
     # No hold, and no escalation but case E1's one, answered by the
-    # architect: the other cycles have no question to raise.
+    # architect, and case O1's, answered by the operator: the other cycles
+    # have no question to raise.
     holds = q("SELECT agent_id, kind FROM member_holds")
     expect(not holds, "aicrewd: member holds %s" % [tuple(h) for h in holds])
     escalations = q("SELECT id, answered_by FROM escalations WHERE task_id = ?", task)
-    if case == "E1":
-        expect(len(escalations) == 1 and escalations[0]["answered_by"].startswith("architect:"),
+    if case in ("E1", "O1"):
+        answerer = "architect:" if case == "E1" else "operator"
+        expect(len(escalations) == 1 and escalations[0]["answered_by"].startswith(answerer),
                "aicrewd: the escalations on the task are %s" % [tuple(e) for e in escalations])
         # The coordinator's mirror of the request, posted once the hold ended.
         if escalations and after("done"):
@@ -201,7 +203,7 @@ def check(step, d, case=""):
            "aimem: no triage comment")
     states = [(h.get("task") or {}).get("state") for h in items(loadj(d, "aimem/history.json", []), "changes")]
     expect(states and None not in states, "aimem: the task's history has no states: %s" % states)
-    expect(not ({"BLOCKED", "CANCELLED"} if case not in ("P4", "E1") else {"CANCELLED"}) & set(states),
+    expect(not ({"BLOCKED", "CANCELLED"} if case not in ("P4", "E1", "O1") else {"CANCELLED"}) & set(states),
            "aimem: the task's history went through %s" % states)
     hold = loadj(d, "aimem/reservation.json")
     if want["holder"]:

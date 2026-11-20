@@ -1,0 +1,11 @@
+{
+  "pilot-sim": [
+    "status", "team-setup", "hub-grant", "team-toolchain", "team-show", "skills-import", "skills-list", "team-pause-bring-up", "user-add", "member-token", "access-list", "invitation-issue", "invitation-list", "agent-version", "aimem-version", "preflight", "join", "join-rerun", "check", "team-resume", "team-state", "escalations-list", "escalations-show", "escalations-answer", "team-pause"
+  ],
+  "pilot-sim-upgrade": [
+    "status", "team-setup", "hub-grant", "team-toolchain", "team-show", "skills-import", "skills-list", "team-pause-bring-up", "user-add", "member-token", "access-list", "invitation-issue", "invitation-list", "agent-version", "aimem-version", "preflight", "join", "join-rerun", "check", "team-resume"
+  ],
+  "pilot-sim-upgrade-below-minimum": [
+    "status", "team-setup", "hub-grant", "team-toolchain", "team-show", "skills-import", "skills-list", "team-pause-bring-up", "user-add", "member-token", "access-list", "invitation-issue", "invitation-list", "check", "team-resume"
+  ]
+}

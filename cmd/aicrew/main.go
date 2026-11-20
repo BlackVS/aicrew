@@ -8,7 +8,7 @@
 //	aicrew hub-credential list   [--hub HUB]
 //	aicrew hub-credential revoke --id ID
 //	aicrew invitation issue|list|revoke ... (see invitation.go)
-//	aicrew team create|list|show|rename|register|setup|state|pause|resume ... (see team.go, teamsetup.go)
+//	aicrew team create|list|show|rename|register|setup|state|pause|resume|toolchain ... (see team.go, teamsetup.go)
 //	aicrew member pause|resume|nudge ... (see member.go)
 //	aicrew hub add NAME ... (see hub.go)
 //	aicrew operator-token new --output PATH|-
@@ -58,12 +58,12 @@ const usage = `usage:
   aicrew hub-credential list   [--hub HUB]
   aicrew hub-credential revoke --id ID
   aicrew invitation issue|list|revoke ...   (run "aicrew invitation" for its usage)
-  aicrew team create|list|show|rename|register|setup|state|pause|resume ...   (run "aicrew team" for its usage)
+  aicrew team create|list|show|rename|register|setup|state|pause|resume|toolchain ...   (run "aicrew team" for its usage)
   aicrew member pause|resume|nudge ...   (run "aicrew member" for its usage)
   aicrew hub add NAME ...   (run "aicrew hub" for its usage)
   aicrew operator-token new --output PATH|-
   aicrew architect init|credential ...   (run "aicrew architect" for its usage)
-  aicrew escalations list|show|answer ...   (run "aicrew escalations" for its usage)
+  aicrew escalations list|show|answer|wait ...   (run "aicrew escalations" for its usage)
   aicrew merges [--team TEAM]   (the pull requests waiting for the human merge)
   aicrew attempts handoff --id ATTEMPT [--json]   (an attempt's handoff, as its worker last pushed it)
   aicrew status [--team TEAM]   (each team's members: state, open attempt, unread messages)

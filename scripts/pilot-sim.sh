@@ -120,6 +120,11 @@ TOOLS=$(mktemp -d)
 SIMREPORT=$TOOLS/simreport
 (cd "$ROOT" && go build -trimpath -o "$SIMREPORT" ./e2e/pilotsim/cmd/simreport) ||
   { echo "pilot-sim: the report tool did not build" >&2; rm -rf "$TOOLS"; exit 2; }
+# docstep reads docs/BRING-UP.md's marked lines (e2e/docsteps): the runner
+# runs the document's own command lines.
+DOCSTEP=$TOOLS/docstep
+(cd "$ROOT" && go build -trimpath -o "$DOCSTEP" ./e2e/docsteps/cmd/docstep) ||
+  { echo "pilot-sim: the docstep tool did not build" >&2; rm -rf "$TOOLS"; exit 2; }
 SIMUPGRADE=$TOOLS/simupgrade
 PREVIOUS=
 if [ -n "$UPGRADE" ]; then
@@ -133,7 +138,7 @@ fi
 # allows (cycle.py): only the below-minimum run sets it, after its nudge.
 export PILOTSIM_OFFERED_NUDGES=0
 # An earlier run's report and snapshots go: each snapshot is taken once.
-rm -rf "$OUT/events.jsonl" "$OUT/report.jsonl" "$OUT/homes" "$OUT"/cycle-* "$OUT"/case-* "$OUT"/upgrade-*
+rm -rf "$OUT/docsteps.ran" "$OUT/events.jsonl" "$OUT/report.jsonl" "$OUT/homes" "$OUT"/cycle-* "$OUT"/case-* "$OUT"/upgrade-*
 # ev TYPE KEY=VALUE...: one event of the run's report.
 ev() { "$SIMREPORT" event "$OUT" "$@" || echo "pilot-sim: the report's $1 event was not recorded" >&3; }
 
@@ -260,7 +265,7 @@ fail() {
   # turn without the toolchain says which step is missing there.
   for s in coordinator worker indep; do
     echo "---- sim-$s: the last turn errors (logs/turns.jsonl)" >&3
-    dc exec -T -u member "sim-$s" sh -c 'jq -r "select((.error // \"\") != \"\") | .error" /home/member/agent/logs/turns.jsonl 2>/dev/null | tail -n 3' >&3 2>/dev/null || true
+    dc exec -T -u member "sim-$s" sh -c 'jq -r "select((.error // \"\") != \"\") | .error" $1/logs/turns.jsonl 2>/dev/null | tail -n 3' sh "$(mhome "$s")" >&3 2>/dev/null || true
   done
   exit 1
 }
@@ -269,7 +274,7 @@ homes() {
   local role
   for role in coordinator worker indep; do
     mkdir -p "$OUT/homes/$role"
-    dc exec -T -u member "sim-$role" sh -c 'cd /home/member/agent && find docs logs state -type f 2>/dev/null | tar -cf - -T -' \
+    dc exec -T -u member "sim-$role" sh -c 'cd "$1" && find docs logs state -type f 2>/dev/null | tar -cf - -T -' sh "$(mhome "$role")" \
       2>/dev/null | tar -C "$OUT/homes/$role" -xf - 2>/dev/null || true
   done
 }
@@ -478,6 +483,69 @@ px() { dc exec -T "sim-px-$1" simproxy "${@:2}"; }
 gitea() { dc exec -T -u git sim-gitea gitea --config /data/gitea/conf/app.ini "$@"; }
 json_field() { python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
 
+# ---- docs/BRING-UP.md's lines ---------------------------------------------------
+# The runner runs the document's command lines as the document writes them,
+# read by their markers (e2e/docsteps), with the placeholders filled in;
+# each step it ran is recorded in OUT/docsteps.ran, and a full run checks
+# at its end that it ran every step its scenario declares
+# (e2e/docsteps/scenarios.json). Where the simulation differs from the
+# document, docs/E2E-PILOT-SIM.md says how and why ("Where the simulation
+# differs from the document").
+# docline ID [docstep options]: step ID's line, filled in.
+docline() { "$DOCSTEP" line -doc "$ROOT/docs/BRING-UP.md" -id "$@"; }
+# doc RUNNER DIR ID [docstep options]: step ID's line run by RUNNER (op,
+# hub) in DIR, its output on stdout.
+doc() {
+  local runner=$1 dir=$2 id=$3 line
+  shift 3
+  line=$(docline "$id" "$@") || fail "docs/BRING-UP.md: no line for step $id"
+  "$runner" sh -c 'cd "$1" && eval "$2"' sh "$dir" "$line" || return
+  echo "$id" >> "$OUT/docsteps.ran"
+}
+# mhome ROLE: the member's home, join's default for its label
+# (~/aicrew/agents/LABEL); sim-indep's label is independent.
+mhome() {
+  local label=$1
+  [ "$label" != indep ] || label=independent
+  echo "/home/member/aicrew/agents/$label"
+}
+# member_doc ROLE ID [docstep options]: step ID's line, as the member's
+# input file /sim/in/ID.line for member.sh.
+member_doc() {
+  local role=$1 id=$2
+  shift 2
+  docline "$id" "$@" | dc exec -T -u member "sim-$role" sh -c 'cat > "$1"' sh "/sim/in/$id.line" ||
+    fail "docs/BRING-UP.md: step $id for sim-$role"
+}
+# mcheck ROLE: the document's check with its --json, in the member's home;
+# check's own exit code.
+mcheck() {
+  local line rc=0
+  line=$(docline check -set "HOME=$(mhome "$1")" -add --json) || fail "docs/BRING-UP.md: no line for step check"
+  dc exec -T -u member "sim-$1" sh -c "$line" || rc=$?
+  [ "$rc" != 0 ] || echo check >> "$OUT/docsteps.ran"
+  return "$rc"
+}
+# mrejoin ROLE: the document's rerun of join on the member's linked home,
+# which refreshes its layout and files; no service, as in member.sh.
+mrejoin() {
+  local line
+  line=$(docline join-rerun -set "HOME=$(mhome "$1")") || fail "docs/BRING-UP.md: no line for step join-rerun"
+  dc exec -T -u member -e AICREW_NO_SERVICE=1 "sim-$1" sh -c "$line" > "$OUT/rejoin-$1.txt" 2>&1 ||
+    fail "aicrew-agent join --home on sim-$1's linked home ($OUT/rejoin-$1.txt)"
+  echo join-rerun >> "$OUT/docsteps.ran"
+}
+# docsteps_verify SCENARIO: the run executed every step SCENARIO declares;
+# the members' own runs are in their containers.
+docsteps_verify() {
+  local role
+  for role in coordinator worker indep; do
+    dc exec -T -u member "sim-$role" sh -c 'cat "$HOME/docsteps.ran" 2>/dev/null || true' >> "$OUT/docsteps.ran"
+  done
+  "$DOCSTEP" verify -scenarios "$ROOT/e2e/docsteps/scenarios.json" -scenario "$1" -ran "$OUT/docsteps.ran" ||
+    fail "the run did not execute every docs/BRING-UP.md step scenario $1 declares"
+}
+
 MAIN=$$
 trap finish EXIT
 trap 'fail "line $LINENO exited $?"' ERR
@@ -562,8 +630,9 @@ hub mkdir -p /home/aimem/aiskills
 for f in "aiskills-$PILOTSIM_AISKILLS_VERSION.tar.gz" SHA256SUMS; do
   hub sh -c 'cat > "/home/aimem/aiskills/$1"' sh "$f" < "$STAGE/aiskills/$f"
 done
-hub aimem skills import --from-archive "/home/aimem/aiskills/aiskills-$PILOTSIM_AISKILLS_VERSION.tar.gz" >/dev/null ||
-  fail "aimem skills import on the hub's host"
+doc hub /home/aimem/aiskills skills-import >/dev/null || fail "aimem skills import on the hub's host"
+doc hub /home/aimem skills-list > "$OUT/skills-list.txt" || fail "aimem skills list --hub"
+grep -q oh-code-review "$OUT/skills-list.txt" || fail "aimem skills list --hub names no oh-code-review ($OUT/skills-list.txt)"
 # The sim's process repository has no tag, so the commit is selected with
 # --commit (aimem 0.10.17 takes a bare commit only with it).
 hub aimem process select "$PROCESS_URL" "$PROCESS_COMMIT" process/manifest.json --commit -p "$PROJECT" >/dev/null
@@ -579,24 +648,27 @@ HUB_ID=$(op cat $OPS_HOME/peer/aimem-hub-id)
 # ---- aicrewd: the hub, the team, the introspection credential ----------------------
 step "aicrewd: aicrew hub add, team setup and the hub's introspection credential"
 # aicrewd reaches the hub through sim-px-hub (case F6-unreachable).
-op aicrew hub add sim --config $OPS_HOME/aicrew/etc/aicrewd.json --base-url https://sim-px-hub:8440 \
+op aicrew hub add main --config $OPS_HOME/aicrew/etc/aicrewd.json --base-url https://sim-px-hub:8440 \
   --tls-trust-mode spki_sha256 --tls-trust-value "$PIN_SIM_AIMEM" --cred-dir $OPS_HOME/peer >/dev/null
 dc restart sim-aicrewd >/dev/null
 waitfor "aicrewd's restart" 60 op curl -fs --cacert /sim/tls/ca.pem https://sim-aicrewd:9443/healthz
-TEAM=sim
-setup_out=$(op aicrew team setup "$TEAM" --hub sim --project "$PROJECT" || true)
-grant=$(printf '%s\n' "$setup_out" | sed -n 's/^[[:space:]]*aimem identity team grant //p')
-[ -n "$grant" ] || fail "aicrew team setup printed no grant: $setup_out"
-# shellcheck disable=SC2086 # the grant's words, as printed
-identity team grant $grant >/dev/null
-op aicrew team setup "$TEAM" --hub sim --project "$PROJECT" >/dev/null || fail "aicrew team setup, second run"
-TEAM_ID=$(op aicrew team show -team-name "$TEAM" | json_field id)
+TEAM=crew
+doc op $OPS_HOME status > "$OUT/status-empty.json" || fail "aicrew status before the team"
+setup_out=$(doc op $OPS_HOME team-setup -set "PROJECT=$PROJECT" || true)
+printf '%s\n' "$setup_out" | grep -q '^[[:space:]]*aimem identity team grant ' ||
+  fail "aicrew team setup printed no grant: $setup_out"
+# The grant as the document writes it, on the hub's host, with the hub's
+# private CA (the document's addition).
+doc hub /home/aimem hub-grant -set SERVICE=aicrew-service -set "PROJECT=$PROJECT" -set HUB_URL=https://sim-aimem:8440 \
+  -set ADMIN_TOKEN_FILE=/home/aimem/admin.token -add "--hub-ca-file FILE" -set FILE=/sim/tls/ca.pem >/dev/null ||
+  fail "aimem identity team grant"
+doc op $OPS_HOME team-setup -set "PROJECT=$PROJECT" >/dev/null || fail "aicrew team setup, second run"
+TEAM_ID=$(doc op $OPS_HOME team-show | json_field id) || fail "aicrew team show"
 # The project's toolchain, by the operator's documented step (docs/BRING-UP.md),
 # before any member joins: a worker's launcher records the team's projects
 # when it starts, and its turns run the project's tests only with it.
-op aicrew team toolchain --team-name "$TEAM" --project "$PROJECT" --toolchain dev-go >/dev/null ||
-  fail "aicrew team toolchain"
-[ "$(op aicrew team show -team-name "$TEAM" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("toolchains", {}).get(sys.argv[1], ""))' "$PROJECT")" = dev-go ] ||
+doc op $OPS_HOME team-toolchain -set "PROJECT=$PROJECT" >/dev/null || fail "aicrew team toolchain"
+[ "$(doc op $OPS_HOME team-show | python3 -c 'import json,sys; print(json.load(sys.stdin).get("toolchains", {}).get(sys.argv[1], ""))' "$PROJECT")" = dev-go ] ||
   fail "aicrew team show does not name dev-go for project $PROJECT after aicrew team toolchain"
 ev observation task= what="the operator selected the toolchain dev-go for project $PROJECT with aicrew team toolchain, and aicrew team show names it"
 op aicrew hub-credential issue -hub "$HUB_ID" --output $OPS_HOME/introspection.token >/dev/null
@@ -632,30 +704,60 @@ step "the members: aimem users and tokens, invitations, and their input files"
 # The roles' services and their aicrew roles: sim-indep is the team's
 # independent member.
 declare -A AICREW_ROLE=([coordinator]=coordinator [worker]=worker [indep]=independent)
+# member_lines ROLE: the lines member.sh runs, the document's step 5 and 6,
+# for a member of this tree's release or the upgrade scenario's previous
+# one; the below-minimum run's start predates the document's form and
+# joins in the simulation's own (member.sh). sim-indep joins with the
+# document's pinned alternative (spki_sha256), the others by ca_dns with
+# the simulation's CA in the system trust.
+member_lines() {
+  local role=$1 per=${AICREW_ROLE[$1]} alt=()
+  [ -z "$BELOW" ] || return 0
+  [ "$role" != indep ] || alt=(-alt -set "PIN=${PIN_SIM_AICREWD#sha256-}")
+  local v=(-set AICREWD=sim-px-crew -set PORT=9443 -set HUB=sim-px-aimem:8440
+    -set FORGE_HOST=sim-gitea:3000 "${alt[@]}")
+  member_doc "$role" agent-version
+  member_doc "$role" aimem-version
+  member_doc "$role" preflight "${v[@]}"
+  member_doc "$role" join -per "$per" "${v[@]}" -add "--aimem-ca-file hub-ca.pem" -add "--code-file PATH" -set PATH=invite.code
+}
 dc up -d sim-coordinator sim-worker sim-indep sim-architect >/dev/null
 own_volumes
+# The team is paused for the bring-up, as the document's step 1 offers,
+# and resumed in its step 8 once every member is ready (below).
+doc op $OPS_HOME team-pause-bring-up >/dev/null || fail "aicrew team pause for the bring-up"
 for role in coordinator worker indep; do
   svc=sim-$role
-  uid=$(hub aimem access user-add --user-name "sim-$role" | json_field id)
-  expiry=$(date -u -d '+30 days' +%Y-%m-%dT%H:%M:%SZ)
-  hub aimem access token-issue-user --user-id "$uid" --label "sim-$role" --expires "$expiry" \
-    --output "/home/aimem/member-$role.token" >/dev/null
-  hub cat "/home/aimem/member-$role.token" | into "$svc" member /sim/in/aimem.token
-  hub rm -f "/home/aimem/member-$role.token"
+  per=${AICREW_ROLE[$role]}
+  hub mkdir -p "/home/aimem/members/$per"
+  uid=$(doc hub "/home/aimem/members/$per" user-add -per "$per" | json_field id) || fail "aimem access user-add for $per"
+  doc hub "/home/aimem/members/$per" member-token -per "$per" >/dev/null || fail "aimem access token-issue-user for $per"
+  hub cat "/home/aimem/members/$per/member.token" | into "$svc" member /sim/in/member.token
+  hub rm -rf "/home/aimem/members/$per"
+  hub cat /sim/tls/ca.pem | into "$svc" member /sim/in/hub-ca.pem
   gitea admin user generate-access-token --username "sim-$role" --token-name sim --scopes all --raw |
     into "$svc" member /sim/in/forge.token
-  op aicrew invitation issue -team "$TEAM_ID" -role "${AICREW_ROLE[$role]}" -hub "$HUB_ID" -label "$role" -expect-user "$uid" \
-    --output "$OPS_HOME/invite-$role" >/dev/null
-  op cat "$OPS_HOME/invite-$role" | into "$svc" member /sim/in/invite
-  op rm -f "$OPS_HOME/invite-$role"
+  op mkdir -p "$OPS_HOME/invite-$per"
+  doc op "$OPS_HOME/invite-$per" invitation-issue -per "$per" -set "HUB_ID=$HUB_ID" -set "USER_ID=$uid" >/dev/null ||
+    fail "aicrew invitation issue for $per"
+  op cat "$OPS_HOME/invite-$per/invite.code" | into "$svc" member /sim/in/invite.code
+  op rm -rf "$OPS_HOME/invite-$per"
+  member_lines "$role"
+  # ca_dns trusts the system roots: the simulation's CA joins them, as a
+  # private CA joins a host's trust (docs/E2E-PILOT-SIM.md, "Where the
+  # simulation differs from the document").
+  dc exec -T -u root "$svc" sh -c 'cp /sim/tls/ca.pem /usr/local/share/ca-certificates/pilotsim-ca.crt && update-ca-certificates >/dev/null' ||
+    fail "the simulation CA into $svc's system trust"
   dc exec -T -u member "$svc" touch /sim/in/ready
 done
+doc hub /home/aimem access-list > "$OUT/access-list.txt" || fail "aimem access list"
+doc op $OPS_HOME invitation-list > "$OUT/invitation-list.json" || fail "aicrew invitation list"
 
 # ---- the smoke check -------------------------------------------------------------------
 # verify-delivery as the coordinator's client finds it (the sim client's
 # skillFile): the home's skills, which join installs from the hub, then the
 # user's, where the upgrade scenario's previous release has them.
-VERIFY_DELIVERY='p=/home/member/agent/.claude/skills/verify-delivery/verify_delivery.py
+VERIFY_DELIVERY='p=/home/member/aicrew/agents/coordinator/.claude/skills/verify-delivery/verify_delivery.py
 [ -f "$p" ] || p="$HOME/.claude/skills/verify-delivery/verify_delivery.py"
 python3 "$p"'
 begin smoke 900
@@ -676,15 +778,20 @@ served() {
 }
 for role in coordinator worker indep; do
   waitfor "sim-$role's serve and its model probe" 600 served "sim-$role"
-  dc exec -T -u member "sim-$role" aicrew-agent check --home /home/member/agent --json > "$OUT/check-$role.json" ||
+  mcheck "$role" > "$OUT/check-$role.json" ||
     fail "aicrew-agent check is not green in sim-$role (report: $OUT/check-$role.json)"
   # Under -upgrade this check is the previous release's, which knows only its
   # own tested set (smoke.py, `previous`); the check after the upgrade is strict.
   python3 "$SIM/smoke.py" check "$OUT/check-$role.json" "$PILOTSIM_AISKILLS_VERSION" ${UPGRADE:+previous} ||
     fail "sim-$role's check report ($OUT/check-$role.json)"
 done
-op aicrew status --team "$TEAM_ID" > "$OUT/status.json" || fail "aicrew status"
-python3 "$SIM/smoke.py" status "$OUT/status.json" coordinator worker indep || fail "aicrew status ($OUT/status.json)"
+for role in coordinator worker indep; do
+  [ -n "$BELOW" ] || mrejoin "$role"
+done
+doc op $OPS_HOME status > "$OUT/status.json" || fail "aicrew status"
+python3 "$SIM/smoke.py" status "$OUT/status.json" coordinator worker independent || fail "aicrew status ($OUT/status.json)"
+# Every member is ready: the team paused for the bring-up resumes (step 8).
+doc op $OPS_HOME team-resume >/dev/null || fail "aicrew team resume after the bring-up"
 dc exec -T -u member sim-coordinator sh -c \
   "$VERIFY_DELIVERY"' --help >/dev/null' ||
   fail "verify_delivery.py --help does not run in sim-coordinator"
@@ -811,7 +918,7 @@ member_id() {
 }
 WORKER_ID=$(member_id worker)
 COORD_ID=$(member_id coordinator)
-INDEP_ID=$(member_id indep)
+INDEP_ID=$(member_id independent)
 # hubapi METHOD PATH [JSON]: the hub's API as its admin, on the hub's host;
 # a write's idempotency key names the cycle.
 hubapi() {
@@ -834,15 +941,15 @@ member() {
 # turn_mark ROLE: "running N" or "idle N", N the turns the home recorded.
 turn_mark() {
   dc exec -T -u member "sim-$1" python3 -c '
-import json, os
-h = "/home/member/agent"
+import json, os, sys
+h = sys.argv[1]
 try:
     st = json.load(open(h + "/state/turns.json"))
 except FileNotFoundError:
     st = {}
 log = h + "/logs/turns.jsonl"
 n = sum(1 for _ in open(log)) if os.path.exists(log) else 0
-print("running" if st.get("running") else "idle", n)'
+print("running" if st.get("running") else "idle", n)' "$(mhome "$1")"
 }
 # idle ROLE: the member runs no turn, and recorded none, over two seconds:
 # a pause stops the next turn, not the current one (seq 678).
@@ -943,7 +1050,7 @@ take_homes() {
   for role in coordinator worker indep; do
     mkdir -p "$d/homes/$role"
     for f in logs/turns.jsonl logs/guard.jsonl docs/HANDOFF.md state/turns.json; do
-      dc exec -T -u member "sim-$role" sh -c '[ ! -f "$1" ] || cat "$1"' sh "/home/member/agent/$f" \
+      dc exec -T -u member "sim-$role" sh -c '[ ! -f "$1" ] || cat "$1"' sh "$(mhome "$role")/$f" \
         > "$d/homes/$role/${f##*/}"
     done
   done
@@ -1117,7 +1224,7 @@ upgrade() {
       continue
     fi
     waitfor "$svc's serve on the new aicrew-agent" 300 served_since
-    dc exec -T -u member "$svc" aicrew-agent check --home /home/member/agent --json > "$OUT/upgrade-check-$role.json" ||
+    mcheck "$role" > "$OUT/upgrade-check-$role.json" ||
       fail "aicrew-agent check is not green in $svc after the upgrade ($OUT/upgrade-check-$role.json)"
     python3 "$SIM/smoke.py" check "$OUT/upgrade-check-$role.json" "$PILOTSIM_AISKILLS_VERSION" ||
       fail "$svc's check report after the upgrade ($OUT/upgrade-check-$role.json)"
@@ -1166,7 +1273,7 @@ below_check() {
     tail -n 40 <<<"$log"
   } > "$OUT/upgrade-below-serve-$1.txt"
   ev observation task="$TASK" what="$svc after the upgrade with aimem below the minimum: $(head -n 3 "$OUT/upgrade-below-serve-$1.txt" | tr '\n' ';')"
-  dc exec -T -u member "$svc" aicrew-agent check --home /home/member/agent --json > "$OUT/upgrade-check-$1.json" || rc=$?
+  mcheck "$1" > "$OUT/upgrade-check-$1.json" || rc=$?
   [ "$rc" != 0 ] || fail "aicrew-agent check exited 0 in $svc with aimem below the minimum ($OUT/upgrade-check-$1.json)"
   python3 "$SIM/smoke.py" below "$OUT/upgrade-check-$1.json" "$ROOT/internal/agent/supported.json" \
     "$PILOTSIM_MEMBER_AIMEM_VERSION" /opt/aicrew-export > "$OUT/upgrade-instruction-$1.txt" ||
@@ -1226,7 +1333,7 @@ below_turn_and_fix() {
   {
     echo "a turn was offered (operator nudge) while check was blocked; turns before: ${before#* }, after: ${after#* }; a turn started within 120 s: $ran"
     echo "the coordinator's last turn record:"
-    dc exec -T -u member sim-coordinator sh -c 'tail -n 1 /home/member/agent/logs/turns.jsonl 2>/dev/null || true'
+    dc exec -T -u member sim-coordinator sh -c 'tail -n 1 /home/member/aicrew/agents/coordinator/logs/turns.jsonl 2>/dev/null || true'
     echo "serve's log since the nudge:"
     dc logs --no-color --since "$since" sim-coordinator 2>&1 | tail -n 40
   } > "$OUT/upgrade-below-turn.txt"
@@ -1237,7 +1344,7 @@ below_turn_and_fix() {
     step "the below-minimum instruction in $svc, as check printed it"
     dc exec -T -u member "$svc" bash -c "$(cat "$OUT/upgrade-instruction-$role.txt")" > "$OUT/upgrade-below-fix-$role.log" 2>&1 ||
       fail "the instruction check printed did not run in $svc ($OUT/upgrade-below-fix-$role.log)"
-    dc exec -T -u member "$svc" aicrew-agent check --home /home/member/agent --json > "$OUT/upgrade-check-fixed-$role.json" ||
+    mcheck "$role" > "$OUT/upgrade-check-fixed-$role.json" ||
       fail "aicrew-agent check is not green in $svc after the instruction ($OUT/upgrade-check-fixed-$role.json)"
     python3 "$SIM/smoke.py" check "$OUT/upgrade-check-fixed-$role.json" "$PILOTSIM_AISKILLS_VERSION" ||
       fail "$svc's check report after the instruction ($OUT/upgrade-check-fixed-$role.json)"
@@ -1281,6 +1388,7 @@ if [ -n "$UPGRADE" ]; then
   upgrade
   cycle 2
   kept
+  docsteps_verify "pilot-sim-upgrade${BELOW:+-below-minimum}"
 elif [ -z "$SKIP" ]; then
   cycle 1
   cycle 2

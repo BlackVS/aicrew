@@ -1,6 +1,9 @@
 #!/bin/sh
-# aimem-timed: the aimem a member home runs, joined with the real
-# --aimem-command flag (member.sh). It is b4's wrapper (e2e/realaimem,
+# aimem-timed: the aimem a member home runs. The image installs it as
+# /usr/local/bin/aimem, ahead of the real aimem (~/.local/bin) on PATH, so
+# that join, which the runner runs in docs/BRING-UP.md's form with no
+# --aimem-command, finds it as `aimem` (docs/E2E-PILOT-SIM.md, "Where the
+# simulation differs from the document"). It is b4's wrapper (e2e/realaimem,
 # writeAimemWrapper) in the member image: it runs the real aimem and logs
 # each command, its leading two arguments and its exit, which hold no
 # secret, to /home/member/gate/timing.jsonl. The runner sets its gates with
@@ -30,10 +33,11 @@ if [ -e "$gate/hold-$name" ]; then
   rm -f "$gate/go-$name"
 fi
 start=$(date +%s%N)
+real=/home/member/.local/bin/aimem
 if [ -n "$input" ]; then
-  aimem "$@" < "$input"
+  "$real" "$@" < "$input"
 else
-  aimem "$@"
+  "$real" "$@"
 fi
 rc=$?
 if [ -e "$gate/hold-after-$name" ]; then

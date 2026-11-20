@@ -154,7 +154,7 @@ Check: `aicrew invitation list --team-name crew` shows its state.
 ### 5. The tools (member host, as the member's user)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.1/boot.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.2/boot.sh | bash
 cd "$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/BlackVS/aimem/v0.11.5/boot.sh | AIMEM_VERSION=v0.11.5 bash
 npm install -g @anthropic-ai/claude-code@2.1.286
 ```
@@ -170,7 +170,7 @@ npm install -g @anthropic-ai/claude-code@2.1.286
 Then the person logs the client in: `claude`, and its login flow.
 
 Check: `aicrew-agent version`, `aimem version` and `claude --version` print
-v0.11.1, v0.11.5 and 2.1.286.
+v0.11.2, v0.11.5 and 2.1.286.
 
 ### 6. Join (member host)
 
@@ -237,9 +237,6 @@ aicrew-agent join --label worker --url https://AICREWD:PORT \
   needs no grant of its own: the hub reads under the team's grant. This
   needs aimem 0.11.5 or later in the home. A paused team is no obstacle,
   since a pause holds the member's turns, not its conversation.
-  Until 0.11.2 is released, step 5's tag installs aicrew 0.11.1, whose
-  join ends blocked on the skills and installs none: wait for 0.11.2, or
-  build aicrew from main.
 
 When join cannot install the skills, it ends `blocked` with one of these
 reasons, the step that fixes it, and the rerun, `aicrew-agent join --home

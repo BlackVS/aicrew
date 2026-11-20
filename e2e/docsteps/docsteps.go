@@ -77,22 +77,29 @@ func Tool(words []string) int {
 
 // Invocation is the words of the first command of line that names one of
 // Tools, from the tool's name to the shell punctuation that ends it, or
-// nil. It over-approximates rather than parses shell: the line is cut at
-// each unquoted `$(`, backquote, `|`, `;`, `&`, `(` and `)`, and the tool's
-// name counts as a word anywhere in a piece, so `command -v aicrew` asks
-// for a marker too, the safe side.
+// nil. It over-approximates rather than parses shell, in two steps. First
+// the line is cut at each unquoted `$(`, backquote, `|`, `;`, `&`, `(` and
+// `)`, which keeps a quoted value whole (`--reason "a (b) c"`). Where that
+// finds no tool, it is cut again with only single quotes opaque, since the
+// shell runs a command substitution or backquotes inside double quotes
+// (`state="$(aicrew team state ...)"`). In either step the tool's name
+// counts as a word anywhere in a piece, so `command -v aicrew` asks for a
+// marker too, the safe side.
 func Invocation(line string) []string {
-	for _, piece := range pieces(line) {
-		words := Split(piece)
-		if i := Tool(words); i >= 0 {
-			return words[i:]
+	for _, loose := range []bool{false, true} {
+		for _, piece := range pieces(line, loose) {
+			words := Split(piece)
+			if i := Tool(words); i >= 0 {
+				return words[i:]
+			}
 		}
 	}
 	return nil
 }
 
-// pieces cuts a line at its unquoted shell punctuation.
-func pieces(s string) []string {
+// pieces cuts a line at its shell punctuation outside quotes, or with
+// loose outside single quotes only.
+func pieces(s string, loose bool) []string {
 	var out []string
 	var cur strings.Builder
 	quote := rune(0)
@@ -102,7 +109,7 @@ func pieces(s string) []string {
 			if r == quote {
 				quote = 0
 			}
-		case r == '\'' || r == '"':
+		case r == '\'' || r == '"' && !loose:
 			quote = r
 		case strings.ContainsRune("`|;&()", r):
 			out = append(out, cur.String())
@@ -323,7 +330,7 @@ func fields(s string) (ids []string, per string) {
 // is one piece that starts with the tool's name, with neither a flag nor a
 // placeholder.
 func mention(s string) bool {
-	return len(pieces(s)) == 1 && Tool(Split(s)) == 0 && bare(s)
+	return len(pieces(s, true)) == 1 && Tool(Split(s)) == 0 && bare(s)
 }
 
 // bare says whether a span has neither a flag nor a placeholder.

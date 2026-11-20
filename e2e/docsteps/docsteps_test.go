@@ -67,7 +67,7 @@ func checkMentions(d *Doc, bins, home string) []error {
 			}
 			return usage[key]
 		}
-		if !verbsIn(usageOf(nil), tool, words[1:], usageOf) {
+		if !verbsIn(usageOf(nil), tool, words[1:], usageOf, false) {
 			errs = append(errs, fmt.Errorf("line %d: %q: no usage line of %s names %s", c.At, c.Line, tool,
 				strings.Join(words[1:], " ")))
 		}
@@ -149,7 +149,7 @@ func parseLine(bins, home, line string) error {
 		cmd.Env = cleanEnv(home)
 		cmd.Dir = home
 		out, _ := cmd.CombinedOutput()
-		if !verbsIn(string(out), "aicrew-agent", verbs, nil) {
+		if !verbsIn(string(out), "aicrew-agent", verbs, nil, true) {
 			return fmt.Errorf("%q: no usage line of aicrew-agent names %s:\n%s", line, strings.Join(verbs, " "), out)
 		}
 		for _, f := range flags {
@@ -164,36 +164,44 @@ func parseLine(bins, home, line string) error {
 // verbWord is a usage word of verbs: alternatives in lower case.
 var verbWord = regexp.MustCompile(`^[a-z][a-z0-9-]*(\|[a-z][a-z0-9-]*)*$`)
 
-// verbsIn says whether a usage line of tool names every one of the verbs,
-// in order: each is one of the alternatives of the usage word at its place.
-// Where the line's words stop being verbs (a placeholder, a flag, an
-// optional part), the rest of the verbs are its arguments. A line that
-// sends to the group's own usage with "..." is read on in group's text,
-// the usage of tool with the group's name; group nil reads no further.
-func verbsIn(usage, tool string, verbs []string, group func(args []string) string) bool {
+// placeholderWord is a usage word that takes one positional word.
+var placeholderWord = regexp.MustCompile(`^[A-Z][A-Z0-9_]*(\|[A-Z][A-Z0-9_]*)*$`)
+
+// verbsIn says whether a usage line of tool names the words, in order:
+// each word is one of the alternatives of the usage word at its place, or
+// the value of a placeholder there (NAME). A flag or an optional part takes
+// no positional word. A line that sends to the group's own usage with
+// "..." is read on in group's text, the usage of tool with the group's
+// name; group nil reads no further. complete asks for the whole verb
+// sequence of a runnable line: no verb of the usage line may be left over.
+func verbsIn(usage, tool string, words []string, group func(args []string) string, complete bool) bool {
 	re := regexp.MustCompile(`(?m)^\s*(?:usage:\s+)?` + regexp.QuoteMeta(tool) + `\s+(.*)$`)
 	for _, m := range re.FindAllStringSubmatch(usage, -1) {
-		words := strings.Fields(m[1])
-		ok := true
-		for i, v := range verbs {
-			if i < len(words) && words[i] == "..." && i > 0 && group != nil {
-				ok = verbsIn(group(verbs[:1]), tool, verbs, nil)
-				break
-			}
-			if i >= len(words) || !verbWord.MatchString(words[i]) {
-				ok = i > 0 && i < len(words)
-				break
-			}
-			if !slices.Contains(strings.Split(words[i], "|"), v) {
-				ok = false
-				break
-			}
-		}
-		if ok {
+		if lineNames(strings.Fields(m[1]), tool, words, group, complete) {
 			return true
 		}
 	}
 	return false
+}
+
+// lineNames is verbsIn for one usage line's words.
+func lineNames(usage []string, tool string, words []string, group func(args []string) string, complete bool) bool {
+	for i, w := range words {
+		switch {
+		case i >= len(usage):
+			return false
+		case usage[i] == "..." && i > 0 && group != nil:
+			return verbsIn(group(words[:1]), tool, words, nil, complete)
+		case verbWord.MatchString(usage[i]):
+			if !slices.Contains(strings.Split(usage[i], "|"), w) {
+				return false
+			}
+		case i > 0 && placeholderWord.MatchString(usage[i]):
+		default:
+			return false
+		}
+	}
+	return !complete || len(usage) <= len(words) || !verbWord.MatchString(usage[len(words)])
 }
 
 func cleanEnv(home string) []string {
@@ -318,6 +326,14 @@ func TestDocumentStepsAltered(t *testing.T) {
 			"step extra (line"},
 		{"an unmarked block line in a command substitution", "## The forge token's rights",
 			"```sh\nstate=$(aicrew team state --team-name crew)\n```\n\n## The forge token's rights", "has no run marker"},
+		{"an unmarked block line in a double-quoted command substitution", "## The forge token's rights",
+			"```sh\nstate=\"$(aicrew team state --team-name crew)\"\n```\n\n## The forge token's rights", "has no run marker"},
+		{"an unmarked block line in double-quoted backquotes", "## The forge token's rights",
+			"```sh\nstate=\"`aicrew team state --team-name crew`\"\n```\n\n## The forge token's rights", "has no run marker"},
+		{"a mention with a word where the usage takes only flags", "## The forge token's rights",
+			"Then `aicrew status list`.\n\n## The forge token's rights", "no usage line of aicrew names status list"},
+		{"a member line without its verb", "`aicrew-agent session leave --home HOME` <!-- run: session-leave -->",
+			"`aicrew-agent session --home HOME` <!-- run: session-leave -->", "no usage line of aicrew-agent names session"},
 		{"a mention of a third verb that does not exist", "## The forge token's rights",
 			"Then `aicrew-agent forge pr nosuch`.\n\n## The forge token's rights", "no usage line of aicrew-agent names forge pr nosuch"},
 		{"three hyphens on an exempted member line", "aicrew-agent service status --home HOME",
@@ -342,6 +358,25 @@ func TestDocumentStepsAltered(t *testing.T) {
 			}
 			t.Errorf("no failure names %q: %v", c.want, errs)
 		})
+	}
+}
+
+// Invocation finds the tool's command wherever the shell runs it, and
+// keeps a quoted value whole for the parse.
+func TestInvocation(t *testing.T) {
+	for line, want := range map[string]string{
+		`aicrew team pause --team-name crew --reason "a (b) c"`:              `aicrew team pause --team-name crew --reason 'a (b) c'`,
+		`sudo -iu sessiond aicrew status`:                                    `aicrew status`,
+		`state=$(aicrew team state --team-name crew)`:                        `aicrew team state --team-name crew`,
+		`state="$(aicrew team state --team-name crew)"`:                      `aicrew team state --team-name crew`,
+		"state=\"`aicrew team state --team-name crew`\"":                     `aicrew team state --team-name crew`,
+		`uid="$(aimem access user-add --user-name crew-worker | jq -r .id)"`: `aimem access user-add --user-name crew-worker`,
+		`echo 'aicrew is a name here' | wc -w`:                               ``,
+		`loginctl enable-linger "$USER"`:                                     ``,
+	} {
+		if got := Join(Invocation(line)); got != want {
+			t.Errorf("%s: %q, want %q", line, got, want)
+		}
 	}
 }
 

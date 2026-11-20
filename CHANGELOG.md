@@ -63,26 +63,44 @@ tested with aimem 0.11.5, ai-skills 1.43.0 and Claude Code 2.1.286.
    cd "$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/BlackVS/aimem/v0.11.5/boot.sh | AIMEM_VERSION=v0.11.5 bash
    ```
 
-4. **Rerun join where it ended blocked on the skills:**
-   `aicrew-agent join --home HOME`. A home whose skills are already
-   installed is not touched: join installs only when the client does not
-   see a required skill.
-5. **The home's session record now has a lock.** Every access to it takes
-   `state/aicrew-session.lock` in the home's state directory, which the
-   first read or write creates. A 0.11.1 binary does not take that lock,
-   so do not leave one running in an upgraded home: upgrade a home while
-   its member's service is stopped, or restart the service right after
-   the upgrade. The member one-liner in step 2 does that for registered
-   services.
+4. **No 0.11.1 process left running in an upgraded home.** Every access to
+   the home's session record now takes `state/aicrew-session.lock` in the
+   home's state directory, which the first read or write creates. A 0.11.1
+   binary does not take that lock. The member one-liner in step 2 stops
+   the registered member services before the swap and starts the new ones
+   after it, but not in two cases:
+   - with `AICREW_NO_SERVICE=1` it leaves the services alone;
+   - when a service does not stop, it prints `warning: not every member's
+     service stopped` and the swap goes on.
+
+   In either case, before step 5, stop that home's service and start it
+   again on the new binary: `aicrew-agent service restart --home HOME`.
+   `aicrew-agent service status --home HOME` then shows it running.
+   `service restart` does not touch a member's client started by hand
+   with `aicrew-agent run`: the person who started it ends it in the
+   terminal where it runs (Ctrl-C), then runs the same command again.
+5. **Rerun join where it ended blocked on the skills:**
+   `aicrew-agent join --home HOME`. join installs from the hub when the
+   home's check finds the skills short:
+   - a required skill the client does not see;
+   - an ai-skills installation older than the minimum;
+   - an installation whose version record cannot be used, which the
+     install writes anew.
+
+   A home whose skills pass the check is not touched.
 
 ### Added
 
 - **join installs a member's skills from the hub** (01a1f3a6-77d3, #273).
-  When the client does not see a skill the team's process pins, join opens
-  a conversation in the team as the member, has the home's aimem install
-  the skills of the team's first granted project as that conversation
-  (`AIMEM_TEAM_SESSION`), closes it, and checks again. The member's aimem
-  user needs no grant of its own.
+  When the home's check finds the skills short, join has the home's aimem
+  install the skills of the team's first granted project as a
+  conversation in the team (`AIMEM_TEAM_SESSION`), then checks again. The
+  member's aimem user needs no grant of its own.
+  - In a home with no session, join opens that conversation as the member
+    and closes it after the install.
+  - In a home whose member already holds a bound session with the team's
+    projects recorded, join installs inside that session and leaves it
+    open: it is the member's.
   - join enters only fresh and closes with its own token. It never enters
     beside, resumes or takes back a member's session, and it removes the
     home's session record only while that record is its own.
@@ -105,8 +123,9 @@ tested with aimem 0.11.5, ai-skills 1.43.0 and Claude Code 2.1.286.
   member's record write failing with "Access is denied" while another
   process read the record.
 - **The tested aimem is 0.11.5** (#273); the minimum stays 0.11.0. The
-  real-aimem harness builds aimem v0.11.5, and the pilot simulation's
-  member image installs the skills the documented way.
+  real-aimem harness builds aimem v0.11.5. In the real-aimem harness and
+  the pilot simulation a member has no skills before join: the hub's set
+  comes from the administrator's import, and join installs them.
 - **docs/BRING-UP.md** installs aicrew v0.11.2 in step 5, and step 6
   describes join's install of the skills.
 

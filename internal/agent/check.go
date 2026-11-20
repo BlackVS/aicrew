@@ -576,12 +576,25 @@ func (c *checker) checkClient(ctx context.Context, name string, single bool) {
 			strings.Join(r.MissingSkills, ", "), skillsInstruction(c.set.Components["ai-skills"], "", r.MissingSkills, c.o.Home)))
 	}
 	if d.ApprovalPending {
-		c.notice(fmt.Sprintf("Claude Code will ask at the first interactive start in this home to trust the folder and to "+
-			"approve the project MCP server aimem: accept both (`%s`)", StartCommand(c.o.Home, []string{"claude"})))
+		c.notice(approvalNotice(c.o.Home))
 	}
 	if name == "claude" {
 		c.checkTurnModel(ctx, path)
 	}
+}
+
+// approvalNotice is check's notice for a project server Claude Code has not
+// approved for interactive use. Only an interactive start asks (clients.go).
+// A turns home has none: `aicrew-agent run` refuses it, and its service runs
+// each turn in print mode, which shows neither question.
+func approvalNotice(home string) string {
+	if ReadWakeSettings(home).Mode == WakeTurns {
+		return "Claude Code lists the project MCP server aimem as not yet approved for an interactive start in this " +
+			"home. This home is in turns mode: no interactive client starts here, and the member's service runs each " +
+			"turn in print mode, which asks neither to trust the folder nor to approve the server. Nothing is to be accepted"
+	}
+	return fmt.Sprintf("Claude Code asks at an interactive start in this home (`%s`) to trust the folder and to "+
+		"approve the project MCP server aimem: the person who starts it so accepts both", startCommand("claude", quoteArg(home)))
 }
 
 // checkTurnModel probes the turn model of a turns home (modelprobe.go). The

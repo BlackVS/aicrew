@@ -155,6 +155,16 @@ func registered(t opapi.Team, hub string, stdout, stderr io.Writer) (opapi.Team,
 	return t, 0
 }
 
+// grantHubFlags are the two flags aimem's admin commands require. aicrewd's
+// answer names neither the hub's URL nor, of course, the admin's bearer, so
+// the line names them for the admin to fill in, and grantHubNote says what
+// each one is.
+const grantHubFlags = "--hub HUB_URL --admin-token-file ADMIN_TOKEN_FILE"
+
+const grantHubNote = "  HUB_URL is the hub's TLS listener, https://HOST:PORT, the --base-url given to aicrew hub add;\n" +
+	"  ADMIN_TOKEN_FILE is a file only the admin can read, holding the hub's admin bearer (docs/BRING-UP.md, step 1);\n" +
+	"  a hub on a private CA also takes --hub-ca-file FILE or --hub-pin sha256-PIN\n"
+
 // reportGrants prints each wanted project's grant, or the command that
 // grants it, and the projects the hub grants beyond them.
 func reportGrants(stdout io.Writer, g opapi.TeamGrants, projects []string) int {
@@ -195,10 +205,11 @@ func reportGrants(stdout io.Writer, g opapi.TeamGrants, projects []string) int {
 		fmt.Fprintf(stdout, "every project is granted to team %s\n", g.Name)
 		return 0
 	}
-	fmt.Fprintf(stdout, "not granted yet; on the hub, as its admin, run:\n")
+	fmt.Fprintf(stdout, "not granted yet; on the hub's host, as its admin, run:\n")
 	for _, p := range missing {
-		fmt.Fprintf(stdout, "  aimem identity team grant --peer %s --team-name %s --project %s\n", g.ServiceID, teamName, p)
+		fmt.Fprintf(stdout, "  aimem identity team grant --peer %s --team-name %s --project %s %s\n", g.ServiceID, teamName, p, grantHubFlags)
 	}
+	fmt.Fprint(stdout, grantHubNote)
 	fmt.Fprintf(stdout, "then run this command again to check\n")
 	return exitIncomplete
 }

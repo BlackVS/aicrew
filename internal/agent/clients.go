@@ -217,6 +217,10 @@ func claudeDiscover(ctx context.Context, p discoveryEnv, path, home string) (Dis
 			return "", err
 		}
 		st, _ := parseClaudeMCPList(out)
+		if st == "pending" {
+			// Not a fault: the server's approval for an interactive start.
+			return "aimem pending approval for an interactive start", nil
+		}
 		return "aimem " + st, nil
 	})
 	if err != nil {

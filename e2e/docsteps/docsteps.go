@@ -48,8 +48,9 @@ type Step struct {
 
 // Command is a line or an inline span of the document that runs aicrew,
 // aicrew-agent or aimem, wherever the tool's name stands in it (after
-// `sudo -iu USER` or a variable's assignment too), marked or not. Other
-// programs' lines are outside: docs/E2E-PILOT-SIM.md names them.
+// `sudo -iu USER`, a variable's assignment or shell punctuation too),
+// marked or not. Other programs' lines are outside: docs/E2E-PILOT-SIM.md
+// names them.
 type Command struct {
 	Line string
 	At   int
@@ -63,7 +64,7 @@ type Command struct {
 // Tools are the programs whose lines the document's check covers.
 var Tools = []string{"aicrew", "aicrew-agent", "aimem"}
 
-// Tool is the index of the first word that runs one of Tools (by its base
+// Tool is the index of the first word that is one of Tools (by its base
 // name, so ~/aicrew/bin/aicrew too), or -1.
 func Tool(words []string) int {
 	for i, w := range words {
@@ -72,6 +73,45 @@ func Tool(words []string) int {
 		}
 	}
 	return -1
+}
+
+// Invocation is the words of the first command of line that names one of
+// Tools, from the tool's name to the shell punctuation that ends it, or
+// nil. It over-approximates rather than parses shell: the line is cut at
+// each unquoted `$(`, backquote, `|`, `;`, `&`, `(` and `)`, and the tool's
+// name counts as a word anywhere in a piece, so `command -v aicrew` asks
+// for a marker too, the safe side.
+func Invocation(line string) []string {
+	for _, piece := range pieces(line) {
+		words := Split(piece)
+		if i := Tool(words); i >= 0 {
+			return words[i:]
+		}
+	}
+	return nil
+}
+
+// pieces cuts a line at its unquoted shell punctuation.
+func pieces(s string) []string {
+	var out []string
+	var cur strings.Builder
+	quote := rune(0)
+	for _, r := range s {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		case strings.ContainsRune("`|;&()", r):
+			out = append(out, cur.String())
+			cur.Reset()
+			continue
+		}
+		cur.WriteRune(r)
+	}
+	return append(out, cur.String())
 }
 
 // Doc is the document's steps and command lines.
@@ -183,8 +223,8 @@ func Parse(raw []byte) (*Doc, error) {
 				continue
 			}
 			text := line[m[2]:m[3]]
-			if i := Tool(Split(text)); i >= 0 {
-				d.Commands = append(d.Commands, Command{Line: text, At: n, Mention: i == 0 && bare(text)})
+			if Invocation(text) != nil {
+				d.Commands = append(d.Commands, Command{Line: text, At: n, Mention: mention(text)})
 			}
 		}
 	}
@@ -232,7 +272,7 @@ func Parse(raw []byte) (*Doc, error) {
 func (d *Doc) closeBlock(lines []string, at []int, mark *pending) error {
 	if mark == nil {
 		for i, l := range lines {
-			if Tool(Split(l)) >= 0 {
+			if Invocation(l) != nil {
 				d.Commands = append(d.Commands, Command{Line: l, At: at[i]})
 			}
 		}
@@ -245,7 +285,7 @@ func (d *Doc) closeBlock(lines []string, at []int, mark *pending) error {
 		if err := d.add(&Step{ID: mark.ids[i], Line: l, Per: mark.per, At: at[i]}); err != nil {
 			return err
 		}
-		if Tool(Split(l)) >= 0 {
+		if Invocation(l) != nil {
 			d.Commands = append(d.Commands, Command{Line: l, At: at[i], ID: mark.ids[i]})
 		}
 	}
@@ -277,6 +317,13 @@ func fields(s string) (ids []string, per string) {
 		ids = append(ids, f)
 	}
 	return ids, per
+}
+
+// mention says whether an inline span names a command and runs nothing: it
+// is one piece that starts with the tool's name, with neither a flag nor a
+// placeholder.
+func mention(s string) bool {
+	return len(pieces(s)) == 1 && Tool(Split(s)) == 0 && bare(s)
 }
 
 // bare says whether a span has neither a flag nor a placeholder.

@@ -55,14 +55,19 @@ func checkMentions(d *Doc, bins, home string) []error {
 		if tool == "aimem" {
 			continue
 		}
-		if _, ok := usage[tool]; !ok {
-			cmd := exec.Command(filepath.Join(bins, tool+exe()))
-			cmd.Env = cleanEnv(home)
-			cmd.Dir = home
-			out, _ := cmd.CombinedOutput()
-			usage[tool] = string(out)
+		// The usage of tool with args: the top level's, or a group's.
+		usageOf := func(args []string) string {
+			key := tool + " " + strings.Join(args, " ")
+			if _, ok := usage[key]; !ok {
+				cmd := exec.Command(filepath.Join(bins, tool+exe()), args...)
+				cmd.Env = cleanEnv(home)
+				cmd.Dir = home
+				out, _ := cmd.CombinedOutput()
+				usage[key] = string(out)
+			}
+			return usage[key]
 		}
-		if !verbsIn(usage[tool], tool, words[1:]) {
+		if !verbsIn(usageOf(nil), tool, words[1:], usageOf) {
 			errs = append(errs, fmt.Errorf("line %d: %q: no usage line of %s names %s", c.At, c.Line, tool,
 				strings.Join(words[1:], " ")))
 		}
@@ -110,8 +115,7 @@ func dummy(home string) map[string]string {
 // connection, after its flags were taken; an aicrew-agent line's verbs and
 // flags must be those its usage names.
 func parseLine(bins, home, line string) error {
-	words := Split(line)
-	words = words[Tool(words):]
+	words := Invocation(line)
 	switch path.Base(words[0]) {
 	case "aicrew":
 		cmd := exec.Command(filepath.Join(bins, "aicrew"+exe()), words[1:]...)
@@ -130,7 +134,12 @@ func parseLine(bins, home, line string) error {
 		for _, w := range words[1:] {
 			switch {
 			case strings.HasPrefix(w, "-"):
-				name, _, _ := strings.Cut(strings.TrimLeft(w, "-"), "=")
+				// Go's flag package reads -name and --name, no other
+				// number of hyphens.
+				name, _, _ := strings.Cut(strings.TrimPrefix(w[1:], "-"), "=")
+				if name == "" || strings.HasPrefix(name, "-") {
+					return fmt.Errorf("%q: %s is not a flag aicrew-agent reads", line, w)
+				}
 				flags = append(flags, name)
 			case len(flags) == 0:
 				verbs = append(verbs, w)
@@ -140,7 +149,7 @@ func parseLine(bins, home, line string) error {
 		cmd.Env = cleanEnv(home)
 		cmd.Dir = home
 		out, _ := cmd.CombinedOutput()
-		if !verbsIn(string(out), "aicrew-agent", verbs) {
+		if !verbsIn(string(out), "aicrew-agent", verbs, nil) {
 			return fmt.Errorf("%q: no usage line of aicrew-agent names %s:\n%s", line, strings.Join(verbs, " "), out)
 		}
 		for _, f := range flags {
@@ -152,16 +161,35 @@ func parseLine(bins, home, line string) error {
 	return nil
 }
 
-// verbsIn says whether a usage line of tool names the verbs: its first
-// word the first verb, and its second word's alternatives the second, if
-// any.
-func verbsIn(usage, tool string, verbs []string) bool {
-	re := regexp.MustCompile(`(?m)^\s*(?:usage:\s+)?` + regexp.QuoteMeta(tool) + `\s+(\S+)(?:\s+(\S+))?`)
+// verbWord is a usage word of verbs: alternatives in lower case.
+var verbWord = regexp.MustCompile(`^[a-z][a-z0-9-]*(\|[a-z][a-z0-9-]*)*$`)
+
+// verbsIn says whether a usage line of tool names every one of the verbs,
+// in order: each is one of the alternatives of the usage word at its place.
+// Where the line's words stop being verbs (a placeholder, a flag, an
+// optional part), the rest of the verbs are its arguments. A line that
+// sends to the group's own usage with "..." is read on in group's text,
+// the usage of tool with the group's name; group nil reads no further.
+func verbsIn(usage, tool string, verbs []string, group func(args []string) string) bool {
+	re := regexp.MustCompile(`(?m)^\s*(?:usage:\s+)?` + regexp.QuoteMeta(tool) + `\s+(.*)$`)
 	for _, m := range re.FindAllStringSubmatch(usage, -1) {
-		if !slices.Contains(strings.Split(m[1], "|"), verbs[0]) {
-			continue
+		words := strings.Fields(m[1])
+		ok := true
+		for i, v := range verbs {
+			if i < len(words) && words[i] == "..." && i > 0 && group != nil {
+				ok = verbsIn(group(verbs[:1]), tool, verbs, nil)
+				break
+			}
+			if i >= len(words) || !verbWord.MatchString(words[i]) {
+				ok = i > 0 && i < len(words)
+				break
+			}
+			if !slices.Contains(strings.Split(words[i], "|"), v) {
+				ok = false
+				break
+			}
 		}
-		if len(verbs) == 1 || slices.Contains(strings.Split(m[2], "|"), verbs[1]) {
+		if ok {
 			return true
 		}
 	}
@@ -203,8 +231,7 @@ func buildCLIs(t *testing.T) string {
 func checkParse(d *Doc, bins, home string) []error {
 	var errs []error
 	for id, s := range d.Steps {
-		words := Split(s.Line)
-		if i := Tool(words); i < 0 || path.Base(words[i]) == "aimem" {
+		if inv := Invocation(s.Line); inv == nil || path.Base(inv[0]) == "aimem" {
 			continue
 		}
 		variants := []Options{{Values: dummy(home)}}
@@ -289,6 +316,12 @@ func TestDocumentStepsAltered(t *testing.T) {
 		{"a marked line after sudo with a verb that does not exist", "## The forge token's rights",
 			"<!-- run: extra -->\n```sh\nsudo -iu USER aicrew team nosuch --team-name crew\n```\n\n## The forge token's rights",
 			"step extra (line"},
+		{"an unmarked block line in a command substitution", "## The forge token's rights",
+			"```sh\nstate=$(aicrew team state --team-name crew)\n```\n\n## The forge token's rights", "has no run marker"},
+		{"a mention of a third verb that does not exist", "## The forge token's rights",
+			"Then `aicrew-agent forge pr nosuch`.\n\n## The forge token's rights", "no usage line of aicrew-agent names forge pr nosuch"},
+		{"three hyphens on an exempted member line", "aicrew-agent service status --home HOME",
+			"aicrew-agent service status ---home HOME", "---home is not a flag aicrew-agent reads"},
 		{"a shortened member flag", "--tls-trust-mode ca_dns --tls-trust-value AICREWD --client claude",
 			"--tls-trust ca_dns --tls-trust-value AICREWD --client claude", "usage has no flag --tls-trust"},
 		{"an alternative with a flag the step lacks", "sha256-PIN` <!-- run-alt:", "sha256-PIN --typo value` <!-- run-alt:", "the step has no flag --typo"},

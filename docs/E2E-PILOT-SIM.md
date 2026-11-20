@@ -387,12 +387,15 @@ The marked lines no scenario runs, each with its reason (also in
 
 `go test ./e2e/docsteps` reads every line of docs/BRING-UP.md that runs
 `aicrew`, `aicrew-agent` or `aimem`, wherever the tool's name stands in
-it: in a fenced block or an inline span, after `sudo -iu USER` or a
-variable's assignment too. Each such line is marked, or repeats a marked
-line. An inline span that starts with the tool's name and has no flag
-and no placeholder (`aicrew team setup`) names a command: it needs no
-marker, and for `aicrew` and `aicrew-agent` its verbs must be ones the
-tool's usage names.
+it: in a fenced block or an inline span, after `sudo -iu USER`, a
+variable's assignment or shell punctuation (a command substitution, a
+pipe) too. It over-approximates rather than parses shell: any word that
+is the tool's name counts, so a lookup such as `command -v aicrew` would
+ask for a marker or an exemption. Each such line is marked, or repeats a
+marked line. An inline span that starts with the tool's name and has no
+flag and no placeholder (`aicrew team setup`) names a command: it needs
+no marker, and for `aicrew` and `aicrew-agent` its whole verb sequence
+must be one the tool's usage names.
 
 Other programs' lines are outside the check, and no scenario has to run
 them. `claude --version` is marked anyway and run by every member

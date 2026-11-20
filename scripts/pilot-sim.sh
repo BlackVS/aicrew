@@ -746,7 +746,7 @@ for role in coordinator worker indep; do
   # ca_dns trusts the system roots: the simulation's CA joins them, as a
   # private CA joins a host's trust (docs/E2E-PILOT-SIM.md, "Where the
   # simulation differs from the document").
-  dc exec -T -u root "$svc" sh -c 'cp /sim/tls/ca.pem /usr/local/share/ca-certificates/pilotsim-ca.crt && update-ca-certificates >/dev/null' ||
+  dc exec -T -u root "$svc" sh -c 'cp /sim/tls/ca.pem /usr/local/share/ca-certificates/pilotsim-ca.crt && /usr/sbin/update-ca-certificates >/dev/null' ||
     fail "the simulation CA into $svc's system trust"
   dc exec -T -u member "$svc" touch /sim/in/ready
 done

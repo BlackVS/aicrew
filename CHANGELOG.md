@@ -12,6 +12,104 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.11.2] - 2026-11-20
+
+Two pull requests since 0.11.1 (#272, #273). The one that matters to a
+running team: **join now installs a member's skills from the hub** (#273),
+so a member with no personal grant gets the skills the team's process pins.
+The first team's members, linked and blocked on the skills, finish by
+rerunning join.
+
+The store stays at schema 39, and aicrewd is unchanged: no line under
+`internal/store`, `internal/server` or `cmd/aicrewd` changed since 0.11.1.
+An aicrewd of 0.11.1 (or 0.11.0) serves members of 0.11.2. This release is
+tested with aimem 0.11.5, ai-skills 1.43.0 and Claude Code 2.1.286.
+
+### Upgrade steps
+
+1. **aicrewd needs no upgrade for this release.** A hub on 0.11.1 stays as
+   it is.
+2. **Each member.** As that user, rerun the member one-liner. It stops the
+   account's registered member services, swaps the binaries and starts them
+   again:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.2/boot.sh | bash
+     ```
+
+   - Windows, in a PowerShell window that is already open:
+
+     ```powershell
+     irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.2/boot.ps1 | iex
+     ```
+
+   - Windows, from cmd or the Run dialog:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.2/boot.ps1 | iex"
+     ```
+
+   In a closed network, install from the aiforge export instead, as
+   README's closed-network forms show (`AICREW_BASE`).
+3. **aimem 0.11.5 or later in each member's home, for the install.** join
+   installs the skills through aimem's team path, which aimem 0.11.5
+   added. With an older aimem, join ends `blocked` with
+   `skills_aimem_below` and names aimem's one-liner; nothing else changes.
+   The hubs stay at aimem v0.11.4. On Linux and macOS, from an empty
+   directory:
+
+   ```sh
+   cd "$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/BlackVS/aimem/v0.11.5/boot.sh | AIMEM_VERSION=v0.11.5 bash
+   ```
+
+4. **Rerun join where it ended blocked on the skills:**
+   `aicrew-agent join --home HOME`. A home whose skills are already
+   installed is not touched: join installs only when the client does not
+   see a required skill.
+5. **The home's session record now has a lock.** Every access to it takes
+   `state/aicrew-session.lock` in the home's state directory, which the
+   first read or write creates. A 0.11.1 binary does not take that lock,
+   so do not leave one running in an upgraded home: upgrade a home while
+   its member's service is stopped, or restart the service right after
+   the upgrade. The member one-liner in step 2 does that for registered
+   services.
+
+### Added
+
+- **join installs a member's skills from the hub** (01a1f3a6-77d3, #273).
+  When the client does not see a skill the team's process pins, join opens
+  a conversation in the team as the member, has the home's aimem install
+  the skills of the team's first granted project as that conversation
+  (`AIMEM_TEAM_SESSION`), closes it, and checks again. The member's aimem
+  user needs no grant of its own.
+  - join enters only fresh and closes with its own token. It never enters
+    beside, resumes or takes back a member's session, and it removes the
+    home's session record only while that record is its own.
+  - When the install cannot happen, join ends `blocked` with one of
+    `skills_aimem_below`, `skills_no_project`, `skills_not_on_hub`,
+    `skills_grant`, `skills_no_process`, `skills_conversation` or
+    `skills_install_failed`, the step that fixes it, and the rerun.
+  - `aicrew-agent check` only reports: its line is the complete join
+    command, quoted for the platform's shell.
+- **The bring-up command's design** (#272), docs/DESIGN-BRING-UP-COMMAND.md:
+  one command brings a team up from the operator's machine over the
+  operator's own shell access. A design, not yet a command.
+
+### Changed
+
+- **Every access to a home's session record takes one lock** (#273):
+  `state/aicrew-session.lock`, held only for the file operation, with a
+  5-second bound whose error names the lock file. A read that cannot take
+  it fails, never reads as "no record". On Windows this also ends a
+  member's record write failing with "Access is denied" while another
+  process read the record.
+- **The tested aimem is 0.11.5** (#273); the minimum stays 0.11.0. The
+  real-aimem harness builds aimem v0.11.5, and the pilot simulation's
+  member image installs the skills the documented way.
+- **docs/BRING-UP.md** installs aicrew v0.11.2 in step 5, and step 6
+  describes join's install of the skills.
+
 ## [0.11.1] - 2026-11-19
 
 Seventeen pull requests since 0.11.0 (#253 to #270). They bring what the

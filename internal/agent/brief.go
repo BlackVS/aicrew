@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/BlackVS/aicrew/internal/toolchain"
 )
 
 // The turn brief (docs/DESIGN-TURNS.md, section 3, decision T1; increment
@@ -240,6 +242,8 @@ func (l *TurnLoop) briefTask(ctx context.Context, b *strings.Builder, a *memberA
 	if err != nil {
 		fmt.Fprintf(b, "Task %s could not be read for the brief (%s): read it with aimem's `get_task`.\n",
 			a.Task.TaskID, redactBrief(l.Home, err.Error(), maxBriefText))
+		// The attempt names its project without the snapshot.
+		briefToolchain(b, l.Home, a)
 		return
 	}
 	at := snap.ReadAt.UTC().Format(time.RFC3339)
@@ -254,6 +258,42 @@ func (l *TurnLoop) briefTask(ctx context.Context, b *strings.Builder, a *memberA
 		snap.Title, snap.Objective, snap.AcceptanceCriteria, snap.NonGoals)
 	if snap.Cut {
 		b.WriteString("\n(The text was cut to the snapshot's bound; aimem's `get_task` has it in full.)\n")
+	}
+	briefToolchain(b, l.Home, a)
+}
+
+// briefToolchain says whether the attempt's project has a toolchain the
+// operator selected, and so whether this turn may run its build and test
+// commands (task 01a1f86e-70b9): the static turn text cannot know, and a
+// worker that read "the project's test commands" ran them into a denial.
+func briefToolchain(b *strings.Builder, home string, a *memberAttempt) {
+	rec, _, err := LoadTeam(home)
+	if err != nil {
+		return
+	}
+	name := ""
+	for _, p := range rec.Projects {
+		if p.ProjectID == a.Task.ProjectID {
+			name = p.Toolchain
+			if p.HubID == a.Task.HubID {
+				break
+			}
+		}
+	}
+	switch {
+	case name == "":
+		fmt.Fprintf(b, "\nToolchain: none is selected for project %s, so do not run its build and test commands "+
+			"in this attempt: the operator's selection decides them. If the task cannot be done without them, "+
+			"block the attempt and name the missing selection, the operator's `aicrew team toolchain` "+
+			"(docs/BRING-UP.md); never ask for an edit of this home's allow list.\n", a.Task.ProjectID)
+	case !toolchain.Valid(name):
+		fmt.Fprintf(b, "\nToolchain: %s is selected for project %s, but this aicrew-agent does not know it, so "+
+			"do not run the project's build and test commands until aicrew-agent is upgraded.\n", name,
+			a.Task.ProjectID)
+	default:
+		fmt.Fprintf(b, "\nToolchain: the operator selected %s for project %s, so this turn may run its commands in "+
+			"your attempt's worktree, for example `cd worktrees/%s && %s`.\n", name, a.Task.ProjectID, a.ID,
+			toolchain.TestCommand(name))
 	}
 }
 

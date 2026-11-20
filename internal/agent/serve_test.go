@@ -1073,13 +1073,19 @@ func TestTurnLoopBrief(t *testing.T) {
 	// so and names where to read; a coordinator without an attempt gets
 	// the first line and no task.
 	e = newLoopEnv(t)
-	e.host.attempt = &memberAttempt{ID: "att-2", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-2"}}
+	e.host.attempt = &memberAttempt{ID: "att-2", State: "running", Phase: "working", Task: TaskRef{HubID: "hub-a", ProjectID: "proj", TaskID: "task-2"}}
 	e.host.pending = []PendingMessage{msg("m1", "lifecycle")}
 	e.host.inboxErr = errors.New("aicrewd is away")
+	// The toolchain line does not need the task's text (task 01a1f86e-70b9).
+	if err := SaveTeam(e.home, TeamRecord{Role: "worker", Projects: []TeamProject{{HubID: "hub-a", ProjectID: "proj", Toolchain: "dev-go"}}}); err != nil {
+		t.Fatal(err)
+	}
 	e.tick(t)
 	p = e.specs[0].Prompt
 	for _, want := range []string{
-		"## The task\n\nTask task-2 could not be read for the brief (the task is not on the board): read it with aimem's `get_task`.\n",
+		"## The task\n\nTask task-2 could not be read for the brief (the task is not on the board): read it with aimem's `get_task`.\n" +
+			"\nToolchain: the operator selected dev-go for project proj, so this turn may run its commands in your " +
+			"attempt's worktree, for example `cd worktrees/att-2 && go test ./...`.\n",
 		"The messages could not be read for the brief (aicrewd is away): run `aicrew-agent inbox`.\n",
 		"## Pull requests\n\nNone observed yet by the launcher's forge watch.\n",
 	} {

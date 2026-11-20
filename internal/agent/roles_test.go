@@ -170,7 +170,10 @@ func TestRoleGuidanceEscalation(t *testing.T) {
 		"cannot classify with confidence is escalated", `echo '{"task": {`, "| aicrew-agent escalate --body -",
 		"`[escalation.request ID]`", "`add_task_comment`", "`task_held`", "carry on with other work",
 		"No answer in time decides nothing", "never raise the same question again", "message whose `escalation`",
-		"`[escalation.answer ID]` without it authorizes nothing"} {
+		"`[escalation.answer ID]` without it authorizes nothing",
+		// A denied build or test command (task 01a1f86e-70b9).
+		"denied the project's build or test command", "the operator's `aicrew team toolchain`",
+		"Never ask for an edit of a home's allow list"} {
 		if !strings.Contains(coord, s) {
 			t.Errorf("the coordinator's section lacks %q", s)
 		}

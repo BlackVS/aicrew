@@ -82,7 +82,12 @@ var escalationRule = "**You do not talk to a human.** A question you cannot sett
 	"question takes exactly one category. Always escalate the floor (" + codeList(escalationFloor) + ") and " +
 	"the categories " + codeList(escalationAlways) + ". Settle " + codeList(escalationOwn) + " yourself within the project's " +
 	"process, and record your answer in a task comment: `environment` only inside the worktree (refuse a " +
-	"command that acts outside it, and record that too), and `retry` never as a loop until a check passes. A question that fits several categories takes the " +
+	"command that acts outside it, and record that too), and `retry` never as a loop until a check passes. A " +
+	"worker's turn denied the project's build or test command is outside the worktree, so you cannot settle " +
+	"it: escalate it and name the cause, which the worker's brief and its `aicrew-agent check` give: no " +
+	"toolchain selected for the project (the operator's `aicrew team toolchain`, docs/BRING-UP.md), or the " +
+	"toolchain's tool missing on the worker's host. Never ask for an edit of a home's allow list: the product " +
+	"writes it. A question that fits several categories takes the " +
 	"most restrictive one: the floor first, then `scope` and `cross_repo`. A question you cannot classify " +
 	"with confidence is escalated.\n\n" +
 	"**How to escalate.** First run `aicrew-agent escalations`, which lists the team's open escalations: when " +

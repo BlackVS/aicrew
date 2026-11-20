@@ -1,4 +1,7 @@
-# A member home (sim-coordinator, sim-worker, sim-indep): git and Python 3,
+# A member home (sim-coordinator, sim-worker, sim-indep): git, Python 3 and
+# Go from the distribution's package (a worker's host has the build tools of
+# the project it works on, docs/BRING-UP.md; the stand-in client runs
+# `go version` in a worker's worktree),
 # the client stand-in as `claude` on PATH, b4's aimem-timed wrapper that
 # the home joins with as its aimem command, then each component by its own
 # installer (DESIGN-PILOT-SIMULATION section 3): aicrew's boot.sh from this
@@ -15,7 +18,7 @@ FROM debian:bookworm-20261020-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b203
 ARG AIMEM_VERSION
 ARG AISKILLS_VERSION
 ARG AISKILLS
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq python3 \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git golang-go jq python3 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 3000 -s /bin/bash member \
     && install -d -o member -g member -m 700 /sim/in

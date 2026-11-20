@@ -2743,7 +2743,14 @@ managed files from it:
     are not admitted. The coordinator's file never carries a toolchain.
     These commands run the repository's code; the deny rules still stop
     the texts they name (`docs/TURN-PROBE.md`), and isolation stays the
-    OS account (WORKSPACE, "Its limit").
+    OS account (WORKSPACE, "Its limit"). The worker's brief says in its
+    task section whether the attempt's project has a toolchain and gives
+    its test command only then; `/crew-turn` names none. `aicrew-agent
+    check` on a worker's home warns of a project with a repository and no
+    toolchain, and blocks with `toolchain_tool_missing` when a selected
+    toolchain's first tool (`go` for `dev-go`) is not on its PATH; it reads
+    the role and the team from `state/team.json`, which records them since
+    task 01a1f86e-70b9 (docs/BRING-UP.md, "The toolchain of each project").
 
   Its path rules are anchored at the home with `./`, the turn's working
   directory: a file passed with `--settings` anchors a leading `/` at its

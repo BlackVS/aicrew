@@ -51,13 +51,14 @@ EXPECT = {
     "done":   dict(attempt=("closed", "finalized"), op="finalize", results=1, task="DONE", holder=None),
 }
 
-# The operator's own calls in the audit: the runner's setup and its pauses,
+# The operator's own calls in the audit: the runner's setup (its toolchain
+# selection included) and its pauses,
 # and in a case's cycle its nudges and case E1's issue of the architect
 # credential. Any other operator operation, or a member's call of one,
 # fails the check. The architect's answer is audited under its own caller
 # kind.
 OPERATOR_OPS = {"control.pause", "control.resume", "introspection.credential.issue", "invitation.issue",
-                "team.create", "team.record_registration"}
+                "team.create", "team.record_registration", "team.set_toolchain"}
 CASE_OPS = {"control.nudge", "architect.credential.issue"}
 # The cases whose cycle cycle.py checks at the step done.
 CASES = ("P1", "P2", "P4", "E1", "P5", "F1", "F2", "F3")

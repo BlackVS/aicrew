@@ -93,9 +93,12 @@ type CheckReport struct {
 	OperatorCLI *OperatorCLI `json:"operator_cli,omitempty"`
 	// TurnModel is the turn model's probe in a turns home whose client is
 	// Claude Code (modelprobe.go).
-	TurnModel    *TurnModelReport `json:"turn_model,omitempty"`
-	Notices      []string         `json:"notices,omitempty"`
-	Instructions []string         `json:"instructions,omitempty"`
+	TurnModel *TurnModelReport `json:"turn_model,omitempty"`
+	// Warnings do not block, but are printed beside the status line: a
+	// worker's project without a toolchain (checktoolchain.go).
+	Warnings     []string `json:"warnings,omitempty"`
+	Notices      []string `json:"notices,omitempty"`
+	Instructions []string `json:"instructions,omitempty"`
 }
 
 // OperatorCLI is the `aicrew` found beside aicrew-agent: its path and the
@@ -316,6 +319,7 @@ func runCheck(ctx context.Context, o CheckOptions, doc *agentDoc, newHome bool) 
 		}
 	}
 	c.checkForgeCreds(ctx)
+	c.checkToolchains()
 
 	c.rep.Instructions = c.blockers
 	switch {

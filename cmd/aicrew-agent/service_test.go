@@ -289,3 +289,15 @@ func TestNoServiceEnv(t *testing.T) {
 		t.Fatal("no service without AICREW_NO_SERVICE")
 	}
 }
+
+// join prints the check's warnings right under its status line, where a
+// ready status would hide them (task 01a1f86e-70b9).
+func TestJoinReportPrintsWarningsUnderTheStatus(t *testing.T) {
+	rep := agent.JoinReport{Status: agent.JoinReady, Home: "/h/w",
+		Check: &agent.CheckReport{Status: agent.JoinReady, Warnings: []string{"project p has no toolchain selected"}}}
+	var b bytes.Buffer
+	printJoinReport(&b, joinOutput{JoinReport: rep})
+	if !strings.HasPrefix(b.String(), "status: ready\nwarning: project p has no toolchain selected\n") {
+		t.Errorf("join's report:\n%s", b.String())
+	}
+}

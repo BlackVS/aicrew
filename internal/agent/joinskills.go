@@ -394,7 +394,7 @@ func enterConversation(ctx context.Context, home, hub string, e *Engine, crew Se
 		return abandon(err)
 	}
 	conv := Conversation{File: e.AimemFile(), SessionID: e.SessionID(), Close: joinLeave(e)}
-	if err := RecordTeam(ctx, home, hub, crew, e.stepToken()); err != nil {
+	if err := RecordTeam(ctx, home, hub, e.session, crew, e.stepToken()); err != nil {
 		return abandon(fmt.Errorf("the team's projects: %w", err))
 	}
 	team, _, err := LoadTeam(home)

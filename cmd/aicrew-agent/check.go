@@ -66,6 +66,7 @@ func check(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, string(raw))
 	} else {
 		fmt.Fprintf(stdout, "status: %s\n", rep.Status)
+		printWarnings(stdout, rep)
 		printCheck(stdout, rep)
 		printServiceCheck(stdout, svc)
 	}
@@ -134,6 +135,14 @@ func printServiceCheck(w io.Writer, c serviceCheck) {
 	}
 	if c.ToDo != "" {
 		fmt.Fprintf(w, "to do: %s\n", c.ToDo)
+	}
+}
+
+// printWarnings prints a check's warnings right under the status line,
+// where a ready status would otherwise hide them.
+func printWarnings(w io.Writer, rep agent.CheckReport) {
+	for _, s := range rep.Warnings {
+		fmt.Fprintf(w, "warning: %s\n", s)
 	}
 }
 

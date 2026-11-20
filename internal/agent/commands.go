@@ -66,11 +66,13 @@ var crewCommands = []crewCommand{
 			"A procedure you work out again is not automated in the turn: propose it as `docs/ROLES.md` says " +
 			"under \"" + sectionEveryMember + "\" (a worker under Open questions in its handoff and in its pull " +
 			"request's body, a coordinator in an `[automate]` task comment), and go on by hand.\n\n" +
-			"A turn runs without prompts, under an allow list: git, `aicrew-agent`, the project's build and test " +
-			"commands, and edits in `worktrees/` and of `docs/HANDOFF.md`. Run each command alone, in one Bash " +
+			"A turn runs without prompts, under an allow list: git, `aicrew-agent`, edits in `worktrees/` and of " +
+			"`docs/HANDOFF.md`, and the project's build and test commands only when the operator selected a " +
+			"toolchain for the project: your brief's task section says whether one is, and which command it " +
+			"admits. Run each command alone, in one Bash " +
 			"call, from the home: no `cd`, `&&`, `;`, pipe or redirection, since a compound command is judged as " +
-			"a whole and denied. The one exception is the project's build and test commands, which run in your " +
-			"attempt's worktree as `cd worktrees/NAME && COMMAND` (for example `cd worktrees/NAME && go test ./...`): " +
+			"a whole and denied. The one exception is a selected toolchain's commands, which run in your " +
+			"attempt's worktree as `cd worktrees/NAME && COMMAND`: " +
 			"one `cd` into your own worktree, then one such command, nothing more. Use the Bash tool, not PowerShell. Read files with the Read tool and change them " +
 			"with the Edit tool, never with the shell. When a call is denied, run what you need again alone as " +
 			"these steps say; never work around a denial, and report one you cannot avoid in the handoff.\n\n" +

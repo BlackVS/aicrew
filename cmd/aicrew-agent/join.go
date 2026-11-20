@@ -209,6 +209,9 @@ func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.W
 func printJoinReport(w io.Writer, out joinOutput) {
 	rep := out.JoinReport
 	fmt.Fprintf(w, "status: %s\n", rep.Status)
+	if rep.Check != nil {
+		printWarnings(w, *rep.Check)
+	}
 	if rep.Reason != "" {
 		fmt.Fprintf(w, "reason: %s\n", rep.Reason)
 	}

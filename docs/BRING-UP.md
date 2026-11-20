@@ -194,11 +194,16 @@ worker's host. The restarted service records the team's projects after
 its model probe and its session's start, and only then writes
 `msg="the turn loop runs"` to `HOME/logs/serve.log`. A check run before
 that line may still print what it printed before the restart: run it
-again once the line is there.
+again once the line is there. A warning that persists after the line
+was not a check run too early: the service could not record the team,
+and `HOME/logs/serve.log` then holds `msg="the team's projects were not
+recorded"` with the cause in its `error=` field. Restart the service again
+once that cause is gone.
 
 Check: `aicrew team show --team-name crew` names `dev-go` for the project
 under `toolchains`. After step 6, the worker's `aicrew-agent check --home
-HOME` prints no `warning:` line under its status line.
+HOME` prints no `warning:` line under its status line. A worker's check
+reports the toolchain from aicrew 0.11.3 on, the release step 5 installs.
 
 The hub also needs the skills set that the project's process pins: the
 members get their skills from the hub in step 6. The hub's admin imports
@@ -308,7 +313,7 @@ Check: `aicrew invitation list --team-name crew` shows its state.
 ### 5. The tools (member host, as the member's user)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.2/boot.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.3/boot.sh | bash
 cd "$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/BlackVS/aimem/v0.11.5/boot.sh | AIMEM_VERSION=v0.11.5 bash
 npm install -g @anthropic-ai/claude-code@2.1.286
 ```
@@ -340,7 +345,7 @@ npm install -g @anthropic-ai/claude-code@2.1.286
 Then the person logs the client in: `claude`, and its login flow.
 
 Check: `aicrew-agent version`, `aimem version` and `claude --version` print
-v0.11.2, v0.11.5 and 2.1.286.
+v0.11.3, v0.11.5 and 2.1.286.
 
 ### 6. Join (member host)
 
@@ -504,10 +509,11 @@ the attempt, and the coordinator escalates. Nothing in the worker's home
 is edited by hand. In this order:
 1. On the worker's host, `aicrew-agent check --home HOME` prints
    `warning: project PROJECT has no toolchain selected` under its status
-   line, with the operator's command. An `aicrew-agent` older than the
-   release that documents this section prints no such line: upgrade the
-   member first. The upgrade restarts its service, which records the team
-   again: run check once `msg="the turn loop runs"` is in
+   line, with the operator's command. A worker's check reports the
+   toolchain from aicrew-agent 0.11.3 on; an older one prints no such
+   line: upgrade the member to v0.11.3 first (step 5's one-liner). The
+   upgrade restarts its service, which records the team again: run check
+   once `msg="the turn loop runs"` is in
    `HOME/logs/serve.log` after the upgrade, since a check run earlier may
    read the record from before it and print no line.
 2. The operator selects the toolchain, as in step 1:
@@ -519,8 +525,11 @@ is edited by hand. In this order:
    after the restart: the record is written before that line.
 4. `aicrew-agent check --home HOME` again. A check that still prints the
    warning was run before the record: run it again after that line. A
-   `blocked` status with the reason `toolchain_tool_missing` says the
-   host lacks the toolchain's tool.
+   warning that persists after the line was not a check run too early:
+   `HOME/logs/serve.log` then holds `msg="the team's projects were not
+   recorded"` with the cause in its `error=` field; restart the service
+   again once that cause is gone. A `blocked` status with the reason
+   `toolchain_tool_missing` says the host lacks the toolchain's tool.
 5. If so, install it (for aicrew, Go at go.mod's `go` version or later),
    then restart the service from a shell that finds it, as the check's
    instruction says, and wait for the line again. A worker whose join

@@ -2,7 +2,7 @@
 # aicrewd hub installer: install or upgrade aicrew's service on a Debian or
 # Ubuntu host, usually the aimem hub's own host. Run AS ROOT:
 #
-#   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.2/install-aicrewd.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.3/install-aicrewd.sh | bash
 #
 # In a closed network, from an aiforge export (a local directory, or an
 # internal https server holding the same files; README.txt in the export
@@ -76,7 +76,7 @@ set -euo pipefail
 
 # The release this script installs. Bumped together with the CHANGELOG
 # when a release is cut (internal/installer checks they agree).
-RELEASE=v0.11.2
+RELEASE=v0.11.3
 
 # BEGIN release-source
 # Where the release's files come from, and their verification. boot.sh

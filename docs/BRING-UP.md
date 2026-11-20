@@ -41,14 +41,16 @@ directory").
 
 ## What a member's host needs
 
-The coordinator's host and the worker's host need the same things. The
-role is set by the invitation, not by the host.
+The coordinator's host and the worker's host need the same things, except
+the project's build tools, which only the worker's host needs. The role is
+set by the invitation, not by the host.
 
 | Need | Check | Source |
 | --- | --- | --- |
 | Linux on amd64 or arm64 | `uname -sm` | `boot.sh` refuses any other system or architecture |
 | One OS user per member, not root, with a home directory | `id` | `e2e/pilotsim/member/Dockerfile` (`useradd -m`); `boot.sh` installs into `~/.local/bin` |
 | `curl`, `ca-certificates`, `git`, `jq`, `python3` | `command -v curl git jq python3` | the member image's package list; `boot.sh` needs curl, aimem's installer needs jq, and git is used for each worktree |
+| On a worker's host, the project's build tools: for aicrew, Go at go.mod's `go` version or later, and git | `go version` and `git --version`, before join; after join, the worker's `aicrew-agent check --home HOME` has no `toolchain_tool_missing` block | the toolchain the operator selects in step 1 runs them in the worker's turns, and `check` looks for its first tool on its PATH. The worker's service runs with the PATH of the shell that installed or last restarted it, so install the tools before join (step 5) |
 | Node.js with npm, for the client | `npm --version` | `aicrew-agent check`'s instruction for a missing client is `npm install -g @anthropic-ai/claude-code@<tested>` |
 | A systemd user manager, with lingering on | `systemctl --user status` and `loginctl show-user "$USER" --property=Linger` | `aicrew-agent service` (a systemd user unit), and the note it prints when lingering is off |
 | About 0.5 GB of disk for the tools | `df -h ~` | the try below: 34 MB for aicrew and aimem, 456 MB for Claude Code; worktrees come on top |
@@ -172,6 +174,27 @@ Check: the rerun exits 0 and prints
 `has no repository on the hub` or `has no selected process on the hub`
 still needs that done on the hub first; rerun after it until neither line
 appears.
+
+**The toolchain of each project.** A worker's turn may run the project's
+build and test commands only when the operator has selected a toolchain
+for the project. Without one, its turns deny `go test` and the like, and
+the worker cannot test its change. For aicrew, and any project built with
+Go:
+
+```sh
+aicrew team toolchain --team-name crew --project PROJECT --toolchain dev-go
+```
+
+`dev-go` admits Go's test, vet, build and module commands, `gofmt` and
+the repository's `scripts/*.sh` (`internal/toolchain`). A worker's launcher
+records the team's projects when it starts, so select the toolchain before
+the worker joins. A selection made later takes effect when the worker's
+service restarts: `aicrew-agent service restart --home HOME` on the
+worker's host.
+
+Check: `aicrew team show --team-name crew` names `dev-go` for the project
+under `toolchains`. After step 6, the worker's `aicrew-agent check --home
+HOME` prints no `warning:` line under its status line.
 
 The hub also needs the skills set that the project's process pins: the
 members get their skills from the hub in step 6. The hub's admin imports
@@ -423,8 +446,10 @@ Two lines of join's and `check`'s output are not faults:
   in print mode, which asks neither, and the init probe in print mode
   reports aimem's server `connected` while the approval is pending. This
   is read from the code and from measurements of October 2026
-  (`docs/TURN-PROBE.md`, "MCP tools and file reads in a turn"); a member's
-  first turn on v0.11.2 has not been observed yet. A home joined with
+  (`docs/TURN-PROBE.md`, "MCP tools and file reads in a turn"). The
+  members' first turns on v0.11.2 were seen on 2026-11-20: the
+  coordinator offered a task and the worker accepted it and committed its
+  change. A home joined with
   `--wake stop-hook` gets the other form of the notice, which names
   `aicrew-agent run`: there the person who starts the client accepts
   both.
@@ -453,10 +478,38 @@ If the team was paused in step 1, resume it when every member is
 
 Check: `aicrew team show --team-name crew` lists the coordinator and the
 worker. `aicrew-agent check --home HOME` on each host has no `blocked`
-line. Its `turn model:` line says `available`, and its project table says
-`verified` for each repository. `aicrew status` shows both members.
+line, and on the worker's host no `warning:` line. Its `turn model:` line
+says `available`, and its project table says `verified` for each
+repository. `aicrew status` shows both members.
 
 This is feature 5's check.
+
+### A team already up without a toolchain
+
+A team brought up before this document named the toolchain step has no
+toolchain selected. Its worker's first task ends where the first team's
+did on 2026-11-20: the turn denies the project's tests, the worker blocks
+the attempt, and the coordinator escalates. Nothing in the worker's home
+is edited by hand. In this order:
+1. On the worker's host, `aicrew-agent check --home HOME` prints
+   `warning: project PROJECT has no toolchain selected` under its status
+   line, with the operator's command. An `aicrew-agent` older than the
+   release that documents this section prints no such line: upgrade the
+   member first.
+2. The operator selects the toolchain, as in step 1:
+   `aicrew team toolchain --team-name crew --project PROJECT --toolchain dev-go`.
+   Check: `aicrew team show --team-name crew` names it.
+3. On the worker's host, the service restarts, so that its launcher
+   records the selection: `aicrew-agent service restart --home HOME`.
+4. `aicrew-agent check --home HOME` again. A `blocked` status with the
+   reason `toolchain_tool_missing` says the host lacks the toolchain's
+   tool.
+5. If so, install it (for aicrew, Go at go.mod's `go` version or later),
+   then restart the service from a shell that finds it, as the check's
+   instruction says.
+6. `aicrew-agent check --home HOME` says `ready`, with no `warning:` line.
+7. Only then is the open escalation answered, so that the worker's
+   resumed attempt runs its tests under the new selection.
 
 ## The forge token's rights
 
@@ -595,8 +648,14 @@ machine account for both members:
     skills installed from the hub, and each member's service started and
     held its own session thirty seconds later. `check` passed with the
     forge credential and the repository verified.
-- **Not seen yet:** a member's first turn, and `aicrew team show` of
-  step 8.
+- **The first turns, 2026-11-20.** The coordinator offered the first task
+  and the worker accepted it, made the change and committed it. Its turns
+  were then denied `go test`: the team had no toolchain selected and the
+  worker's host had no Go. The worker blocked the attempt and the
+  coordinator escalated. That is why step 1 now selects the toolchain,
+  the host table names the build tools, and "A team already up without a
+  toolchain" says what such a team does.
+- **Not seen yet:** `aicrew team show` of step 8.
 
 On 2026-11-16, step 5 and the start of step 6 were run as an unprivileged
 user in a scratch `debian:bookworm-slim` container on the lab simulation

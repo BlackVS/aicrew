@@ -66,7 +66,12 @@ func run(ctx context.Context, args []string, dir string, stdout, stderr io.Write
 	case slices.Equal(args, []string{"mcp", "list"}):
 		return mcpList(ctx, dir, stdout)
 	case turnMode(args):
-		return turnRun(ctx, dir, os.Stdin, stdout, newMember(dir))
+		m := newMember(dir)
+		// Claude Code reads --settings from the turn's working directory.
+		if m.settings = flag(args, "--settings"); m.settings != "" && !filepath.IsAbs(m.settings) {
+			m.settings = filepath.Join(dir, m.settings)
+		}
+		return turnRun(ctx, dir, os.Stdin, stdout, m)
 	case printMode(args) && slices.Contains(args, "--strict-mcp-config"):
 		return probe(args, stdout)
 	case printMode(args) && flag(args, "-p") == "hi":

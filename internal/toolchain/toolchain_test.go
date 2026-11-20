@@ -3,6 +3,7 @@ package toolchain
 import (
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -24,6 +25,16 @@ func TestLists(t *testing.T) {
 		if !narrow.MatchString(r) {
 			t.Errorf("dev-go's rule %s is not a narrow toolchain rule", r)
 		}
+	}
+	// Every list names its first tool and a test command its rules admit.
+	for _, n := range Names() {
+		w := strings.Fields(TestCommand(n))
+		if len(w) < 2 || w[0] != Tool(n) || !slices.Contains(Rules(n), "Bash("+w[0]+" "+w[1]+" *)") {
+			t.Errorf("toolchain %s: tool %q, test command %q", n, Tool(n), TestCommand(n))
+		}
+	}
+	if Tool("dev-go") != "go" || TestCommand("dev-go") != "go test ./..." || Tool("dev-cobol") != "" || TestCommand("dev-cobol") != "" {
+		t.Fatal("dev-go's tool or test command")
 	}
 	rules[0] = "Bash(*)"
 	if Rules("dev-go")[0] == "Bash(*)" {

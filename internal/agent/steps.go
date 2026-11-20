@@ -174,11 +174,17 @@ type stepSession interface {
 	stepAimemFile() string
 	stepAgent() string
 	stepHubAlias() string
+	stepMember() Session
 }
 
 // stepHubAlias is the home's name for its team's hub; the configuration
 // never changes while the engine runs.
 func (e *Engine) stepHubAlias() string { return e.Cfg.AimemHub }
+
+// stepMember is the session the engine holds: its team and the member's
+// role. The launcher reads it on the engine's goroutine, as
+// RecordOpenAttempts reads the role.
+func (e *Engine) stepMember() Session { return e.session }
 
 func (e *Engine) stepToken() string {
 	e.live.RLock()

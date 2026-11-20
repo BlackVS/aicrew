@@ -314,6 +314,10 @@ command on the host it belongs to:
    - `aicrew hub add`, then a restart of aicrewd;
    - `aicrew team setup`, with the grant it prints run by the hub's admin,
      then setup again;
+   - `aicrew team toolchain --team-name sim --project pilot --toolchain dev-go`,
+     the toolchain step of docs/BRING-UP.md, with its check: `aicrew team
+     show` must name `dev-go` for the project. It runs before any member
+     joins, so each worker's launcher records the selection when it starts;
    - `aicrew hub-credential issue` for the hub's introspection credential.
 4. Each stub's token in its own `/sim/in`, then the scenario file.
 5. Per member:
@@ -464,8 +468,20 @@ nothing to do ends, and the launcher's next message starts the next one.
     the verdict and waits for a later turn.
   - answers a worker's blocked report with the `answer` step.
 - **The worker** accepts an offer with the instruction digest the offer
-  carries. In its running attempt it makes the worktree with
-  `aicrew-agent clone`, commits one file, pushes with the home's own
+  carries. In each turn of its running attempt it first reads the turn's
+  settings (the file the launcher passes with `--settings`) and fails the
+  turn when their allow and deny rules would not admit `go test ./...`:
+  "the turn's settings deny `go test ./...`: no toolchain is selected for
+  the project (`aicrew team toolchain`, docs/BRING-UP.md)". It makes the
+  worktree with `aicrew-agent clone` and, in that turn only, runs
+  `go version` there in the turn's environment, which fails the turn when
+  it does not run (the member image has Go from the distribution's
+  package). This proves the selection, the settings it gives the worker's
+  turn and the tool's presence on the worker's host; the simulation still
+  runs no project tests. A run without the selection fails while it waits
+  for the worker's pull request; the runner's failure output ends with
+  each member's last turn errors, read from its `logs/turns.jsonl`, where
+  that message stands. Then it commits one file, pushes with the home's own
   credential, opens the pull request with `aicrew-agent forge pr open`, and
   adds `review-this`. Later turns read the pull request with
   `forge pr show` and wait while `review-this` or `hands-reviewing` is on.

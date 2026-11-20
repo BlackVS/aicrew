@@ -24,7 +24,13 @@ type TeamRecord struct {
 	ReadAt  time.Time `json:"read_at"`
 	// HubAlias is the home's name for the team's hub (agent.json's
 	// aimem_hub), beside each project's hub ID.
-	HubAlias string        `json:"hub_alias,omitempty"`
+	HubAlias string `json:"hub_alias,omitempty"`
+	// TeamID and Role are the team and the member's role in it, from the
+	// session that read the projects: check reads them with the home's
+	// session left (a worker's toolchain lines, check.go). An older
+	// aicrew-agent's record has neither.
+	TeamID   string        `json:"team_id,omitempty"`
+	Role     string        `json:"role,omitempty"`
 	Projects []TeamProject `json:"projects"`
 }
 
@@ -45,8 +51,8 @@ type TeamProject struct {
 const projectsPath = "/v1/crew/projects"
 
 // RecordTeam reads the team's projects as the session of token and records
-// them in home, with the home's hub alias.
-func RecordTeam(ctx context.Context, home, hubAlias string, crew SessionReader, token string) error {
+// them in home, with the home's hub alias and the session's team and role.
+func RecordTeam(ctx context.Context, home, hubAlias string, session Session, crew SessionReader, token string) error {
 	raw, err := crew.Read(ctx, token, projectsPath)
 	if err != nil {
 		return err
@@ -57,7 +63,8 @@ func RecordTeam(ctx context.Context, home, hubAlias string, crew SessionReader, 
 	if err := json.Unmarshal(raw, &answer); err != nil {
 		return fmt.Errorf("the team's projects: %w", err)
 	}
-	return SaveTeam(home, TeamRecord{ReadAt: time.Now().UTC(), HubAlias: hubAlias, Projects: answer.Projects})
+	return SaveTeam(home, TeamRecord{ReadAt: time.Now().UTC(), HubAlias: hubAlias, TeamID: session.TeamID,
+		Role: session.Role, Projects: answer.Projects})
 }
 
 func teamPath(home string) string { return filepath.Join(home, "state", "team.json") }

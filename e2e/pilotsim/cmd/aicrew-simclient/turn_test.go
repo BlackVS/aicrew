@@ -51,15 +51,33 @@ type fakeTools struct {
 	comments    []string
 	// steps are scripted answers to a step, in order, before the default one.
 	steps map[string][]stepReply
+	// goOut and goCode are what `go version` answers.
+	goOut  string
+	goCode int
 }
 
+// toolchainSettings is a worker turn's settings with dev-go's rules, as the
+// launcher writes them when the operator selected the toolchain.
+const toolchainSettings = `{"permissions": {"allow": ["Bash(git status)", "Bash(go test)", "Bash(go test *)"],
+  "deny": ["Bash(curl *)"]}}`
+
 func newFake(t *testing.T) *fakeTools {
-	return &fakeTools{t: t, home: t.TempDir(), tasks: map[string]map[string]any{},
-		bodies: map[string]map[string]any{}, stdin: map[string]string{}, steps: map[string][]stepReply{}}
+	f := &fakeTools{t: t, home: t.TempDir(), tasks: map[string]map[string]any{},
+		bodies: map[string]map[string]any{}, stdin: map[string]string{}, steps: map[string][]stepReply{},
+		goOut: "go version go1.19.8 linux/amd64"}
+	f.writeSettings(toolchainSettings)
+	return f
+}
+
+// writeSettings replaces the turn's settings file.
+func (f *fakeTools) writeSettings(s string) {
+	if err := os.WriteFile(filepath.Join(f.home, "turn-settings.json"), []byte(s), 0o600); err != nil {
+		f.t.Fatal(err)
+	}
 }
 
 func (f *fakeTools) member() *member {
-	return &member{home: f.home, run: f.run, mcp: f.mcp,
+	return &member{home: f.home, settings: filepath.Join(f.home, "turn-settings.json"), run: f.run, mcp: f.mcp,
 		now: func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }}
 }
 
@@ -102,6 +120,9 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 	}
 	if name == "git" {
 		return nil, 0, nil
+	}
+	if name == "go" {
+		return []byte(f.goOut), f.goCode, nil
 	}
 	if name == "env" {
 		return []byte(f.verify), f.verifyCode, nil
@@ -762,5 +783,80 @@ func TestCoordinatorWaitsOnAnUnconfirmedDelivery(t *testing.T) {
 	}
 	if f.called("env ") || f.called("aicrew-agent step") {
 		t.Fatalf("an open pull request was verified: %v", f.calls)
+	}
+}
+
+// A worker's working turn checks that its settings admit `go test ./...`
+// and runs `go version` in the worktree it made, once per attempt.
+func TestWorkerChecksTheToolchain(t *testing.T) {
+	f := newFake(t)
+	writeSection(t, f.home)
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 1 = %d: %s", code, out.String())
+	}
+	if !f.called("go version") || !strings.Contains(out.String(), "Ran `go version` in the worktree: go version go1.19.8") {
+		t.Fatalf("turn 1 did not run go version: %v\n%s", f.calls, out.String())
+	}
+	// The next turn has the worktree: no second `go version`.
+	f.calls = nil
+	f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: "open", HeadCommit: tHead,
+		Labels: []string{"hands-reviewing"}}, Content: &forge.PullContent{}}
+	out.Reset()
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 2 = %d: %s", code, out.String())
+	}
+	if f.called("go version") {
+		t.Fatalf("turn 2 ran go version again: %v", f.calls)
+	}
+}
+
+// Without the toolchain's rules, or with a deny rule over them, the
+// worker's turn fails before it clones or commits, naming the step.
+func TestWorkerTurnFailsWithoutTheToolchain(t *testing.T) {
+	for name, settings := range map[string]string{
+		"no toolchain":     `{"permissions": {"allow": ["Bash(git status)"], "deny": []}}`,
+		"denied by a rule": `{"permissions": {"allow": ["Bash(go test *)"], "deny": ["Bash(go test *)"]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake(t)
+			writeSection(t, f.home)
+			f.writeSettings(settings)
+			var out bytes.Buffer
+			code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member())
+			want := "the turn's settings deny `go test ./...`: no toolchain is selected for the project " +
+				"(`aicrew team toolchain`, docs/BRING-UP.md)"
+			if code != 1 || !strings.Contains(out.String(), want) {
+				t.Fatalf("code %d, out %s", code, out.String())
+			}
+			if f.called("aicrew-agent clone") || f.called("git") || f.called("go version") {
+				t.Fatalf("the turn went on: %v", f.calls)
+			}
+		})
+	}
+}
+
+// A `go version` that does not run fails the turn before it commits.
+func TestWorkerTurnFailsWithoutGo(t *testing.T) {
+	f := newFake(t)
+	writeSection(t, f.home)
+	f.goOut, f.goCode = "go: not found", 127
+	var out bytes.Buffer
+	code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member())
+	if code != 1 || !strings.Contains(out.String(), "`go version` did not run in the worktree: exit 127") {
+		t.Fatalf("code %d, out %s", code, out.String())
+	}
+	if f.called("git add") {
+		t.Fatalf("the turn committed: %v", f.calls)
+	}
+}
+
+// A turn without --settings fails: the launcher always passes one.
+func TestWorkerTurnNeedsSettings(t *testing.T) {
+	f := newFake(t)
+	m := f.member()
+	m.settings = ""
+	if err := m.admitsTests(); err == nil || err.Error() != "the turn names no --settings file" {
+		t.Fatalf("no settings: %v", err)
 	}
 }

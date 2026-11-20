@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/agent"
+	"github.com/BlackVS/aicrew/internal/automation"
 	"github.com/BlackVS/aicrew/internal/forge"
 )
 
@@ -124,10 +125,13 @@ type mcpFunc func(ctx context.Context, tool string, args map[string]any) (string
 // member is one turn of the scripted member.
 type member struct {
 	home string
-	run  runFunc
-	mcp  mcpFunc
-	now  func() time.Time
-	sc   scenario
+	// settings is the turn's --settings file, which holds the allow list a
+	// model's commands would run under.
+	settings string
+	run      runFunc
+	mcp      mcpFunc
+	now      func() time.Time
+	sc       scenario
 	// scErr is an unreadable scenario, which fails the turn rather than
 	// running the plain cycle in its place.
 	scErr error
@@ -432,6 +436,9 @@ func (m *member) worker(ctx context.Context, b brief, msgs []message) error {
 		}
 		m.note("Resumed attempt %s for the coordinator's rework.", b.Attempt)
 	}
+	if err := m.admitsTests(); err != nil {
+		return err
+	}
 	wt := filepath.Join(m.home, "worktrees", b.Attempt)
 	if _, err := os.Stat(wt); errors.Is(err, os.ErrNotExist) {
 		var out any
@@ -440,12 +447,60 @@ func (m *member) worker(ctx context.Context, b brief, msgs []message) error {
 			return err
 		}
 		m.note("Cloned %s and made the worktree on %s from %s.", b.Repo, b.Branch, b.Base)
+		// Once per attempt, in the turn that made its worktree.
+		if err := m.goVersion(ctx, wt); err != nil {
+			return err
+		}
 	}
 	n := recordedPull(m.section())
 	if n == 0 {
 		return m.openPull(ctx, b, wt)
 	}
 	return m.followPull(ctx, b, wt, n)
+}
+
+// errTestsDenied is a worker's turn whose settings would deny the
+// project's tests: the operator selected no toolchain for the project.
+var errTestsDenied = errors.New("the turn's settings deny `go test ./...`: no toolchain is selected for the " +
+	"project (`aicrew team toolchain`, docs/BRING-UP.md)")
+
+// admitsTests checks that the turn's settings admit the project's test
+// command, `go test ./...`, as the turn's allow and deny rules judge it,
+// before the worker commits: a model would run it here. The simulation
+// runs no tests; it proves the selection reaches the turn.
+func (m *member) admitsTests() error {
+	if m.settings == "" {
+		return errors.New("the turn names no --settings file")
+	}
+	raw, err := os.ReadFile(m.settings)
+	if err != nil {
+		return fmt.Errorf("the turn's settings: %w", err)
+	}
+	var s struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+			Deny  []string `json:"deny"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return fmt.Errorf("the turn's settings %s: %w", m.settings, err)
+	}
+	if automation.NewAllowList(s.Permissions.Allow, s.Permissions.Deny).Admit("go", []string{"test", "./..."}) != nil {
+		return errTestsDenied
+	}
+	return nil
+}
+
+// goVersion runs `go version` in the worktree, in the turn's environment:
+// the worker's host has the toolchain's tool.
+func (m *member) goVersion(ctx context.Context, wt string) error {
+	out, code, err := m.run(ctx, wt, "", "go", "version")
+	if err != nil || code != 0 {
+		return fmt.Errorf("`go version` did not run in the worktree: exit %d, %v: %s", code, err,
+			strings.TrimSpace(string(out)))
+	}
+	m.note("Ran `go version` in the worktree: %s.", strings.TrimSpace(string(out)))
+	return nil
 }
 
 // answered says whether the messages hold the coordinator's answer to the

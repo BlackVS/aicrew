@@ -256,6 +256,12 @@ fail() {
     echo "---- $s (last 40 lines; all in $LOGS/$s.log)" >&3
     tail -n 40 "$LOGS/$s.log" >&3 || true
   done
+  # A turn's own error is in its record, not in serve's log: a worker's
+  # turn without the toolchain says which step is missing there.
+  for s in coordinator worker indep; do
+    echo "---- sim-$s: the last turn errors (logs/turns.jsonl)" >&3
+    dc exec -T -u member "sim-$s" sh -c 'grep -o "\"error\":\"[^\"]*\"" /home/member/agent/logs/turns.jsonl 2>/dev/null | tail -n 3' >&3 2>/dev/null || true
+  done
   exit 1
 }
 # homes: each member home's docs, logs and state (no credential lives there).
@@ -585,6 +591,14 @@ grant=$(printf '%s\n' "$setup_out" | sed -n 's/^[[:space:]]*aimem identity team 
 identity team grant $grant >/dev/null
 op aicrew team setup "$TEAM" --hub sim --project "$PROJECT" >/dev/null || fail "aicrew team setup, second run"
 TEAM_ID=$(op aicrew team show -team-name "$TEAM" | json_field id)
+# The project's toolchain, by the operator's documented step (docs/BRING-UP.md),
+# before any member joins: a worker's launcher records the team's projects
+# when it starts, and its turns run the project's tests only with it.
+op aicrew team toolchain --team-name "$TEAM" --project "$PROJECT" --toolchain dev-go >/dev/null ||
+  fail "aicrew team toolchain"
+[ "$(op aicrew team show -team-name "$TEAM" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("toolchains", {}).get(sys.argv[1], ""))' "$PROJECT")" = dev-go ] ||
+  fail "aicrew team show does not name dev-go for project $PROJECT after aicrew team toolchain"
+ev observation task= what="the operator selected the toolchain dev-go for project $PROJECT with aicrew team toolchain, and aicrew team show names it"
 op aicrew hub-credential issue -hub "$HUB_ID" --output $OPS_HOME/introspection.token >/dev/null
 op cat $OPS_HOME/introspection.token | into sim-aimem aimem /home/aimem/introspection.token
 op rm -f $OPS_HOME/introspection.token

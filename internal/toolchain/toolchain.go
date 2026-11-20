@@ -35,6 +35,20 @@ func Valid(name string) bool {
 	return ok
 }
 
+// tools are each toolchain's first tool, the command its rules start with,
+// which a worker's host must have on its PATH, and an example of the
+// project's test command the brief offers when the toolchain is selected.
+var tools = map[string]struct{ tool, test string }{
+	"dev-go": {tool: "go", test: "go test ./..."},
+}
+
+// Tool is the named toolchain's first tool, or "" for an unknown name.
+func Tool(name string) string { return tools[name].tool }
+
+// TestCommand is the named toolchain's example test command, or "" for an
+// unknown name.
+func TestCommand(name string) string { return tools[name].test }
+
 // Rules is the named toolchain's allow rules, or nil for an unknown name.
 func Rules(name string) []string { return slices.Clone(lists[name]) }
 

@@ -582,12 +582,11 @@ func TestCheckClaudeApprovalPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The notice names the interactive start and who answers it, and says
-	// that a service's turns are not asked; it names no service command,
-	// which accepts nothing (bring-up finding B).
+	// In a stop-hook home the notice names the interactive start and who
+	// answers it; it names no service command, which accepts nothing
+	// (bring-up finding B).
 	want := "Claude Code asks at an interactive start in this home (`" + startCommand("claude", quoteArg(e.home)) +
-		"`) to trust the folder and to approve the project MCP server aimem: the person who starts it so accepts both. " +
-		"A turn of the member's service runs in print mode, which shows neither question"
+		"`) to trust the folder and to approve the project MCP server aimem: the person who starts it so accepts both"
 	if rep.Status != JoinRestartRequired || !rep.Clients[0].ApprovalPending || !hasNotice(rep, want) ||
 		hasNotice(rep, "service start") {
 		t.Fatalf("%+v", rep)
@@ -595,6 +594,21 @@ func TestCheckClaudeApprovalPending(t *testing.T) {
 	// The progress line says what "pending" is (bring-up finding D).
 	if !strings.Contains(out.String(), ", aimem pending approval for an interactive start\n") {
 		t.Fatalf("the progress lines:\n%s", out.String())
+	}
+
+	// In a turns home, where `aicrew-agent run` refuses to start, it names
+	// no interactive command and says that nothing is to be accepted.
+	path := filepath.Join(e.home, "agent.json")
+	doc := readJSON(t, path)
+	doc["wake"] = map[string]any{"mode": WakeTurns}
+	raw, _ := json.Marshal(doc)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep = e.check(t, "claude")
+	if !rep.Clients[0].ApprovalPending || !hasNotice(rep, "This home is in turns mode: no interactive client starts here") ||
+		!hasNotice(rep, "Nothing is to be accepted") || hasNotice(rep, "aicrew-agent run") || hasNotice(rep, "service start") {
+		t.Fatalf("a turns home: %+v", rep.Notices)
 	}
 }
 

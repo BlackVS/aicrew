@@ -2475,10 +2475,12 @@ member's user-level skills under it. It reports:
   it stopped at its ceiling (the human output only, never `--json`). Print
   mode never shows Claude Code's
   workspace-trust dialog. A project server Claude Code has not yet approved
-  for interactive use is reported as a notice: an interactive start in the
-  home (`aicrew-agent run`) asks to trust the folder and to approve it, and
-  the person who starts it answers. A turn of the member's service runs in
-  print mode and is not asked. The progress line of `claude mcp list`
+  for interactive use is reported as a notice. In a stop-hook home it
+  names the interactive start (`aicrew-agent run`), which asks to trust the
+  folder and to approve the server, and says the person who starts it
+  answers. In a turns home, where `run` refuses to start, it says that the
+  service runs each turn in print mode, which asks neither, and that
+  nothing is to be accepted. The progress line of `claude mcp list`
   reads `aimem pending approval for an interactive start` in that case.
 - **The turn model,** in a `turns` home whose client is Claude Code. The
   home's model (`turns.model`, an alias such as `haiku` or a full ID, or

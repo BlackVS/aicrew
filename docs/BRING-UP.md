@@ -95,10 +95,17 @@ The commands of this page show neither: they assume the variables.
 Check: `aicrew status` answers.
 
 **aimem's admin commands run on the hub's host, as the hub's service
-user,** and reach the hub's local service over its socket.
+user.** They reach the hub in two ways:
+- `aimem access` and `aimem skills` (steps 1 and 2) go to the hub's local
+  service over its socket;
+- `aimem identity` (step 1's grant) goes to the hub's HTTPS listener,
+  named by `--hub`, with the hub admin's bearer.
+
+So a socket error concerns the first kind, and a refused grant the
+second's URL or bearer.
 - **The socket.** aimem finds it under `XDG_RUNTIME_DIR`. A shell opened
-  with `su - USER` or `sudo -iu USER` has no `XDG_RUNTIME_DIR`, and every
-  admin command then stops with "is the local aimem service running?"
+  with `su - USER` has no `XDG_RUNTIME_DIR`, and every admin command then
+  stops with "is the local aimem service running?"
   although the service runs (seen on 2026-11-19). Set it first:
 
   ```sh
@@ -108,19 +115,20 @@ user,** and reach the hub's local service over its socket.
   Where aimem looks is read from aimem's code (`AIMEM_SOCKET`, then the
   state root when `AIMEM_STATE_DIR` is set, then `XDG_RUNTIME_DIR`); the
   line above was not tried.
-- **The hub admin's bearer.** `aimem access` needs only the socket. The
-  `aimem identity` commands (step 1's grant) also need the hub's admin
-  bearer, as a file only its owner can read. On the hub's host it is the
-  value of `AIMEM_HTTP_TOKEN` in the service user's
-  `~/.config/aimem/env`. Write it to a file for the step, and delete the
-  file after it:
+- **The hub admin's bearer.** `aimem identity` takes it as a file only
+  its owner can read. On the hub's host it is the value of
+  `AIMEM_HTTP_TOKEN` in the service user's `~/.config/aimem/env`. Write it
+  to a new file for step 1's grants, and remove the file after them:
 
   ```sh
-  (umask 077; sed -n 's/^AIMEM_HTTP_TOKEN=//p' ~/.config/aimem/env > admin.token)
+  ADMIN_TOKEN_FILE=$(mktemp)
+  sed -n 's/^AIMEM_HTTP_TOKEN=//p' ~/.config/aimem/env > "$ADMIN_TOKEN_FILE"
   ```
 
-  This is the line aimem's own hub installer reads it with. The bearer is
-  the hub's admin credential: it stays on the hub's host.
+  `mktemp` creates a new file that only its owner can read, so the bearer
+  never lands in an existing file with wider rights. The `sed` line is the
+  one aimem's own hub installer reads the value with. The bearer is the
+  hub's admin credential: it stays on the hub's host.
 
 ## The bring-up, in order
 
@@ -149,7 +157,8 @@ address, so the line cannot:
 - `HUB_URL` is the hub's TLS listener, `https://HOST:PORT`: the
   `--base-url` that `aicrew hub add` was given.
 - `ADMIN_TOKEN_FILE` is the file with the hub admin's bearer ("Before
-  step 1"). Delete it after the grants.
+  step 1"): `"$ADMIN_TOKEN_FILE"` in that shell. After the grants, remove
+  it: `rm -f "$ADMIN_TOKEN_FILE"`.
 - A hub on a private CA also takes `--hub-ca-file FILE` or
   `--hub-pin sha256-PIN`.
 
@@ -285,8 +294,8 @@ npm install -g @anthropic-ai/claude-code@2.1.286
 - npm needs a prefix the user may write to, for example
   `npm config set prefix ~/.npm-global` with its `bin` on `PATH`.
 - Claude Code 2.1.286 declares Node.js 22 or later. Debian 13 ships
-  Node.js 20.19: npm warns at the install, and the client works (seen on
-  2026-11-19).
+  Node.js 20.19: npm warns at the install, and the client works. Ubuntu
+  26.04 ships Node.js 22, without the warning (both seen on 2026-11-19).
 - aimem's boot script also adds two hooks to the user's own
   `~/.claude/settings.json`, `Stop` and `StopFailure`, each running
   `aimem submit-claude`, which records a finished turn in aimem. join and
@@ -405,16 +414,20 @@ After `ready`, delete the input files from the member's host:
   it into the home.
 
 Two lines of join's and `check`'s output are not faults:
-- **"Claude Code asks at an interactive start in this home ... to trust
-  the folder and to approve the project MCP server aimem".** Only an
-  interactive start asks (`aicrew-agent run`), and the person who starts
-  it answers. A member that runs only as a service starts no interactive
-  client: its turns run Claude Code in print mode, which shows neither
-  question, and the init probe in print mode reports aimem's server
-  `connected` while the approval is pending. This is read from the code
-  and from measurements of October 2026 (`docs/TURN-PROBE.md`, "MCP tools
-  and file reads in a turn"); a member's first turn on v0.11.2 has not
-  been observed yet.
+- **"Claude Code lists the project MCP server aimem as not yet approved
+  for an interactive start in this home. This home is in turns mode ...
+  Nothing is to be accepted".** This is the notice of a home joined with
+  `--wake turns`, as above. Only an interactive start asks to trust the
+  folder and to approve the server, and a turns home has none:
+  `aicrew-agent run` refuses to start there. Its service runs each turn
+  in print mode, which asks neither, and the init probe in print mode
+  reports aimem's server `connected` while the approval is pending. This
+  is read from the code and from measurements of October 2026
+  (`docs/TURN-PROBE.md`, "MCP tools and file reads in a turn"); a member's
+  first turn on v0.11.2 has not been observed yet. A home joined with
+  `--wake stop-hook` gets the other form of the notice, which names
+  `aicrew-agent run`: there the person who starts the client accepts
+  both.
 - **"claude mcp list: ..., aimem pending approval for an interactive
   start".** The same approval, as `claude mcp list` reports it. The line
   before it, "claude init probe: ..., aimem MCP server connected", is how
@@ -559,14 +572,17 @@ account's access.
   `check` says they are not checked and points to the list above.
 - **GitLab.** Not read: `not_checked`.
 
-The Gitea part was tried, the GitHub part was not: it is read from
-GitHub's documentation and tested against a stand-in server only.
+The Gitea part was tried. Of the GitHub part, a classic token with `repo`
+was seen `verified` on real hosts (step 3); the rest (a fine-grained token,
+a classic token without a scope) is read from GitHub's documentation and
+tested against a stand-in server only.
 
 ## How far this was tried
 
 **On real hosts, 2026-11-19 and 2026-11-20.** A hub with aicrewd beside
-it, two Debian member hosts, one GitHub repository owned by a personal
-account, and one machine account for both members:
+it, two member hosts (one Debian 13, one Ubuntu 26.04, to try two
+systems), one GitHub repository owned by a personal account, and one
+machine account for both members:
 - **The operator's steps 1 to 4** were run by the owner. The findings of that run are corrected above: the
   grant line, the two connections, the hub admin's bearer, the paused
   team, the invitation's lifetime, the user name and the carrying of

@@ -36,7 +36,7 @@ func TestBriefToolchain(t *testing.T) {
 		"the project not recorded": {"other": "dev-go"},
 	} {
 		got := brief(chains)
-		if !strings.Contains(got, "Toolchain: none is selected for project proj, so this turn denies") ||
+		if !strings.Contains(got, "Toolchain: none is selected for project proj, so do not run its build and test commands") ||
 			!strings.Contains(got, "`aicrew team toolchain`") || strings.Contains(got, "go test") {
 			t.Errorf("%s: %q", name, got)
 		}

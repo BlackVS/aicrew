@@ -447,9 +447,20 @@ func (m *member) worker(ctx context.Context, b brief, msgs []message) error {
 			return err
 		}
 		m.note("Cloned %s and made the worktree on %s from %s.", b.Repo, b.Branch, b.Base)
-		// Once per attempt, in the turn that made its worktree.
+	}
+	// Once per attempt, recorded apart from the worktree: a turn whose probe
+	// failed after the clone leaves no record, so the next turn probes again
+	// before it commits.
+	probed := filepath.Join(m.home, "state", "simclient-go-"+b.Attempt)
+	if _, err := os.Stat(probed); err != nil {
 		if err := m.goVersion(ctx, wt); err != nil {
 			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(probed), 0o700); err != nil {
+			return fmt.Errorf("record the go probe: %w", err)
+		}
+		if err := os.WriteFile(probed, nil, 0o600); err != nil {
+			return fmt.Errorf("record the go probe: %w", err)
 		}
 	}
 	n := recordedPull(m.section())

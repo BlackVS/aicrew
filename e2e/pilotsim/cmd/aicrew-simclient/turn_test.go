@@ -849,6 +849,14 @@ func TestWorkerTurnFailsWithoutGo(t *testing.T) {
 	if f.called("git add") {
 		t.Fatalf("the turn committed: %v", f.calls)
 	}
+	// The worktree exists now, but the probe failed: the next turn probes
+	// again and fails again before it commits.
+	out.Reset()
+	f.calls = nil
+	code = turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member())
+	if code != 1 || !f.called("go version") || f.called("git add") {
+		t.Fatalf("the retry: code %d, calls %v, out %s", code, f.calls, out.String())
+	}
 }
 
 // A turn without --settings fails: the launcher always passes one.

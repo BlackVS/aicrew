@@ -3,6 +3,8 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -52,7 +54,8 @@ func TestCheckToolchains(t *testing.T) {
 	}
 	for _, want := range []string{"project aicrew has no toolchain selected",
 		"`aicrew team toolchain --team team-7 --project aicrew --toolchain dev-go`",
-		"`aicrew-agent service restart --home " + e.home + "`"} {
+		// A stop-hook home's member starts again through its client.
+		"stop the member's client and start it again: `aicrew-agent run --client claude --home " + shellArg(e.home) + "`"} {
 		if !strings.Contains(rep.Warnings[0], want) {
 			t.Errorf("the warning lacks %q: %s", want, rep.Warnings[0])
 		}
@@ -63,7 +66,8 @@ func TestCheckToolchains(t *testing.T) {
 	rep = e.check(t)
 	if rep.Status != JoinBlocked || rep.Reason != ReasonToolchainToolMissing || len(rep.Warnings) != 0 ||
 		len(rep.Instructions) != 1 || !strings.Contains(rep.Instructions[0], "install `go` on this host") ||
-		!strings.Contains(rep.Instructions[0], "aicrew-agent service restart --home "+e.home) {
+		!strings.Contains(rep.Instructions[0], "if join ended blocked, rerun it, `aicrew-agent join --home "+shellArg(e.home)+"`") ||
+		!strings.Contains(rep.Instructions[0], "aicrew-agent run --client claude --home "+shellArg(e.home)) {
 		t.Fatalf("tool missing: %+v", rep)
 	}
 
@@ -82,5 +86,32 @@ func TestCheckToolchains(t *testing.T) {
 		if rep = e.check(t); rep.Status != JoinReady || len(rep.Warnings) != 0 {
 			t.Errorf("%s: %+v", c.name, rep)
 		}
+	}
+}
+
+// The restart a toolchain line names fits the home: a turns home's
+// service, a stop-hook home's client, each with the home quoted for the
+// shell, so a path with a space pastes as one argument.
+func TestCheckToolchainsRestart(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "worker one")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for mode, want := range map[string]string{
+		WakeTurns:    "restart the worker's service: `aicrew-agent service restart --home " + shellArg(home) + "`",
+		WakeStopHook: "stop the member's client and start it again: `aicrew-agent run --client claude --home " + shellArg(home) + "`",
+	} {
+		writeAgentDoc(t, home, map[string]any{"clients": []string{"claude"}, "wake": map[string]any{"mode": mode}})
+		doc, ok, err := readAgentDoc(home)
+		if err != nil || !ok {
+			t.Fatal(ok, err)
+		}
+		c := &checker{o: CheckOptions{Home: home}, doc: &doc}
+		if got := c.restartMember(); got != want {
+			t.Errorf("%s: %s", mode, got)
+		}
+	}
+	if q := shellArg(home); q == home {
+		t.Fatalf("a home with a space is not quoted: %s", q)
 	}
 }

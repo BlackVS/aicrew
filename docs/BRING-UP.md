@@ -190,7 +190,11 @@ the repository's `scripts/*.sh` (`internal/toolchain`). A worker's launcher
 records the team's projects when it starts, so select the toolchain before
 the worker joins. A selection made later takes effect when the worker's
 service restarts: `aicrew-agent service restart --home HOME` on the
-worker's host.
+worker's host. The restarted service records the team's projects after
+its model probe and its session's start, and only then writes
+`msg="the turn loop runs"` to `HOME/logs/serve.log`. A check run before
+that line may still print what it printed before the restart: run it
+again once the line is there.
 
 Check: `aicrew team show --team-name crew` names `dev-go` for the project
 under `toolchains`. After step 6, the worker's `aicrew-agent check --home
@@ -421,6 +425,13 @@ HOME`:
 - `skills_no_project` and `skills_install_failed`: the team has no
   project yet, or aimem failed otherwise, with its own text.
 
+On a worker's host, join also ends `blocked` with the reason
+`toolchain_tool_missing` when a toolchain is selected for the team's
+project (step 1) and its tool, `go` for `dev-go`, is not on the PATH.
+Join then installs no service. Install the tool (the host table above),
+then rerun join from a shell that finds it: `aicrew-agent join --home
+HOME`. The rerun installs the service, which runs with that shell's PATH.
+
 Check: join's report is `ready`, and its `skills:` lines name what it
 installed. Its forge table shows the host `provisioned`, and `aicrew
 invitation list` shows step 4's invitation redeemed. On 2026-11-20 both
@@ -495,18 +506,26 @@ is edited by hand. In this order:
    `warning: project PROJECT has no toolchain selected` under its status
    line, with the operator's command. An `aicrew-agent` older than the
    release that documents this section prints no such line: upgrade the
-   member first.
+   member first. The upgrade restarts its service, which records the team
+   again: run check once `msg="the turn loop runs"` is in
+   `HOME/logs/serve.log` after the upgrade, since a check run earlier may
+   read the record from before it and print no line.
 2. The operator selects the toolchain, as in step 1:
    `aicrew team toolchain --team-name crew --project PROJECT --toolchain dev-go`.
    Check: `aicrew team show --team-name crew` names it.
 3. On the worker's host, the service restarts, so that its launcher
    records the selection: `aicrew-agent service restart --home HOME`.
-4. `aicrew-agent check --home HOME` again. A `blocked` status with the
-   reason `toolchain_tool_missing` says the host lacks the toolchain's
-   tool.
+   Wait until `HOME/logs/serve.log` has `msg="the turn loop runs"` from
+   after the restart: the record is written before that line.
+4. `aicrew-agent check --home HOME` again. A check that still prints the
+   warning was run before the record: run it again after that line. A
+   `blocked` status with the reason `toolchain_tool_missing` says the
+   host lacks the toolchain's tool.
 5. If so, install it (for aicrew, Go at go.mod's `go` version or later),
    then restart the service from a shell that finds it, as the check's
-   instruction says.
+   instruction says, and wait for the line again. A worker whose join
+   ended blocked has no service yet: there, rerun join from that shell
+   (`aicrew-agent join --home HOME`), which installs it.
 6. `aicrew-agent check --home HOME` says `ready`, with no `warning:` line.
 7. Only then is the open escalation answered, so that the worker's
    resumed attempt runs its tests under the new selection.

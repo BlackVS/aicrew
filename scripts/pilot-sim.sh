@@ -260,7 +260,7 @@ fail() {
   # turn without the toolchain says which step is missing there.
   for s in coordinator worker indep; do
     echo "---- sim-$s: the last turn errors (logs/turns.jsonl)" >&3
-    dc exec -T -u member "sim-$s" sh -c 'grep -o "\"error\":\"[^\"]*\"" /home/member/agent/logs/turns.jsonl 2>/dev/null | tail -n 3' >&3 2>/dev/null || true
+    dc exec -T -u member "sim-$s" sh -c 'jq -r "select((.error // \"\") != \"\") | .error" /home/member/agent/logs/turns.jsonl 2>/dev/null | tail -n 3' >&3 2>/dev/null || true
   done
   exit 1
 }

@@ -242,6 +242,8 @@ func (l *TurnLoop) briefTask(ctx context.Context, b *strings.Builder, a *memberA
 	if err != nil {
 		fmt.Fprintf(b, "Task %s could not be read for the brief (%s): read it with aimem's `get_task`.\n",
 			a.Task.TaskID, redactBrief(l.Home, err.Error(), maxBriefText))
+		// The attempt names its project without the snapshot.
+		briefToolchain(b, l.Home, a)
 		return
 	}
 	at := snap.ReadAt.UTC().Format(time.RFC3339)
@@ -280,14 +282,14 @@ func briefToolchain(b *strings.Builder, home string, a *memberAttempt) {
 	}
 	switch {
 	case name == "":
-		fmt.Fprintf(b, "\nToolchain: none is selected for project %s, so this turn denies the project's build and "+
-			"test commands: do not run them. If the task cannot be done without them, block the attempt and name "+
-			"the missing selection, the operator's `aicrew team toolchain` (docs/BRING-UP.md); never ask for an "+
-			"edit of this home's allow list.\n", a.Task.ProjectID)
+		fmt.Fprintf(b, "\nToolchain: none is selected for project %s, so do not run its build and test commands "+
+			"in this attempt: the operator's selection decides them. If the task cannot be done without them, "+
+			"block the attempt and name the missing selection, the operator's `aicrew team toolchain` "+
+			"(docs/BRING-UP.md); never ask for an edit of this home's allow list.\n", a.Task.ProjectID)
 	case !toolchain.Valid(name):
 		fmt.Fprintf(b, "\nToolchain: %s is selected for project %s, but this aicrew-agent does not know it, so "+
-			"this turn denies the project's build and test commands until aicrew-agent is upgraded: do not run "+
-			"them.\n", name, a.Task.ProjectID)
+			"do not run the project's build and test commands until aicrew-agent is upgraded.\n", name,
+			a.Task.ProjectID)
 	default:
 		fmt.Fprintf(b, "\nToolchain: the operator selected %s for project %s, so this turn may run its commands in "+
 			"your attempt's worktree, for example `cd worktrees/%s && %s`.\n", name, a.Task.ProjectID, a.ID,

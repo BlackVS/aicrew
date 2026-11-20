@@ -327,7 +327,10 @@ there. The member joins with them and removes them, then runs serve. As
 an installed member's service does, the container starts serve again
 10 seconds after a failure, but not after a clean stop or exit 2: a
 member whose session refresh meets the hub stopped (case F6-unreachable)
-comes back once the hub does.
+comes back once the hub does. A clean stop ends the container. After
+exit 2 the container stays up with serve stopped, as a host stays up when
+its service stops, so check and an instruction still run in the home; the
+runner fails at once on member.sh's line for it where serve must serve.
 
 No secret is printed or passed as an argument. A token or code goes from
 the container that makes it to the one that reads it through a pipe.
@@ -629,9 +632,13 @@ and is looked at again when the minimum is next raised; a test of the tool
 fails if the pinned aimem is ever not below this tree's minimum. The run
 differs from the upgrade above in three places:
 1. After each member's restart on the new `aicrew-agent`, what serve does
-   is recorded (`DIR/upgrade-below-serve-ROLE.txt`: whether its model probe
-   ran, and whether it runs, read both from the process list and from
-   serve's own log line that its turn loop runs), not required. `aicrew-agent check` must exit
+   is recorded (`DIR/upgrade-below-serve-ROLE.txt`: the model probe's
+   outcome as serve logged it, available, could not be verified, or not
+   available with serve's exit 2, or no probe line within 120 s; and
+   whether serve runs, read both from the process list and from serve's
+   own log line that its turn loop runs), not required. A serve that
+   exited leaves the member's host up, so check and the instruction below
+   still run. `aicrew-agent check` must exit
    non-zero, `blocked` with the reason `aimem_below`, aimem `below`, and
    this exact instruction (`smoke.py below`):
 
@@ -656,7 +663,8 @@ job 14 minutes 49 seconds):
   aimem 0.11.5, and the first cycle passed. That cycle is what ran the old
   client against the new hub.
 - After the restart on the new `aicrew-agent`, serve ran in each member:
-  its model probe ran within 120 s, its process was found, and its log
+  its model probe ran and found the model available, its process was
+  found, and its log
   said its turn loop runs. Check was blocked on `aimem_below` in all
   three, with the exact instruction above.
 - Nudged by the operator while check was blocked, the coordinator started

@@ -45,8 +45,11 @@ fi
 # serve runs as an installed member's service runs it (internal/service/
 # render.go: Restart=on-failure, RestartSec=10, RestartPreventExitStatus=2):
 # after a failure, such as a session refresh that met the hub stopped in
-# case F6-unreachable, it starts again 10 seconds later; a clean stop or
-# exit 2 ends the container. A stop signal goes to serve.
+# case F6-unreachable, it starts again 10 seconds later; a clean stop ends
+# the container. After exit 2 the service stays stopped and the host stays
+# up, so check and an instruction still run in the home, as an operator
+# runs them on a host whose service stopped. A stop signal goes to serve,
+# or ends the wait.
 pid=
 trap '[ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null; [ -z "$pid" ] || wait "$pid"; exit 0' TERM INT
 while :; do
@@ -55,7 +58,18 @@ while :; do
   rc=0
   wait "$pid" || rc=$?
   pid=
-  case $rc in 0 | 2) exit "$rc" ;; esac
+  case $rc in
+    0) exit 0 ;;
+    2)
+      echo "member.sh: serve exited 2; the service stays stopped, as the installed service's does, and the host stays up" >&2
+      # A stop signal now ends only the wait.
+      trap '[ -z "$pid" ] || kill "$pid" 2>/dev/null; exit 0' TERM INT
+      while :; do
+        sleep 3600 &
+        pid=$!
+        wait "$pid" || true
+      done ;;
+  esac
   echo "member.sh: serve exited $rc; it starts again in 10 s, as the installed service's does" >&2
   sleep 10
 done

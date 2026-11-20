@@ -125,8 +125,13 @@ PREVIOUS=
 if [ -n "$UPGRADE" ]; then
   (cd "$ROOT" && go build -trimpath -o "$SIMUPGRADE" ./e2e/pilotsim/cmd/simupgrade) ||
     { echo "pilot-sim: the upgrade tool did not build" >&2; rm -rf "$TOOLS"; exit 2; }
-  PREVIOUS=$("$SIMUPGRADE" previous "$ROOT") || { rm -rf "$TOOLS"; exit 2; }
+  # -below-minimum starts from its pinned pair (below), so a shallow
+  # checkout without the release tags runs it too.
+  [ -n "$BELOW" ] || PREVIOUS=$("$SIMUPGRADE" previous "$ROOT") || { rm -rf "$TOOLS"; exit 2; }
 fi
+# The operator's nudges outside a case that the second cycle's audit check
+# allows (cycle.py): only the below-minimum run sets it, after its nudge.
+export PILOTSIM_OFFERED_NUDGES=0
 # An earlier run's report and snapshots go: each snapshot is taken once.
 rm -rf "$OUT/events.jsonl" "$OUT/report.jsonl" "$OUT/homes" "$OUT"/cycle-* "$OUT"/case-* "$OUT"/upgrade-*
 # ev TYPE KEY=VALUE...: one event of the run's report.
@@ -642,12 +647,18 @@ python3 "$p"'
 begin smoke 900
 step "the smoke check"
 # served SERVICE: its serve passed the model probe; a member that exited
-# (a failed join) fails the run at once.
+# (a failed join), or whose serve exited 2 (member.sh), fails the run at
+# once.
 served() {
+  local log
   if dc ps -a --status exited --services 2>/dev/null | grep -qx "$1"; then
     fail "$1 exited before serving"
   fi
-  dc logs --no-color "$1" 2>&1 | grep -q 'the turn model is available'
+  log=$(dc logs --no-color "$1" 2>&1 || true)
+  if grep -q 'member.sh: serve exited 2' <<<"$log"; then
+    fail "$1's serve exited 2 before serving"
+  fi
+  grep -q 'the turn model is available' <<<"$log"
 }
 for role in coordinator worker indep; do
   waitfor "sim-$role's serve and its model probe" 600 served "sim-$role"
@@ -1111,13 +1122,18 @@ upgrade() {
 # the restart, recorded and not required, and check, which must be blocked on
 # aimem with the exact instruction (smoke.py below).
 below_check() {
-  local svc=sim-$1 rc=0 i served=no log
-  for ((i = 0; i < 120; i += 2)); do
-    if served_since; then served=yes; break; fi
+  local svc=sim-$1 rc=0 probe log deadline=$((SECONDS + 120))
+  # The probe's outcome is serve's line for it (internal/agent/serve.go
+  # serveModel, cmd/aicrew-agent's exit 2 on an unavailable model); none
+  # within the deadline is no evidence of a probe, not a failed one.
+  while :; do
+    log=$(dc logs --no-color --since "$2" "$svc" 2>&1 || true)
+    probe=$(probe_outcome "$log")
+    [ "$probe" = "no probe line" ] && [ "$SECONDS" -lt "$deadline" ] || break
     sleep 2
   done
   {
-    echo "serve's model probe after the restart: $served (within 120 s)"
+    echo "serve's model probe after the restart: $probe (within 120 s)"
     # The image has no procps: the process list is read from /proc.
     echo "serve running: $(dc exec -T -u member "$svc" sh -c 'for f in /proc/[0-9]*/cmdline; do tr "\0" " " < "$f"; echo; done 2>/dev/null | grep -q "^[^ ]*aicrew-agent serve " && echo yes || echo no')"
     # The second source: serve's own line that its turn loop runs.
@@ -1133,6 +1149,15 @@ below_check() {
     "$PILOTSIM_MEMBER_AIMEM_VERSION" /opt/aicrew-export > "$OUT/upgrade-instruction-$1.txt" ||
     fail "$svc's check report with aimem below the minimum ($OUT/upgrade-check-$1.json)"
 }
+# probe_outcome LOG: the model probe's outcome as serve logged it.
+probe_outcome() {
+  case $1 in
+    *'the turn model is not available'*) echo "ran: the model is not available (serve exits 2)" ;;
+    *'the turn model could not be verified'*) echo "ran: the model could not be verified (the loop starts)" ;;
+    *'the turn model is available'*) echo "ran: the model is available" ;;
+    *) echo "no probe line" ;;
+  esac
+}
 # below_turn_and_fix (-below-minimum): the coordinator, resumed while its
 # check is blocked, is offered a turn by the operator's nudge, and what it
 # does is recorded from its turn log, serve's log and a snapshot of the
@@ -1140,14 +1165,15 @@ below_check() {
 # then runs the instruction its check printed, as printed and nothing else,
 # and its check must be green.
 below_turn_and_fix() {
-  local role svc since before after i ran=no
+  local role svc since before after deadline ran=no
   before=$(turn_mark coordinator)
   since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   member resume coordinator
   member nudge coordinator "an offered turn while aimem is below the minimum"
   # The audit keeps this nudge: the second cycle's checks allow it (cycle.py).
   export PILOTSIM_OFFERED_NUDGES=1
-  for ((i = 0; i < 120; i += 2)); do
+  deadline=$((SECONDS + 120))
+  while [ "$SECONDS" -lt "$deadline" ]; do
     after=$(turn_mark coordinator)
     if [ "$after" != "$before" ]; then ran=yes; break; fi
     sleep 2

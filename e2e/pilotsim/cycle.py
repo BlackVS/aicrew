@@ -167,9 +167,9 @@ def check(step, d, case=""):
     # The audit: the operator's calls are the runner's own, and a member
     # calls only member operations.
     allowed = OPERATOR_OPS | (CASE_OPS if case else set())
-    offered = int(os.environ.get("PILOTSIM_OFFERED_NUDGES") or 0)
+    offered = max(int(os.environ.get("PILOTSIM_OFFERED_NUDGES") or 0), 0)
     for r in q("SELECT caller_kind, caller_id, operation FROM audit"):
-        if r["caller_kind"] == "operator" and r["operation"] == "control.nudge" and not case and offered:
+        if r["caller_kind"] == "operator" and r["operation"] == "control.nudge" and not case and offered > 0:
             offered -= 1
         elif r["caller_kind"] == "operator":
             expect(r["operation"] in allowed, "aicrewd: the audit has the operator call %s" % r["operation"])

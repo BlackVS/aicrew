@@ -20,6 +20,7 @@ keeps (docs/E2E-PILOT-SIM.md, "The smoke check").
 Exit 0 when the report holds, 1 with the reasons otherwise.
 """
 import json
+import re
 import sys
 
 def check(report, skills_version, previous=False):
@@ -67,7 +68,7 @@ def below(report, supported, found, base):
         errs.append("status %r, reason %r: not blocked on aimem_below" % (d.get("status"), d.get("reason")))
     comps = {c["name"]: c for c in d.get("components", [])}
     a = comps.get("aimem", {})
-    if a.get("state") != "below" or found not in a.get("found", ""):
+    if a.get("state") != "below" or not re.search(r"(?<![\w.])v?%s(?![\w.-])" % re.escape(found), a.get("found", "")):
         errs.append("aimem: %r" % a)
     if want not in d.get("instructions", []):
         errs.append("the aimem instruction is not the expected one; instructions: %r; expected: %r"

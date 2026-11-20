@@ -1118,7 +1118,8 @@ below_check() {
   done
   {
     echo "serve's model probe after the restart: $served (within 120 s)"
-    echo "serve running: $(dc exec -T -u member "$svc" sh -c 'pgrep -f "aicrew-agent serve" >/dev/null && echo yes || echo no')"
+    # The image has no procps: the process list is read from /proc.
+    echo "serve running: $(dc exec -T -u member "$svc" sh -c 'for f in /proc/[0-9]*/cmdline; do tr "\0" " " < "$f"; echo; done 2>/dev/null | grep -q "^[^ ]*aicrew-agent serve " && echo yes || echo no')"
     echo "serve's log since the restart:"
     dc logs --no-color --since "$2" "$svc" 2>&1 | tail -n 40
   } > "$OUT/upgrade-below-serve-$1.txt"
@@ -1141,6 +1142,8 @@ below_turn_and_fix() {
   since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   member resume coordinator
   member nudge coordinator "an offered turn while aimem is below the minimum"
+  # The audit keeps this nudge: the second cycle's checks allow it (cycle.py).
+  export PILOTSIM_OFFERED_NUDGES=1
   for ((i = 0; i < 120; i += 2)); do
     after=$(turn_mark coordinator)
     if [ "$after" != "$before" ]; then ran=yes; break; fi

@@ -390,7 +390,7 @@ func holdText(label, agentID string, r HoldReport) string {
 		}
 		return fmt.Sprintf("Member %s is held: %d turns in a row ended and left message(s) %s unacknowledged; the last "+
 			"one ended with %s. Its launcher gives it one turn again at %s, or sooner when a new message reaches it, "+
-			"once its longest wait (20 minutes by default) has passed since the last turn. The hold ends when the member acknowledges one of the messages, or when the operator "+
+			"once its longest wait (20 minutes by default) has passed since the last turn. The hold ends when the member acknowledges one of the messages it was first held on, or when the operator "+
 			"pauses and then resumes it.", who, r.Turns, strings.Join(r.Messages, ", "), last, next)
 	}
 	return fmt.Sprintf("Member %s is held: the client's provider login is missing or expired. To log in: %s. "+

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,11 +28,15 @@ type fakeHost struct {
 	mu      sync.Mutex
 	pending []PendingMessage
 	paused  *PauseNote
-	attempt *memberAttempt
-	role    string
-	steps   int64
-	calls   []StepCall
-	polls   int
+	// pendingErr is the pending read's error, pendingReads how often it
+	// was read.
+	pendingErr   error
+	pendingReads int
+	attempt      *memberAttempt
+	role         string
+	steps        int64
+	calls        []StepCall
+	polls        int
 	// The brief's sources: the inbox as the member would read it, the
 	// board's tasks, and the forge watch's last observations.
 	inbox     []inboxMessage
@@ -142,7 +147,17 @@ func (h *fakeHost) Observed() []PullObservation {
 func (h *fakeHost) PendingNow(context.Context) ([]PendingMessage, *PauseNote, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.pendingReads++
+	if h.pendingErr != nil {
+		return nil, nil, h.pendingErr
+	}
 	return append([]PendingMessage(nil), h.pending...), h.paused, nil
+}
+
+// ack is the member acknowledging messages: they leave the pending read.
+// The caller holds h.mu or runs within a turn.
+func (h *fakeHost) ack(ids ...string) {
+	h.pending = slices.DeleteFunc(h.pending, func(m PendingMessage) bool { return slices.Contains(ids, m.ID) })
 }
 
 func (h *fakeHost) Status(context.Context) (memberStatus, error) {
@@ -226,6 +241,7 @@ func newLoopEnv(t *testing.T) *loopEnv {
 				e.host.mu.Lock()
 				for i := range e.host.pending {
 					e.host.pending[i].ID += "+"
+					e.host.pending[i].Seq = msgSeq.Add(1)
 				}
 				e.host.mu.Unlock()
 			}
@@ -263,7 +279,13 @@ func (e *loopEnv) records(t *testing.T) []TurnRecord {
 	return out
 }
 
-func msg(id, kind string) PendingMessage { return PendingMessage{ID: id, Kind: kind} }
+// msgSeq numbers the test messages in the order they are made, as aicrewd
+// numbers a team's messages.
+var msgSeq atomic.Int64
+
+func msg(id, kind string) PendingMessage {
+	return PendingMessage{ID: id, Kind: kind, Seq: msgSeq.Add(1)}
+}
 
 // A message gives one turn, a fresh conversation whose prompt is the
 // brief; the record's trigger names the messages' kinds and ids, never

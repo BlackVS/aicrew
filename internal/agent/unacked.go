@@ -39,16 +39,25 @@ const (
 	// unacknowledged hold (store.MaxHoldMessages, store.MaxHoldSummary).
 	maxHoldMessages = 10
 	maxHoldSummary  = 1024
+	// maxHoldTurns is aicrewd's bound on the turns a hold names
+	// (store.MaxHoldTurns): the report names the smaller.
+	maxHoldTurns = 10000
 	// maxUnackedSummary bounds an earlier turn's summary in the brief.
 	maxUnackedSummary = 300
 )
 
 // unackedState is the count of turns without progress, in the turn state.
 type unackedState struct {
-	// Messages are the ids the last such turn left unacknowledged, oldest
-	// first, as the pending read lists them.
+	// Messages are the ids the last such turn was admitted on, oldest
+	// first, as the pending read lists them; Stuck the ids the count began
+	// with, which only an acknowledgement (or their leaving the pending
+	// read) or a pause clears.
 	Messages []string `json:"messages"`
-	Turns    int      `json:"turns"`
+	Stuck    []string `json:"stuck"`
+	// Served is the newest message's seq a turn was admitted on: a
+	// pending message newer than it has not had its turn.
+	Served int64 `json:"served"`
+	Turns  int   `json:"turns"`
 	// Since is when the first such turn ended: the hold's identity on
 	// aicrewd, so a set that grew is one hold.
 	Since     time.Time `json:"since"`
@@ -73,16 +82,6 @@ func pendingIDs(p []PendingMessage) []string {
 	return ids
 }
 
-// anyMissing reports whether one of ids is not in from.
-func anyMissing(ids, from []string) bool {
-	for _, id := range ids {
-		if !slices.Contains(from, id) {
-			return true
-		}
-	}
-	return false
-}
-
 // unackedCountable reports whether a turn's only cause is the member's
 // unacknowledged messages: messages are pending, it is no continuation, and
 // the member has no attempt in work, whose turns keep their own cadence and
@@ -102,8 +101,9 @@ func boundedAttempt(st turnState, attempt *memberAttempt) bool {
 	return a == nil || !a.Stalled
 }
 
-// unackedDue is when the member may next have a turn on pending, the zero
-// time when the count does not hold it back.
+// unackedDue is when the member may next have a turn, the zero time when
+// the count does not hold it back. A pending message newer than any a turn
+// was admitted on gives a held member one turn.
 func unackedDue(st turnState, pending []PendingMessage, wait time.Duration) time.Time {
 	u := st.Unacked
 	if u == nil || u.Turns == 0 {
@@ -113,9 +113,7 @@ func unackedDue(st turnState, pending []PendingMessage, wait time.Duration) time
 	switch {
 	case u.Turns == 1:
 		return u.LastEnded.Add(wait)
-	case u.Turns < unackedTurns:
-		return u.LastEnded.Add(ceiling)
-	case anyMissing(pendingIDs(pending), u.Messages):
+	case u.Turns < unackedTurns, maxSeq(pending) > u.Served:
 		return u.LastEnded.Add(ceiling)
 	}
 	return u.LastEnded.Add(unackedRecheck)
@@ -127,7 +125,7 @@ func unackedHold(st turnState) *holdReport {
 	if u == nil || u.Turns < unackedTurns {
 		return nil
 	}
-	r := &holdReport{Kind: holdUnacknowledged, Messages: u.Messages, Turns: u.Turns, StuckSince: u.Since,
+	r := &holdReport{Kind: holdUnacknowledged, Messages: u.Messages, Turns: min(u.Turns, maxHoldTurns), StuckSince: u.Since,
 		NextCheck: u.LastEnded.Add(unackedRecheck)}
 	if len(r.Messages) > maxHoldMessages {
 		r.Messages = r.Messages[:maxHoldMessages]
@@ -167,40 +165,52 @@ func (l *TurnLoop) clearUnacked(st *turnState, why string) {
 	}
 }
 
-// noteAcked clears the count once the member acknowledged one of the
-// messages its turns left: the pending read no longer lists it. The read
-// lists the oldest messages first, so a newer one never pushes them out.
-func (l *TurnLoop) noteAcked(st *turnState, pending []PendingMessage) {
-	if st.Unacked != nil && anyMissing(st.Unacked.Messages, pendingIDs(pending)) {
-		l.clearUnacked(st, "the member acknowledged a message")
+// noteGone clears the count once a message it began with is no longer
+// pending: the member acknowledged it, or it left the pending read for
+// another reason, such as a project grant withdrawn. The read lists the
+// oldest messages first, so a newer one never pushes them out.
+func (l *TurnLoop) noteGone(st *turnState, pending []PendingMessage) {
+	if st.Unacked != nil && anyMissing(st.Unacked.Stuck, pendingIDs(pending)) {
+		l.clearUnacked(st, "a message the count began with is no longer pending")
 	}
 }
 
-// countUnacked counts a finished turn, or one cut by its own budget, that
-// left every message of before unacknowledged; after is the pending read
-// after the turn. A turn that acknowledged one clears the count; a stopped,
-// failed or otherwise held turn is not counted.
-func (l *TurnLoop) countUnacked(st *turnState, rec TurnRecord, before, after []PendingMessage) {
-	if anyMissing(pendingIDs(before), pendingIDs(after)) {
-		l.clearUnacked(st, "the turn acknowledged a message")
-		return
-	}
-	if rec.Outcome != TurnFinished && (rec.Outcome != TurnLimitReached || rec.LimitKind != "budget") {
-		// Not counted, but the waits run from the latest turn on the set,
-		// so a held member's stopped turn is not followed by another at
-		// once.
-		if st.Unacked != nil {
-			st.Unacked.LastEnded = rec.EndedAt
-		}
-		return
-	}
+// countUnacked counts a turn on admitted, the pending messages it was
+// admitted with, that ended and left the stuck messages (those the count
+// began with, or admitted when it begins) pending; after is the pending read
+// after it, when read says it succeeded (a turn after a failed read counts
+// as one that acknowledged nothing). A turn that ends finished, cut by its own budget or
+// stopped by its time limit counts; one stopped because the loop is
+// stopping, or failed, does not, and a failed turn keeps its own backoff and
+// leaves its new messages new.
+func (l *TurnLoop) countUnacked(st *turnState, rec TurnRecord, admitted, after []PendingMessage, read, stopping bool) {
 	u := st.Unacked
+	stuck := pendingIDs(admitted)
+	if u != nil {
+		stuck = u.Stuck
+	}
+	if read && anyMissing(stuck, pendingIDs(after)) {
+		l.clearUnacked(st, "the turn acknowledged a message the count began with")
+		return
+	}
+	served := maxSeq(admitted)
+	if u != nil {
+		u.LastEnded = rec.EndedAt
+		if rec.Outcome != TurnFailed {
+			u.Served = max(u.Served, served)
+		}
+	}
+	counted := rec.Outcome == TurnFinished || (rec.Outcome == TurnStopped && !stopping) ||
+		(rec.Outcome == TurnLimitReached && rec.LimitKind == "budget")
+	if !counted {
+		return
+	}
 	if u == nil {
-		u = &unackedState{Since: rec.EndedAt}
+		u = &unackedState{Stuck: stuck, Since: rec.EndedAt, LastEnded: rec.EndedAt, Served: served}
 		st.Unacked = u
 	}
 	u.Turns++
-	u.Messages, u.LastEnded = pendingIDs(after), rec.EndedAt
+	u.Messages = pendingIDs(admitted)
 	u.Outcomes = append(u.Outcomes, unackedTurn{Turn: rec.ID, EndedAt: rec.EndedAt, Outcome: rec.Outcome,
 		Summary: holdSummary(l.Home, rec.Summary)})
 	if n := len(u.Outcomes) - maxUnackedOutcomes; n > 0 {
@@ -212,6 +222,25 @@ func (l *TurnLoop) countUnacked(st *turnState, rec TurnRecord, before, after []P
 		return
 	}
 	l.Log.Info("the turn left its messages unacknowledged", "turns", u.Turns, "messages", strings.Join(u.Messages, ","))
+}
+
+// maxSeq is the newest message's seq in p, 0 for none.
+func maxSeq(p []PendingMessage) int64 {
+	var n int64
+	for _, m := range p {
+		n = max(n, m.Seq)
+	}
+	return n
+}
+
+// anyMissing reports whether one of ids is not in from.
+func anyMissing(ids, from []string) bool {
+	for _, id := range ids {
+		if !slices.Contains(from, id) {
+			return true
+		}
+	}
+	return false
 }
 
 // briefUnacked tells a turn on messages earlier turns left unacknowledged

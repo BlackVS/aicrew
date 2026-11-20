@@ -183,6 +183,14 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	st := readTurnState(l.Home)
 	l.syncHold(ctx, &st)
 	if now.Before(st.HoldUntil) {
+		// A pause during a backoff still clears the count: a resume
+		// leaves no trace to read later.
+		if st.Unacked != nil {
+			if _, paused, err := l.Host.PendingNow(ctx); err == nil && paused != nil {
+				l.clearUnacked(&st, "the member or its team was paused")
+				l.syncHold(ctx, &st)
+			}
+		}
 		return
 	}
 	pending, paused, err := l.Host.PendingNow(ctx)
@@ -194,7 +202,7 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 		l.syncHold(ctx, &st)
 		return
 	}
-	l.noteAcked(&st, pending)
+	l.noteGone(&st, pending)
 	status, err := l.Host.Status(ctx)
 	if err != nil {
 		return
@@ -434,9 +442,18 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	l.afterOutcome(st, res)
 	// A turn that left its member an attempt in work was not one on the
 	// messages alone.
+	// A pending read that fails counts the turn as one that acknowledged
+	// nothing; the next read that succeeds clears the count if a stuck
+	// message is gone.
 	if countable && !(afterErr == nil && boundedAttempt(*st, after.Attempt)) {
-		if again, paused, err := l.Host.PendingNow(ctx); err == nil && paused == nil {
-			l.countUnacked(st, rec, pending, again)
+		again, paused, err := l.Host.PendingNow(ctx)
+		switch {
+		case err != nil:
+			l.countUnacked(st, rec, pending, nil, false, ctx.Err() != nil)
+		case paused != nil:
+			l.clearUnacked(st, "the member or its team was paused")
+		default:
+			l.countUnacked(st, rec, pending, again, true, ctx.Err() != nil)
 		}
 	}
 	setHold(st, firstHold(outcomeHold(*st, res, attemptID), unackedHold(*st)))

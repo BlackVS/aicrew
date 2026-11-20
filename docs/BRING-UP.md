@@ -623,7 +623,9 @@ It lists each member under `members`:
   than 20 minutes after its last. The team's coordinators get a message
   about a worker's hold. The operator learns of a coordinator's hold
   only from this command. The hold ends when the member acknowledges
-  one of the messages, or when the operator pauses the team and then
+  one of the messages the count began with (a message that leaves the
+  inbox for another reason, such as a project grant withdrawn, counts
+  the same), or when the operator pauses the team and then
   resumes it (below), after the hold has left the team's state. On
   2026-11-20, before this hold existed, a coordinator's turns ended and
   started again every few seconds on one message for twelve minutes, its

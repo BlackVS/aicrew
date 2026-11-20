@@ -1052,8 +1052,9 @@ in the team state and tells the team's coordinators.
   - `needs_login`, with `command`, how the client logs in again (at most
     512 bytes);
   - `unacknowledged`, with `messages` (1 to 10 distinct message ids the
-    turns left unacknowledged), `turns` (how many turns in a row did, 1
-    to 10000), `summary` (the last turn's summary: the model's own text,
+    last turn was admitted with), `turns` (how many turns in a row left
+    them unacknowledged, 1 to 10000; the launcher sends the smaller of
+    its count and 10000), `summary` (the last turn's summary: the model's own text,
     redacted by the launcher, at most 1024 bytes of UTF-8 on one line
     with no control character, so it is safe in a coordinator's brief and
     on the operator's terminal; it may be empty) and `stuck_since` (when
@@ -1098,7 +1099,10 @@ in the team state and tells the team's coordinators.
 
 The launcher reports a hold when it changes, and clears it when it admits
 a turn again, but for an unacknowledged hold, which only the member's
-acknowledgement or a pause clears. A hold that is only the launcher's own, the backoff after a
+acknowledgement of a message the count began with, or a pause, clears. A
+message the count began with that leaves the pending read for another
+reason, such as a project grant withdrawn, clears it as an
+acknowledgement does. A hold that is only the launcher's own, the backoff after a
 failed turn or a check of the budgets whose totals aicrewd did not answer,
 is not reported. A report that does not reach aicrewd stays in the home's
 `state/turns.json` and is sent again at the next tick; one refused with

@@ -362,6 +362,7 @@ func (l *TurnLoop) briefTrigger(ctx context.Context, b *strings.Builder, in brie
 	if err != nil {
 		fmt.Fprintf(b, "The messages could not be read for the brief (%s): run `aicrew-agent inbox`.\n",
 			redactBrief(l.Home, err.Error(), maxBriefText))
+		briefUnacked(b, in.unacked)
 		return nil
 	}
 	b.WriteString("\n")

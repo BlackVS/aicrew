@@ -2932,22 +2932,34 @@ Messages that arrive during a turn wait for the next one.
 - **Turns that leave their messages unacknowledged** (task 01a1fa19). A
   turn whose only cause is the member's unacknowledged messages (no
   continuation, and no attempt of the member in work) counts as a turn
-  without progress when it finishes, or is cut by its own budget, and
-  every one of those messages is still unacknowledged after it. A
-  stopped or failed turn is not counted, and the failed turn's backoff
-  is unchanged. The next such turn waits `unacked_wait` (5 minutes; from
+  without progress when it finishes, is cut by its own budget or is
+  stopped by its time limit, and the messages the count began with are
+  all still pending after it; a turn that acknowledges only messages
+  that arrived later made no progress on them. A turn stopped because
+  the loop is stopping, or a failed one, is not counted, and the failed
+  turn's backoff is unchanged. When the pending read after the turn
+  fails, the turn counts as one that acknowledged nothing, and the next
+  read that succeeds clears the count if one of the messages is gone. The next such turn waits `unacked_wait` (5 minutes; from
   10 seconds to an hour) after the first, four times that after the
   second, and after the third the member is held:
   - it gets one turn a day on those messages, and one turn on a new
-    message no sooner than the longest wait after its last turn. A new
-    message does not clear the count, so a coordinator writing to a held
-    worker cannot restart the three turns;
+    message no sooner than the longest wait after its last turn. A
+    message has had its turn when a turn was admitted with it: one that
+    arrives while a turn runs, or whose turn failed, still gets its own.
+    A new message does not clear the count, so a coordinator writing to
+    a held worker cannot restart the three turns. A new message is one
+    newer than any a turn was admitted with, read from the pending
+    page of the 100 oldest: behind a full page a new message is not
+    seen, and the member gets its daily turn;
   - the hold reaches aicrewd as kind `unacknowledged` (CREW-CONTRACT.md,
     "A member's hold") with the messages, the turns, the last turn's
     summary and the count's start. The team state shows it, and the
     team's other coordinators are told once;
-  - only an acknowledgement of one of the messages by the member, or a
-    pause of the member or its team, clears the count and the hold.
+  - only the member's acknowledgement of a message the count began with
+    (or that message leaving the pending read for another reason, such
+    as a project grant withdrawn), or a pause of the member or its team,
+    clears the count and the hold. A pause is read during a failed
+    turn's backoff or a provider's limit too.
   - The brief of such a turn says which turn on these messages it is and
     how the earlier ones ended, from the count in `state/turns.json`,
     which survives a restart.

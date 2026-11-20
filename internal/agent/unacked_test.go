@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -143,9 +145,8 @@ func TestUnackedWaitsAndHold(t *testing.T) {
 	}
 }
 
-// An acknowledgement clears the count: by the member outside a turn (the
-// pending read no longer lists the message), or in a turn. The next turn
-// then has no wait and no "turn N" in its brief.
+// An acknowledgement by the member clears the count: outside a turn, or in
+// one. The next turn then has no wait and no "turn N" in its brief.
 func TestUnackedClearedByAck(t *testing.T) {
 	e := unackedEnv(t)
 	e.tick(t)
@@ -154,7 +155,8 @@ func TestUnackedClearedByAck(t *testing.T) {
 	if n := readTurnState(e.home).Unacked.Turns; n != 2 {
 		t.Fatalf("%d turns counted", n)
 	}
-	e.host.pending = []PendingMessage{msg("m2", "message")}
+	e.host.ack("m1")
+	e.host.pending = append(e.host.pending, msg("m2", "message"))
 	e.tick(t)
 	if len(e.specs) != 3 || strings.Contains(e.specs[2].Prompt, "This is turn") {
 		t.Fatalf("after an acknowledgement: %d turns", len(e.specs))
@@ -165,7 +167,7 @@ func TestUnackedClearedByAck(t *testing.T) {
 
 	// A turn that acknowledges its message leaves no count.
 	e.next = func(_ TurnSpec, h *fakeHost) TurnResult {
-		h.pending = nil
+		h.ack("m2")
 		return TurnResult{Outcome: TurnFinished}
 	}
 	e.clock = readTurnState(e.home).Unacked.LastEnded.Add(defaultUnackedWait)
@@ -200,9 +202,25 @@ func TestUnackedClearedByPause(t *testing.T) {
 	}
 }
 
-// A turn cut by its own budget that leaves the set unchanged counts; a
-// stopped or failed one does not, and the failed turn's backoff is as it
-// was.
+// tickStopping ticks once, and the loop is stopping during the turn, which
+// ends stopped.
+func (e *loopEnv) tickStopping(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	next := e.next
+	e.next = func(TurnSpec, *fakeHost) TurnResult {
+		cancel()
+		return TurnResult{Outcome: TurnStopped, Error: "the turn loop is stopping"}
+	}
+	defer func() { e.next = next }()
+	e.clock = e.clock.Add(turnGap + time.Second)
+	e.loop.Tick(ctx)
+}
+
+// A turn cut by its own budget, or stopped by its time limit, that leaves
+// the set unchanged counts; one stopped because the loop is stopping, or a
+// failed one, does not, and the failed turn's backoff is as it was.
 func TestUnackedOutcomes(t *testing.T) {
 	e := unackedEnv(t)
 	e.next = func(TurnSpec, *fakeHost) TurnResult {
@@ -214,11 +232,19 @@ func TestUnackedOutcomes(t *testing.T) {
 	}
 
 	e = unackedEnv(t)
-	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnStopped} }
+	e.next = func(TurnSpec, *fakeHost) TurnResult {
+		return TurnResult{Outcome: TurnStopped, Error: "the turn's time limit (30m0s) passed"}
+	}
 	e.tick(t)
-	e.tick(t)
+	if u := readTurnState(e.home).Unacked; u == nil || u.Turns != 1 {
+		t.Fatalf("a turn stopped by its time limit: %+v", u)
+	}
+
+	e = unackedEnv(t)
+	e.tickStopping(t)
+	e.tickStopping(t)
 	if u := readTurnState(e.home).Unacked; u != nil || len(e.specs) != 2 {
-		t.Fatalf("stopped turns: %+v, %d turns", u, len(e.specs))
+		t.Fatalf("turns stopped by the loop: %+v, %d turns", u, len(e.specs))
 	}
 
 	e = unackedEnv(t)
@@ -287,7 +313,7 @@ func TestUnackedCountsStalledAttempt(t *testing.T) {
 	// rules again.
 }
 
-// A held member's turn that is stopped is not counted, but the next one
+// A held member's turn stopped by the loop is not counted, but the next one
 // still waits: the waits run from the latest turn on the messages.
 func TestUnackedStoppedTurnWhileHeld(t *testing.T) {
 	e := unackedEnv(t)
@@ -297,9 +323,8 @@ func TestUnackedStoppedTurnWhileHeld(t *testing.T) {
 		}
 		e.tick(t)
 	}
-	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnStopped} }
-	e.clock = readTurnState(e.home).Unacked.LastEnded.Add(unackedRecheck)
-	e.tick(t)
+	e.clock = readTurnState(e.home).Unacked.LastEnded.Add(unackedRecheck - turnGap - time.Second)
+	e.tickStopping(t)
 	if u := readTurnState(e.home).Unacked; len(e.specs) != 4 || u.Turns != 3 || !u.LastEnded.Equal(e.clock) {
 		t.Fatalf("the re-check's stopped turn: %d turns, count %+v", len(e.specs), u)
 	}
@@ -345,5 +370,161 @@ func TestHoldSummary(t *testing.T) {
 	long := holdSummary(home, strings.Repeat("é", maxHoldSummary))
 	if len(long) > maxHoldSummary || !strings.HasSuffix(long, "…") {
 		t.Fatalf("a long summary: %d bytes", len(long))
+	}
+}
+
+// heldEnv is unackedEnv after three turns: the member is held on m1.
+func heldEnv(t *testing.T) *loopEnv {
+	t.Helper()
+	e := unackedEnv(t)
+	for range 3 {
+		if u := readTurnState(e.home).Unacked; u != nil {
+			e.clock = u.LastEnded.Add(unackedCeiling * defaultUnackedWait)
+		}
+		e.tick(t)
+	}
+	if u := readTurnState(e.home).Unacked; len(e.specs) != 3 || u == nil || u.Turns != 3 {
+		t.Fatalf("not held: %d turns, %+v", len(e.specs), u)
+	}
+	return e
+}
+
+// A held member's turn that acknowledges only a later note made no
+// progress on the message the count began with: it counts, and the hold
+// keeps its start, so the coordinators are not told again.
+func TestUnackedLaterAckIsNoProgress(t *testing.T) {
+	e := heldEnv(t)
+	since := readTurnState(e.home).Unacked.Since
+	for i, id := range []string{"n1", "n2", "n3"} {
+		e.host.pending = append(e.host.pending, msg(id, "message"))
+		e.next = func(_ TurnSpec, h *fakeHost) TurnResult {
+			h.ack(id)
+			return TurnResult{Outcome: TurnFinished}
+		}
+		e.clock = readTurnState(e.home).Unacked.LastEnded.Add(unackedCeiling * defaultUnackedWait)
+		e.tick(t)
+		u := readTurnState(e.home).Unacked
+		if len(e.specs) != 4+i || u == nil || u.Turns != 4+i || !u.Since.Equal(since) ||
+			strings.Join(u.Stuck, ",") != "m1" {
+			t.Fatalf("note %s: %d turns, count %+v", id, len(e.specs), u)
+		}
+	}
+	// No new note: the day's wait.
+	e.ticksTo(t, readTurnState(e.home).Unacked.LastEnded.Add(time.Hour))
+	if len(e.specs) != 6 {
+		t.Fatalf("%d turns after three notes, want 6", len(e.specs))
+	}
+}
+
+// A pending read that fails after a turn counts the turn as one that
+// acknowledged nothing; the next read that succeeds clears the count when
+// a message it began with is gone.
+func TestUnackedFailedReadAfterTurn(t *testing.T) {
+	e := unackedEnv(t)
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult {
+		h.ack("m1")
+		h.pendingErr = errors.New("aicrewd is restarting")
+		return TurnResult{Outcome: TurnFinished}
+	}
+	e.tick(t)
+	if u := readTurnState(e.home).Unacked; u == nil || u.Turns != 1 {
+		t.Fatalf("a turn whose read failed: %+v", u)
+	}
+	e.host.pendingErr = nil
+	e.tick(t)
+	if u := readTurnState(e.home).Unacked; u != nil {
+		t.Fatalf("the next read did not clear the count: %+v", u)
+	}
+
+	// The same without the acknowledgement: the count stands and waits.
+	e = unackedEnv(t)
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult {
+		h.pendingErr = errors.New("aicrewd is restarting")
+		return TurnResult{Outcome: TurnFinished}
+	}
+	e.tick(t)
+	e.host.pendingErr = nil
+	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished} }
+	e.tick(t)
+	if u := readTurnState(e.home).Unacked; len(e.specs) != 1 || u == nil || u.Turns != 1 {
+		t.Fatalf("after a failed read: %d turns, count %+v", len(e.specs), u)
+	}
+}
+
+// The messages that had their turn are those it was admitted with: one that
+// arrives while the held member's turn runs still gets its own turn, and
+// one whose turn failed has not had it.
+func TestUnackedArrivalDuringTurn(t *testing.T) {
+	e := heldEnv(t)
+	e.host.pending = append(e.host.pending, msg("m2", "message"))
+	e.clock = readTurnState(e.home).Unacked.LastEnded.Add(unackedCeiling * defaultUnackedWait)
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult {
+		h.pending = append(h.pending, msg("m3", "message"))
+		return TurnResult{Outcome: TurnFinished}
+	}
+	e.tick(t)
+	if len(e.specs) != 4 {
+		t.Fatalf("%d turns for m2", len(e.specs))
+	}
+	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished} }
+	e.ticksTo(t, readTurnState(e.home).Unacked.LastEnded.Add(unackedCeiling*defaultUnackedWait))
+	e.tick(t)
+	if len(e.specs) != 5 {
+		t.Fatalf("%d turns: m3, which arrived during m2's turn, had none", len(e.specs))
+	}
+
+	e = heldEnv(t)
+	e.host.pending = append(e.host.pending, msg("m2", "message"))
+	e.clock = readTurnState(e.home).Unacked.LastEnded.Add(unackedCeiling * defaultUnackedWait)
+	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFailed, Error: "exit 1"} }
+	e.tick(t)
+	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished} }
+	e.ticksTo(t, readTurnState(e.home).Unacked.LastEnded.Add(unackedCeiling*defaultUnackedWait))
+	e.tick(t)
+	if len(e.specs) != 5 {
+		t.Fatalf("%d turns: m2's failed turn used up its turn", len(e.specs))
+	}
+}
+
+// A pause during a failed turn's backoff clears the count; the backoff
+// stands.
+func TestUnackedPauseDuringBackoff(t *testing.T) {
+	e := heldEnv(t)
+	e.host.pending = append(e.host.pending, msg("m2", "message"))
+	e.clock = readTurnState(e.home).Unacked.LastEnded.Add(unackedCeiling * defaultUnackedWait)
+	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFailed, Error: "exit 1"} }
+	e.tick(t)
+	until := readTurnState(e.home).HoldUntil
+	if !e.clock.Before(until) {
+		t.Fatal("no backoff after the failed turn")
+	}
+	e.host.paused = &PauseNote{Reason: "the operator"}
+	e.tick(t)
+	e.host.paused = nil
+	st := readTurnState(e.home)
+	if st.Unacked != nil || !st.HoldUntil.Equal(until) || !lastHold(e).same(holdReport{}) {
+		t.Fatalf("a pause during the backoff: %+v, until %s, hold %+v", st.Unacked, st.HoldUntil, lastHold(e))
+	}
+}
+
+// A brief whose inbox read failed still names the turn and the earlier
+// outcomes.
+func TestUnackedBriefWithoutInbox(t *testing.T) {
+	e := unackedEnv(t)
+	e.host.inboxErr = errors.New("the inbox is unavailable")
+	e.tick(t)
+	e.clock = readTurnState(e.home).Unacked.LastEnded.Add(defaultUnackedWait)
+	e.tick(t)
+	if len(e.specs) != 2 || !strings.Contains(e.specs[1].Prompt, "This is turn 2 on message(s) m1") ||
+		!strings.Contains(e.specs[1].Prompt, "The delivery check was denied.") {
+		t.Fatalf("the fallback brief: %d turns\n%s", len(e.specs), e.specs[len(e.specs)-1].Prompt)
+	}
+}
+
+// The hold names at most aicrewd's bound of turns.
+func TestUnackedHoldTurnsBound(t *testing.T) {
+	st := turnState{Unacked: &unackedState{Messages: []string{"m1"}, Stuck: []string{"m1"}, Turns: maxHoldTurns + 5}}
+	if h := unackedHold(st); h == nil || h.Turns != maxHoldTurns {
+		t.Fatalf("%+v", h)
 	}
 }

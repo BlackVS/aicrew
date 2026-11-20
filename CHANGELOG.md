@@ -12,6 +12,103 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.11.3] - 2026-11-20
+
+Three pull requests since 0.11.2 (#275, #276, #277). The one that matters to
+a running team: **a worker's `aicrew-agent check` reports the project's
+toolchain** (#277). The first team's first cycle stopped because its worker
+could not run the project's tests: no toolchain was selected for the project,
+and the worker's host had no Go. Nothing said so before the first task. With
+this release, check says so on the worker's home, the worker's brief gives the
+test command only with a selected toolchain, and docs/BRING-UP.md names the
+step and a section for a team that is already up.
+
+The store stays at schema 39, and aicrewd is unchanged: no line under
+`internal/store`, `internal/server` or `cmd/aicrewd` changed since 0.11.2.
+An aicrewd of 0.11.2 (or 0.11.1, or 0.11.0) serves members of 0.11.3. The
+operator CLI's only change is the text `aicrew team setup` prints for the
+hub's grant (#275). This release is tested with aimem 0.11.5, ai-skills
+1.43.0 and Claude Code 2.1.286.
+
+### Upgrade steps
+
+1. **aicrewd needs no upgrade for this release.** A hub on 0.11.2 stays as
+   it is.
+2. **A worker's host needs the project's build tools** before a toolchain
+   is selected for its project: for `dev-go`, `go` (for aicrew, Go at
+   go.mod's `go` version or later) and git, on the PATH of the shell that
+   starts the worker's service. Without the tool, the worker's check is
+   `blocked` with `toolchain_tool_missing` once a toolchain is selected.
+3. **Each member.** As that user, rerun the member one-liner. It stops the
+   account's registered member services, swaps the binaries and starts them
+   again:
+   - Linux and macOS:
+
+     ```sh
+     curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.3/boot.sh | bash
+     ```
+
+   - Windows, in a PowerShell window that is already open:
+
+     ```powershell
+     irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.3/boot.ps1 | iex
+     ```
+
+   - Windows, from cmd or the Run dialog:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.3/boot.ps1 | iex"
+     ```
+
+   In a closed network, install from the aiforge export instead, as
+   README's closed-network forms show (`AICREW_BASE`).
+
+   The restart of each home's service at the upgrade writes the record
+   check reads (`state/team.json`, which now holds the team and the role).
+   Run a worker's check once its `HOME/logs/serve.log` has
+   `msg="the turn loop runs"` after the upgrade.
+4. **A team already up without a toolchain** follows docs/BRING-UP.md,
+   "A team already up without a toolchain": the worker's check warns, the
+   operator selects the toolchain with `aicrew team toolchain`, the worker's
+   service restarts, and check says `ready` before the open escalation is
+   answered.
+5. **The brief and the member documents changed** (the crew-turn text and
+   the coordinator's escalation rule), so a rejoin reports changed guidance.
+
+### Changed
+
+- **A worker's `aicrew-agent check` reports the toolchain**
+  (01a1f86e-70b9, #277).
+  - A project with a repository and no toolchain selected is a warning,
+    printed by check and join under their status line. It names the
+    operator's `aicrew team toolchain` command and how the member starts
+    again: the service restart in a turns home, the client's start in a
+    stop-hook home, with the home quoted for the shell. It does not block,
+    because the selection is the operator's and may be meant.
+  - A selected toolchain whose tool is not on check's PATH blocks with
+    `toolchain_tool_missing`. The instruction says to install it, then to
+    rerun join where join ended blocked, or otherwise to start the member
+    again from a shell that finds the tool.
+  - The team record (`state/team.json`) now carries the team ID and the
+    member's role, which check reads after the session is left.
+- **The worker's brief names the toolchain** (#277). Its task section says
+  whether the attempt's project has a toolchain, and gives its test command
+  in the worktree only then; without one it says not to run the build and
+  test commands, to block the attempt if the task needs them, and never to
+  ask for an edit of the home's allow list. The crew-turn text names no test
+  command, and the coordinator's escalation rule names the missing selection
+  or tool.
+- **docs/BRING-UP.md** (#275, #277) is corrected from the first bring-up on
+  real hosts. It names the toolchain step with its check, the build tools of
+  a worker's host, the restart after a later selection and when check can be
+  read after it, a section for a team already up without a toolchain, and
+  installs aicrew v0.11.3 in step 5. `aicrew team setup` prints the hub
+  flags of aimem's grant command and what each one is (#275).
+- **The pilot simulation** (#276, #277) selects the toolchain as the
+  document does; its member image has Go, and its stand-in client fails a
+  worker's turn whose settings deny `go test ./...`. A new upgrade run
+  starts from a home whose aimem is below the new minimum.
+
 ## [0.11.2] - 2026-11-20
 
 Two pull requests since 0.11.1 (#272, #273). The one that matters to a

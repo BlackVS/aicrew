@@ -3,7 +3,7 @@
 # member's aicrew-agent, and the operator CLI aicrew beside it, from any
 # directory:
 #
-#   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.2/boot.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.3/boot.sh | bash
 #
 # In a closed network, from an aiforge export (a local directory, or an
 # internal https server holding the same files; README.txt in the export
@@ -45,7 +45,7 @@ set -euo pipefail
 
 # The release this script installs. Bumped together with the CHANGELOG
 # when a release is cut (internal/installer checks they agree).
-RELEASE=v0.11.2
+RELEASE=v0.11.3
 
 # BEGIN release-source
 # Where the release's files come from, and their verification. boot.sh

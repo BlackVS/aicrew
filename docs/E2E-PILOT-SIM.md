@@ -59,8 +59,8 @@ competes with everything else on the desktop for memory.
   test the bounds (see "The bounds").
 
 It needs Docker with Compose v2, the Go that `go.mod` declares or later, Python 3, `ps`, and network
-access: the images install aimem and ai-skills from their GitHub releases,
-as an operator's host does.
+access: the images install aimem from its GitHub release, and the hub
+imports the ai-skills release archive, as an operator's hosts do.
 
 The script exits 0 when the stack is healthy, the stubs' fixtures pass,
 two cycles reach DONE with their delivery records and the pilot and fault cases pass; with
@@ -267,7 +267,7 @@ after the other, never together: each needs the memory above.
 | `sim-gitea` | Gitea 1.27 with TLS from the run's CA | the pinned image, configured by its own CLI and API |
 | `sim-hands`, `sim-ci` | the stub reviewer and the stub CI ([below](#the-stub-reviewer-and-the-stub-ci)) | `simstub` (`e2e/pilotsim/cmd/simstub`) in one image, `e2e/pilotsim/stub/` |
 | `sim-px-aimem`, `sim-px-crew`, `sim-px-peer`, `sim-px-hub` | the fault proxies ([below](#the-fault-cases)) | `simproxy` (`e2e/pilotsim/cmd/simproxy`) in one image, `e2e/pilotsim/proxy/` |
-| `sim-coordinator`, `sim-worker`, `sim-indep` | one member home each, `aicrew-agent serve`; `sim-indep` is an independent member, whose steps the fault cases drive ([below](#the-direct-steps)) | `boot.sh` with `AICREW_PREBUILT_DIR`; aimem's verifying boot script taken at the tested tag, as `aicrew-agent check` instructs; the ai-skills release archive checked against `SHA256SUMS`, since an image build has no hub for `aimem skills install`; then `aicrew-agent join … --wake turns --no-service --code-file … --aimem-command /usr/local/bin/aimem-timed` |
+| `sim-coordinator`, `sim-worker`, `sim-indep` | one member home each, `aicrew-agent serve`; `sim-indep` is an independent member, whose steps the fault cases drive ([below](#the-direct-steps)) | `boot.sh` with `AICREW_PREBUILT_DIR`; aimem's verifying boot script taken at the tested tag, as `aicrew-agent check` instructs; no ai-skills; then `aicrew-agent join … --wake turns --no-service --code-file … --aimem-command /usr/local/bin/aimem-timed`, which installs the skills from the hub inside the team's conversation, as on a person's hosts (BRING-UP.md, step 6). Only the upgrade scenario's previous release, which has no such path, installs ai-skills from its release archive checked against `SHA256SUMS`, as that release's homes had them |
 
 The member's client is `aicrew-simclient` (`e2e/pilotsim/cmd/aicrew-simclient`),
 installed as `claude` on the image's `PATH`, where a member finds its

@@ -789,13 +789,13 @@ func TestCheckOutcomes(t *testing.T) {
 		instruction string
 		notice      string
 	}{
-		{"aimem missing", []string{"claude"}, nil, "1.26.1", JoinBlocked, "aimem_missing", "Install aimem v0.11.4 (the release this aicrew is tested with) with its verifying installer", ""},
-		{"aimem newer", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.11.5" }, "1.26.1", JoinRestartRequired, "",
-			"", "aimem 0.11.5 is newer than the tested 0.11.4"},
+		{"aimem missing", []string{"claude"}, nil, "1.26.1", JoinBlocked, "aimem_missing", "Install aimem v0.11.5 (the release this aicrew is tested with) with its verifying installer", ""},
+		{"aimem newer", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.11.6" }, "1.26.1", JoinRestartRequired, "",
+			"", "aimem 0.11.6 is newer than the tested 0.11.5"},
 		{"aimem v0.9.2", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.9.2" }, "1.26.1", JoinBlocked,
 			"aimem_below", "aimem 0.11.0 or later is required", ""},
 		{"aimem v0.10.25", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.10.25" }, "1.26.1", JoinBlocked,
-			"aimem_below", "aimem 0.11.0 or later is required. Install aimem v0.11.4 (the release this aicrew is tested with) with its verifying installer", ""},
+			"aimem_below", "aimem 0.11.0 or later is required. Install aimem v0.11.5 (the release this aicrew is tested with) with its verifying installer", ""},
 		{"aimem source build", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem v0.7.3-52-gabc1234" }, "1.26.1",
 			JoinRestartRequired, "", "", "aimem v0.7.3-52-gabc1234 is a development build"},
 		{"aimem unstamped source build", []string{"aimem", "claude"}, func(f *fakeTools) { f.Aimem = "aimem dev" }, "1.26.1",
@@ -813,7 +813,7 @@ func TestCheckOutcomes(t *testing.T) {
 			"", "claude 2.2.0 is newer than the tested 2.1.286"},
 		{"claude MCP failed", []string{"aimem", "claude"}, func(f *fakeTools) { f.ClaudeMCP = "failed" }, "1.26.1", JoinBlocked,
 			"claude_mcp", "does not have aimem's MCP server running", ""},
-		{"skill missing", []string{"aimem", "claude"}, nil, "-", JoinBlocked, "claude_skills", "skills install -p <project> --tool claude", ""},
+		{"skill missing", []string{"aimem", "claude"}, nil, "-", JoinBlocked, "claude_skills", "with `aicrew-agent join --home ", ""},
 		{"ai-skills unrecorded", []string{"aimem", "claude"}, nil, "", JoinRestartRequired, "", "", "the ai-skills version is unknown"},
 		{"ai-skills below", []string{"aimem", "claude"}, nil, "1.20.0", JoinBlocked, "ai-skills_below",
 			"ai-skills 1.26.1 or later is required (found 1.20.0)", ""},
@@ -917,7 +917,7 @@ func TestSupportedSet(t *testing.T) {
 		}
 	}
 	am := set.Components["aimem"]
-	for v, want := range map[string]string{"0.8.0": StateBelow, "0.9.2": StateBelow, "0.10.0": StateBelow, "0.10.25": StateBelow, "0.10.27": StateBelow, "0.11.0": StateSupported, "0.11.1": StateSupported, "0.11.4": StateSupported, "0.11.5": StateNewer, "0.12.0": StateNewer, "1.0.0": StateNewer} {
+	for v, want := range map[string]string{"0.8.0": StateBelow, "0.9.2": StateBelow, "0.10.0": StateBelow, "0.10.25": StateBelow, "0.10.27": StateBelow, "0.11.0": StateSupported, "0.11.1": StateSupported, "0.11.4": StateSupported, "0.11.5": StateSupported, "0.11.6": StateNewer, "0.12.0": StateNewer, "1.0.0": StateNewer} {
 		s, _, _ := parseVersion(v)
 		if got, _ := am.classify(s); got != want {
 			t.Fatalf("aimem %s: %s, want %s", v, got, want)

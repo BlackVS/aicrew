@@ -573,7 +573,7 @@ func (c *checker) checkClient(ctx context.Context, name string, single bool) {
 	}
 	if len(r.MissingSkills) > 0 {
 		c.block(name+"_skills", fmt.Sprintf("%s does not see the required skills %s: %s", name,
-			strings.Join(r.MissingSkills, ", "), skillsInstruction(c.set.Components["ai-skills"], "", r.MissingSkills, c.o.Home, c.aimemCommand())))
+			strings.Join(r.MissingSkills, ", "), skillsInstruction(c.set.Components["ai-skills"], "", r.MissingSkills, c.o.Home)))
 	}
 	if d.ApprovalPending {
 		c.notice(fmt.Sprintf("Claude Code will ask at the first interactive start in this home to trust the folder and to "+
@@ -709,12 +709,12 @@ func (c *checker) skillsInstallation(comp supportedComponent, dir string, unknow
 		r.State = StateFailed
 		r.Detail = "the record " + record + " cannot be used: " + tail(err.Error(), 200)
 		c.block("ai-skills_record", fmt.Sprintf("the ai-skills installation in %s has a version record that cannot be used "+
-			"(%s): reinstall it: %s", dir, tail(err.Error(), 200), skillsInstruction(comp, "", c.set.RequiredSkills, c.o.Home, c.aimemCommand())))
+			"(%s): reinstall it: %s", dir, tail(err.Error(), 200), skillsInstruction(comp, "", c.set.RequiredSkills, c.o.Home)))
 		return r
 	}
 	r.Found = m.Version
 	c.classify(&r, comp, m.Version, func() string {
-		return skillsInstruction(comp, m.Version, c.set.RequiredSkills, c.o.Home, c.aimemCommand())
+		return skillsInstruction(comp, m.Version, c.set.RequiredSkills, c.o.Home)
 	})
 	return r
 }

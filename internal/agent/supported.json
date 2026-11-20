@@ -3,7 +3,7 @@
   "required_skills": ["oh-code-review"],
   "components": {
     "aimem": {
-      "ranges": [{"min": "0.11.0", "tested": "0.11.4"}],
+      "ranges": [{"min": "0.11.0", "tested": "0.11.5"}],
       "note": "the release this aicrew is tested with"
     },
     "ai-skills": {

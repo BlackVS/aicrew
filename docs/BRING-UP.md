@@ -379,7 +379,7 @@ npm install -g @anthropic-ai/claude-code@2.1.286
 
 Then the person logs the client in: `claude`, and its login flow.
 
-Check: `aicrew-agent version` <!-- run: agent-version -->, `aimem version` <!-- run: aimem-version --> and `claude --version` print
+Check: `aicrew-agent version` <!-- run: agent-version -->, `aimem version` <!-- run: aimem-version --> and `claude --version` <!-- run: client-version --> print
 v0.11.3, v0.11.5 and 2.1.286.
 
 ### 6. Join (member host)
@@ -609,9 +609,15 @@ It lists each member under `members`:
   lately), `needs_login` or `limit_reached`. A member's `hold`, when
   present, says why it takes no turn and until when, with the command
   that logs a client in.
-- `unacknowledged` counts the messages the member has not acknowledged
-  yet. A number that stays above zero while the member is `waiting`
-  means its turns do not run.
+- `unacknowledged` counts the messages in the member's inbox that it
+  has not acknowledged yet, delivered or not. A member acknowledges a
+  message once a turn has handled it, so the count says only that these
+  messages are not handled yet. It stays above zero for one of two
+  causes: a turn is still working on them (on 2026-11-20 a
+  coordinator's turns ran for twelve minutes on one message with the
+  count at one), or no turn runs. `state` tells them apart: `working` is
+  the first; `waiting` with the same count for several minutes, or a
+  `hold`, points to the second.
 - `open_attempt` is the attempt the member works on: its `phase` is
   `working`, `blocked` (the worker stopped and said why), `submitted`
   (the coordinator reviews it), `rework`, `accepted` or `finalized`. A

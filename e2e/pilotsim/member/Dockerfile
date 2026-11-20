@@ -26,6 +26,7 @@ COPY prebuilt/ /opt/aicrew-prebuilt/
 COPY export/ /opt/aicrew-export/
 COPY boot.sh /opt/aicrew-boot.sh
 COPY member.sh /usr/local/bin/member.sh
+COPY doclines.sh /usr/local/bin/doclines.sh
 USER member
 WORKDIR /home/member
 ENV PATH=/home/member/.local/bin:/usr/local/bin:/usr/bin:/bin

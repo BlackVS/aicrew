@@ -335,7 +335,8 @@ default, `~/aicrew/agents/LABEL`.
 5. `aicrew team pause` for the bring-up, then per member:
    - an aimem user and a user token, `aicrew invitation issue`;
    - the member's input files, among them the document's lines it runs:
-     `aicrew-agent version`, `aimem version`, the preflight and join;
+     `aicrew-agent version`, `aimem version`, `claude --version`, the
+     preflight and join;
    - the simulation's CA in the member's system trust;
    then `aimem access list` and `aicrew invitation list`.
 6. After the smoke check, each member's `aicrew-agent join --home HOME`
@@ -381,6 +382,33 @@ The marked lines no scenario runs, each with its reason (also in
   `skills_conversation` reason, which needs the hub to refuse a
   conversation for a session the home recorded earlier, a hub fault no
   harness injects.
+
+### What the document check covers
+
+`go test ./e2e/docsteps` reads every line of docs/BRING-UP.md that runs
+`aicrew`, `aicrew-agent` or `aimem`, wherever the tool's name stands in
+it: in a fenced block or an inline span, after `sudo -iu USER` or a
+variable's assignment too. Each such line is marked, or repeats a marked
+line. An inline span that starts with the tool's name and has no flag
+and no placeholder (`aicrew team setup`) names a command: it needs no
+marker, and for `aicrew` and `aicrew-agent` its verbs must be ones the
+tool's usage names.
+
+Other programs' lines are outside the check, and no scenario has to run
+them. `claude --version` is marked anyway and run by every member
+(`client-version`), and `loginctl enable-linger` is marked and exempted
+(above). The others are:
+- the host checks of "What a member's host needs": `uname -sm`,
+  `useradd -m`, `command -v curl git jq python3`, `go version`,
+  `git --version`, `npm --version`, `systemctl --user status`,
+  `loginctl show-user`, `df -h ~`, `free -m`, `go test ./...`;
+- the installers and the client's set-up: the `boot.sh` one-liner,
+  `npm install -g @anthropic-ai/claude-code@…`, `npm config set prefix`;
+- the hub admin's credential file, made with `sed` and removed with
+  `rm -f` around the grant;
+- `sudo -iu sessiond` and `su - USER`, the shells the commands run in;
+- `claude auth status` and `claude mcp list`, which the page names to
+  explain what the preflight and the client report.
 
 ## The smoke check
 

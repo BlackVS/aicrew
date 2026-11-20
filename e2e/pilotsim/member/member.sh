@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # A member's start: wait (bounded) for the files the scenario writes into
 # /sim/in (the invitation code, the aimem token, the forge token and the
-# hub's CA, each owner only, the preflight's and join's command lines, then
-# "ready"), run the preflight and join once with them, and run serve,
+# hub's CA, each owner only, the document's command lines, then "ready"),
+# run the versions, the preflight and join once with them, and run serve,
 # restarted after a failure as the installed service restarts it.
 #
-# The two command lines are docs/BRING-UP.md's own (step 6), which the
-# runner reads from the document with e2e/docsteps and fills in; this
-# script records each id it ran in $HOME/docsteps.ran for the runner's
-# check. join runs in /sim/in, where its input files have the document's
-# names, with AICREW_NO_SERVICE=1, since the container has no systemd user
+# The command lines are docs/BRING-UP.md's own (steps 5 and 6), which the
+# runner reads from the document with e2e/docsteps and fills in;
+# doclines.sh runs them and records each id that ran in
+# $HOME/docsteps.ran for the runner's check. join runs in /sim/in, where
+# its input files have the document's names, with AICREW_NO_SERVICE=1,
+# since the container has no systemd user
 # manager (docs/E2E-PILOT-SIM.md, "Where the simulation differs from the
 # document"). Nothing is typed: join reads the code with --code-file. The
 # member reaches aicrewd and the hub through the fault proxies sim-px-crew
@@ -37,13 +38,11 @@ if [ ! -f "$home/agent.json" ] || ! grep -q '"agent_id"' "$home/agent.json"; the
   [ ! -f /opt/aicrew-export/MANIFEST ] || base=/opt/aicrew-export
   cd "$in"
   if [ -f "$in/join.line" ]; then
-    # The versions (step 5), then the preflight a person runs before join,
-    # with join's own values: it spends nothing, and a member that fails it
-    # stops here; then join (step 6).
-    for id in agent-version aimem-version preflight join; do
-      AICREW_BASE=$base AICREW_NO_SERVICE=1 sh -c "$(cat "$in/$id.line")" < /dev/null
-      echo "$id" >> "$HOME/docsteps.ran"
-    done
+    # The versions (step 5), the client's included, then the preflight a
+    # person runs before join, with join's own values: it spends nothing,
+    # and a member that fails it stops here; then join (step 6).
+    AICREW_BASE=$base AICREW_NO_SERVICE=1 sh /usr/local/bin/doclines.sh "$in" "$HOME/docsteps.ran" \
+      agent-version aimem-version client-version preflight join
     rm -f "$in"/*.line
   else
     # A release older than the document's form (the below-minimum run's

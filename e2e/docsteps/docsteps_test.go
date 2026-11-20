@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -28,12 +29,42 @@ var exempt = map[string]string{
 		"hub to refuse a conversation for a session the home recorded earlier, a hub fault no harness injects",
 }
 
-// checkMarked: every command line of the document is a marked step.
+// checkMarked: every command line of the document is a marked step or a
+// repeat of one; a mention needs no marker (checkMentions reads its verbs).
 func checkMarked(d *Doc) []error {
 	var errs []error
 	for _, c := range d.Commands {
-		if c.ID == "" {
+		if c.ID == "" && !c.Mention {
 			errs = append(errs, fmt.Errorf("line %d: %q has no run marker", c.At, c.Line))
+		}
+	}
+	return errs
+}
+
+// checkMentions: a mention of aicrew or aicrew-agent names verbs the
+// tool's usage names (aimem's usage is not in this tree).
+func checkMentions(d *Doc, bins, home string) []error {
+	var errs []error
+	usage := map[string]string{}
+	for _, c := range d.Commands {
+		words := Split(c.Line)
+		if !c.Mention || len(words) == 1 {
+			continue
+		}
+		tool := path.Base(words[0])
+		if tool == "aimem" {
+			continue
+		}
+		if _, ok := usage[tool]; !ok {
+			cmd := exec.Command(filepath.Join(bins, tool+exe()))
+			cmd.Env = cleanEnv(home)
+			cmd.Dir = home
+			out, _ := cmd.CombinedOutput()
+			usage[tool] = string(out)
+		}
+		if !verbsIn(usage[tool], tool, words[1:]) {
+			errs = append(errs, fmt.Errorf("line %d: %q: no usage line of %s names %s", c.At, c.Line, tool,
+				strings.Join(words[1:], " ")))
 		}
 	}
 	return errs
@@ -74,15 +105,14 @@ func dummy(home string) map[string]string {
 		"HUB_URL": "https://hub.invalid:1", "FORGE_HOST": "forge.invalid", "PIN": "AAAA"}
 }
 
-var usageLine = regexp.MustCompile(`(?m)^\s*(?:usage:\s+)?aicrew-agent\s+(\S+)(?:\s+(\S+))?`)
-
 // parseLine checks one line against the product's own parser: an aicrew
 // line runs with no connection configured and must stop at the
 // connection, after its flags were taken; an aicrew-agent line's verbs and
 // flags must be those its usage names.
 func parseLine(bins, home, line string) error {
 	words := Split(line)
-	switch words[0] {
+	words = words[Tool(words):]
+	switch path.Base(words[0]) {
 	case "aicrew":
 		cmd := exec.Command(filepath.Join(bins, "aicrew"+exe()), words[1:]...)
 		cmd.Env = cleanEnv(home)
@@ -110,11 +140,11 @@ func parseLine(bins, home, line string) error {
 		cmd.Env = cleanEnv(home)
 		cmd.Dir = home
 		out, _ := cmd.CombinedOutput()
-		if !verbsIn(string(out), verbs) {
+		if !verbsIn(string(out), "aicrew-agent", verbs) {
 			return fmt.Errorf("%q: no usage line of aicrew-agent names %s:\n%s", line, strings.Join(verbs, " "), out)
 		}
 		for _, f := range flags {
-			if !regexp.MustCompile(`(^|[\s\[(|])--?` + regexp.QuoteMeta(f) + `\b`).Match(out) {
+			if !regexp.MustCompile(`(?m)(^|[\s\[(|,])--?` + regexp.QuoteMeta(f) + `($|[\s=\])|,])`).Match(out) {
 				return fmt.Errorf("%q: aicrew-agent %s's usage has no flag --%s", line, strings.Join(verbs, " "), f)
 			}
 		}
@@ -122,10 +152,12 @@ func parseLine(bins, home, line string) error {
 	return nil
 }
 
-// verbsIn says whether a usage line names the verbs: its first word the
-// first verb, and its second word's alternatives the second, if any.
-func verbsIn(usage string, verbs []string) bool {
-	for _, m := range usageLine.FindAllStringSubmatch(usage, -1) {
+// verbsIn says whether a usage line of tool names the verbs: its first
+// word the first verb, and its second word's alternatives the second, if
+// any.
+func verbsIn(usage, tool string, verbs []string) bool {
+	re := regexp.MustCompile(`(?m)^\s*(?:usage:\s+)?` + regexp.QuoteMeta(tool) + `\s+(\S+)(?:\s+(\S+))?`)
+	for _, m := range re.FindAllStringSubmatch(usage, -1) {
 		if !slices.Contains(strings.Split(m[1], "|"), verbs[0]) {
 			continue
 		}
@@ -171,7 +203,8 @@ func buildCLIs(t *testing.T) string {
 func checkParse(d *Doc, bins, home string) []error {
 	var errs []error
 	for id, s := range d.Steps {
-		if !strings.HasPrefix(s.Line, "aicrew") {
+		words := Split(s.Line)
+		if i := Tool(words); i < 0 || path.Base(words[i]) == "aimem" {
 			continue
 		}
 		variants := []Options{{Values: dummy(home)}}
@@ -220,7 +253,9 @@ func TestDocumentSteps(t *testing.T) {
 	}
 	report(t, checkMarked(d))
 	report(t, checkCovered(d, decl))
-	report(t, checkParse(d, buildCLIs(t), t.TempDir()))
+	bins, home := buildCLIs(t), t.TempDir()
+	report(t, checkParse(d, bins, home))
+	report(t, checkMentions(d, bins, home))
 }
 
 // A deliberately altered document fails the checks: a renamed verb, a
@@ -243,6 +278,20 @@ func TestDocumentStepsAltered(t *testing.T) {
 			"`aicrew-agent rejoin --home HOME` <!-- run: join-rerun -->", "step join-rerun"},
 		{"an unmarked new line", "## The forge token's rights", "`aicrew team list --team-name crew`\n\n## The forge token's rights", "has no run marker"},
 		{"a marker removed", "<!-- run: escalations-show -->\n", "", "has no run marker"},
+		{"a mention of a verb that does not exist", "## The forge token's rights",
+			"Then `aicrew team lists`.\n\n## The forge token's rights", "no usage line of aicrew names team lists"},
+		{"a mention of a member verb that does not exist", "## The forge token's rights",
+			"Then `aicrew-agent forge prs`.\n\n## The forge token's rights", "no usage line of aicrew-agent names forge prs"},
+		{"an unmarked line after sudo", "## The forge token's rights",
+			"Then `sudo -iu USER aicrew team list --team-name crew`.\n\n## The forge token's rights", "has no run marker"},
+		{"an unmarked block line after an assignment", "## The forge token's rights",
+			"```sh\nAICREW_X=1 aicrew team nosuch --flag v\n```\n\n## The forge token's rights", "has no run marker"},
+		{"a marked line after sudo with a verb that does not exist", "## The forge token's rights",
+			"<!-- run: extra -->\n```sh\nsudo -iu USER aicrew team nosuch --team-name crew\n```\n\n## The forge token's rights",
+			"step extra (line"},
+		{"a shortened member flag", "--tls-trust-mode ca_dns --tls-trust-value AICREWD --client claude",
+			"--tls-trust ca_dns --tls-trust-value AICREWD --client claude", "usage has no flag --tls-trust"},
+		{"an alternative with a flag the step lacks", "sha256-PIN` <!-- run-alt:", "sha256-PIN --typo value` <!-- run-alt:", "the step has no flag --typo"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if !bytes.Contains(raw, []byte(c.old)) {
@@ -252,7 +301,7 @@ func TestDocumentStepsAltered(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			errs := append(append(checkMarked(d), checkCovered(d, decl)...), checkParse(d, bins, home)...)
+			errs := append(append(append(checkMarked(d), checkCovered(d, decl)...), checkParse(d, bins, home)...), checkMentions(d, bins, home)...)
 			for _, e := range errs {
 				if strings.Contains(e.Error(), c.want) {
 					return

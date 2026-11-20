@@ -13,7 +13,11 @@
 //     names as an addition to those steps (a private CA, no terminal);
 //   - “ `FLAGS` <!-- run-alt: ID [ID...] --> “ marks the document's
 //     alternative for flags the steps already have: each flag it names
-//     replaces the step's flag of that name, with its value.
+//     replaces the step's flag of that name, with its value, and a flag
+//     the step lacks is refused.
+//
+// The lines read are those that run aicrew, aicrew-agent or aimem
+// (Command, Tool); docs/E2E-PILOT-SIM.md names the other programs' lines.
 //
 // per=WORD names the step's example value that the document says to vary per
 // member ("another --label for the coordinator"): Line replaces it as a word.
@@ -27,6 +31,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -41,12 +46,32 @@ type Step struct {
 	alts []string
 }
 
-// Command is a command line of aicrew, aicrew-agent or aimem in the
-// document, marked or not.
+// Command is a line or an inline span of the document that runs aicrew,
+// aicrew-agent or aimem, wherever the tool's name stands in it (after
+// `sudo -iu USER` or a variable's assignment too), marked or not. Other
+// programs' lines are outside: docs/E2E-PILOT-SIM.md names them.
 type Command struct {
 	Line string
 	At   int
 	ID   string // empty when unmarked
+	// Mention is an inline span that starts with the tool's name and has
+	// no flag and no placeholder (`aicrew team setup`): it names a command
+	// and needs no marker.
+	Mention bool
+}
+
+// Tools are the programs whose lines the document's check covers.
+var Tools = []string{"aicrew", "aicrew-agent", "aimem"}
+
+// Tool is the index of the first word that runs one of Tools (by its base
+// name, so ~/aicrew/bin/aicrew too), or -1.
+func Tool(words []string) int {
+	for i, w := range words {
+		if slices.Contains(Tools, w[strings.LastIndex(w, "/")+1:]) {
+			return i
+		}
+	}
+	return -1
 }
 
 // Doc is the document's steps and command lines.
@@ -59,7 +84,6 @@ var (
 	runMarker  = regexp.MustCompile(`^<!-- run: ([^>]*?) -->$`)
 	inlineMark = regexp.MustCompile("`([^`]+)` <!-- (run|run-add|run-alt): ([^>]*?) -->")
 	spanRe     = regexp.MustCompile("`([^`]+)`")
-	commandRe  = regexp.MustCompile(`^(aicrew|aicrew-agent|aimem) `)
 	placeRe    = regexp.MustCompile(`[A-Z][A-Z0-9_]+`)
 )
 
@@ -158,8 +182,9 @@ func Parse(raw []byte) (*Doc, error) {
 			if marked[m[2]] {
 				continue
 			}
-			if text := line[m[2]:m[3]]; isCommandLine(text) {
-				d.Commands = append(d.Commands, Command{Line: text, At: n})
+			text := line[m[2]:m[3]]
+			if i := Tool(Split(text)); i >= 0 {
+				d.Commands = append(d.Commands, Command{Line: text, At: n, Mention: i == 0 && bare(text)})
 			}
 		}
 	}
@@ -174,13 +199,16 @@ func Parse(raw []byte) (*Doc, error) {
 	}
 	// A command line repeated as written elsewhere in the document is the
 	// marked step's line: the marker is needed once.
+	ids := make([]string, 0, len(d.Steps))
+	for id := range d.Steps {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
 	for i, c := range d.Commands {
-		if c.ID != "" {
-			continue
-		}
-		for id, s := range d.Steps {
-			if s.Line == c.Line {
+		for _, id := range ids {
+			if c.ID == "" && d.Steps[id].Line == c.Line {
 				d.Commands[i].ID = id
+				break
 			}
 		}
 	}
@@ -204,7 +232,7 @@ func Parse(raw []byte) (*Doc, error) {
 func (d *Doc) closeBlock(lines []string, at []int, mark *pending) error {
 	if mark == nil {
 		for i, l := range lines {
-			if commandRe.MatchString(l) {
+			if Tool(Split(l)) >= 0 {
 				d.Commands = append(d.Commands, Command{Line: l, At: at[i]})
 			}
 		}
@@ -217,7 +245,7 @@ func (d *Doc) closeBlock(lines []string, at []int, mark *pending) error {
 		if err := d.add(&Step{ID: mark.ids[i], Line: l, Per: mark.per, At: at[i]}); err != nil {
 			return err
 		}
-		if commandRe.MatchString(l) {
+		if Tool(Split(l)) >= 0 {
 			d.Commands = append(d.Commands, Command{Line: l, At: at[i], ID: mark.ids[i]})
 		}
 	}
@@ -251,18 +279,14 @@ func fields(s string) (ids []string, per string) {
 	return ids, per
 }
 
-// isCommandLine says whether an inline span is a command line, not a
-// command's name: it starts with a command and has a flag or a placeholder.
-func isCommandLine(s string) bool {
-	if !commandRe.MatchString(s) {
-		return false
-	}
-	for _, w := range strings.Fields(s)[1:] {
-		if strings.HasPrefix(w, "-") || placeRe.MatchString(w) {
-			return true
+// bare says whether a span has neither a flag nor a placeholder.
+func bare(s string) bool {
+	for _, w := range Split(s) {
+		if strings.HasPrefix(w, "-") || fill(w, func(p string) string { return "" }) != w {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // Options are what a scenario gives a step's line.
@@ -285,7 +309,10 @@ func (d *Doc) Line(id string, o Options) (string, error) {
 			return "", fmt.Errorf("step %s has no run-alt marker", id)
 		}
 		for _, alt := range s.alts {
-			words = replaceFlags(words, Split(alt))
+			var err error
+			if words, err = replaceFlags(words, Split(alt)); err != nil {
+				return "", fmt.Errorf("step %s: its run-alt %q: %w", id, alt, err)
+			}
 		}
 	}
 	for _, a := range o.Adds {
@@ -364,16 +391,29 @@ func isWord(c byte) bool {
 }
 
 // replaceFlags puts each flag of alt, with its value, in place of the
-// line's flag of that name.
-func replaceFlags(line, alt []string) []string {
-	for i := 0; i+1 < len(alt); i += 2 {
+// line's flag of that name. alt is pairs of a flag and its value, and each
+// of its flags must be one the line has: an alternative replaces, it adds
+// nothing.
+func replaceFlags(line, alt []string) ([]string, error) {
+	if len(alt)%2 != 0 {
+		return nil, fmt.Errorf("not pairs of a flag and its value")
+	}
+	line = slices.Clone(line)
+	for i := 0; i < len(alt); i += 2 {
+		if !strings.HasPrefix(alt[i], "-") {
+			return nil, fmt.Errorf("%q is not a flag", alt[i])
+		}
+		found := false
 		for j := 0; j+1 < len(line); j++ {
 			if line[j] == alt[i] {
-				line[j+1] = alt[i+1]
+				line[j+1], found = alt[i+1], true
 			}
 		}
+		if !found {
+			return nil, fmt.Errorf("the step has no flag %s", alt[i])
+		}
 	}
-	return line
+	return line, nil
 }
 
 func unique(s []string) []string {

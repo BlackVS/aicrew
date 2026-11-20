@@ -655,11 +655,12 @@ waitfor "aicrewd's restart" 60 op curl -fs --cacert /sim/tls/ca.pem https://sim-
 TEAM=crew
 doc op $OPS_HOME status > "$OUT/status-empty.json" || fail "aicrew status before the team"
 setup_out=$(doc op $OPS_HOME team-setup -set "PROJECT=$PROJECT" || true)
-printf '%s\n' "$setup_out" | grep -q '^[[:space:]]*aimem identity team grant ' ||
-  fail "aicrew team setup printed no grant: $setup_out"
 # The grant as the document writes it, on the hub's host, with the hub's
-# private CA (the document's addition).
-doc hub /home/aimem hub-grant -set SERVICE=aicrew-service -set "PROJECT=$PROJECT" -set HUB_URL=https://sim-aimem:8440 \
+# private CA (the document's addition); its SERVICE is the peer the line
+# team setup printed names, as the operator reads it there.
+peer=$(printf '%s\n' "$setup_out" | sed -n 's/^[[:space:]]*aimem identity team grant .*--peer \([^[:space:]]*\).*/\1/p' | head -n 1)
+[ -n "$peer" ] || fail "aicrew team setup printed no grant with its --peer: $setup_out"
+doc hub /home/aimem hub-grant -set "SERVICE=$peer" -set "PROJECT=$PROJECT" -set HUB_URL=https://sim-aimem:8440 \
   -set ADMIN_TOKEN_FILE=/home/aimem/admin.token -add "--hub-ca-file FILE" -set FILE=/sim/tls/ca.pem >/dev/null ||
   fail "aimem identity team grant"
 doc op $OPS_HOME team-setup -set "PROJECT=$PROJECT" >/dev/null || fail "aicrew team setup, second run"
@@ -718,6 +719,7 @@ member_lines() {
     -set FORGE_HOST=sim-gitea:3000 "${alt[@]}")
   member_doc "$role" agent-version
   member_doc "$role" aimem-version
+  member_doc "$role" client-version
   member_doc "$role" preflight "${v[@]}"
   member_doc "$role" join -per "$per" "${v[@]}" -add "--aimem-ca-file hub-ca.pem" -add "--code-file PATH" -set PATH=invite.code
 }

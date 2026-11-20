@@ -1059,7 +1059,7 @@ same() {
 # e2e/pilotsim/member/Dockerfile), each with the new release's files.
 upgrade() {
   begin upgrade 900
-  local role svc since up=$STAGE/upgrade arch_bin
+  local role svc since restarted up=$STAGE/upgrade arch_bin
   arch_bin=$(docker version --format '{{.Server.Arch}}')
   for role in coordinator worker indep; do hold "$role" "the upgrade"; done
   take upgrade-before
@@ -1095,10 +1095,11 @@ upgrade() {
     # for an installed member's service restart (with AICREW_NO_SERVICE=1
     # boot.sh does not restart it).
     since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    restarted=$SECONDS
     dc restart "$svc" >/dev/null
     served_since() { dc logs --no-color --since "$since" "$svc" 2>&1 | grep -q 'the turn model is available'; }
     if [ -n "$BELOW" ]; then
-      below_check "$role" "$since"
+      below_check "$role" "$since" "$restarted"
       continue
     fi
     waitfor "$svc's serve on the new aicrew-agent" 300 served_since
@@ -1118,28 +1119,36 @@ upgrade() {
   [ -z "$BELOW" ] || below_turn_and_fix
   for role in coordinator worker indep; do member resume "$role"; done
 }
-# below_check ROLE SINCE (-below-minimum): what the member's serve does after
-# the restart, recorded and not required, and check, which must be blocked on
-# aimem with the exact instruction (smoke.py below).
+# below_check ROLE SINCE STARTED (-below-minimum): what the member's serve
+# does after the restart (at SINCE, when $SECONDS was STARTED), recorded and
+# not required, and check, which must be blocked on aimem with the exact
+# instruction (smoke.py below).
 below_check() {
-  local svc=sim-$1 rc=0 probe log deadline=$((SECONDS + 120))
+  local svc=sim-$1 rc=0 probe="no probe line" settled=no cur log= deadline=$(($3 + 120))
   # The probe's outcome is serve's line for it (internal/agent/serve.go
   # serveModel, cmd/aicrew-agent's exit 2 on an unavailable model); none
-  # within the deadline is no evidence of a probe, not a failed one.
-  while :; do
-    log=$(dc logs --no-color --since "$2" "$svc" 2>&1 || true)
+  # within the deadline is no evidence of a probe, not a failed one. A
+  # probe that lets serve go on comes before the loop's line or serve's
+  # exit (member.sh's line), so the wait goes on for one of them. A log
+  # read after the deadline is not counted.
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    cur=$(dc logs --no-color --since "$2" "$svc" 2>&1 || true)
+    [ "$SECONDS" -le "$deadline" ] || break
+    log=$cur
     probe=$(probe_outcome "$log")
-    [ "$probe" = "no probe line" ] && [ "$SECONDS" -lt "$deadline" ] || break
+    case $probe in
+      "no probe line") ;;
+      *"is not available"*) settled=yes; break ;;
+      *) if grep -q -e 'msg="the turn loop runs"' -e 'member.sh: serve exited' <<<"$log"; then settled=yes; break; fi ;;
+    esac
     sleep 2
   done
   {
     echo "serve's model probe after the restart: $probe (within 120 s)"
-    # The image has no procps: the process list is read from /proc.
-    echo "serve running: $(dc exec -T -u member "$svc" sh -c 'for f in /proc/[0-9]*/cmdline; do tr "\0" " " < "$f"; echo; done 2>/dev/null | grep -q "^[^ ]*aicrew-agent serve " && echo yes || echo no')"
+    echo "serve running: $(serve_runs "$svc")"
     # The second source: serve's own line that its turn loop runs.
-    log=$(dc logs --no-color --since "$2" "$svc" 2>&1 || true)
-    echo "serve's log since the restart says the turn loop runs: $(grep -q 'msg="the turn loop runs"' <<<"$log" && echo yes || echo no)"
-    echo "serve's log since the restart:"
+    echo "serve's log since the restart says the turn loop runs: $(grep -q 'msg="the turn loop runs"' <<<"$log" && echo yes || echo no) (the loop's line or serve's exit within 120 s: $settled)"
+    echo "serve's log since the restart, read within 120 s:"
     tail -n 40 <<<"$log"
   } > "$OUT/upgrade-below-serve-$1.txt"
   ev observation task="$TASK" what="$svc after the upgrade with aimem below the minimum: $(head -n 3 "$OUT/upgrade-below-serve-$1.txt" | tr '\n' ';')"
@@ -1148,6 +1157,21 @@ below_check() {
   python3 "$SIM/smoke.py" below "$OUT/upgrade-check-$1.json" "$ROOT/internal/agent/supported.json" \
     "$PILOTSIM_MEMBER_AIMEM_VERSION" /opt/aicrew-export > "$OUT/upgrade-instruction-$1.txt" ||
     fail "$svc's check report with aimem below the minimum ($OUT/upgrade-check-$1.json)"
+}
+# serve_runs SERVICE: yes when an aicrew-agent serve runs in it. The image
+# has no procps: the process list is read from /proc.
+serve_runs() {
+  dc exec -T -u member "$1" sh -c 'for f in /proc/[0-9]*/cmdline; do tr "\0" " " < "$f"; echo; done 2>/dev/null | grep -q "^[^ ]*aicrew-agent serve " && echo yes || echo no'
+}
+# serving_since SERVICE SINCE: its serve, started at SINCE, passed the model
+# probe; a serve that exited 2 since fails the run at once.
+serving_since() {
+  local log
+  log=$(dc logs --no-color --since "$2" "$1" 2>&1 || true)
+  if grep -q 'member.sh: serve exited 2' <<<"$log"; then
+    fail "$1's serve exited 2 after it started again"
+  fi
+  grep -q 'the turn model is available' <<<"$log"
 }
 # probe_outcome LOG: the model probe's outcome as serve logged it.
 probe_outcome() {
@@ -1163,18 +1187,23 @@ probe_outcome() {
 # does is recorded from its turn log, serve's log and a snapshot of the
 # store and the homes (upgrade-offered); then it is held again. Each member
 # then runs the instruction its check printed, as printed and nothing else,
-# and its check must be green.
+# and its check must be green; a member whose serve stopped (exit 2) has its
+# service started again, as the operator starts a stopped service
+# (`aicrew-agent service start`, cmd/aicrew-agent/service.go) once check is
+# green, and must serve before the members resume.
 below_turn_and_fix() {
   local role svc since before after deadline ran=no
   before=$(turn_mark coordinator)
   since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   member resume coordinator
+  deadline=$((SECONDS + 120))
   member nudge coordinator "an offered turn while aimem is below the minimum"
   # The audit keeps this nudge: the second cycle's checks allow it (cycle.py).
   export PILOTSIM_OFFERED_NUDGES=1
-  deadline=$((SECONDS + 120))
+  # A sample taken after the deadline is not counted.
   while [ "$SECONDS" -lt "$deadline" ]; do
     after=$(turn_mark coordinator)
+    [ "$SECONDS" -le "$deadline" ] || break
     if [ "$after" != "$before" ]; then ran=yes; break; fi
     sleep 2
   done
@@ -1198,6 +1227,13 @@ below_turn_and_fix() {
       fail "aicrew-agent check is not green in $svc after the instruction ($OUT/upgrade-check-fixed-$role.json)"
     python3 "$SIM/smoke.py" check "$OUT/upgrade-check-fixed-$role.json" "$PILOTSIM_AISKILLS_VERSION" ||
       fail "$svc's check report after the instruction ($OUT/upgrade-check-fixed-$role.json)"
+    if [ "$(serve_runs "$svc")" != yes ]; then
+      step "$svc's service started again after the instruction: its serve had stopped"
+      since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      dc restart "$svc" >/dev/null
+      waitfor "$svc's serve after the instruction" 300 serving_since "$svc" "$since"
+      ev observation task="$TASK" what="$svc's serve had stopped after the upgrade, and the instruction check printed names no service start: the run started its service again after the instruction (dc restart, the operator's start of a stopped service), and it serves"
+    fi
   done
   ev observation task="$TASK" what="the instruction check printed, run as printed in each member, brought check to supported (aimem $PILOTSIM_AIMEM_VERSION)"
 }

@@ -330,7 +330,7 @@ member whose session refresh meets the hub stopped (case F6-unreachable)
 comes back once the hub does. A clean stop ends the container. After
 exit 2 the container stays up with serve stopped, as a host stays up when
 its service stops, so check and an instruction still run in the home; the
-runner fails at once on member.sh's line for it where serve must serve.
+smoke check fails at once on member.sh's line for it.
 
 No secret is printed or passed as an argument. A token or code goes from
 the container that makes it to the one that reads it through a pipe.
@@ -654,8 +654,11 @@ differs from the upgrade above in three places:
    again.
 3. Each member runs the command between the instruction's backticks, as
    printed and nothing else, and its check must then pass the smoke
-   check's strict assertions. The second cycle and the comparisons follow
-   as above.
+   check's strict assertions. A member whose serve is not running then
+   (it exited 2 after the restart) has its service started again, as the
+   operator starts a stopped service once check is green, and its serve
+   must pass the model probe within 300 s. The second cycle and the
+   comparisons follow as above.
 
 **Observed** in the first green run (2026-11-20, CI run 44709262641, the
 job 14 minutes 49 seconds):

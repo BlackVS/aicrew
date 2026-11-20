@@ -1127,20 +1127,20 @@ below_check() {
   local svc=sim-$1 rc=0 probe="no probe line" settled=no cur log= deadline=$(($3 + 120))
   # The probe's outcome is serve's line for it (internal/agent/serve.go
   # serveModel, cmd/aicrew-agent's exit 2 on an unavailable model); none
-  # within the deadline is no evidence of a probe, not a failed one. A
-  # probe that lets serve go on comes before the loop's line or serve's
-  # exit (member.sh's line), so the wait goes on for one of them. A log
-  # read after the deadline is not counted.
+  # within the deadline is no evidence of a probe, not a failed one. The
+  # probe's line comes before the loop's line or serve's exit (member.sh's
+  # line, written once serve has exited), so the wait goes on for one of
+  # them. A log read after the deadline is not counted.
   while [ "$SECONDS" -lt "$deadline" ]; do
     cur=$(dc logs --no-color --since "$2" "$svc" 2>&1 || true)
     [ "$SECONDS" -le "$deadline" ] || break
     log=$cur
     probe=$(probe_outcome "$log")
-    case $probe in
-      "no probe line") ;;
-      *"is not available"*) settled=yes; break ;;
-      *) if grep -q -e 'msg="the turn loop runs"' -e 'member.sh: serve exited' <<<"$log"; then settled=yes; break; fi ;;
-    esac
+    if [ "$probe" != "no probe line" ] &&
+      grep -q -e 'msg="the turn loop runs"' -e 'member.sh: serve exited' <<<"$log"; then
+      settled=yes
+      break
+    fi
     sleep 2
   done
   {
@@ -1192,7 +1192,7 @@ probe_outcome() {
 # (`aicrew-agent service start`, cmd/aicrew-agent/service.go) once check is
 # green, and must serve before the members resume.
 below_turn_and_fix() {
-  local role svc since before after deadline ran=no
+  local role svc since before after deadline runs up ran=no
   before=$(turn_mark coordinator)
   since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   member resume coordinator
@@ -1227,13 +1227,27 @@ below_turn_and_fix() {
       fail "aicrew-agent check is not green in $svc after the instruction ($OUT/upgrade-check-fixed-$role.json)"
     python3 "$SIM/smoke.py" check "$OUT/upgrade-check-fixed-$role.json" "$PILOTSIM_AISKILLS_VERSION" ||
       fail "$svc's check report after the instruction ($OUT/upgrade-check-fixed-$role.json)"
-    if [ "$(serve_runs "$svc")" != yes ]; then
-      step "$svc's service started again after the instruction: its serve had stopped"
-      since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-      dc restart "$svc" >/dev/null
-      waitfor "$svc's serve after the instruction" 300 serving_since "$svc" "$since"
-      ev observation task="$TASK" what="$svc's serve had stopped after the upgrade, and the instruction check printed names no service start: the run started its service again after the instruction (dc restart, the operator's start of a stopped service), and it serves"
-    fi
+    runs=$(serve_runs "$svc") || fail "the process list of $svc could not be read after the instruction"
+    case $runs in
+      yes) continue ;;
+      no) ;;
+      *) fail "the process list of $svc after the instruction: $runs" ;;
+    esac
+    step "$svc's service started again after the instruction: its serve had stopped"
+    since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    deadline=$((SECONDS + 300))
+    up=no
+    dc restart "$svc" >/dev/null
+    # Elapsed time, and a sample read after the deadline is not counted.
+    while [ "$SECONDS" -lt "$deadline" ]; do
+      if serving_since "$svc" "$since"; then
+        [ "$SECONDS" -gt "$deadline" ] || up=yes
+        break
+      fi
+      sleep 2
+    done
+    [ "$up" = yes ] || fail "$svc's serve did not pass the model probe within 300 s after it started again"
+    ev observation task="$TASK" what="$svc's serve had stopped after the upgrade, and the instruction check printed names no service start: the run started its service again after the instruction (dc restart, the operator's start of a stopped service), and it serves"
   done
   ev observation task="$TASK" what="the instruction check printed, run as printed in each member, brought check to supported (aimem $PILOTSIM_AIMEM_VERSION)"
 }

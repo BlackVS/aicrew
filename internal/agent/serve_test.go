@@ -192,6 +192,10 @@ type loopEnv struct {
 	staleHandoff bool
 	// dirty is an uncommitted change in the attempt's worktree.
 	dirty bool
+	// acks makes each turn acknowledge its messages and a new one arrive
+	// in their place, so the count of turns that leave their messages
+	// unacknowledged (unacked.go) never slows a test of another rule.
+	acks bool
 }
 
 // touchHandoff is the member keeping its handoff: a line added to the
@@ -218,6 +222,13 @@ func newLoopEnv(t *testing.T) *loopEnv {
 		Run: func(_ context.Context, spec TurnSpec) TurnResult {
 			e.specs = append(e.specs, spec)
 			res := e.next(spec, e.host)
+			if e.acks {
+				e.host.mu.Lock()
+				for i := range e.host.pending {
+					e.host.pending[i].ID += "+"
+				}
+				e.host.mu.Unlock()
+			}
 			if !e.staleHandoff {
 				touchHandoff(e.home, fmt.Sprintf("turn %d", len(e.specs)))
 			}
@@ -580,6 +591,7 @@ func TestTurnLoopOutcomes(t *testing.T) {
 // budget none for that attempt.
 func TestTurnLoopBudgets(t *testing.T) {
 	e := newLoopEnv(t)
+	e.acks = true
 	writeAgentDoc(t, e.home, map[string]any{"turns": map[string]any{"daily_budget_usd": 1, "attempt_budget_usd": 100}})
 	e.host.pending = []PendingMessage{msg("m1", "message")}
 	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished, CostUSD: 0.6} }
@@ -599,6 +611,7 @@ func TestTurnLoopBudgets(t *testing.T) {
 	}
 
 	e = newLoopEnv(t)
+	e.acks = true
 	writeAgentDoc(t, e.home, map[string]any{"turns": map[string]any{"attempt_budget_usd": 1}})
 	e.host.attempt = &memberAttempt{ID: "att-1", State: "running", Phase: "submitted", Task: TaskRef{TaskID: "task-1"}}
 	e.host.pending = []PendingMessage{msg("m1", "message")}

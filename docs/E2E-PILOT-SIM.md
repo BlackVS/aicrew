@@ -776,10 +776,11 @@ The scenario `upgrade` is bounded to 15 minutes and `upgrade-kept` to 5;
 the others keep their bounds above. A green run on a 6-vCPU host took 15
 minutes: the setup 2.2, a cycle 5 to 6, the upgrade itself half a minute.
 
-Today the previous release and this tree have the same store schema, so
-the upgrade migrates nothing, and the scenario proves the upgrade's
-mechanics and that the records stay readable. The first change of the
-schema makes it run a real migration. aicrewd's rows are compared on the
+This tree's store schema (40) is one newer than the previous release's
+(39): the upgrade migrates `member_holds`, which gains the four columns
+of an unacknowledged hold (`messages`, `turns`, `summary`,
+`stuck_since`), and the scenario proves that migration as well as the
+upgrade's mechanics and that the records stay readable. aicrewd's rows are compared on the
 columns they had before the upgrade: a migration's author sees each added
 column named in a `note:` line of `DIR/upgrade-same-*.txt`, and the run
 stays green; a column that is gone or renamed, or a changed value, fails
@@ -789,7 +790,9 @@ it.
 
 After the two cycles, `e2e/pilotsim/cases.sh` runs the pilot cases of
 [DESIGN-PILOT-SIMULATION.md](DESIGN-PILOT-SIMULATION.md), section 6.2, in
-the order P2, P5, P4, the escalation case E1 (below), P1 and, after the fault cases below, P3. Each is one fault on a cycle of its own, set
+the order P2, P5, P4, the escalation case E1, the operator case O1, the
+unacknowledged case U1 (all three below), P1 and, after the fault cases
+below, P3. Each is one fault on a cycle of its own, set
 through the stubs' scenario or the member's: `/sim/scenario/member.json`
 in each member's container, which only the script writes, and only while
 the member is paused and its turn has ended. The member's scenario
@@ -843,7 +846,7 @@ gap is closed and the run fails until the case is updated.
 
 `AICREW_SIM_SKIP_FAULT=CASE` runs the stack and that case only, without its
 fault. The run is green only when the case then fails where its absence
-should show: P2 and P1 at their first check, and P5, P4, E1 and P3 when the
+should show: P2 and P1 at their first check, and P5, P4, E1, U1 and P3 when the
 first head's CI failure, the block or the hold never comes. A case that passes without its
 fault fails the run. The snapshots stay in `DIR/case-<case>/<point>/`, or
 `DIR/case-<case>/<subcase>/` for a subcase such as F1-claim-request: no
@@ -864,6 +867,26 @@ as every case's does: the coordinator's review, the operator's merge and
 the delivery record, with the cycle's checks at the step done (the one
 escalation on the task answered by the operator). No mirror is posted on
 the task: the document asks none of the operator.
+
+### The unacknowledged case
+
+U1 is the bound on turns that leave a message unacknowledged (task
+01a1fa19; DEVELOPMENT.md, "Turns that leave their messages
+unacknowledged"). Every member's home sets `turns.unacked_wait` to 10
+seconds. The independent member's scenario never acknowledges, and the
+operator's note (`aicrew member nudge`) is its one message. Its turns
+wait 10 seconds and then 40, and after the third the team's state shows
+its `hold` with kind `unacknowledged`. 50 seconds on, its turn log still
+has exactly three turns on the message, each later one no sooner than its
+wait after the one before; aicrewd keeps the hold with three turns, and
+the coordinator was told once. A second note gives exactly one more turn:
+four turns in all, the hold with both messages and four turns, still told
+once. The operator then pauses the team by the document's own line, the
+hold leaves the team's state, the resume follows, and the member,
+acknowledging again, empties its inbox. The case's report carries the
+turns and the gaps between them. Without its fault
+(`AICREW_SIM_SKIP_FAULT=U1`) the member acknowledges, the hold never
+comes, and the run is green at that point.
 
 ### The escalation case
 

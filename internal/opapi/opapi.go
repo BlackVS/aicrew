@@ -432,8 +432,10 @@ type MemberState struct {
 	Stalled bool `json:"stalled,omitempty"`
 	// Hold is the hold the member's launcher last reported: no turn
 	// before NextCheck, because a budget is spent (with the amount spent
-	// and the limit), the provider's limit is reached or the client's
-	// login is missing (with the command that logs in).
+	// and the limit), the provider's limit is reached, the client's
+	// login is missing (with the command that logs in), or turns in a row
+	// left the same messages unacknowledged (with the messages, the
+	// count of turns and the last turn's summary).
 	Hold *MemberHold `json:"hold,omitempty"`
 }
 
@@ -446,7 +448,15 @@ type MemberHold struct {
 	NextCheck time.Time `json:"next_check"`
 	ResetAt   time.Time `json:"reset_at,omitzero"`
 	Command   string    `json:"command,omitempty"`
-	Since     time.Time `json:"since"`
+	// Messages, Turns, Summary and StuckSince are an unacknowledged
+	// hold's: the message ids the turns left unacknowledged (at most 10),
+	// how many turns in a row did, the last one's summary (one line, at
+	// most 1024 bytes, no control character) and when the count began.
+	Messages   []string  `json:"messages,omitempty"`
+	Turns      int       `json:"turns,omitempty"`
+	Summary    string    `json:"summary,omitempty"`
+	StuckSince time.Time `json:"stuck_since,omitzero"`
+	Since      time.Time `json:"since"`
 }
 
 // MemberProfile is the client and model the member's agent last reported.

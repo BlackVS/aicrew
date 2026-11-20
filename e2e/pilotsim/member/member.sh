@@ -57,6 +57,21 @@ if [ ! -f "$home/agent.json" ] || ! grep -q '"agent_id"' "$home/agent.json"; the
   rm -f invite.code member.token forge.token hub-ca.pem
   cd "$HOME"
 fi
+# The run's pace for turns that leave a message unacknowledged
+# (agent.json's turns.unacked_wait; docs/DESIGN-PILOT-SIMULATION.md):
+# 10 seconds, then 40, then the hold, instead of 5 and 20 minutes, so case
+# U1 and the fault cases' retries fit the run. An older aicrew-agent
+# ignores the key.
+python3 - "$home/agent.json" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.setdefault("turns", {})["unacked_wait"] = "10s"
+fd = os.open(p + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump(d, f, indent=2)
+os.replace(p + ".new", p)
+PY
 # serve runs as an installed member's service runs it (internal/service/
 # render.go: Restart=on-failure, RestartSec=10, RestartPreventExitStatus=2):
 # after a failure, such as a session refresh that met the hub stopped in

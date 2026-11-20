@@ -335,7 +335,9 @@ own expected failure.
   - every random choice seeded from the scenario;
   - the launcher's timers set only where `agent.json` documents a
     setting: `turns.turn_timeout` (1 minute at the least, 30 minutes by
-    default). `wake.wait_seconds` bounds only the Stop-hook wait of an
+    default), and `turns.unacked_wait`, which every member's home sets to
+    10 seconds (5 minutes by default) so that case U1 and the fault
+    cases' retries fit the run. `wake.wait_seconds` bounds only the Stop-hook wait of an
     interactive client, which `serve` in turns mode does not use. The
     rest are constants and run at the
     production pace: the forge poll (60 seconds), the inbox poll

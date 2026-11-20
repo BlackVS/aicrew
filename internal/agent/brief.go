@@ -160,6 +160,9 @@ type briefInput struct {
 	// handoff is a worker's session doc as the turn starts (handoff.go),
 	// nil for any other member or when it could not be read.
 	handoff *handoffDoc
+	// unacked is the count of earlier turns that left the messages
+	// unacknowledged, nil when there were none (unacked.go).
+	unacked *unackedState
 }
 
 // brief writes the turn's brief, and returns the ids of the messages it
@@ -368,6 +371,7 @@ func (l *TurnLoop) briefTrigger(ctx context.Context, b *strings.Builder, in brie
 	if more := len(in.pending) - len(msgs); more > 0 {
 		fmt.Fprintf(b, "\n%d more message(s) are pending: `aicrew-agent inbox`.\n", more)
 	}
+	briefUnacked(b, in.unacked)
 	return msgs
 }
 

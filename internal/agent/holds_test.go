@@ -17,6 +17,7 @@ import (
 // command that logs in. A failed turn's backoff is not reported.
 func TestTurnLoopReportsHolds(t *testing.T) {
 	e := newLoopEnv(t)
+	e.acks = true
 	writeAgentDoc(t, e.home, map[string]any{"turns": map[string]any{"daily_budget_usd": 1, "attempt_budget_usd": 100}})
 	e.host.pending = []PendingMessage{msg("m1", "message")}
 	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished, CostUSD: 1.2} }
@@ -37,11 +38,12 @@ func TestTurnLoopReportsHolds(t *testing.T) {
 	e.host.holds = nil
 	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished} }
 	e.tick(t)
-	if len(e.specs) != 2 || len(e.host.holds) != 1 || e.host.holds[0] != (holdReport{}) {
+	if len(e.specs) != 2 || len(e.host.holds) != 1 || !e.host.holds[0].same(holdReport{}) {
 		t.Fatalf("the next day's turn: %d turns, holds %+v", len(e.specs), e.host.holds)
 	}
 
 	e = newLoopEnv(t)
+	e.acks = true
 	writeAgentDoc(t, e.home, map[string]any{"turns": map[string]any{"attempt_budget_usd": 1}})
 	e.host.attempt = &memberAttempt{ID: "att-1", State: "running", Phase: "submitted", Task: TaskRef{TaskID: "task-1"}}
 	e.host.pending = []PendingMessage{msg("m1", "message")}
@@ -79,13 +81,13 @@ func TestTurnLoopReportsHolds(t *testing.T) {
 			want.NextCheck = e.clock.Add(c.backoff)
 		}
 		got := e.host.holds
-		if want == (holdReport{}) {
+		if want.same(holdReport{}) {
 			if len(got) != 0 {
 				t.Errorf("%s/%s: holds %+v", c.res.Outcome, c.res.LimitKind, got)
 			}
 			continue
 		}
-		if len(got) != 1 || got[0] != want {
+		if len(got) != 1 || !got[0].same(want) {
 			t.Errorf("%s/%s: holds %+v, want %+v", c.res.Outcome, c.res.LimitKind, got, want)
 		}
 	}
@@ -98,6 +100,7 @@ func TestTurnLoopReportsHolds(t *testing.T) {
 func TestTurnLoopHoldDelivery(t *testing.T) {
 	var logs syncBuffer
 	e := newLoopEnv(t)
+	e.acks = true
 	e.loop.Log = slog.New(slog.NewTextHandler(&logs, nil))
 	writeAgentDoc(t, e.home, map[string]any{"turns": map[string]any{"daily_budget_usd": 1}})
 	e.host.pending = []PendingMessage{msg("m1", "message")}

@@ -123,3 +123,59 @@ func TestHoldRoutes(t *testing.T) {
 		})
 	}
 }
+
+// An unacknowledged hold (task 01a1fa19) crosses the route: the coordinator
+// is told once with the messages and the last summary, a set that grew is
+// not told again, the team state shows the messages, the turns, the
+// summary and the count's start, and a summary with a control character is
+// refused.
+func TestUnacknowledgedHoldRoute(t *testing.T) {
+	e := setupCoordination(t)
+	e.runningOffer(t)
+	next := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
+	start := time.Now().Add(-25 * time.Minute).UTC().Truncate(time.Second)
+	report := map[string]any{"kind": "unacknowledged", "messages": []string{"m1"}, "turns": 3,
+		"summary": "The delivery check was denied.", "stuck_since": start.Format(time.RFC3339),
+		"next_check": next.Format(time.RFC3339)}
+	grown := map[string]any{}
+	for k, v := range report {
+		grown[k] = v
+	}
+	grown["messages"], grown["turns"] = []string{"m1", "m2"}, 4
+	for i, r := range []map[string]any{report, grown} {
+		got := e.call(t, e.indep.token, HoldsPath, "", r)
+		if got.status != http.StatusOK || got.body["announced"] != (i == 0) {
+			t.Fatalf("report %d: %d %s", i, got.status, got.raw)
+		}
+	}
+	var told []inboxMessage
+	for _, m := range inboxOf(t, e.get(t, e.lead.token, InboxPath+"?limit=100")) {
+		if m.Kind == "lifecycle" && strings.Contains(m.Text, "is held") {
+			told = append(told, m)
+		}
+	}
+	if len(told) != 1 || !strings.Contains(told[0].Text, "3 turns in a row") ||
+		!strings.Contains(told[0].Text, "The delivery check was denied.") {
+		t.Fatalf("the coordinator's messages: %+v", told)
+	}
+	var list []opapi.TeamState
+	if got := e.adminCall(t, http.MethodGet, opapi.TeamStatesPath, e.opToken, nil, nil, &list); got.status != http.StatusOK {
+		t.Fatalf("team states: %d %s", got.status, got.raw)
+	}
+	var h *opapi.MemberHold
+	for _, m := range list[0].Members {
+		if m.AgentID == e.indep.agent.ID {
+			h = m.Hold
+		}
+	}
+	if h == nil || h.Kind != "unacknowledged" || strings.Join(h.Messages, ",") != "m1,m2" || h.Turns != 4 ||
+		h.Summary != "The delivery check was denied." || !h.StuckSince.Equal(start) || !h.NextCheck.Equal(next) {
+		t.Fatalf("the team state's hold: %+v", h)
+	}
+	bad := map[string]any{}
+	for k, v := range report {
+		bad[k] = v
+	}
+	bad["summary"] = "denied\x1b]0;title\x07"
+	refused(t, e.call(t, e.indep.token, HoldsPath, "", bad), http.StatusBadRequest, "invalid_request")
+}

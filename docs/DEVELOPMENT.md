@@ -2926,8 +2926,41 @@ Messages that arrive during a turn wait for the next one.
 ```json
 {"turns": {"turn_timeout": "30m", "turn_budget_usd": 2, "attempt_budget_usd": 20,
            "daily_budget_usd": 50, "max_continuations": 20, "model": "",
-           "allow": ["Bash(go test *)"]}}
+           "unacked_wait": "5m", "allow": ["Bash(go test *)"]}}
 ```
+
+- **Turns that leave their messages unacknowledged** (task 01a1fa19). A
+  turn whose only cause is the member's unacknowledged messages (no
+  continuation, and no attempt of the member in work) counts as a turn
+  without progress when it finishes, or is cut by its own budget, and
+  every one of those messages is still unacknowledged after it. A
+  stopped or failed turn is not counted, and the failed turn's backoff
+  is unchanged. The next such turn waits `unacked_wait` (5 minutes; from
+  10 seconds to an hour) after the first, four times that after the
+  second, and after the third the member is held:
+  - it gets one turn a day on those messages, and one turn on a new
+    message no sooner than the longest wait after its last turn. A new
+    message does not clear the count, so a coordinator writing to a held
+    worker cannot restart the three turns;
+  - the hold reaches aicrewd as kind `unacknowledged` (CREW-CONTRACT.md,
+    "A member's hold") with the messages, the turns, the last turn's
+    summary and the count's start. The team state shows it, and the
+    team's other coordinators are told once;
+  - only an acknowledgement of one of the messages by the member, or a
+    pause of the member or its team, clears the count and the hold.
+  - The brief of such a turn says which turn on these messages it is and
+    how the earlier ones ended, from the count in `state/turns.json`,
+    which survives a restart.
+  - The continuation turns of an attempt in work keep their cadence and
+    the stall rules below. A worker acknowledges the offer's message in
+    the turn that accepts it, as ROLES.md asks of every handled message.
+    One that does not has the attempt in work from that turn on, and
+    the stall rules bound its turns.
+  - What a stuck message costs at most: three turns within the first
+    hour, then one a day, each within `turn_budget_usd` (2 USD): 6 USD
+    on the first day and 2 USD on each later one. At the 0.24 USD a turn
+    seen on 2026-11-20, that is 0.72 USD, against 10.01 USD spent in
+    twelve minutes before the hold existed.
 
 - A spent daily budget gives no turn until the next UTC day. A spent
   attempt budget gives no turn while that attempt is open, and is checked

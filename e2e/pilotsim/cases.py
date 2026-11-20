@@ -3,6 +3,7 @@
     cases.py check CASE POINT DIR
     cases.py followup STORE_DIR TASK COORDINATOR   (P1: a message to the coordinator about an unacked one)
     cases.py hold STORE_DIR AGENT KIND             (the member's hold in aicrewd is KIND; "none" for no hold)
+    cases.py unacked TURNS STORE_DIR COORDINATOR AGENT N WAIT  (U1: N turns left the messages, the waits, the hold told once)
     cases.py has_op STORE_DIR TASK OP              (aicrewd audited OP, e.g. attempt.answer, on the task's attempt)
     cases.py blocked_report STORE_DIR TASK COORDINATOR  (P4: the coordinator has the stall's blocked report)
     cases.py answer_acked STORE_DIR TASK COORDINATOR WORKER  (E1: both acked the escalation answer's message)
@@ -420,6 +421,38 @@ def instant(s):
     return t.astimezone(datetime.timezone.utc)
 
 
+def unacked(turns_file, store_dir, coordinator, agent, want, wait):
+    """U1: the member's turns on messages it left unacknowledged, as its turn
+    log has them since the case began: exactly WANT of them, each later one
+    starting no sooner than its wait after the one before (WAIT, then four
+    times WAIT for every later one), and the hold that aicrewd keeps with
+    WANT turns and told to the coordinator once. Returns the errors and the
+    turns' facts for the report."""
+    errs = []
+    turns = [r for r in json_objects(open(turns_file).read()) if r.get("brief_messages")]
+    gaps = []
+    for i in range(1, len(turns)):
+        start, end = instant(turns[i]["started_at"]), instant(turns[i - 1].get("ended_at"))
+        gap = (start - end).total_seconds() if start and end else -1
+        gaps.append(round(gap, 1))
+        least = wait if i == 1 else 4 * wait
+        if gap < least:
+            errs.append("turn %d started %.1fs after the one before, sooner than its wait of %ds" % (i + 1, gap, least))
+    if len(turns) != want:
+        errs.append("%d turns on the unacknowledged messages, want %d" % (len(turns), want))
+    q = db_of(store_dir)
+    rows = q("SELECT kind, turns FROM member_holds WHERE agent_id = ?", agent)
+    if not rows or rows[0]["kind"] != "unacknowledged" or rows[0]["turns"] != want:
+        errs.append("aicrewd's hold for the member is %s, want unacknowledged with %d turns" %
+                    ([(r["kind"], r["turns"]) for r in rows], want))
+    told = q("""SELECT m.text FROM message_recipients r JOIN messages m ON m.id = r.message_id
+                WHERE r.agent_id = ? AND m.kind = 'lifecycle' AND m.text LIKE ? AND m.text LIKE '%turns in a row%'""",
+             coordinator, "%" + agent + "%")
+    if len(told) != 1:
+        errs.append("the coordinator was told of the hold %d times, want once" % len(told))
+    return errs, {"turns": len(turns), "gaps_seconds": gaps, "told": len(told)}
+
+
 def restarted(facts, name, expect):
     before, after = instant(facts.get(name + "_before")), instant(facts.get(name + "_after"))
     expect(before and after and after > before, "%s did not restart: started %s, then %s" %
@@ -831,6 +864,12 @@ def main(argv):
         a = attempt_of(q, argv[2])
         told = messages_to(q, argv[3], a["id"] if a else "", argv[2])
         return 0 if any(FOLLOWUP.search(r["text"] or "") for r in told) else 1
+    if len(argv) == 7 and argv[0] == "unacked":
+        errs, facts = unacked(argv[1], argv[2], argv[3], argv[4], int(argv[5]), int(argv[6]))
+        print(json.dumps(facts))
+        for e in errs:
+            print("case U1:", e, file=sys.stderr)
+        return 1 if errs else 0
     if len(argv) == 4 and argv[0] == "hold":
         rows = db_of(argv[1])("SELECT kind FROM member_holds WHERE agent_id = ?", argv[2])
         return 0 if (rows[0]["kind"] if rows else "none") == argv[3] else 1

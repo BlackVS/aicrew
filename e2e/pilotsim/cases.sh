@@ -428,6 +428,62 @@ case_o1() {
   member resume coordinator
 }
 
+# U1: a member whose turns leave one message unacknowledged (task
+# 01a1fa19). The independent member never acknowledges; the operator's
+# note is its one message. Its turns wait 10 seconds, then 40 (member.sh's
+# turns.unacked_wait), and after the third it is held: the team's state
+# shows the hold with the message and the count, and the coordinator is
+# told once. A second note gives exactly one more turn, no sooner than 40
+# seconds after the last, with the hold still shown and not told again.
+# The team's pause, as docs/BRING-UP.md writes it, clears the hold, and
+# the resume lets the member, acknowledging again, go on.
+U1_WAIT=10
+# member_turns ROLE FROM: the member's turn records after its first FROM.
+member_turns() {
+  dc exec -T -u member "sim-$1" sh -c 'tail -n +"$(($2 + 1))" "$1/logs/turns.jsonl"' sh "$(mhome "$1")" "$2"
+}
+# u1_turns N: the member's turns since the case began are N.
+u1_turns() {
+  local mark
+  mark=$(turn_mark indep) && [ "${mark#* }" -ge "$((U1_FROM + $1))" ] && [ "${mark%% *}" = idle ]
+}
+# u1_check N: the U1 checks with N turns on the messages (cases.py unacked).
+u1_check() {
+  member_turns indep "$U1_FROM" > "$CYC/turns-$1.jsonl" && store_copy "$CYC/peek" &&
+    python3 "$SIM/cases.py" unacked "$CYC/turns-$1.jsonl" "$CYC/peek" "$COORD_ID" "$INDEP_ID" "$1" "$U1_WAIT" \
+      > "$CYC/u1-$1.json"
+}
+case_u1() {
+  case_start U1
+  hold indep "case U1: its scenario"
+  fault U1 member_scenario indep '{"never_ack":true}'
+  U1_FROM=$(turn_mark indep)
+  U1_FROM=${U1_FROM#* }
+  member resume indep
+  member nudge indep "case U1: a message the member leaves unacknowledged"
+  reach U1 held 300 "the member's unacknowledged hold in aicrew team state" team_state held \
+    '(m["independent"].get("hold") or {}).get("kind") == "unacknowledged" and m["independent"]["hold"]["turns"] == 3'
+  # No fourth turn on the old message: the hold's next turn is a day on.
+  sleep $((5 * U1_WAIT))
+  u1_check 3 || fail "case U1: three turns, then the hold ($CYC/u1-3.json)"
+  ev u1 turns=3 facts="$(cat "$CYC/u1-3.json")"
+  member nudge indep "case U1: a second message to the held member"
+  waitfor "the held member's one turn on the new message" 300 u1_turns 4
+  sleep $((5 * U1_WAIT))
+  u1_check 4 || fail "case U1: one more turn on the new message, the hold not told again ($CYC/u1-4.json)"
+  ev u1 turns=4 facts="$(cat "$CYC/u1-4.json")"
+  team_state held-new '(m["independent"].get("hold") or {}).get("kind") == "unacknowledged" and len(m["independent"]["hold"]["messages"]) == 2 and m["independent"]["unacknowledged"] == 2' ||
+    fail "case U1: the team state does not show the held member with both messages ($CYC/state-held-new.json)"
+  opjson team-pause pause.json -set "REASON=case U1: the operator looks at the held member"
+  waitfor "the pause to clear the member's hold in aicrew team state" 120 team_state cleared \
+    'not m["independent"].get("hold")'
+  hold indep "case U1: its scenario's end"
+  member_scenario indep '{}'
+  opjson team-resume resume.json
+  member resume indep
+  waitfor "the member's acknowledgement after the resume" 120 team_state acked 'm["independent"]["unacknowledged"] == 0'
+}
+
 # P5: the CI fails on the first head and the rework's second head carries
 # the gates; then the merge commit's CI stays pending, and verify-delivery's
 # pending answer is never recorded as delivered.
@@ -476,7 +532,7 @@ case_p5() {
 . "$SIM/faults.sh"
 
 # A skipped fault runs only its case: F1-claim-request runs F1.
-for c in P2 P5 P4 E1 O1 P1 F1 F2 F3 F4 F5 F6 F7 P3; do
+for c in P2 P5 P4 E1 O1 U1 P1 F1 F2 F3 F4 F5 F6 F7 P3; do
   [ -z "$SKIP" ] || [ "${SKIP%%-*}" = "$c" ] || continue
   "case_${c,,}"
 done
@@ -487,4 +543,4 @@ SCENARIO=
 
 docsteps_verify pilot-sim
 collect
-step "pilot-sim: green: the three members checked, listed and serving; the stubs' fixtures confirmed, refused and released; two cycles from a filed task to DONE with the delivery record; the pilot cases P1 to P5, the escalation case E1, the operator case O1 and the fault cases F1 to F7, expected-to-fail parts in $XFAIL (reports in $OUT)"
+step "pilot-sim: green: the three members checked, listed and serving; the stubs' fixtures confirmed, refused and released; two cycles from a filed task to DONE with the delivery record; the pilot cases P1 to P5, the escalation case E1, the operator case O1, the unacknowledged case U1 and the fault cases F1 to F7, expected-to-fail parts in $XFAIL (reports in $OUT)"

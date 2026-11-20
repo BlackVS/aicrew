@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -24,6 +25,9 @@ const (
 	holdDailyBudget   = "daily_budget"
 	holdProviderLimit = "provider_limit"
 	holdNeedsLogin    = "needs_login"
+	// holdUnacknowledged: turns in a row left the same messages
+	// unacknowledged (unacked.go).
+	holdUnacknowledged = "unacknowledged"
 )
 
 // loginCommand is how a member's client logs in again (DESIGN-CONTROL-PLANE
@@ -39,6 +43,12 @@ type holdReport struct {
 	NextCheck time.Time `json:"next_check,omitzero"`
 	ResetAt   time.Time `json:"reset_at,omitzero"`
 	Command   string    `json:"command,omitempty"`
+	// An unacknowledged hold's messages, turns, last summary and the
+	// count's start, which is its identity on aicrewd.
+	Messages   []string  `json:"messages,omitempty"`
+	Turns      int       `json:"turns,omitempty"`
+	Summary    string    `json:"summary,omitempty"`
+	StuckSince time.Time `json:"stuck_since,omitzero"`
 }
 
 // setHold makes r, nil for none, the hold aicrewd is to have; a change is
@@ -58,7 +68,9 @@ func setHold(st *turnState, r *holdReport) {
 // reading and may name another location.
 func (r holdReport) same(o holdReport) bool {
 	return r.Kind == o.Kind && r.AttemptID == o.AttemptID && r.SpentUSD == o.SpentUSD && r.LimitUSD == o.LimitUSD &&
-		r.NextCheck.Equal(o.NextCheck) && r.ResetAt.Equal(o.ResetAt) && r.Command == o.Command
+		r.NextCheck.Equal(o.NextCheck) && r.ResetAt.Equal(o.ResetAt) && r.Command == o.Command &&
+		slices.Equal(r.Messages, o.Messages) && r.Turns == o.Turns && r.Summary == o.Summary &&
+		r.StuckSince.Equal(o.StuckSince)
 }
 
 // syncHold sends the hold aicrewd is to have, when it does not have it yet.
@@ -94,6 +106,16 @@ func (l *TurnLoop) syncHold(ctx context.Context, st *turnState) {
 	if err := writeTurnState(l.Home, *st); err != nil {
 		l.Log.Warn("record the turn state", "error", err.Error())
 	}
+}
+
+// firstHold is the first of holds that is not nil, nil when all are.
+func firstHold(holds ...*holdReport) *holdReport {
+	for _, h := range holds {
+		if h != nil {
+			return h
+		}
+	}
+	return nil
 }
 
 // outcomeHold is the hold a turn's outcome reports, nil for none: the

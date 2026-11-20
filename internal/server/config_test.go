@@ -48,7 +48,8 @@ func TestParseConfigRefusals(t *testing.T) {
 		{"bad service", strings.Replace(validConfig, `"aicrew-example"`, `"aicrew example"`, 1), "service_id"},
 		{"bad shutdown", strings.Replace(validConfig, "}", `,"shutdown_timeout":"-1s"}`, 1), "shutdown_timeout"},
 		{"long shutdown", strings.Replace(validConfig, "}", `,"shutdown_timeout":"1h"}`, 1), "shutdown_timeout"},
-		{"shutdown not a duration", strings.Replace(validConfig, "}", `,"shutdown_timeout":15}`, 1), "duration"},
+		{"shutdown not a duration", strings.Replace(validConfig, "}", `,"shutdown_timeout":15}`, 1), `shutdown_timeout must be a duration: a duration is a string such as "15s"`},
+		{"shutdown not a duration string", strings.Replace(validConfig, "}", `,"shutdown_timeout":"soon"}`, 1), `shutdown_timeout must be a duration: a duration is a string such as "15s"`},
 		{"two objects", validConfig + validConfig, "one JSON object"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

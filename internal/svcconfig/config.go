@@ -131,14 +131,17 @@ func (a AimemConfig) checkOrigin() error {
 // Duration is a time.Duration written as a Go duration string, like "15s".
 type Duration time.Duration
 
+// errNotDuration is a Duration's refusal; decodeConfig names the field.
+var errNotDuration = errors.New("a duration is a string such as \"15s\"")
+
 func (d *Duration) UnmarshalJSON(b []byte) error {
 	var s string
 	if err := json.Unmarshal(b, &s); err != nil {
-		return errors.New("a duration is a string such as \"15s\"")
+		return errNotDuration
 	}
 	v, err := time.ParseDuration(s)
 	if err != nil {
-		return errors.New("a duration is a string such as \"15s\"")
+		return errNotDuration
 	}
 	*d = Duration(v)
 	return nil
@@ -181,6 +184,10 @@ func decodeConfig(raw []byte) (Config, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
+		if errors.Is(err, errNotDuration) {
+			// shutdown_timeout is the one Duration field.
+			return Config{}, fmt.Errorf("config: shutdown_timeout must be a duration: %w", err)
+		}
 		return Config{}, fmt.Errorf("config: %w", err)
 	}
 	if dec.Decode(&struct{}{}) != io.EOF {

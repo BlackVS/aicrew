@@ -2944,8 +2944,10 @@ Messages that arrive during a turn wait for the next one.
   second, and after the third the member is held:
   - it gets one turn a day on those messages, and one turn on a new
     message no sooner than the longest wait after its last turn. A
-    message has had its turn when a turn was admitted with it: one that
-    arrives while a turn runs, or whose turn failed, still gets its own.
+    message has had its turn when a counted turn was admitted with it:
+    one that arrives while a turn runs, or whose turn failed, hit the
+    provider's limit or was ended by the stopping loop, still gets its
+    own.
     A new message does not clear the count, so a coordinator writing to
     a held worker cannot restart the three turns. A new message is one
     newer than any a turn was admitted with, read from the pending
@@ -2960,8 +2962,8 @@ Messages that arrive during a turn wait for the next one.
     as a project grant withdrawn), or a pause of the member or its team,
     clears the count and the hold. A pause is read during a failed
     turn's backoff or a provider's limit too.
-  - The brief of such a turn says which turn on these messages it is and
-    how the earlier ones ended, from the count in `state/turns.json`,
+  - The brief of such a turn says which turn on the messages the count
+    began with it is and how the earlier ones ended, from the count in `state/turns.json`,
     which survives a restart.
   - The continuation turns of an attempt in work keep their cadence and
     the stall rules below. A worker acknowledges the offer's message in

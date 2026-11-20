@@ -211,7 +211,7 @@ func (e *loopEnv) tickStopping(t *testing.T) {
 	next := e.next
 	e.next = func(TurnSpec, *fakeHost) TurnResult {
 		cancel()
-		return TurnResult{Outcome: TurnStopped, Error: "the turn loop is stopping"}
+		return TurnResult{Outcome: TurnStopped, Error: "the turn loop is stopping", LoopStopping: true}
 	}
 	defer func() { e.next = next }()
 	e.clock = e.clock.Add(turnGap + time.Second)
@@ -526,5 +526,92 @@ func TestUnackedHoldTurnsBound(t *testing.T) {
 	st := turnState{Unacked: &unackedState{Messages: []string{"m1"}, Stuck: []string{"m1"}, Turns: maxHoldTurns + 5}}
 	if h := unackedHold(st); h == nil || h.Turns != maxHoldTurns {
 		t.Fatalf("%+v", h)
+	}
+}
+
+// A turn stopped by its time limit counts even when the loop begins to stop
+// while the turn is recorded: the cause is the runner's, not the context's.
+func TestUnackedTimeoutThenShutdown(t *testing.T) {
+	e := unackedEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult {
+		cancel()
+		h.pendingErr = errors.New("the loop is stopping")
+		return TurnResult{Outcome: TurnStopped, Error: "the turn's time limit (30m0s) passed"}
+	}
+	e.clock = e.clock.Add(turnGap + time.Second)
+	e.loop.Tick(ctx)
+	if u := readTurnState(e.home).Unacked; u == nil || u.Turns != 1 {
+		t.Fatalf("a timed-out turn during a shutdown: %+v", u)
+	}
+}
+
+// During a failed turn's backoff, a read that no longer lists a message the
+// count began with clears the count and the hold; the backoff stands.
+func TestUnackedGoneDuringBackoff(t *testing.T) {
+	e := heldEnv(t)
+	e.host.pending = append(e.host.pending, msg("m2", "message"))
+	e.clock = readTurnState(e.home).Unacked.LastEnded.Add(unackedCeiling * defaultUnackedWait)
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult {
+		h.ack("m1")
+		h.pendingErr = errors.New("aicrewd is restarting")
+		return TurnResult{Outcome: TurnFailed, Error: "exit 1"}
+	}
+	e.tick(t)
+	st := readTurnState(e.home)
+	if st.Unacked == nil || !e.clock.Before(st.HoldUntil) {
+		t.Fatalf("after the failed turn: %+v, until %s", st.Unacked, st.HoldUntil)
+	}
+	until := st.HoldUntil
+	e.host.pendingErr = nil
+	e.tick(t)
+	st = readTurnState(e.home)
+	if st.Unacked != nil || !st.HoldUntil.Equal(until) || !lastHold(e).same(holdReport{}) {
+		t.Fatalf("a read without m1 during the backoff: %+v, until %s, hold %+v", st.Unacked, st.HoldUntil, lastHold(e))
+	}
+}
+
+// A later note the held member's turn acknowledged is not in the next
+// brief's streak: the brief names the messages the count began with.
+func TestUnackedMessagesNamed(t *testing.T) {
+	e := heldEnv(t)
+	e.host.pending = append(e.host.pending, msg("n1", "message"), msg("n2", "message"))
+	e.clock = readTurnState(e.home).Unacked.LastEnded.Add(unackedCeiling * defaultUnackedWait)
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult {
+		h.ack("n1")
+		return TurnResult{Outcome: TurnFinished}
+	}
+	e.tick(t)
+	if h := lastHold(e); strings.Join(h.Messages, ",") != "m1,n1,n2" || h.Turns != 4 {
+		t.Fatalf("the hold after turn 4: %+v", h)
+	}
+	e.host.pending = append(e.host.pending, msg("n3", "message"))
+	e.clock = readTurnState(e.home).Unacked.LastEnded.Add(unackedCeiling * defaultUnackedWait)
+	e.tick(t)
+	p := e.specs[len(e.specs)-1].Prompt
+	if len(e.specs) != 5 || !strings.Contains(p, "This is turn 5 on message(s) m1:") {
+		t.Fatalf("the fifth brief: %d turns\n%s", len(e.specs), p)
+	}
+}
+
+// A held member's turn on a new note that hits the provider's limit did
+// not serve the note: its next turn is due after the ceiling, not a day on.
+func TestUnackedLimitLeavesNoteNew(t *testing.T) {
+	e := heldEnv(t)
+	e.host.pending = append(e.host.pending, msg("n1", "message"))
+	e.clock = readTurnState(e.home).Unacked.LastEnded.Add(unackedCeiling * defaultUnackedWait)
+	e.next = func(TurnSpec, *fakeHost) TurnResult {
+		return TurnResult{Outcome: TurnLimitReached, LimitKind: "usage", ResetAt: e.clock.Add(time.Minute)}
+	}
+	e.tick(t)
+	if len(e.specs) != 4 {
+		t.Fatalf("%d turns for the note", len(e.specs))
+	}
+	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished} }
+	e.ticksTo(t, readTurnState(e.home).Unacked.LastEnded.Add(unackedCeiling*defaultUnackedWait+time.Minute))
+	e.tick(t)
+	if len(e.specs) != 5 {
+		t.Fatalf("%d turns: the limited turn served the note", len(e.specs))
 	}
 }

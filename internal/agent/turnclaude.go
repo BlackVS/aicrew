@@ -46,7 +46,10 @@ type TurnResult struct {
 	Outcome   string
 	Error     string
 	LimitKind string
-	ResetAt   time.Time
+	// LoopStopping marks a stopped turn that ended because the loop is
+	// stopping, not by its own time limit (unacked.go).
+	LoopStopping bool
+	ResetAt      time.Time
 	// Usage is the turn's own token use.
 	Usage TurnUsage
 	// CostUSD is the turn's own cost, from CostSource. A Claude Code turn
@@ -137,7 +140,7 @@ func RunClaudeTurn(ctx context.Context, spec TurnSpec) TurnResult {
 	case errors.Is(tctx.Err(), context.DeadlineExceeded):
 		res.Outcome, res.Error = TurnStopped, fmt.Sprintf("the turn's time limit (%s) passed", spec.Timeout)
 	case ctx.Err() != nil:
-		res.Outcome, res.Error = TurnStopped, "the turn loop is stopping"
+		res.Outcome, res.Error, res.LoopStopping = TurnStopped, "the turn loop is stopping", true
 	case res.Outcome == "" && werr != nil:
 		res.Outcome, res.Error = TurnFailed, fmt.Sprintf("the client exited without a result: %v: %s", werr,
 			strings.TrimSpace(stderr.String()))

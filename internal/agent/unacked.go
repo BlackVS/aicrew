@@ -48,10 +48,10 @@ const (
 
 // unackedState is the count of turns without progress, in the turn state.
 type unackedState struct {
-	// Messages are the ids the last such turn was admitted on, oldest
-	// first, as the pending read lists them; Stuck the ids the count began
-	// with, which only an acknowledgement (or their leaving the pending
-	// read) or a pause clears.
+	// Stuck are the ids the count began with, which only an
+	// acknowledgement (or their leaving the pending read) or a pause
+	// clears; the brief names them. Messages, which the hold names, are
+	// the ids the last such turn was admitted with.
 	Messages []string `json:"messages"`
 	Stuck    []string `json:"stuck"`
 	// Served is the newest message's seq a turn was admitted on: a
@@ -180,9 +180,8 @@ func (l *TurnLoop) noteGone(st *turnState, pending []PendingMessage) {
 // began with, or admitted when it begins) pending; after is the pending read
 // after it, when read says it succeeded (a turn after a failed read counts
 // as one that acknowledged nothing). A turn that ends finished, cut by its own budget or
-// stopped by its time limit counts; one stopped because the loop is
-// stopping, or failed, does not, and a failed turn keeps its own backoff and
-// leaves its new messages new.
+// stopped by its time limit counts; any other does not, keeps its own
+// backoff, and leaves its new messages new.
 func (l *TurnLoop) countUnacked(st *turnState, rec TurnRecord, admitted, after []PendingMessage, read, stopping bool) {
 	u := st.Unacked
 	stuck := pendingIDs(admitted)
@@ -193,12 +192,8 @@ func (l *TurnLoop) countUnacked(st *turnState, rec TurnRecord, admitted, after [
 		l.clearUnacked(st, "the turn acknowledged a message the count began with")
 		return
 	}
-	served := maxSeq(admitted)
 	if u != nil {
 		u.LastEnded = rec.EndedAt
-		if rec.Outcome != TurnFailed {
-			u.Served = max(u.Served, served)
-		}
 	}
 	counted := rec.Outcome == TurnFinished || (rec.Outcome == TurnStopped && !stopping) ||
 		(rec.Outcome == TurnLimitReached && rec.LimitKind == "budget")
@@ -206,9 +201,12 @@ func (l *TurnLoop) countUnacked(st *turnState, rec TurnRecord, admitted, after [
 		return
 	}
 	if u == nil {
-		u = &unackedState{Stuck: stuck, Since: rec.EndedAt, LastEnded: rec.EndedAt, Served: served}
+		u = &unackedState{Stuck: stuck, Since: rec.EndedAt, LastEnded: rec.EndedAt}
 		st.Unacked = u
 	}
+	// Only a counted turn served its new messages: one that hit the
+	// provider's limit, failed or was ended by the loop leaves them new.
+	u.Served = max(u.Served, maxSeq(admitted))
 	u.Turns++
 	u.Messages = pendingIDs(admitted)
 	u.Outcomes = append(u.Outcomes, unackedTurn{Turn: rec.ID, EndedAt: rec.EndedAt, Outcome: rec.Outcome,
@@ -252,7 +250,7 @@ func briefUnacked(b *strings.Builder, u *unackedState) {
 	fmt.Fprintf(b, "\nThis is turn %d on message(s) %s: the last %d turn(s) ended and left them unacknowledged. "+
 		"The launcher waits longer before each such turn and, after %d, gives the member one such turn a day; "+
 		"it tells the operator in the team's state. Acknowledge a message you have handled. If you cannot act on "+
-		"one, say why in your summary.\n", u.Turns+1, strings.Join(u.Messages, ", "), u.Turns, unackedTurns)
+		"one, say why in your summary.\n", u.Turns+1, strings.Join(u.Stuck, ", "), u.Turns, unackedTurns)
 	for _, o := range u.Outcomes {
 		fmt.Fprintf(b, "- Turn %s ended %s, %s: %s\n", o.Turn, o.EndedAt.UTC().Format(time.RFC3339), o.Outcome,
 			orNone(cutText(o.Summary, maxUnackedSummary)))

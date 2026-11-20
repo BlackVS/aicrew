@@ -185,9 +185,15 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	if now.Before(st.HoldUntil) {
 		// A pause during a backoff still clears the count: a resume
 		// leaves no trace to read later.
+		// So does a read that no longer lists a message the count
+		// began with. The backoff stands either way.
 		if st.Unacked != nil {
-			if _, paused, err := l.Host.PendingNow(ctx); err == nil && paused != nil {
-				l.clearUnacked(&st, "the member or its team was paused")
+			if pending, paused, err := l.Host.PendingNow(ctx); err == nil {
+				if paused != nil {
+					l.clearUnacked(&st, "the member or its team was paused")
+				} else {
+					l.noteGone(&st, pending)
+				}
 				l.syncHold(ctx, &st)
 			}
 		}
@@ -449,11 +455,11 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		again, paused, err := l.Host.PendingNow(ctx)
 		switch {
 		case err != nil:
-			l.countUnacked(st, rec, pending, nil, false, ctx.Err() != nil)
+			l.countUnacked(st, rec, pending, nil, false, res.LoopStopping)
 		case paused != nil:
 			l.clearUnacked(st, "the member or its team was paused")
 		default:
-			l.countUnacked(st, rec, pending, again, true, ctx.Err() != nil)
+			l.countUnacked(st, rec, pending, again, true, res.LoopStopping)
 		}
 	}
 	setHold(st, firstHold(outcomeHold(*st, res, attemptID), unackedHold(*st)))

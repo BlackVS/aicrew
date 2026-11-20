@@ -104,8 +104,8 @@ user.** They reach the hub in two ways:
 So a socket error concerns the first kind, and a refused grant the
 second's URL or bearer.
 - **The socket.** aimem finds it under `XDG_RUNTIME_DIR`. A shell opened
-  with `su - USER` has no `XDG_RUNTIME_DIR`, and every admin command then
-  stops with "is the local aimem service running?"
+  with `su - USER` has no `XDG_RUNTIME_DIR`, and `aimem access` and
+  `aimem skills` then stop with "is the local aimem service running?"
   although the service runs (seen on 2026-11-19). Set it first:
 
   ```sh

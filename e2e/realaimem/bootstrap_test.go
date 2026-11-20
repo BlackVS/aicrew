@@ -245,11 +245,19 @@ func (h *harness) setupTeam(opEnv, host []string) {
 	if r.code != 3 || !strings.Contains(r.stdout, "team e2e is registered on hub "+hubName) || len(grant) != 1 {
 		t.Fatalf("aicrew team setup, first run: exit %d\n%s%s", r.code, r.stdout, r.stderr)
 	}
-	want := "--peer " + serviceID + " --team-name e2e --project " + projectID
-	if grant[0][1] != want {
+	// The line names the hub's URL and the admin's token file as
+	// placeholders for the admin, and the note under it says what each one
+	// is; the harness's identity helper passes its own real hub flags, so
+	// only the line's grant fields go on.
+	fields := "--peer " + serviceID + " --team-name e2e --project " + projectID
+	if want := fields + " --hub HUB_URL --admin-token-file ADMIN_TOKEN_FILE"; grant[0][1] != want {
 		t.Fatalf("team setup prints the grant %q, want %q", grant[0][1], want)
 	}
-	h.must(host, nil, h.identity(append([]string{"team", "grant"}, strings.Fields(grant[0][1])...)...)...)
+	if !strings.Contains(r.stdout, "\n  HUB_URL is the hub's TLS listener") ||
+		!strings.Contains(r.stdout, "\n  ADMIN_TOKEN_FILE is a file only the admin can read") {
+		t.Fatalf("team setup's note on the placeholders:\n%s", r.stdout)
+	}
+	h.must(host, nil, h.identity(append([]string{"team", "grant"}, strings.Fields(fields)...)...)...)
 	r = h.run(opEnv, nil, aicrew, "team", "setup", "e2e", "--hub", hubName, "--project", projectID)
 	if r.code != 0 || !strings.Contains(r.stdout, "team e2e is already registered on hub "+hubName) ||
 		!strings.Contains(r.stdout, "granted: "+projectID) || !strings.Contains(r.stdout, "every project is granted") ||

@@ -194,11 +194,13 @@ worker's host. The restarted service records the team's projects after
 its model probe and its session's start, and only then writes
 `msg="the turn loop runs"` to `HOME/logs/serve.log`. A check run before
 that line may still print what it printed before the restart: run it
-again once the line is there. A warning that persists after the line
-was not a check run too early: the service could not record the team,
-and `HOME/logs/serve.log` then holds `msg="the team's projects were not
-recorded"` with the cause in its `error=` field. Restart the service again
-once that cause is gone.
+again once the line is there. First see that the warning names the
+project just selected: another project of the team keeps its own warning
+until it has a selection. A warning for that project that persists
+after the line was not a check run too early: the service could not
+record the team, and `HOME/logs/serve.log` then holds `msg="the team's
+projects were not recorded"` with the cause in its `error=` field.
+Restart the service again once that cause is gone.
 
 Check: `aicrew team show --team-name crew` names `dev-go` for the project
 under `toolchains`. After step 6, the worker's `aicrew-agent check --home
@@ -524,8 +526,10 @@ is edited by hand. In this order:
    Wait until `HOME/logs/serve.log` has `msg="the turn loop runs"` from
    after the restart: the record is written before that line.
 4. `aicrew-agent check --home HOME` again. A check that still prints the
-   warning was run before the record: run it again after that line. A
-   warning that persists after the line was not a check run too early:
+   warning was run before the record: run it again after that line. See
+   first that the warning names the project just selected: another
+   project keeps its own until it has a selection. A warning for that
+   project that persists after the line was not a check run too early:
    `HOME/logs/serve.log` then holds `msg="the team's projects were not
    recorded"` with the cause in its `error=` field; restart the service
    again once that cause is gone. A `blocked` status with the reason

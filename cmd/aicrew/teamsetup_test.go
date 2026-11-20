@@ -87,8 +87,11 @@ func TestTeamSetup(t *testing.T) {
 	r := cli(t, "team", "setup", "crew", "--hub", "main", "--project", "app", "--project", "docs", "--project", "app")
 	if r.code != exitIncomplete || !strings.Contains(r.stdout, "team crew created on hub main") ||
 		!strings.Contains(r.stdout, "team crew is registered on hub main") ||
-		!strings.Contains(r.stdout, "aimem identity team grant --peer aicrew-test --team-name crew --project app\n") ||
-		!strings.Contains(r.stdout, "aimem identity team grant --peer aicrew-test --team-name crew --project docs\n") ||
+		!strings.Contains(r.stdout, "not granted yet; on the hub's host, as its admin, run:\n"+
+			"  aimem identity team grant --peer aicrew-test --team-name crew --project app --hub HUB_URL --admin-token-file ADMIN_TOKEN_FILE\n"+
+			"  aimem identity team grant --peer aicrew-test --team-name crew --project docs --hub HUB_URL --admin-token-file ADMIN_TOKEN_FILE\n"+
+			"  HUB_URL is the hub's TLS listener, https://HOST:PORT, the --base-url given to aicrew hub add;\n") ||
+		!strings.Contains(r.stdout, "ADMIN_TOKEN_FILE is a file only the admin can read") ||
 		strings.Count(r.stdout, "aimem identity team grant") != 2 {
 		t.Fatalf("first run: exit %d\n%s%s", r.code, r.stdout, r.stderr)
 	}

@@ -577,10 +577,24 @@ func TestCheckClaudeApprovalPending(t *testing.T) {
 	f.ClaudePending = true
 	e := setupCheck(t, f, "aimem", "claude")
 	e.installSkills(t, "1.26.1", "oh-code-review")
-	rep := e.check(t, "claude")
-	if rep.Status != JoinRestartRequired || !rep.Clients[0].ApprovalPending || !hasNotice(rep, "trust the folder") ||
-		!hasNotice(rep, "(`"+StartCommand(e.home, []string{"claude"})+"`)") {
+	var out bytes.Buffer
+	rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"claude"}, Timeout: 60 * time.Second, Out: &out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The notice names the interactive start and who answers it, and says
+	// that a service's turns are not asked; it names no service command,
+	// which accepts nothing (bring-up finding B).
+	want := "Claude Code asks at an interactive start in this home (`" + startCommand("claude", quoteArg(e.home)) +
+		"`) to trust the folder and to approve the project MCP server aimem: the person who starts it so accepts both. " +
+		"A turn of the member's service runs in print mode, which shows neither question"
+	if rep.Status != JoinRestartRequired || !rep.Clients[0].ApprovalPending || !hasNotice(rep, want) ||
+		hasNotice(rep, "service start") {
 		t.Fatalf("%+v", rep)
+	}
+	// The progress line says what "pending" is (bring-up finding D).
+	if !strings.Contains(out.String(), ", aimem pending approval for an interactive start\n") {
+		t.Fatalf("the progress lines:\n%s", out.String())
 	}
 }
 

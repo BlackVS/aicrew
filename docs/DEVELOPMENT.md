@@ -1411,9 +1411,11 @@ bin/aicrew team toolchain --team-name crew --project PROJECT --clear
     reported as the problem, with exit 1 and no grant command;
   - each `--project` the hub grants is listed, with a note when the hub
     binds it no repository or process. For each one it does not grant yet,
-    it prints the exact command the hub's admin runs,
-    `aimem identity team grant --peer SERVICE_ID --team-name TEAM --project PROJECT`,
-    and exits 3;
+    it prints the command the hub's admin runs on the hub's host,
+    `aimem identity team grant --peer SERVICE_ID --team-name TEAM --project PROJECT --hub HUB_URL --admin-token-file ADMIN_TOKEN_FILE`,
+    with lines that say what the two values are, and exits 3. aicrewd's
+    answer names neither the hub's URL nor the admin's bearer, so the admin
+    fills them in (BRING-UP.md, step 1);
   - run again once the grants exist, it registers nothing again, reports
     every project granted and exits 0.
 - Wherever a command takes `--team`, the team's ID, it takes `--team-name`
@@ -2473,8 +2475,11 @@ member's user-level skills under it. It reports:
   it stopped at its ceiling (the human output only, never `--json`). Print
   mode never shows Claude Code's
   workspace-trust dialog. A project server Claude Code has not yet approved
-  for interactive use is reported as a notice: the first interactive start
-  in the home asks to trust the folder and to approve it.
+  for interactive use is reported as a notice: an interactive start in the
+  home (`aicrew-agent run`) asks to trust the folder and to approve it, and
+  the person who starts it answers. A turn of the member's service runs in
+  print mode and is not asked. The progress line of `claude mcp list`
+  reads `aimem pending approval for an interactive start` in that case.
 - **The turn model,** in a `turns` home whose client is Claude Code. The
   home's model (`turns.model`, an alias such as `haiku` or a full ID, or
   the client's default when empty) resolves through the member's own Claude

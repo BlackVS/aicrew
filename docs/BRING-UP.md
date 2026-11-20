@@ -15,6 +15,12 @@ here.
 The commands are the product's. Where a step has no product command, this
 page says so. Such gaps are listed at the end, under "Gaps".
 
+The steps were run on real hosts on 2026-11-19 and 2026-11-20: a hub with
+aicrewd beside it, two member hosts and a GitHub repository, with aicrew
+v0.11.1 and then v0.11.2. What that run showed is marked "seen" below;
+what is read from code or from other documentation only is marked as
+such. "How far this was tried" at the end lists both.
+
 ## Who does what
 
 Only a person can:
@@ -68,6 +74,54 @@ Two notes on these:
   `check` is the check that shows the login works, and `unknown` there
   means a refused login, a limit or another failure.
 
+## Before step 1: the operator's two connections
+
+The operator's steps run two kinds of command, and each needs its
+connection set up first.
+
+**`aicrew`, on the operator's machine, reaches aicrewd** through four
+values, as flags on each command or, once, as variables of the shell:
+
+```sh
+export AICREW_URL=https://AICREWD:PORT
+export AICREW_TLS_TRUST_MODE=ca_dns            # or spki_sha256
+export AICREW_TLS_TRUST_VALUE=AICREWD          # the host name, or sha256- and the pin
+export AICREW_OPERATOR_TOKEN_FILE=operator.token
+```
+
+The flags are `--url`, `--tls-trust-mode`, `--tls-trust-value` and
+`--token-file`. The token file holds the operator credential, owner-only.
+The commands of this page show neither: they assume the variables.
+Check: `aicrew status` answers.
+
+**aimem's admin commands run on the hub's host, as the hub's service
+user,** and reach the hub's local service over its socket.
+- **The socket.** aimem finds it under `XDG_RUNTIME_DIR`. A shell opened
+  with `su - USER` or `sudo -iu USER` has no `XDG_RUNTIME_DIR`, and every
+  admin command then stops with "is the local aimem service running?"
+  although the service runs (seen on 2026-11-19). Set it first:
+
+  ```sh
+  export XDG_RUNTIME_DIR=/run/user/$(id -u)
+  ```
+
+  Where aimem looks is read from aimem's code (`AIMEM_SOCKET`, then the
+  state root when `AIMEM_STATE_DIR` is set, then `XDG_RUNTIME_DIR`); the
+  line above was not tried.
+- **The hub admin's bearer.** `aimem access` needs only the socket. The
+  `aimem identity` commands (step 1's grant) also need the hub's admin
+  bearer, as a file only its owner can read. On the hub's host it is the
+  value of `AIMEM_HTTP_TOKEN` in the service user's
+  `~/.config/aimem/env`. Write it to a file for the step, and delete the
+  file after it:
+
+  ```sh
+  (umask 077; sed -n 's/^AIMEM_HTTP_TOKEN=//p' ~/.config/aimem/env > admin.token)
+  ```
+
+  This is the line aimem's own hub installer reads it with. The bearer is
+  the hub's admin credential: it stays on the hub's host.
+
 ## The bring-up, in order
 
 For each member, the operator's steps come first and the member host's
@@ -82,10 +136,27 @@ aicrew team setup crew --hub main --project PROJECT
 ```
 
 A new team has no project yet. `team setup` creates or registers it, then
-prints `not granted yet; on the hub, as its admin, run:` followed by one
-`aimem identity team grant ...` line per project, and exits 3. The hub's
-admin runs each printed line on the hub. The operator then runs
-`aicrew team setup` again with the same arguments.
+prints `not granted yet; on the hub's host, as its admin, run:` followed by
+one line per project, and exits 3:
+
+```text
+  aimem identity team grant --peer SERVICE --team-name crew --project PROJECT --hub HUB_URL --admin-token-file ADMIN_TOKEN_FILE
+```
+
+The hub's admin runs each line on the hub's host, as "Before step 1"
+says, with two values filled in. aicrewd does not tell `aicrew` the hub's
+address, so the line cannot:
+- `HUB_URL` is the hub's TLS listener, `https://HOST:PORT`: the
+  `--base-url` that `aicrew hub add` was given.
+- `ADMIN_TOKEN_FILE` is the file with the hub admin's bearer ("Before
+  step 1"). Delete it after the grants.
+- A hub on a private CA also takes `--hub-ca-file FILE` or
+  `--hub-pin sha256-PIN`.
+
+Without `--hub` the command stops with "--hub must be the hub's TLS
+listener" (seen on 2026-11-19, when the printed line had neither flag).
+The operator then runs `aicrew team setup` again with the same
+arguments.
 
 Check: the rerun exits 0 and prints
 `every project is granted to team crew`. A `granted:` project followed by
@@ -106,18 +177,42 @@ The archive and SHA256SUMS are the assets of that ai-skills release, or
 the same files from an aiforge export in a closed network. Check:
 `aimem skills list --hub` on the hub's host names the release set.
 
+**A new team works as soon as a member joins.** A coordinator that joins
+wakes on the READY tasks of the team's projects. To bring the team up
+first and start its work later, pause it now:
+
+```sh
+aicrew team pause --team-name crew --reason "bring-up"
+```
+
+and resume it in step 8. A pause holds the members' turns, not their
+joins: the first team's members joined it paused on 2026-11-19, and ended
+`ready` in it on 2026-11-20 (seen).
+
 ### 2. The member's aimem user and token (operator, on the hub)
 
-On the hub's host, with aimem's admin commands:
+On the hub's host, with aimem's admin commands ("Before step 1"):
 
 ```sh
 aimem access user-add --user-name crew-worker
-aimem access token-issue-user --user-id USER_ID --label crew-worker --expires 2027-01-01T00:00:00Z --output member.token
+aimem access token-issue-user --user-name crew-worker --label crew-worker --expires 2027-01-01T00:00:00Z --output member.token
 ```
 
-Check: `user-add` prints the user's ID, which step 4 pins. The token file
-is owner-only. Carry it to the member's host privately, or type it at the
-hidden prompt in step 6.
+The member's aimem user gets no grant of its own: the hub serves it under
+the team's grant (step 6, "The skills").
+
+Check: `user-add` prints the user's ID, which step 4's `--expect-user`
+needs. `aimem access list` shows the users and their live tokens; there is
+no separate user list. The token file is owner-only.
+
+**Carrying a file to the member's host.** Steps 2 to 4 each make a file
+the member's host needs: this token, the forge token and the invitation
+code. Copy each as it is, for example with `scp` to the member's user, and
+make it owner-only there (`chmod 600 FILE`). A text pipe can change the
+bytes: in PowerShell, piping one command's output into another adds a
+carriage return, and the token is then refused (seen on 2026-11-19). The
+aimem and forge tokens can also be typed at join's hidden prompts instead
+(step 6).
 
 ### 3. The member's forge account and token (operator, on the forge)
 
@@ -126,13 +221,35 @@ Each member has its own forge account and token
 account needs push access to the team's repositories, since `check` reads
 that permission for each granted project.
 - **GitHub:** a user account for the member. Add it as a collaborator
-  with write access to each repository, and issue a personal access token
-  for it.
+  with write access to each repository, and issue a **classic** personal
+  access token for it with the `repo` scope. A fine-grained token cannot
+  reach a repository its account only collaborates on: it works only on
+  repositories of the account that owns the token, or of an organization
+  that admits fine-grained tokens (GitHub's documentation on personal
+  access tokens; met by the first pilot on 2026-10-11). The first team's
+  members used classic tokens: join reported them `verified` on
+  2026-11-19, and `check` on 2026-11-20.
 - **Gitea:** a user for the member, given write access to each repository
   (as a collaborator, or through a team with write). Issue an access token
   for it, under the user's settings, Applications.
 
-The token needs the rights listed under "The forge token's rights" below.
+The token needs the rights listed under "The forge token's rights" below,
+and it must write, for the coordinator too: its review comment, the
+external-review label and marking a pull request ready go through
+`aicrew-agent forge pr` with its own token.
+
+**A token that cannot write is not refused at join.** join asks the forge
+only who the token is. `check` then reads what it may do ("What `check`
+reads of the token"): on Gitea and with a classic GitHub token it names a
+missing write right, and with a fine-grained GitHub token it says
+`not_checked`. So check `check`'s project table after join, not only join's
+report.
+
+**One forge account for two members** works: aicrew does not compare the
+members' forge accounts. On a free GitHub plan a single owner may have only
+one machine account, and the first team's two members shared one. Each
+member still has its own token, and the automations of a pull request run
+with the token of the member whose attempt it belongs to.
 
 Check: none until step 6, where `join --cred` asks the forge who the token
 authenticates as before writing it, and then `check`, which reads the
@@ -146,8 +263,9 @@ aicrew invitation issue --team-name crew --role worker --hub HUB_ID --label work
 ```
 
 Use `--role coordinator` and another `--label` for the coordinator. The
-code is written only to `--output`, lives 24 hours by default, and is
-never an argument later. Give it privately to whoever runs `join`.
+code is written only to `--output` and is never an argument later. Give it
+privately to whoever runs `join`. It lives 24 hours by default and at most
+72 (`--expires 72h`); a bring-up spread over days issues it last, or again.
 
 Check: `aicrew invitation list --team-name crew` shows its state.
 
@@ -166,6 +284,22 @@ npm install -g @anthropic-ai/claude-code@2.1.286
   runs in an empty one.
 - npm needs a prefix the user may write to, for example
   `npm config set prefix ~/.npm-global` with its `bin` on `PATH`.
+- Claude Code 2.1.286 declares Node.js 22 or later. Debian 13 ships
+  Node.js 20.19: npm warns at the install, and the client works (seen on
+  2026-11-19).
+- aimem's boot script also adds two hooks to the user's own
+  `~/.claude/settings.json`, `Stop` and `StopFailure`, each running
+  `aimem submit-claude`, which records a finished turn in aimem. join and
+  `check` therefore print, on a host set up as written: "this home runs
+  under an OS user whose own Claude Code configuration reaches every turn
+  of the member: hooks in ~/.claude/settings.json". On a member's host this
+  notice is expected, and these two hooks are the reason. In a member's
+  turn they run with the home's own aimem: the home's managed
+  `.claude/settings.json` gives every session started there, its hooks
+  included, the home's `AIMEM_STATE_DIR` and `AIMEM_SOCKET` (read from the
+  code, `internal/agent/homeaimem.go`). Anything else the notice names
+  (other skills, permissions, a `CLAUDE.md`) is the user's own and reaches
+  the member's turns too.
 
 Then the person logs the client in: `claude`, and its login flow.
 
@@ -257,7 +391,34 @@ HOME`:
 
 Check: join's report is `ready`, and its `skills:` lines name what it
 installed. Its forge table shows the host `provisioned`, and `aicrew
-invitation list` shows step 4's invitation redeemed.
+invitation list` shows step 4's invitation redeemed. On 2026-11-20 both
+members' joins with v0.11.2 ended `ready` in about eleven seconds, with
+the skills installed from the hub (seen).
+
+After `ready`, delete the input files from the member's host:
+- **The aimem token** (`--aimem-token-file`): join gave it to the home's
+  own aimem installation, which keeps it.
+- **The forge token** (`--cred`): join wrote it to the home's credential
+  store.
+- **The invitation code** (`--code-file`): it is spent.
+- **The hub's CA file** (`--aimem-ca-file`), if one was given: join copied
+  it into the home.
+
+Two lines of join's and `check`'s output are not faults:
+- **"Claude Code asks at an interactive start in this home ... to trust
+  the folder and to approve the project MCP server aimem".** Only an
+  interactive start asks (`aicrew-agent run`), and the person who starts
+  it answers. A member that runs only as a service starts no interactive
+  client: its turns run Claude Code in print mode, which shows neither
+  question, and the init probe in print mode reports aimem's server
+  `connected` while the approval is pending. This is read from the code
+  and from measurements of October 2026 (`docs/TURN-PROBE.md`, "MCP tools
+  and file reads in a turn"); a member's first turn on v0.11.2 has not
+  been observed yet.
+- **"claude mcp list: ..., aimem pending approval for an interactive
+  start".** The same approval, as `claude mcp list` reports it. The line
+  before it, "claude init probe: ..., aimem MCP server connected", is how
+  a turn sees the server.
 
 ### 7. The service (member host)
 
@@ -273,6 +434,9 @@ stops at the last logout.
 Check: `service status` says `running`.
 
 ### 8. The team (operator)
+
+If the team was paused in step 1, resume it when every member is
+`ready`: `aicrew team resume --team-name crew`.
 
 Check: `aicrew team show --team-name crew` lists the coordinator and the
 worker. `aicrew-agent check --home HOME` on each host has no `blocked`
@@ -321,7 +485,9 @@ CI re-run automation reports that nothing was re-run.
 ### GitHub
 
 This list is read from the code and from GitHub's documentation of the
-permissions each REST endpoint needs. It was not tried with a token.
+permissions each REST endpoint needs. A fine-grained token was not tried.
+A classic token with `repo` was: the first team's members joined with one,
+join reported it `verified` on 2026-11-19, and `check` on 2026-11-20.
 
 A fine-grained personal access token of the member's account, with access
 to the team's repositories:
@@ -351,7 +517,8 @@ The account's own `GET /user` needs no permission.
 
 A classic personal access token covers the same with the `repo` scope
 (`public_repo` on a public repository), and `workflow` for workflow files.
-GitHub recommends the fine-grained one.
+GitHub recommends the fine-grained one, but a member whose account only
+collaborates on the repository needs the classic one (step 3).
 
 ### What `check` reads of the token
 
@@ -396,6 +563,24 @@ The Gitea part was tried, the GitHub part was not: it is read from
 GitHub's documentation and tested against a stand-in server only.
 
 ## How far this was tried
+
+**On real hosts, 2026-11-19 and 2026-11-20.** A hub with aicrewd beside
+it, two Debian member hosts, one GitHub repository owned by a personal
+account, and one machine account for both members:
+- **The operator's steps 1 to 4** were run by the owner. The findings of that run are corrected above: the
+  grant line, the two connections, the hub admin's bearer, the paused
+  team, the invitation's lifetime, the user name and the carrying of
+  files.
+- **Steps 5 and 6** on both member hosts, with the product's commands
+  only, run as the member's user without a terminal (`--code-file`):
+  - with v0.11.1 and aimem v0.11.4, join ended `blocked` on the skills,
+    which aicrew v0.11.2 fixed;
+  - with v0.11.2 and aimem v0.11.5, join ended `ready` on both hosts, the
+    skills installed from the hub, and each member's service started and
+    held its own session thirty seconds later. `check` passed with the
+    forge credential and the repository verified.
+- **Not seen yet:** a member's first turn, and `aicrew team show` of
+  step 8.
 
 On 2026-11-16, step 5 and the start of step 6 were run as an unprivileged
 user in a scratch `debian:bookworm-slim` container on the lab simulation

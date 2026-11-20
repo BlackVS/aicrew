@@ -576,8 +576,11 @@ func (c *checker) checkClient(ctx context.Context, name string, single bool) {
 			strings.Join(r.MissingSkills, ", "), skillsInstruction(c.set.Components["ai-skills"], "", r.MissingSkills, c.o.Home)))
 	}
 	if d.ApprovalPending {
-		c.notice(fmt.Sprintf("Claude Code will ask at the first interactive start in this home to trust the folder and to "+
-			"approve the project MCP server aimem: accept both (`%s`)", StartCommand(c.o.Home, []string{"claude"})))
+		// Only an interactive start asks (clients.go): a turn of the member's
+		// service runs Claude Code in print mode, which shows neither prompt.
+		c.notice(fmt.Sprintf("Claude Code asks at an interactive start in this home (`%s`) to trust the folder and to "+
+			"approve the project MCP server aimem: the person who starts it so accepts both. A turn of the member's "+
+			"service runs in print mode, which shows neither question", startCommand("claude", quoteArg(c.o.Home))))
 	}
 	if name == "claude" {
 		c.checkTurnModel(ctx, path)

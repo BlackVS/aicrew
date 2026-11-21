@@ -272,6 +272,10 @@ def check(step, d, case=""):
     coordinator = load(d, "homes/coordinator/HANDOFF.md", "") or ""
     for s, text in (("review", "Accepted result 1 of attempt " + a["id"]),
                     ("done", "Attempt %s was finalized" % a["id"])):
+        # A home of an earlier release (the upgrade scenario's first cycle)
+        # has its coordinator finalize in a turn.
+        if s == "done" and "Finalized attempt " + a["id"] in coordinator:
+            continue
         if after(s):
             expect(text in coordinator, "coordinator: the handoff does not record %r" % text)
     return errs

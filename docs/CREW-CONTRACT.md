@@ -1134,6 +1134,11 @@ names the home's credentials. Nothing of aicrewd's routes changes.
   accepted, the launcher reads the open attempts every 30 seconds (not the
   forge) and starts the check when the attempt is listed accepted with
   that pull request, and forgets it when the attempt leaves the list.
+  The merge notice in the inbox is the only start: the launcher reads no
+  attempt's pull request on the forge. An accepted attempt whose merge
+  notice was acknowledged before its coordinator's launcher had the check
+  (a turn of an earlier release's home acknowledged it) gets no check,
+  and nothing else starts one.
   The launcher reads the message once, at first sight, with the inbox
   read the brief makes (`GET /v1/crew/inbox`, up to 100 messages); the
   pending list names a message's kind but not its subjects. That read
@@ -1222,6 +1227,33 @@ names the home's credentials. Nothing of aicrewd's routes changes.
 - Only a coordinator's launcher checks; a worker's defers nothing. The
   team state does not show a pending check; the launcher's log has each
   read as `delivery check`, with the verdict.
+- **The order of steps after the merge.** The coordinator's launcher
+  confirms the delivery (`confirm-delivery`). aicrewd announces it with a
+  lifecycle message, "LABEL confirmed the delivery of result N of task
+  T.", to every active member of the team but the one that confirmed, so
+  the worker gets it and the coordinator does not. The worker finalizes
+  its accepted result on that message (`finalize`, with that result). The
+  coordinator may finalize instead, only from the session and generation
+  that recorded the acceptance (ROLES.md: "if the worker has not"). Before
+  this check, one coordinator turn took both steps; now the confirm is the
+  launcher's, and the finalize is usually the worker's.
+- **A confirmed delivery the worker never finalizes.** Nothing moves
+  it. The attempt stays `running/accepted`, with its delivery recorded.
+  aicrewd's list of pending merges no longer names it, since its delivery
+  is the accepted result, and an accepted attempt never counts as
+  stalled. The confirmation's message does not reach the coordinator, so
+  no message and no tick of its launcher gives the coordinator a turn for
+  it. When the worker's turns on that message fail, the message stays
+  unacknowledged, and the worker's count of unacknowledged turns reports
+  a hold, as for any message. A worker turn that acknowledges the message
+  without finalizing leaves no sign.
+- **On an upgraded home.** The home's guidance and settings are managed
+  files, which only `aicrew-agent join` writes (BRING-UP.md, "Upgrading a
+  member"). A coordinator's home upgraded without the rerun keeps the
+  earlier release's guidance, which tells its turns to run the check, and
+  its settings lack the rule that keeps a turn from editing the skills:
+  the product does not detect this yet, beyond `check`'s notice on the
+  deny rules of `.claude/settings.json`.
 
 ## Ordering across the two stores
 

@@ -535,6 +535,49 @@ mrejoin() {
     fail "aicrew-agent join --home on sim-$1's linked home ($OUT/rejoin-$1.txt)"
   echo join-rerun >> "$OUT/docsteps.ran"
 }
+# mupgrade_join ROLE: the document's rerun of join in an upgrade, on the
+# member's home, with its JSON report in $OUT/upgrade-join-ROLE.json (its
+# progress lines in .txt); no
+# service, as in member.sh. The report asks for the restart a changed
+# managed file needs (restart_required), and it updated the home's
+# docs/ROLES.md.
+mupgrade_join() {
+  local line rev=()
+  # The previous release's coordinator joined without --reviewer, which
+  # the launcher's check on Gitea needs (BRING-UP.md, step 6).
+  [ "$1" != coordinator ] || rev=(-add "--reviewer FORGE_HOST=ACCOUNT" -set FORGE_HOST=sim-gitea:3000 -set ACCOUNT=sim-hands)
+  line=$(docline join-upgrade -set "HOME=$(mhome "$1")" "${rev[@]}") || fail "docs/BRING-UP.md: no line for step join-upgrade"
+  dc exec -T -u member -e AICREW_NO_SERVICE=1 "sim-$1" sh -c "$line" > "$OUT/upgrade-join-$1.json" 2> "$OUT/upgrade-join-$1.txt" ||
+    fail "the upgrade's rerun of join on sim-$1 ($OUT/upgrade-join-$1.json, $OUT/upgrade-join-$1.txt)"
+  echo join-upgrade >> "$OUT/docsteps.ran"
+  python3 - "$OUT/upgrade-join-$1.json" <<'PY' || fail "sim-$1: the upgrade's rerun of join did not update the home's guidance ($OUT/upgrade-join-$1.json)"
+import json, sys
+rep = json.load(open(sys.argv[1]))
+changes = {c["path"]: c["action"] for c in rep.get("changes") or []}
+print("  the rerun's changes: " + ", ".join("%s %s" % (a, p) for p, a in sorted(changes.items()) if a != "unchanged"))
+print("  the rerun's status: %s (%s)" % (rep.get("status"), rep.get("instruction", "")))
+sys.exit(0 if rep.get("status") == "restart_required" and changes.get("docs/ROLES.md") == "update" else 1)
+PY
+}
+# upgraded_delivery: after the upgrade, the cycle's delivery is the
+# coordinator's launcher's, on the guidance and settings the rerun wrote:
+# the launcher logged the confirmed delivery of #PULL, the stand-in ran no
+# check of it, and the coordinator's turn settings deny edits of the skills
+# (anchored at the home with ./, as turn settings are).
+upgraded_delivery() {
+  local h
+  h=$(mhome coordinator)
+  dc logs --no-color sim-coordinator 2>&1 | grep -F 'msg="the delivery is confirmed"' |
+    grep -qF "pull=https://sim-gitea:3000/operator/pilot/pulls/$PULL" ||
+    fail "cycle $CYCLE: the coordinator's launcher logged no confirmed delivery of #$PULL after the upgrade"
+  ! dc exec -T -u member sim-coordinator grep -qF "verify-delivery confirmed https://sim-gitea:3000/operator/pilot/pulls/$PULL " "$h/docs/HANDOFF.md" ||
+    fail "cycle $CYCLE: the stand-in coordinator ran the delivery check of #$PULL after the upgrade"
+  dc exec -T -u member sim-coordinator grep -qF "Your launcher takes this step itself" "$h/docs/ROLES.md" ||
+    fail "cycle $CYCLE: the upgraded coordinator's docs/ROLES.md is not this tree's guidance"
+  dc exec -T -u member sim-coordinator grep -qF 'Edit(./.claude/skills/**)' "$h/.claude/turn-settings-coordinator.json" ||
+    fail "cycle $CYCLE: the upgraded coordinator's turn settings do not deny edits of the skills"
+  ev observation task="$TASK" what="after the upgrade and the rerun of join, the coordinator's launcher confirmed the delivery of #$PULL; the stand-in ran no check, and the home has this tree's guidance and turn settings"
+}
 # docsteps_verify SCENARIO: the run executed every step SCENARIO declares;
 # the members' own runs are in their containers.
 docsteps_verify() {
@@ -1220,6 +1263,9 @@ upgrade() {
       fail "boot.sh did not upgrade $svc ($OUT/upgrade-boot-$role.log)"
     [ "$(installed "$svc" member /home/member/.local/bin/aicrew-agent)" = "$(digest "$up/member/prebuilt/aicrew-agent")" ] ||
       fail "$svc's aicrew-agent is not this tree's build after boot.sh"
+    # docs/BRING-UP.md, "Upgrading a member": the rerun of join writes the
+    # home's managed files, which the new binary does not rewrite.
+    [ -n "$BELOW" ] || mupgrade_join "$role"
     # serve keeps the old binary until it starts again: the restart stands
     # for an installed member's service restart (with AICREW_NO_SERVICE=1
     # boot.sh does not restart it).
@@ -1356,6 +1402,8 @@ below_turn_and_fix() {
       fail "aicrew-agent check is not green in $svc after the instruction ($OUT/upgrade-check-fixed-$role.json)"
     python3 "$SIM/smoke.py" check "$OUT/upgrade-check-fixed-$role.json" "$PILOTSIM_AISKILLS_VERSION" ||
       fail "$svc's check report after the instruction ($OUT/upgrade-check-fixed-$role.json)"
+    # The upgrade's rerun of join, once aimem is at the minimum.
+    mupgrade_join "$role"
     runs=$(serve_runs "$svc") || fail "the process list of $svc could not be read after the instruction"
     case $runs in
       yes) continue ;;
@@ -1395,6 +1443,7 @@ if [ -n "$UPGRADE" ]; then
   C1_TASK=$TASK C1_PULL=$PULL C1_MERGE=$MERGE C1_FIRST=$FIRST
   upgrade
   cycle 2
+  upgraded_delivery
   kept
   docsteps_verify "pilot-sim-upgrade${BELOW:+-below-minimum}"
 elif [ -z "$SKIP" ]; then

@@ -548,6 +548,18 @@ nothing to do ends, and the launcher's next message starts the next one.
 - **The worker**, on aicrewd's message that the delivery of its accepted
   result was confirmed, finalizes it (`finalize`) with that message's
   result; without the message it waits.
+- **Both follow their home's guidance on the delivery**, as a person's
+  client reads it: the confirm-delivery step in the home's `docs/ROLES.md`.
+  The two items above hold where it gives the check to the launcher. A
+  home of an earlier release (the upgrade scenario's first cycle) gives it
+  to the coordinator's turn: there the stand-in coordinator runs the
+  installed verify-delivery script with the home's forge credential,
+  takes `confirm-delivery` with its evidence and `finalize` in the same
+  turn, and the stand-in worker leaves the accepted attempt to it. A
+  `docs/ROLES.md` with neither wording fails the turn and says so, and the
+  stand-in's unit test reads both wordings from where the product keeps
+  them (this tree's managed text, and a copy of v0.11.3's in
+  `e2e/pilotsim/cmd/aicrew-simclient/testdata`).
 - **The worker** accepts an offer with the instruction digest the offer
   carries. In each turn of its running attempt it first reads the turn's
   settings (the file the launcher passes with `--settings`) and fails the
@@ -1062,8 +1074,8 @@ its point:
 | F1-transfer-reply | | reply | the worker accepted again; the receipt reconciled the transfer; the worker holds the task |
 | F1-update-request | the same for the worker's submit | request | the update stays pending, undecided; the task is still READY; the worker's handoff records the request key |
 | F1-update-reply | | reply | the worker's next submit superseded the pending one; the receipt reconciled it; the task is in REVIEW |
-| F1-finalize-request | the same for the coordinator's finalize | request | the finalize settled not committed; the attempt is still accepted, the task in REVIEW |
-| F1-finalize-reply | | reply | the coordinator delivered again; the receipt reconciled the finalize; the task is DONE |
+| F1-finalize-request | the same for the worker's finalize, after the coordinator's launcher confirmed the delivery | request | the finalize settled not committed; the attempt is still accepted, the task in REVIEW |
+| F1-finalize-reply | | reply | the worker finalized again; the receipt reconciled the finalize; the task is DONE |
 | F2-begin | `sim-px-crew` drops the reply to the offer's begin | begin | the coordinator saw the step fail, and `step recover` replayed the begin to the one attempt the lost reply began |
 | F2-settle | `sim-px-crew` drops the reply to the settle of `sim-indep`'s claim | settle | the claim saw its settle fail; `step recover` settled it, once: the attempt runs, with one committed claim and no step left recorded |
 | F3-launcher | `sim-indep`'s container is killed after aimem committed its claim, before the settle | launcher | aicrewd's reconciler settled the claim within 45 seconds, and the attempt runs; the restarted launcher has no step recorded |

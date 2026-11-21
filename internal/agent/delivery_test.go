@@ -236,6 +236,36 @@ func TestDeliveryPendingThenConfirmed(t *testing.T) {
 	}
 }
 
+// The first real trial: the home was upgraded from v0.11.3, whose turn
+// state (as that release wrote it, with no delivery field) records the
+// accepted attempt's turns, and the merge notice waits unacknowledged. The
+// new launcher starts the check at its first tick, confirms the delivery
+// and acknowledges the notice, with no turn.
+func TestDeliveryAfterAnUpgradeFromV0113(t *testing.T) {
+	e := deliveryEnv(t)
+	setScript(t, e, fakeVerify{Exit: 0, Stdout: verdictConfirmed})
+	old := `{"attempts":{"` + testAttempt + `":{"continuations":2,"no_progress":0,"head":"abc","cost_usd":0.4,` +
+		`"handoff_unchanged":1}},"days":{"2026-11-20":0.4}}`
+	if err := os.MkdirAll(filepath.Join(e.home, "state"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.home, TurnStateFile), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.tick(t)
+	confirms := e.host.opCalls("confirm-delivery")
+	if len(confirms) != 1 || confirms[0].AttemptID != testAttempt || confirms[0].Key != "aicrew-agent-delivery-"+testAttempt+"-2" {
+		t.Fatalf("confirm steps after the first tick: %+v", confirms)
+	}
+	st := readTurnState(e.home)
+	if len(e.host.pending) != 0 || len(e.specs) != 0 || st.Deliveries[testAttempt] != nil {
+		t.Errorf("after the confirm: pending %v, %d turns, check %+v", e.host.pending, len(e.specs), st.Deliveries[testAttempt])
+	}
+	if a := st.Attempts[testAttempt]; a == nil || a.Continuations != 2 || a.Head != "abc" {
+		t.Errorf("the v0.11.3 state's attempt record was not kept: %+v", a)
+	}
+}
+
 // Not confirmed goes to a turn once, with the failed checks in the brief;
 // the launcher reads on, and a repair made outside (a re-run CI job) is
 // confirmed without another turn.

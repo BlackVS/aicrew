@@ -427,7 +427,15 @@ func (m *member) worker(ctx context.Context, b brief, msgs []message) error {
 		}
 		m.note("Resumed attempt %s on the coordinator's answer.", b.Attempt)
 	} else if b.State == "running" && b.Phase == "accepted" {
-		return m.finalizeConfirmed(ctx, b, msgs)
+		launcher, err := m.launcherDelivers()
+		if err != nil {
+			return err
+		}
+		if launcher {
+			return m.finalizeConfirmed(ctx, b, msgs)
+		}
+		m.note("Attempt %s is accepted: the coordinator confirms its delivery and finalizes it.", b.Attempt)
+		return nil
 	} else if b.State != "running" || (b.Phase != "working" && b.Phase != "rework") {
 		m.note("Attempt %s is %s/%s: nothing for the worker to do.", b.Attempt, b.State, b.Phase)
 		return nil
@@ -793,22 +801,26 @@ func (m *member) coordinator(ctx context.Context, msgs []message) error {
 			m.note("Gave the blocked attempt %s the architect's answer to escalation %s.", ea.attempt, ea.id)
 		}
 	}
-	// After a merge the delivery is the launcher's check, not a turn's
-	// (task 01a1fa19-19a4): an accepted attempt's turn has nothing to run.
-	for _, a := range open.Attempts {
-		if a.Phase == "accepted" {
-			m.note("Attempt %s is accepted: its delivery is the launcher's check.", a.ID)
-		}
+	// The stand-in follows its home's guidance. Where the launcher checks
+	// the delivery (task 01a1fa19-19a4), an accepted attempt's turn has
+	// nothing to run, and the worker finalizes. A home of an earlier release
+	// tells its coordinator to confirm the delivery and finalize in a turn:
+	// every accepted attempt is checked each turn, so a delivery
+	// verify-delivery left pending is confirmed on a later turn.
+	launcher, err := m.launcherDelivers()
+	if err != nil {
+		return err
 	}
-	// The mirrors that waited for the worker's hold on the task go up once
-	// the worker finalized it.
-	for _, msg := range msgs {
-		if msg.Kind == "lifecycle" && msg.AttemptID != "" && msg.Task != nil && finalizedLine.MatchString(msg.Text) {
-			m.note("Attempt %s was finalized: task %s is DONE.", msg.AttemptID, msg.Task.TaskID)
-			if err := m.postWaitingMirrors(ctx, agent.OpenAttempt{ID: msg.AttemptID, Task: *msg.Task}); err != nil {
-				return err
+	if !launcher {
+		for _, a := range open.Attempts {
+			if a.Phase == "accepted" {
+				if err := m.deliver(ctx, a); err != nil {
+					return err
+				}
 			}
 		}
+	} else if err := m.launcherDelivered(ctx, open, msgs); err != nil {
+		return err
 	}
 	for _, t := range tasks {
 		if slices.ContainsFunc(open.Attempts, func(a agent.OpenAttempt) bool { return a.Task.TaskID == t.TaskID }) {
@@ -1232,6 +1244,178 @@ LOW
 
 Review: oh-code-review (high) via the pilot simulation's scripted coordinator
 `
+}
+
+// externalReviewer is the account of the simulation's external reviewer,
+// whose reviews verify-delivery counts as the external one.
+const externalReviewer = "sim-hands"
+
+// deliver confirms the delivery of the accepted result once its pull
+// request is merged, with the evidence verify-delivery returns, and
+// finalizes it.
+func (m *member) deliver(ctx context.Context, a agent.OpenAttempt) error {
+	rs := m.results(a.ID)
+	if len(rs) == 0 {
+		return fmt.Errorf("attempt %s is accepted, but the handoff records no result of it", a.ID)
+	}
+	r := rs[len(rs)-1]
+	shown, err := m.showPull(ctx, r.pull)
+	if err != nil {
+		return err
+	}
+	if shown.Pull.State != forge.PullMerged {
+		m.note("Pull request %s is %s: no delivery to confirm yet.", r.pull, shown.Pull.State)
+		return nil
+	}
+	v, err := m.verifyDelivery(ctx, r.pull)
+	if err != nil {
+		return err
+	}
+	if v.Verdict != "confirmed" {
+		m.note("verify-delivery: %s for %s; the delivery is not confirmed.", v.Verdict, r.pull)
+		return nil
+	}
+	m.note("verify-delivery confirmed %s with %d evidence entries.", r.pull, len(v.Evidence))
+	if _, err := m.step(ctx, "confirm-delivery", a.ID, "", map[string]any{"result_seq": r.seq, "evidence": v.Evidence}); err != nil {
+		return err
+	}
+	m.note("Confirmed the delivery of result %d of attempt %s.", r.seq, a.ID)
+	if _, err := m.step(ctx, "finalize", a.ID, a.Task.TaskID, map[string]any{"result_seq": r.seq}); err != nil {
+		return err
+	}
+	m.note("Finalized attempt %s: task %s is DONE.", a.ID, a.Task.TaskID)
+	return m.postWaitingMirrors(ctx, a)
+}
+
+// delivery is what the coordinator reads of verify-delivery's answer.
+type delivery struct {
+	Verdict  string `json:"verdict"`
+	Evidence []struct {
+		Kind string `json:"kind"`
+		Ref  string `json:"ref"`
+	} `json:"evidence"`
+}
+
+// verifyDelivery runs the installed verify-delivery helper against the pull
+// request with the home's own forge credential, naming the coordinator's
+// account and the external reviewer's as the reviews' authors.
+func (m *member) verifyDelivery(ctx context.Context, url string) (delivery, error) {
+	var v delivery
+	host, _, ok := strings.Cut(strings.TrimPrefix(url, "https://"), "/")
+	if !ok {
+		return v, fmt.Errorf("%s is not an https URL", url)
+	}
+	cred, err := m.forgeCred(host)
+	if err != nil {
+		return v, err
+	}
+	helper, err := m.skillFile("verify-delivery", "verify_delivery.py")
+	if err != nil {
+		return v, err
+	}
+	out, code, err := m.run(ctx, m.home, "", "env", "GITEA_TOKEN_FILE="+cred.file, "python3", helper,
+		"--pr", url, "--api-base", "https://"+host+"/api/v1",
+		"--review-author", "local="+cred.account, "--review-author", "external="+externalReviewer)
+	if err != nil {
+		return v, fmt.Errorf("verify-delivery: %w", err)
+	}
+	if jerr := json.Unmarshal(out, &v); jerr != nil || v.Verdict == "" {
+		return v, fmt.Errorf("verify-delivery exited %d without a verdict: %.400s", code, strings.TrimSpace(string(out)))
+	}
+	return v, nil
+}
+
+// forgeCredential is the home's own credential for a forge host, as
+// join recorded it in agent.json.
+type forgeCredential struct{ file, account string }
+
+func (m *member) forgeCred(host string) (forgeCredential, error) {
+	raw, err := os.ReadFile(filepath.Join(m.home, "agent.json"))
+	if err != nil {
+		return forgeCredential{}, err
+	}
+	var doc struct {
+		Forge map[string]struct {
+			Account string `json:"account"`
+			File    string `json:"file"`
+		} `json:"forge"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return forgeCredential{}, fmt.Errorf("agent.json: %w", err)
+	}
+	e, ok := doc.Forge[host]
+	if !ok || e.File == "" || e.Account == "" {
+		return forgeCredential{}, fmt.Errorf("the home has no forge credential for %s", host)
+	}
+	return forgeCredential{file: filepath.Join(m.home, "creds", e.File), account: e.Account}, nil
+}
+
+// skillFile is a file of an installed skill, from the directories the
+// client reads skills in: the home's, then the user's.
+func (m *member) skillFile(skill, file string) (string, error) {
+	dirs := []string{filepath.Join(m.home, ".claude", "skills")}
+	if uh, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(uh, ".claude", "skills"))
+	}
+	for _, d := range dirs {
+		p := filepath.Join(d, skill, file)
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("no installed %s skill (%s)", skill, strings.Join(dirs, ", "))
+}
+
+// The wordings of the home's docs/ROLES.md on the confirm-delivery step:
+// launcherGuidance where the launcher checks the delivery (task
+// 01a1fa19-19a4), turnGuidance in the releases before, where the
+// coordinator's turn does.
+const (
+	launcherGuidance = "Your launcher takes this step itself"
+	turnGuidance     = "After a person merged the accepted result, record the evidence"
+)
+
+// launcherDelivers says whether the home's own guidance gives the delivery
+// check to the launcher (true) or to the coordinator's turn (false). A home
+// whose guidance has neither wording fails the turn: the stand-in would
+// otherwise guess.
+func (m *member) launcherDelivers() (bool, error) {
+	raw, err := os.ReadFile(filepath.Join(m.home, "docs", "ROLES.md"))
+	if err != nil {
+		return false, fmt.Errorf("the home's guidance on the delivery: %w", err)
+	}
+	return guidanceDelivers(raw)
+}
+
+// guidanceDelivers reads a docs/ROLES.md for who checks the delivery.
+func guidanceDelivers(roles []byte) (bool, error) {
+	l, t := bytes.Contains(roles, []byte(launcherGuidance)), bytes.Contains(roles, []byte(turnGuidance))
+	if l == t {
+		return false, fmt.Errorf("the home's docs/ROLES.md says neither or both of %q and %q: the stand-in cannot "+
+			"tell who checks the delivery", launcherGuidance, turnGuidance)
+	}
+	return l, nil
+}
+
+// launcherDelivered is the coordinator's part where the launcher checks the
+// delivery: an accepted attempt's turn has nothing to run, and the mirrors
+// that waited for the worker's hold on the task go up once the worker
+// finalized it.
+func (m *member) launcherDelivered(ctx context.Context, open agent.OpenAttempts, msgs []message) error {
+	for _, a := range open.Attempts {
+		if a.Phase == "accepted" {
+			m.note("Attempt %s is accepted: its delivery is the launcher's check.", a.ID)
+		}
+	}
+	for _, msg := range msgs {
+		if msg.Kind == "lifecycle" && msg.AttemptID != "" && msg.Task != nil && finalizedLine.MatchString(msg.Text) {
+			m.note("Attempt %s was finalized: task %s is DONE.", msg.AttemptID, msg.Task.TaskID)
+			if err := m.postWaitingMirrors(ctx, agent.OpenAttempt{ID: msg.AttemptID, Task: *msg.Task}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // finalizedLine is aicrewd's announcement of a finalized attempt.

@@ -374,6 +374,51 @@ func TestJoinTakesForgeCreds(t *testing.T) {
 	}
 }
 
+// --reviewer records the external reviewer's account in a host's forge
+// entry, on a rerun too; a rotated credential keeps it, and a host without
+// a credential is refused.
+func TestJoinTakesForgeReviewer(t *testing.T) {
+	e := setupJoin(t)
+	e.join(t, e.opts(), &recCrew{}, activeAimem(), e.invite(t, "inv-1", "coordinator"))
+	dir := t.TempDir()
+	f := newFakeForge()
+	f.kinds["git.example.org"] = forge.Gitea
+	f.ids["gt"] = forge.Identity{Account: "coord", Name: "coord", CommitEmail: "x"}
+	reads := 0
+	deps := e.deps(&recCrew{}, activeAimem(), &reads)
+	deps.Forge = f
+	opts := JoinOptions{Home: e.home, Creds: []ForgeCred{{"git.example.org", tokenFile(t, dir, "gt", "gt")}},
+		Reviewers: []ForgeReviewer{{"git.example.org", "hands-bot"}}}
+	if _, err := Join(context.Background(), opts, deps); err != nil {
+		t.Fatal(err)
+	}
+	doc, _, _ := readAgentDoc(e.home)
+	if r := doc.forgeEntries()["git.example.org"].ExternalReviewer; r != "hands-bot" {
+		t.Fatalf("external_reviewer %q", r)
+	}
+	opts.Reviewers = nil
+	if _, err := Join(context.Background(), opts, deps); err != nil {
+		t.Fatal(err)
+	}
+	doc, _, _ = readAgentDoc(e.home)
+	if r := doc.forgeEntries()["git.example.org"].ExternalReviewer; r != "hands-bot" {
+		t.Fatalf("the credential's rerun dropped external_reviewer: %q", r)
+	}
+	if _, err := Join(context.Background(), JoinOptions{Home: e.home,
+		Reviewers: []ForgeReviewer{{"other.example.org", "x"}}}, deps); err == nil ||
+		!strings.Contains(err.Error(), "--cred other.example.org=FILE") {
+		t.Fatalf("a host without a credential: %v", err)
+	}
+	for _, v := range []string{"git.example.org", "git.example.org=", "git.example.org=a b", "=acct"} {
+		if _, err := ParseForgeReviewer(v); err == nil {
+			t.Errorf("--reviewer %q was taken", v)
+		}
+	}
+	if err := checkForgeReviewers([]ForgeReviewer{{"h", "a"}, {"h", "b"}}); err == nil {
+		t.Error("two reviewers for one host were taken")
+	}
+}
+
 // A recorded file that is not a credential reference is never opened or
 // removed: an edited agent.json cannot point outside creds/.
 func TestForgeEntryFileShape(t *testing.T) {

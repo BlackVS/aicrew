@@ -83,6 +83,10 @@ type JoinOptions struct {
 	// Creds are the member's own forge credentials, one per host
 	// (forgecred.go); allowed on a first join and on a linked home's rerun.
 	Creds []ForgeCred
+	// Reviewers name, per forge host, the account whose reviews the
+	// coordinator's delivery check counts as the external one on Gitea and
+	// GitLab (forgecred.go); allowed on a first join and on a rerun.
+	Reviewers []ForgeReviewer
 	// Wake records the home's wake mode (WakeStopHook or WakeTurns) in
 	// agent.json's wake.mode before the managed files are written; empty
 	// keeps the recorded one.
@@ -284,6 +288,9 @@ func (j *joiner) options() error {
 		return err
 	}
 	if err := checkForgeCreds(o.Creds); err != nil {
+		return err
+	}
+	if err := checkForgeReviewers(o.Reviewers); err != nil {
 		return err
 	}
 	if o.Wake != "" && o.Wake != WakeStopHook && o.Wake != WakeTurns {
@@ -758,6 +765,14 @@ func (j *joiner) prepare(ctx context.Context, redeemed bool) (JoinReport, error)
 	if len(j.toks) > 0 {
 		fmt.Fprintln(j.deps.Out, "Forge credentials:")
 		if rep.Forge, err = provisionForge(ctx, o.Home, &j.doc, j.toks, j.deps.Forge, j.deps.Out); err != nil {
+			return JoinReport{}, err
+		}
+		if err := j.doc.write(o.Home); err != nil {
+			return JoinReport{}, err
+		}
+	}
+	if len(o.Reviewers) > 0 {
+		if err := setForgeReviewers(&j.doc, o.Reviewers, j.deps.Out); err != nil {
 			return JoinReport{}, err
 		}
 		if err := j.doc.write(o.Home); err != nil {

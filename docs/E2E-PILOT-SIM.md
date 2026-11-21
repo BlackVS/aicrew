@@ -514,8 +514,8 @@ member is the client's turn mode (`e2e/pilotsim/cmd/aicrew-simclient/turn.go`).
 It reads the role and the attempt from the brief on standard input, and the
 messages from `aicrew-agent inbox --json`. It acts only through the
 product's surfaces: aicrew-agent's steps and its `clone` and `forge pr`
-commands, git in the worktree, the home's aimem MCP server, and the
-installed verify-delivery helper. It acks the messages it read, records
+commands, git in the worktree, and the home's aimem MCP server. It acks
+the messages it read, records
 what it did in `docs/HANDOFF.md`, and ends with one stream-json `result`
 line, an error result when its script fails. It never sleeps: a turn with
 nothing to do ends, and the launcher's next message starts the next one.
@@ -536,14 +536,30 @@ nothing to do ends, and the launcher's next message starts the next one.
     accepts the result with the `review` step. No member surface names a
     result's number yet (task `01a188f9-4d9a`), so the coordinator counts
     the attempt's submit announcements: the nth is result n.
-  - in every turn, for each accepted attempt whose pull request is merged,
-    runs verify-delivery from its skill directory with its home's own forge
-    credential, `--api-base` and
-    `--review-author local=<its account> --review-author external=sim-hands`.
-    On `confirmed` it confirms the delivery with the evidence returned
-    (`confirm-delivery`) and finalizes (`finalize`); otherwise it records
-    the verdict and waits for a later turn.
+  - runs no delivery check: after the merge the coordinator's launcher,
+    the real `aicrew-agent serve`, runs the installed verify-delivery
+    script against sim-gitea and takes `confirm-delivery` with its evidence
+    (CREW-CONTRACT.md, "A coordinator's delivery check"). The coordinator
+    joins with `--reviewer sim-gitea:3000=sim-hands`, as BRING-UP.md's
+    step names it. A turn notes an accepted attempt as the launcher's, and
+    on aicrewd's message that the attempt was finalized posts the mirrors
+    that waited for the worker's hold on the task.
   - answers a worker's blocked report with the `answer` step.
+- **The worker**, on aicrewd's message that the delivery of its accepted
+  result was confirmed, finalizes it (`finalize`) with that message's
+  result; without the message it waits.
+- **Both follow their home's guidance on the delivery**, as a person's
+  client reads it: the confirm-delivery step in the home's `docs/ROLES.md`.
+  The two items above hold where it gives the check to the launcher. A
+  home of an earlier release (the upgrade scenario's first cycle) gives it
+  to the coordinator's turn: there the stand-in coordinator runs the
+  installed verify-delivery script with the home's forge credential,
+  takes `confirm-delivery` with its evidence and `finalize` in the same
+  turn, and the stand-in worker leaves the accepted attempt to it. A
+  `docs/ROLES.md` with neither wording fails the turn and says so, and the
+  stand-in's unit test reads both wordings from where the product keeps
+  them (this tree's managed text, and a copy of v0.11.3's in
+  `e2e/pilotsim/cmd/aicrew-simclient/testdata`).
 - **The worker** accepts an offer with the instruction digest the offer
   carries. In each turn of its running attempt it first reads the turn's
   settings (the file the launcher passes with `--settings`) and fails the
@@ -625,6 +641,18 @@ The last check is the delivery record. The script runs verify-delivery
 itself, as the coordinator ran it, and its `confirmed` evidence
 (`reviewed_head`, `human_merge`, `post_merge_ci`) must be the attempt's
 delivery and terminal evidence and among the task's evidence refs.
+
+The launcher's delivery check runs here against sim-gitea only. The unit
+tests in `internal/agent/delivery_test.go` run the launcher against a
+stand-in script that prints a preset verdict, so they verify the
+launcher's side and none of the check's own rules: the argument list and
+environment for GitHub, Gitea and GitLab; each verdict and fault; the
+retries of the confirm step; and the day's bound on pending reads. Not
+covered by either: the check's own reading of GitHub (its trust by author
+association) and of GitLab, which the verify-delivery skill's tests own;
+the interpreter on Windows (`python`) and a host without one; and a check
+that answers not confirmed on a real forge, with the escalation that
+follows.
 
 The snapshots stay in `DIR/cycle-<n>/<step>/`.
 
@@ -815,7 +843,7 @@ cycle's checks at the step done, without the plain cycle's external RETURN.
 | --- | --- | --- | --- |
 | P2 | the worker pushes while `hands-reviewing` is on; a worker waiting on its gates gets no turn, so the operator's nudge gives it one during the review | submit | two commits; no review of the first head counts; sim-hands's READY at the second head after the renewed request |
 | P5 | sim-ci fails the first head | submit | the worker reworked for the failed checks; READY and CI success at the second head, the head aicrewd watches |
-| P5 | sim-ci leaves the merge commit pending | pending | verify-delivery answered pending, and the attempt has no delivery, no finalize and no `confirm-delivery` step; the task stays in REVIEW |
+| P5 | sim-ci leaves the merge commit pending | pending | the coordinator's launcher logged its delivery check as pending, and the attempt has no delivery, no finalize and no `confirm-delivery` step; the task stays in REVIEW. Once sim-ci succeeds, the launcher's next read confirms it with no wake, and the cycle ends with its delivery record |
 | P4 | the worker stalls after its accept | blocked | the launcher's stall rule blocked the attempt; the coordinator's blocked report; the task BLOCKED in aimem |
 | P4 | | answered | the coordinator's `answer` step and its handoff; the worker then resumes and the cycle reaches DONE |
 | E1 | the worker stalls after its accept, and the coordinator escalates the block | blocked | as P4's |
@@ -842,7 +870,6 @@ gap is closed and the run fails until the case is updated.
 | P1 | the coordinator's follow-up on the unacked offer within 120 seconds; no bound exists for an unacked message | `01a18ce5-334e` |
 | P3 | the login hold ending within 120 seconds once the login is back; the launcher re-checks only after its backoff | `01a18ce5-335f` |
 | P3 | an unserved model (404) reported as a hold; the launcher backs off and reports nothing. Not run: a member's backoff leaves one held outcome per run. Its reproducer is the member scenario `{"result":"model"}` | `01a176ba-db7d` |
-| P5 | the delivery once the merge commit's CI succeeds, with no wake: the pull watch reads only the head's checks. The operator's nudge then wakes the coordinator, and the cycle ends with its delivery record | `01a18ce5-336d` |
 
 `AICREW_SIM_SKIP_FAULT=CASE` runs the stack and that case only, without its
 fault. The run is green only when the case then fails where its absence
@@ -1047,8 +1074,8 @@ its point:
 | F1-transfer-reply | | reply | the worker accepted again; the receipt reconciled the transfer; the worker holds the task |
 | F1-update-request | the same for the worker's submit | request | the update stays pending, undecided; the task is still READY; the worker's handoff records the request key |
 | F1-update-reply | | reply | the worker's next submit superseded the pending one; the receipt reconciled it; the task is in REVIEW |
-| F1-finalize-request | the same for the coordinator's finalize | request | the finalize settled not committed; the attempt is still accepted, the task in REVIEW |
-| F1-finalize-reply | | reply | the coordinator delivered again; the receipt reconciled the finalize; the task is DONE |
+| F1-finalize-request | the same for the worker's finalize, after the coordinator's launcher confirmed the delivery | request | the finalize settled not committed; the attempt is still accepted, the task in REVIEW |
+| F1-finalize-reply | | reply | the worker finalized again; the receipt reconciled the finalize; the task is DONE |
 | F2-begin | `sim-px-crew` drops the reply to the offer's begin | begin | the coordinator saw the step fail, and `step recover` replayed the begin to the one attempt the lost reply began |
 | F2-settle | `sim-px-crew` drops the reply to the settle of `sim-indep`'s claim | settle | the claim saw its settle fail; `step recover` settled it, once: the attempt runs, with one committed claim and no step left recorded |
 | F3-launcher | `sim-indep`'s container is killed after aimem committed its claim, before the settle | launcher | aicrewd's reconciler settled the claim within 45 seconds, and the attempt runs; the restarted launcher has no step recorded |

@@ -66,7 +66,28 @@ func newFake(t *testing.T) *fakeTools {
 		bodies: map[string]map[string]any{}, stdin: map[string]string{}, steps: map[string][]stepReply{},
 		goOut: "go version go1.19.8 linux/amd64"}
 	f.writeSettings(toolchainSettings)
+	f.writeGuidance(agent.HomeDocs()["docs/ROLES.md"])
 	return f
+}
+
+// writeGuidance replaces the home's docs/ROLES.md.
+func (f *fakeTools) writeGuidance(s string) {
+	if err := os.MkdirAll(filepath.Join(f.home, "docs"), 0o700); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.home, "docs", "ROLES.md"), []byte(s), 0o600); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// earlierGuidance gives the home v0.11.3's docs/ROLES.md, a copy of that
+// release's text.
+func (f *fakeTools) earlierGuidance() {
+	raw, err := os.ReadFile(filepath.Join("testdata", "ROLES-v0.11.3.md"))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.writeGuidance(string(raw))
 }
 
 // writeSettings replaces the turn's settings file.
@@ -729,9 +750,30 @@ func deliveryHome(t *testing.T, f *fakeTools) {
 	f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: forge.PullMerged, HeadCommit: tHead}}
 }
 
-func TestCoordinatorConfirmsTheDelivery(t *testing.T) {
+// After a merge the coordinator's turn runs no delivery check and takes no
+// step: the launcher does (task 01a1fa19-19a4).
+func TestCoordinatorLeavesTheDeliveryToTheLauncher(t *testing.T) {
 	f := newFake(t)
 	deliveryHome(t, f)
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
+		t.Fatalf("turnRun = %d: %s", code, out.String())
+	}
+	if f.called("env ") || f.called("python") || f.called("aicrew-agent step") {
+		t.Fatalf("the turn checked or confirmed the delivery: %v", f.calls)
+	}
+	if doc := readHandoff(t, f.home); !strings.Contains(doc, "Attempt "+tAttempt+" is accepted: its delivery is the launcher's check.") {
+		t.Fatalf("the handoff:\n%s", doc)
+	}
+}
+
+// A home of an earlier release (v0.11.3's guidance) tells its coordinator to
+// confirm the delivery in a turn: the stand-in runs verify-delivery,
+// confirms and finalizes, as the upgrade scenario's first cycle needs.
+func TestCoordinatorOnAnEarlierHomeConfirmsTheDelivery(t *testing.T) {
+	f := newFake(t)
+	deliveryHome(t, f)
+	f.earlierGuidance()
 	f.verify = `{"verdict": "confirmed", "evidence": [{"kind": "reviewed_head", "ref": "R"}, ` +
 		`{"kind": "human_merge", "ref": "M"}, {"kind": "post_merge_ci", "ref": "C"}]}`
 	var out bytes.Buffer
@@ -757,10 +799,11 @@ func TestCoordinatorConfirmsTheDelivery(t *testing.T) {
 	}
 }
 
-func TestCoordinatorWaitsOnAnUnconfirmedDelivery(t *testing.T) {
+func TestCoordinatorOnAnEarlierHomeWaitsOnAnUnconfirmedDelivery(t *testing.T) {
 	for _, verdict := range []string{"pending", "not_confirmed"} {
 		f := newFake(t)
 		deliveryHome(t, f)
+		f.earlierGuidance()
 		f.verify, f.verifyCode = `{"verdict": "`+verdict+`"}`, 4
 		var out bytes.Buffer
 		if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
@@ -776,6 +819,7 @@ func TestCoordinatorWaitsOnAnUnconfirmedDelivery(t *testing.T) {
 	// An open pull request runs no verify-delivery.
 	f := newFake(t)
 	deliveryHome(t, f)
+	f.earlierGuidance()
 	f.pull.Pull.State = forge.PullOpen
 	var out bytes.Buffer
 	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
@@ -783,6 +827,69 @@ func TestCoordinatorWaitsOnAnUnconfirmedDelivery(t *testing.T) {
 	}
 	if f.called("env ") || f.called("aicrew-agent step") {
 		t.Fatalf("an open pull request was verified: %v", f.calls)
+	}
+}
+
+// A worker's working turn checks that its settings admit `go test ./...`
+// and runs `go version` in the worktree it made, once per attempt.
+
+// On an earlier home the worker leaves the accepted attempt to the
+// coordinator, even with the confirmation in its inbox.
+func TestWorkerOnAnEarlierHomeLeavesTheFinalize(t *testing.T) {
+	f := newFake(t)
+	writeSection(t, f.home)
+	f.earlierGuidance()
+	f.inbox = []map[string]any{{"id": "m4", "kind": "lifecycle", "attempt_id": tAttempt,
+		"task": map[string]string{"task_id": tTask},
+		"text": "sim-coordinator confirmed the delivery of result 2 of task main/aicrew/" + tTask + "."}}
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "accepted")), &out, f.member()); code != 0 {
+		t.Fatalf("turnRun = %d: %s", code, out.String())
+	}
+	if f.called("aicrew-agent step") {
+		t.Fatalf("the worker took a step: %v", f.calls)
+	}
+}
+
+// A home whose guidance has neither wording fails the turn and says why.
+func TestTurnFailsOnUnknownDeliveryGuidance(t *testing.T) {
+	f := newFake(t)
+	deliveryHome(t, f)
+	if err := os.WriteFile(filepath.Join(f.home, "docs", "ROLES.md"), []byte("# Roles\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code == 0 ||
+		!strings.Contains(out.String(), "cannot tell who checks the delivery") {
+		t.Fatalf("turnRun = %d: %s", code, out.String())
+	}
+	if f.called("env ") || f.called("aicrew-agent step") {
+		t.Fatalf("the turn acted on unknown guidance: %v", f.calls)
+	}
+}
+
+// The worker finalizes its accepted attempt on aicrewd's message that the
+// delivery was confirmed, with that message's result, and waits without it.
+func TestWorkerFinalizesTheConfirmedDelivery(t *testing.T) {
+	f := newFake(t)
+	writeSection(t, f.home)
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "accepted")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 1 = %d: %s", code, out.String())
+	}
+	if f.called("aicrew-agent step") || !strings.Contains(out.String(), "waiting for the confirmed delivery") {
+		t.Fatalf("turn 1 without the message: %v\n%s", f.calls, out.String())
+	}
+	f.calls = nil
+	f.inbox = []map[string]any{{"id": "m4", "kind": "lifecycle", "attempt_id": tAttempt,
+		"task": map[string]string{"task_id": tTask},
+		"text": "sim-coordinator confirmed the delivery of result 2 of task main/aicrew/" + tTask + "."}}
+	out.Reset()
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "accepted")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 2 = %d: %s", code, out.String())
+	}
+	if f.bodies["finalize"]["result_seq"] != float64(2) {
+		t.Fatalf("finalize body = %v; calls %v", f.bodies["finalize"], f.calls)
 	}
 }
 
@@ -866,5 +973,33 @@ func TestWorkerTurnNeedsSettings(t *testing.T) {
 	m.settings = ""
 	if err := m.admitsTests(); err == nil || err.Error() != "the turn names no --settings file" {
 		t.Fatalf("no settings: %v", err)
+	}
+}
+
+// The stand-in reads who checks the delivery from its home's own guidance:
+// this tree's managed docs/ROLES.md gives it to the launcher, v0.11.3's (a
+// copy of that release's text) to the coordinator's turn, and a guide with
+// neither wording fails, so a reworded sentence breaks this test, not a
+// simulation run.
+func TestGuidanceDelivers(t *testing.T) {
+	old, err := os.ReadFile(filepath.Join("testdata", "ROLES-v0.11.3.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name  string
+		roles string
+		want  bool
+		fails bool
+	}{
+		{"this tree", agent.HomeDocs()["docs/ROLES.md"], true, false},
+		{"v0.11.3", string(old), false, false},
+		{"neither", "# Roles\n", false, true},
+		{"both", launcherGuidance + "\n" + turnGuidance + "\n", false, true},
+	} {
+		got, err := guidanceDelivers([]byte(c.roles))
+		if (err != nil) != c.fails || got != c.want {
+			t.Errorf("%s: guidanceDelivers = %v, %v; want %v, failing %v", c.name, got, err, c.want, c.fails)
+		}
 	}
 }

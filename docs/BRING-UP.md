@@ -432,6 +432,16 @@ aicrew-agent join --label worker --url https://AICREWD:PORT \
 - **The forge host.** `FORGE_HOST` is `github.com`, or the Gitea host with
   its port. With `--cred FORGE_HOST=-` the token is typed at a hidden
   prompt instead of read from a file.
+- **The external reviewer, on Gitea or GitLab.** The coordinator's join
+  adds `--reviewer FORGE_HOST=ACCOUNT` <!-- run-add: join -->, the account the external reviewer
+  posts its reviews as. The coordinator's launcher checks each merged
+  delivery with the verify-delivery skill, which on Gitea and GitLab
+  counts a review only from an account it is told. On a home that is
+  already joined, `aicrew-agent join --home HOME --reviewer
+  FORGE_HOST=ACCOUNT` sets or changes it. GitHub needs none: the check
+  trusts the repository's owners, members and collaborators. Without it,
+  the coordinator's brief says the delivery is not confirmed and names
+  the missing field.
 - **The hub's CA.** A hub on a private CA adds
   `--aimem-ca-file hub-ca.pem` <!-- run-add: join -->. Pin aicrewd as its trust mode requires
   ([DEVELOPMENT.md](DEVELOPMENT.md), "Joining a team").
@@ -544,6 +554,44 @@ report as JSON, for a script. `aicrew status` shows both members.
 
 This is feature 5's check.
 
+### Upgrading a member (member host)
+
+An upgrade is three steps on each member's host, in this order:
+1. Step 5's aicrew one-liner, at the new release's tag. It replaces the
+   binaries, and stops and starts the home's service around the swap.
+2. The rerun of join for each home:
+   `aicrew-agent join --home HOME --json` <!-- run: join-upgrade -->. A
+   home's managed files, its guidance (`docs/ROLES.md`, the
+   `.claude/commands/crew-*.md` commands) and its settings (the
+   `.claude/settings.json` deny rules and the turn settings), are written
+   only by join. The new binary does not rewrite them. Without the rerun,
+   the home keeps the old release's guidance, and its settings miss the
+   new release's rules. In the release with the launcher's delivery check
+   (CREW-CONTRACT.md), one of those rules, `Edit(/.claude/skills/**)`,
+   keeps a turn from editing the
+   verify-delivery script the coordinator's launcher runs with the forge
+   credential. The rerun is a required step of the upgrade, not a
+   tidy-up. A coordinator on Gitea or GitLab, upgraded from a release
+   before that check, adds the external reviewer's account,
+   `--reviewer FORGE_HOST=ACCOUNT` <!-- run-add: join-upgrade -->, as in
+   step 6. Without it, the launcher's check answers that the delivery is
+   not confirmed and names the missing field.
+3. The service's restart, so that the launcher starts on the refreshed
+   home: `aicrew-agent service restart --home HOME`. The rerun does not
+   restart a service that is already running.
+
+Check: when the release changed a managed file, the rerun's report is
+`restart_required`, with the instruction "managed guidance changed:
+restart any client already open in this home", and its `changes` list
+`update` for `docs/ROLES.md` and each other managed file the release
+changed (`ready` when none changed). Step 3 is that restart. A
+`conflict` there means that someone edited that file: join wrote the new
+version beside it as `PATH.aicrew-new`, and the home keeps the edited one
+until a person merges the two. After the restart, `aicrew-agent check
+--home HOME` prints no notice that `.claude/settings.json` lacks managed
+deny rules. That notice is the one sign `check` gives of a missed rerun,
+and it reads only that file.
+
 ### A team already up without a toolchain
 
 A team brought up before this document named the toolchain step has no
@@ -557,8 +605,8 @@ is edited by hand. In this order:
    ID, `--team ID`, which is the same team as `--team-name crew` in step
    2 below. A worker's check reports the
    toolchain from aicrew-agent 0.11.3 on; an older one prints no such
-   line: upgrade the member to v0.11.3 first (step 5's one-liner). The
-   upgrade restarts its service, which records the team again: run check
+   line: upgrade the member to v0.11.3 first, with the three steps of
+   "Upgrading a member" above. The restart records the team again: run check
    once `msg="the turn loop runs"` is in
    `HOME/logs/serve.log` after the upgrade, since a check run earlier may
    read the record from before it and print no line.
@@ -697,6 +745,16 @@ task 01a1fa07-5db2 is done, the readiness check does not read the
 worker's and the coordinator's reviews, whose headers are not yet in the
 form it reads, so the pull request waits for the person's own look at
 the three reviews.
+
+**After the merge.** The coordinator's launcher, not a turn, checks the
+delivery: it runs the installed verify-delivery skill's script with the
+coordinator's forge credential, reads again while CI on the merge commit
+runs, and records the delivery with the check's own evidence. The worker
+then finalizes the task. The coordinator gets no turn for the merge while
+the check is pending; when the check does not confirm, its brief names the
+failed checks and it escalates. The launcher's log has each read
+(`delivery check`, with the verdict); the team state does not show a
+pending check.
 
 ## The forge token's rights
 

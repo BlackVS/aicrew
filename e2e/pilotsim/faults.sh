@@ -253,10 +253,15 @@ case_f1() {
   hold coordinator "case F1: the operator's merge"
   merge
   waitfor "sim-ci's status on the merge commit of #$PULL" 120 pilot_ci_is "$MERGE" success
-  lose_request F1-finalize-request coordinator finalize 300 "the coordinator's finalize"
-  arm aimem F1-finalize-reply drop_reply POST "$(reservation_path finalize)" -persist
+  # The coordinator's launcher confirms the delivery, and the worker
+  # finalizes on aicrewd's message of it (task 01a1fa19-19a4): the
+  # finalize's faults are the worker's.
+  hold worker "case F1: the finalize"
   member resume coordinator
-  member nudge coordinator "case F1-finalize-reply: the finalize again"
+  lose_request F1-finalize-request worker finalize 300 "the worker's finalize"
+  arm aimem F1-finalize-reply drop_reply POST "$(reservation_path finalize)" -persist
+  member resume worker
+  member nudge worker "case F1-finalize-reply: the finalize again"
   delivered
   disarm
   check_case F1-finalize-reply reply

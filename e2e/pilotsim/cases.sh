@@ -111,6 +111,11 @@ pilot_reviewing() {
 }
 # noted ROLE TEXT: the member's handoff has TEXT.
 noted() { dc exec -T -u member "sim-$1" grep -qF "$2" "$(mhome "$1")/docs/HANDOFF.md"; }
+# checked ROLE VERDICT PULL: the member's launcher logged a delivery check of
+# PULL with VERDICT.
+checked() {
+  dc logs --no-color "sim-$1" 2>&1 | grep -F 'msg="delivery check"' | grep -F "pull=$3 " | grep -qF "verdict=$2"
+}
 # nudged_hold ROLE KIND: the operator nudges the member, and its hold in
 # aicrewd is KIND ("none" for no hold) a few seconds later.
 nudged_hold() {
@@ -485,8 +490,10 @@ case_u1() {
 }
 
 # P5: the CI fails on the first head and the rework's second head carries
-# the gates; then the merge commit's CI stays pending, and verify-delivery's
-# pending answer is never recorded as delivered.
+# the gates; then the merge commit's CI stays pending, and the coordinator's
+# launcher's delivery check answers pending, which is never recorded as
+# delivered and gives no turn. Once the CI succeeds, the launcher's next read
+# confirms the delivery with no wake (task 01a1fa19-19a4).
 case_p5() {
   case_start P5
   scenario "{$CASE_SCENARIO}"
@@ -512,19 +519,17 @@ case_p5() {
   merge
   waitfor "sim-ci's pending status on the merge commit of #$PULL" 120 pilot_ci_is "$MERGE" pending
   member resume coordinator
-  waitfor "the coordinator's verify-delivery of the pending merge" 300 \
-    noted coordinator "verify-delivery: pending for https://sim-gitea:3000/operator/pilot/pulls/$PULL"
+  waitfor "the coordinator's launcher's delivery check of the pending merge" 300 \
+    checked coordinator pending "https://sim-gitea:3000/operator/pilot/pulls/$PULL"
   hold coordinator "case P5: the pending delivery's checks"
   check_case P5 pending
-  # The merge commit's CI completes. The pull watch reads only the head's
-  # checks, so nothing wakes the coordinator for it.
+  # The merge commit's CI completes. Nothing wakes the coordinator for it:
+  # its launcher reads again on the check's schedule, at most two minutes
+  # after the pending read, and the paused member's reads wait for the
+  # resume.
   scenario "{$SCENARIO_REPOS}"
   waitfor "sim-ci's success on the merge commit of #$PULL" 120 pilot_ci_is "$MERGE" success
   member resume coordinator
-  xfail 01a18ce5-336d-7000-9bef-5146088e9805 \
-    "the coordinator's delivery once the merge commit's CI succeeds, with no wake from the operator, within 120s" 120 \
-    at 'closed/finalized *'
-  member nudge coordinator "case P5: the merge commit's CI completed"
   delivered
   snapshot done P5
 }

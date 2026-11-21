@@ -426,6 +426,16 @@ func (m *member) worker(ctx context.Context, b brief, msgs []message) error {
 			return err
 		}
 		m.note("Resumed attempt %s on the coordinator's answer.", b.Attempt)
+	} else if b.State == "running" && b.Phase == "accepted" {
+		launcher, err := m.launcherDelivers()
+		if err != nil {
+			return err
+		}
+		if launcher {
+			return m.finalizeConfirmed(ctx, b, msgs)
+		}
+		m.note("Attempt %s is accepted: the coordinator confirms its delivery and finalizes it.", b.Attempt)
+		return nil
 	} else if b.State != "running" || (b.Phase != "working" && b.Phase != "rework") {
 		m.note("Attempt %s is %s/%s: nothing for the worker to do.", b.Attempt, b.State, b.Phase)
 		return nil
@@ -791,15 +801,26 @@ func (m *member) coordinator(ctx context.Context, msgs []message) error {
 			m.note("Gave the blocked attempt %s the architect's answer to escalation %s.", ea.attempt, ea.id)
 		}
 	}
-	// Every accepted attempt is checked each turn, not only on a pull
-	// request's wake: a delivery verify-delivery left pending is confirmed
-	// on a later turn.
-	for _, a := range open.Attempts {
-		if a.Phase == "accepted" {
-			if err := m.deliver(ctx, a); err != nil {
-				return err
+	// The stand-in follows its home's guidance. Where the launcher checks
+	// the delivery (task 01a1fa19-19a4), an accepted attempt's turn has
+	// nothing to run, and the worker finalizes. A home of an earlier release
+	// tells its coordinator to confirm the delivery and finalize in a turn:
+	// every accepted attempt is checked each turn, so a delivery
+	// verify-delivery left pending is confirmed on a later turn.
+	launcher, err := m.launcherDelivers()
+	if err != nil {
+		return err
+	}
+	if !launcher {
+		for _, a := range open.Attempts {
+			if a.Phase == "accepted" {
+				if err := m.deliver(ctx, a); err != nil {
+					return err
+				}
 			}
 		}
+	} else if err := m.launcherDelivered(ctx, open, msgs); err != nil {
+		return err
 	}
 	for _, t := range tasks {
 		if slices.ContainsFunc(open.Attempts, func(a agent.OpenAttempt) bool { return a.Task.TaskID == t.TaskID }) {
@@ -1343,6 +1364,84 @@ func (m *member) skillFile(skill, file string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no installed %s skill (%s)", skill, strings.Join(dirs, ", "))
+}
+
+// The wordings of the home's docs/ROLES.md on the confirm-delivery step:
+// launcherGuidance where the launcher checks the delivery (task
+// 01a1fa19-19a4), turnGuidance in the releases before, where the
+// coordinator's turn does.
+const (
+	launcherGuidance = "Your launcher takes this step itself"
+	turnGuidance     = "After a person merged the accepted result, record the evidence"
+)
+
+// launcherDelivers says whether the home's own guidance gives the delivery
+// check to the launcher (true) or to the coordinator's turn (false). A home
+// whose guidance has neither wording fails the turn: the stand-in would
+// otherwise guess.
+func (m *member) launcherDelivers() (bool, error) {
+	raw, err := os.ReadFile(filepath.Join(m.home, "docs", "ROLES.md"))
+	if err != nil {
+		return false, fmt.Errorf("the home's guidance on the delivery: %w", err)
+	}
+	return guidanceDelivers(raw)
+}
+
+// guidanceDelivers reads a docs/ROLES.md for who checks the delivery.
+func guidanceDelivers(roles []byte) (bool, error) {
+	l, t := bytes.Contains(roles, []byte(launcherGuidance)), bytes.Contains(roles, []byte(turnGuidance))
+	if l == t {
+		return false, fmt.Errorf("the home's docs/ROLES.md says neither or both of %q and %q: the stand-in cannot "+
+			"tell who checks the delivery", launcherGuidance, turnGuidance)
+	}
+	return l, nil
+}
+
+// launcherDelivered is the coordinator's part where the launcher checks the
+// delivery: an accepted attempt's turn has nothing to run, and the mirrors
+// that waited for the worker's hold on the task go up once the worker
+// finalized it.
+func (m *member) launcherDelivered(ctx context.Context, open agent.OpenAttempts, msgs []message) error {
+	for _, a := range open.Attempts {
+		if a.Phase == "accepted" {
+			m.note("Attempt %s is accepted: its delivery is the launcher's check.", a.ID)
+		}
+	}
+	for _, msg := range msgs {
+		if msg.Kind == "lifecycle" && msg.AttemptID != "" && msg.Task != nil && finalizedLine.MatchString(msg.Text) {
+			m.note("Attempt %s was finalized: task %s is DONE.", msg.AttemptID, msg.Task.TaskID)
+			if err := m.postWaitingMirrors(ctx, agent.OpenAttempt{ID: msg.AttemptID, Task: *msg.Task}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// finalizedLine is aicrewd's announcement of a finalized attempt.
+var finalizedLine = regexp.MustCompile(`^Task \S+ was finalized as done with result \d+\.$`)
+
+// confirmedLine is aicrewd's announcement of a confirmed delivery.
+var confirmedLine = regexp.MustCompile(` confirmed the delivery of result (\d+) of task `)
+
+// finalizeConfirmed finalizes the worker's accepted attempt once a message
+// says its delivery was confirmed, with that message's result.
+func (m *member) finalizeConfirmed(ctx context.Context, b brief, msgs []message) error {
+	for _, msg := range msgs {
+		s := confirmedLine.FindStringSubmatch(msg.Text)
+		if msg.Kind != "lifecycle" || msg.AttemptID != b.Attempt || s == nil {
+			continue
+		}
+		var n int64
+		fmt.Sscan(s[1], &n)
+		if _, err := m.step(ctx, "finalize", b.Attempt, b.Task, map[string]any{"result_seq": n}); err != nil {
+			return err
+		}
+		m.note("Finalized attempt %s: task %s is DONE.", b.Attempt, b.Task)
+		return nil
+	}
+	m.note("Attempt %s is accepted: waiting for the confirmed delivery.", b.Attempt)
+	return nil
 }
 
 // ---- the handoff -------------------------------------------------------------------

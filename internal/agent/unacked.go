@@ -175,6 +175,24 @@ func (l *TurnLoop) noteGone(st *turnState, pending []PendingMessage) {
 	}
 }
 
+// uncountHeld takes the messages a delivery check holds out of the count's
+// sets without clearing it: a count from a state that predates the check
+// (an upgraded home) could hold one, and its absence from the later reads
+// would otherwise read as an acknowledgement. A count left with nothing to
+// wait for is cleared.
+func (l *TurnLoop) uncountHeld(st *turnState, held heldMessages) {
+	u := st.Unacked
+	if u == nil || len(held) == 0 {
+		return
+	}
+	drop := func(id string) bool { return held[id] }
+	u.Stuck = slices.DeleteFunc(u.Stuck, drop)
+	u.Messages = slices.DeleteFunc(u.Messages, drop)
+	if len(u.Stuck) == 0 {
+		l.clearUnacked(st, "its messages are the launcher's delivery check")
+	}
+}
+
 // countUnacked counts a turn on admitted, the pending messages it was
 // admitted with, that ended and left the stuck messages (those the count
 // began with, or admitted when it begins) pending; after is the pending read

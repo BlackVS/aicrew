@@ -247,7 +247,7 @@ func TestEscalationOnAHeldTask(t *testing.T) {
 	}
 }
 
-func TestDeliveryPostsTheWaitingMirror(t *testing.T) {
+func TestFinalizePostsTheWaitingMirror(t *testing.T) {
 	f := newFake(t)
 	deliveryHome(t, f)
 	h, err := os.OpenFile(filepath.Join(f.home, filepath.FromSlash(agent.HandoffFile)), os.O_APPEND|os.O_WRONLY, 0)
@@ -259,7 +259,9 @@ func TestDeliveryPostsTheWaitingMirror(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.Close()
-	f.verify = `{"verdict": "confirmed", "evidence": [{"kind": "reviewed_head", "ref": "R"}]}`
+	f.inbox = append(f.inbox, map[string]any{"id": "m5", "kind": "lifecycle", "attempt_id": tAttempt,
+		"task": map[string]string{"task_id": tTask},
+		"text": "Task main/aicrew/" + tTask + " was finalized as done with result 1."})
 	var out bytes.Buffer
 	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
 		t.Fatalf("turnRun = %d: %s", code, out.String())
@@ -288,19 +290,6 @@ func TestCoordinatorActsOnTheEscalationAnswer(t *testing.T) {
 	}
 	if !f.called("aicrew-agent inbox --ack") {
 		t.Fatalf("the answer was not acked: %v", f.calls)
-	}
-}
-
-func TestCoordinatorChecksAcceptedAttemptsWithoutAMessage(t *testing.T) {
-	f := newFake(t)
-	f.attempts = []agent.OpenAttempt{{ID: tAttempt, State: "running", Phase: "accepted", Task: agent.TaskRef{TaskID: tTask}}}
-	var out bytes.Buffer
-	// No result is recorded, so the delivery check fails the turn: it ran.
-	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 1 {
-		t.Fatalf("turnRun = %d: %s", code, out.String())
-	}
-	if !f.called("aicrew-agent attempts") {
-		t.Fatalf("calls = %v", f.calls)
 	}
 }
 

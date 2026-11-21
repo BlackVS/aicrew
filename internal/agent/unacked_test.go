@@ -512,6 +512,11 @@ func TestUnackedPauseDuringBackoff(t *testing.T) {
 func TestUnackedBriefWithoutInbox(t *testing.T) {
 	e := unackedEnv(t)
 	e.host.inboxErr = errors.New("the inbox is unavailable")
+	// The message was looked at for a delivery check before the inbox
+	// failed: an unread one would be held, not sent to a turn.
+	if err := writeTurnState(e.home, turnState{DeliverySeen: e.host.pending[0].Seq}); err != nil {
+		t.Fatal(err)
+	}
 	e.tick(t)
 	e.clock = readTurnState(e.home).Unacked.LastEnded.Add(defaultUnackedWait)
 	e.tick(t)

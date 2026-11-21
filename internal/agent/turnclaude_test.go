@@ -161,8 +161,17 @@ func TestRunClaudeTurn(t *testing.T) {
 	spec.Env = append(env, fakeTurnSleepEnv+"=30s")
 	spec.Timeout = 300 * time.Millisecond
 	start := time.Now()
-	if res := RunClaudeTurn(context.Background(), spec); res.Outcome != TurnStopped || time.Since(start) > 20*time.Second {
+	if res := RunClaudeTurn(context.Background(), spec); res.Outcome != TurnStopped || res.LoopStopping ||
+		time.Since(start) > 20*time.Second {
 		t.Errorf("a turn past its limit: %+v after %s", res, time.Since(start))
+	}
+	// The parent's cancellation is the loop stopping, not the turn's limit.
+	spec.Timeout = time.Minute
+	cctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+	res = RunClaudeTurn(cctx, spec)
+	if res.Outcome != TurnStopped || !res.LoopStopping {
+		t.Errorf("a turn whose loop is stopping: %+v", res)
 	}
 	os.WriteFile(streamf, []byte(stream(streamInit, streamNoModel, streamNoModelResult)), 0o600)
 	spec.Env, spec.Timeout = append(env, fakeTurnExitEnv+"=1"), time.Minute

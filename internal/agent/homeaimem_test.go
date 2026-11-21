@@ -291,7 +291,7 @@ func TestClaudeSettingsCarryTheDenyRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"Read(/creds/**)", "Edit(/creds/**)", "Read(/aimem/hub.json)", "Edit(/aimem/hub.json)",
+		"Read(/creds/**)", "Edit(/creds/**)", "Read(/aimem/hub.json)", "Edit(/aimem/hub.json)", "Edit(/.claude/skills/**)",
 		"Bash(*creds/*)", `Bash(*creds\*)`, "Bash(*aimem/hub.json*)", `Bash(*aimem\hub.json*)`,
 		"Bash(*config --global*)", "Bash(*config --system*)",
 		"Bash(*sslVerify*)", "Bash(*sslverify*)", "Bash(*GIT_SSL_NO_VERIFY*)",

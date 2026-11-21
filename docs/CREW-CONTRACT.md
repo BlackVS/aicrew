@@ -644,10 +644,11 @@ begin needs an `Idempotency-Key`; settle does not.
   - aimem also refuses secret-shaped text, which aicrew does not mirror: a
     confirmation whose reference looks like a secret is refused by aimem at
     finalize, and is then confirmed again.
-  - Aicrew queries no forge. The confirming member gathers the evidence
-    (for example with the verify-delivery skill), and aicrew records it,
-    bound to the accepted result and to the confirming agent, session,
-    generation and time.
+  - aicrewd queries no forge. The confirming member gathers the evidence,
+    and aicrew records it, bound to the accepted result and to the
+    confirming agent, session, generation and time. A coordinator's
+    launcher gathers it itself with the verify-delivery skill ("A
+    coordinator's delivery check").
   - Today the confirming member is the team's current coordinator, who is
     not the attempt's worker. That rule is one predicate, so a dedicated
     verifier role would change only it.
@@ -1112,7 +1113,149 @@ still holds its member. An aicrewd
 older than the route answers `not_found`: the launcher says once that the
 coordinators are not told, and the hold stays its own.
 
-### Ordering across the two stores
+#### A coordinator's delivery check
+
+After a person merged an accepted result, the coordinator's launcher
+checks the delivery and takes the confirm-delivery step itself (task
+01a1fa19-19a4); a turn cannot, since its settings deny any command that
+names the home's credentials. Nothing of aicrewd's routes changes.
+- **What starts a check.** An `action.needed` message with a `pull`
+  subject whose `needs` hold `merged`, for an attempt that
+  `GET /v1/crew/attempts` lists in phase `accepted` with a latest result
+  whose reference is that pull request. The check is bound to that result:
+  its pull request and its `result_seq`, compared again with the listed
+  result before each read. A merge notice of another pull request starts
+  no check and goes to a turn as it is, with one brief line naming the
+  accepted result's reference, so the coordinator escalates it if the
+  merge is the delivery; a check whose attempt was since
+  accepted with another result ends. A pull request merged while its
+  attempt is still open but not accepted (a merge before the review) is
+  remembered: its turn's brief says the check starts once the result is
+  accepted, the launcher reads the open attempts every 30 seconds (not the
+  forge) and starts the check when the attempt is listed accepted with
+  that pull request, and forgets it when the attempt leaves the list.
+  The merge notice in the inbox is the only start: the launcher reads no
+  attempt's pull request on the forge. An accepted attempt whose merge
+  notice was acknowledged before its coordinator's launcher had the check
+  (a turn of an earlier release's home acknowledged it) gets no check,
+  and nothing else starts one.
+  The launcher reads the message once, at first sight, with the inbox
+  read the brief makes (`GET /v1/crew/inbox`, up to 100 messages); the
+  pending list names a message's kind but not its subjects. That read
+  raises the message's delivery count, which only the brief's "delivered
+  N times" shows: no limit, hold or rule in aicrewd or the launcher
+  decides on it. Each message is classified once. A read that fails, or a
+  page that does not list the message, holds it from turns for up to five
+  ticks and reads it again; after that it goes to a turn as an ordinary
+  message, and that turn's brief names it as not read by the launcher, so
+  a merge notice among such messages is escalated.
+- **Which messages are deferred.** A message whose subjects are all such
+  `pull` subjects needing only `merged`. While the check runs it is kept
+  from the turn gate, from the count of unacknowledged turns and from the
+  brief. Any other message, a mixed one, a person's or a member's note
+  about the same attempt included, goes to a turn as before; a mixed one
+  still starts the check, and its turn's brief says the check is the
+  launcher's. The check is the attempt's, not the message's: a turn that
+  acknowledges a mixed message does not end it.
+- **The check.** The launcher runs the home's installed
+  `verify-delivery/verify_delivery.py` (from `.claude/skills`, then the
+  client's user directory) with `python3 -I`, or `python -I`, the first
+  found on PATH. The argument list is fixed: `--pr URL`, and on Gitea
+  `--forge gitea --api-base https://HOST/api/v1`, on GitLab `--forge
+  gitlab`, with `--review-author local=` the attempt's worker's forge
+  account (from the team's capability reports) and the coordinator's own
+  (either may post the local review), and `external=` the forge entry's
+  `external_reviewer` (join's `--reviewer`). No shell; the home's
+  `state/` directory as the working directory; an environment of `PATH`,
+  the one token file variable (`GITHUB_TOKEN_FILE`, `GITEA_TOKEN_FILE` or
+  `GITLAB_TOKEN_FILE`, naming the credential's file), `SSL_CERT_FILE` when
+  the launcher has one, and `SYSTEMROOT` on Windows, which the
+  interpreter needs there. The token's value is in no argument and no log
+  line. A run is bounded by two minutes and 1 MiB of output.
+- **The schedule.** The first read is at first sight, then 2, 5 and 10
+  minutes later and every 15 minutes, for a day at most. A new message
+  naming the attempt gives one more read at once, also after the day.
+- **The answers.**
+  - `confirmed` counts only with exit code 0 and evidence: the launcher
+    records the confirm-delivery call, its body and a request key of the
+    attempt and result, before it sends it; it sends that same call on
+    every try and after a restart, so aicrewd answers a repeat as a replay
+    and announces the confirmation once. A repeat after a session resume is
+    answered as an idempotency conflict (the session's generation is part
+    of the step's input); a receipt exists only for a committed call, so
+    the launcher takes the conflict on its own key as the confirmation. A
+    call aicrewd did not answer, or
+    answered as retryable, goes again on the schedule within the day. Once
+    aicrewd recorded it, the launcher records that, then acknowledges the
+    attempt's deferred messages (none, after a mixed one); a launcher
+    stopped between the two acknowledges after its restart. A confirm
+    aicrewd refuses for good goes to a turn once with the refusal, and is
+    not repeated.
+  - `pending` (exit code 4) gives no turn; after a day it goes to a turn
+    as not confirmed with that reason.
+  - `not_confirmed` (exit code 3), or a fault of the check itself (no
+    interpreter, no script, exit code 2, a timeout, output that does not
+    parse or is over the bound, any other exit code or verdict), goes to
+    a turn once, with the failed checks or the reason in the brief, and
+    the launcher reads on every 15 minutes until the day is over. The
+    answer wakes a turn of its own when no message is pending. It counts
+    as handed over only after a turn that ran on its brief (finished, cut
+    by its own budget or stopped by its time limit) and whose brief
+    carried the launcher's delivery lines whole: the brief records where
+    it wrote them and whether its bound's cut came after them. A turn that
+    ran on the launcher's own wake, with nothing pending, and did not get
+    them whole uses that wake: the lines start no turn again by
+    themselves, and wait for a turn a message starts. The lines come
+    before the messages, each with its action first, and any pull request
+    URL last: a check's line names the action and the reason before the
+    pull request and the failed checks, a merge notice of another pull
+    request names the action and the accepted result's reference before
+    the merged URL, and unread messages are named in lines that the
+    brief's line bound keeps whole. A turn that ends on the provider's
+    limit, fails, needs a login or is interrupted by a restart leaves it
+    to the next turn. Later briefs say it was handed over and when, and
+    ask nothing. A run the
+    launcher's own stop ends (a service restart) records nothing: the
+    check reads again after the restart. A cause
+    repaired outside, such as a re-run CI job, is then confirmed without
+    a turn. A Gitea or GitLab check without the external reviewer's
+    account is not confirmed with a reason that names
+    `forge.HOST.external_reviewer`.
+- **The turn's part.** The coordinator escalates a check that is not
+  confirmed with its reason, and acknowledges the attempt's messages. It
+  does not run the check.
+- Only a coordinator's launcher checks; a worker's defers nothing. The
+  team state does not show a pending check; the launcher's log has each
+  read as `delivery check`, with the verdict.
+- **The order of steps after the merge.** The coordinator's launcher
+  confirms the delivery (`confirm-delivery`). aicrewd announces it with a
+  lifecycle message, "LABEL confirmed the delivery of result N of task
+  T.", to every active member of the team but the one that confirmed, so
+  the worker gets it and the coordinator does not. The worker finalizes
+  its accepted result on that message (`finalize`, with that result). The
+  coordinator may finalize instead, only from the session and generation
+  that recorded the acceptance (ROLES.md: "if the worker has not"). Before
+  this check, one coordinator turn took both steps; now the confirm is the
+  launcher's, and the finalize is usually the worker's.
+- **A confirmed delivery the worker never finalizes.** Nothing moves
+  it. The attempt stays `running/accepted`, with its delivery recorded.
+  aicrewd's list of pending merges no longer names it, since its delivery
+  is the accepted result, and an accepted attempt never counts as
+  stalled. The confirmation's message does not reach the coordinator, so
+  no message and no tick of its launcher gives the coordinator a turn for
+  it. When the worker's turns on that message fail, the message stays
+  unacknowledged, and the worker's count of unacknowledged turns reports
+  a hold, as for any message. A worker turn that acknowledges the message
+  without finalizing leaves no sign.
+- **On an upgraded home.** The home's guidance and settings are managed
+  files, which only `aicrew-agent join` writes (BRING-UP.md, "Upgrading a
+  member"). A coordinator's home upgraded without the rerun keeps the
+  earlier release's guidance, which tells its turns to run the check, and
+  its settings lack the rule that keeps a turn from editing the skills:
+  the product does not detect this yet, beyond `check`'s notice on the
+  deny rules of `.claude/settings.json`.
+
+## Ordering across the two stores
 
 The two services share no transaction, so every step that touches the
 reservation follows one rule:

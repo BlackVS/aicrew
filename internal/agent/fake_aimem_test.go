@@ -28,6 +28,10 @@ func TestMain(m *testing.M) {
 	if len(os.Args) == 3 && os.Args[1] == "sleep-helper" {
 		os.Exit(sleepHelperMain(os.Args[2]))
 	}
+	// The delivery check's interpreter: the script's file says what to do.
+	if len(os.Args) >= 3 && os.Args[1] == "-I" && strings.HasSuffix(os.Args[2], "verify_delivery.py") {
+		os.Exit(fakeVerifyMain(os.Args[2:]))
+	}
 	if os.Getenv(fakeTurnEnv) != "" {
 		os.Exit(fakeTurnMain())
 	}

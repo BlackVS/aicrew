@@ -163,6 +163,29 @@ type turnState struct {
 	// Unacked is the count of turns that left the member's messages
 	// unacknowledged (unacked.go).
 	Unacked *unackedState `json:"unacked,omitempty"`
+	// Deliveries are a coordinator's delivery checks by attempt,
+	// DeliverySeen the newest message seq looked at for them, and
+	// DeliveryReadFails the ticks in a row whose read of a new message
+	// failed (delivery.go).
+	Deliveries        map[string]*deliveryCheck `json:"deliveries,omitempty"`
+	DeliverySeen      int64                     `json:"delivery_seen,omitempty"`
+	DeliveryReadFails int                       `json:"delivery_read_fails,omitempty"`
+	// DeliveryUnread are messages past DeliverySeen whose read failed,
+	// read again at the next tick.
+	DeliveryUnread []string `json:"delivery_unread,omitempty"`
+	// DeliveryReleased are unread messages that went to turns as they
+	// are, named once in a brief; DeliveryEarly are pull requests merged
+	// before their attempt's result was accepted, by attempt, read again
+	// at DeliveryEarlyNext.
+	DeliveryReleased []string `json:"delivery_released,omitempty"`
+	// DeliveryNotes are lines on merge notices the launcher starts no check
+	// for, each given to one turn.
+	DeliveryNotes []string `json:"delivery_notes,omitempty"`
+	// DeliveryLinesWoke says the released and notes' lines used their wake
+	// of a turn: they wait for a turn a message starts.
+	DeliveryLinesWoke bool              `json:"delivery_lines_woke,omitempty"`
+	DeliveryEarly     map[string]string `json:"delivery_early,omitempty"`
+	DeliveryEarlyNext time.Time         `json:"delivery_early_next,omitzero"`
 }
 
 func turnStatePath(home string) string { return filepath.Join(home, filepath.FromSlash(TurnStateFile)) }

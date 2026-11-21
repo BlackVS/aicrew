@@ -163,8 +163,12 @@ var guideRoles = []guideRole{
 				"submitted result: `accept`, or `rework` to send it back. " + resultSeqSource},
 			{"confirm-delivery", "--attempt ATTEMPT_ID", `{"result_seq": 1, "evidence": [` +
 				`{"kind": "reviewed_head", "ref": "REVIEW_URL"}, {"kind": "human_merge", "ref": "MERGE_COMMIT_URL"}, ` +
-				`{"kind": "post_merge_ci", "ref": "CI_RUN_URL"}]}`, "After a person merged the accepted result, " +
-				"record the evidence the project's process requires, each kind with its link. " + resultSeqSource},
+				`{"kind": "post_merge_ci", "ref": "CI_RUN_URL"}]}`, "Your launcher takes this step itself after a " +
+				"person merged the accepted result: it runs the delivery check (the verify-delivery skill's script) " +
+				"with the home's forge credential, waits while CI on the merge commit runs, and records the evidence " +
+				"the check returns. You do not run the check; your turn cannot. When the brief says the launcher's " +
+				"check is not confirmed, escalate with its reason and acknowledge the attempt's messages. " +
+				resultSeqSource},
 			{"finalize", "--attempt ATTEMPT_ID --task TASK_ID", `{"result_seq": 1}`, "Finalize the accepted, delivered " +
 				"result as DONE, if the worker has not. " + resultSeqSource + " " + finalizeEvidence},
 			{"answer", "--attempt ATTEMPT_ID", `{"text": "Retry with the cache cleared: the runner disk was full."}`,
@@ -203,7 +207,7 @@ var guideRoles = []guideRole{
 				"or `resume` after a block or a rework decision. The coordinator's answer to a block arrives in " +
 				"your inbox as an `action.needed` message: act on it, then `resume`."},
 			{"finalize", "--attempt ATTEMPT_ID --task TASK_ID", `{"result_seq": 1}`, "Finalize your accepted result " +
-				"as DONE once the coordinator confirmed its delivery. " + workerResultSeq + " " + finalizeEvidence},
+				"as DONE once the coordinator confirmed its delivery. " + workerMergeMessage + " " + workerResultSeq + " " + finalizeEvidence},
 			{"confirm-stop", "--attempt ATTEMPT_ID", "", "Confirm that you stopped, after the coordinator asked."},
 			{"release", "--attempt ATTEMPT_ID --task TASK_ID", `{"target": "BLOCKED", "blocker": "Waiting on the schema decision."}`,
 				"After confirming a stop, release the task: `READY`, or `BLOCKED` with a blocker."},
@@ -227,6 +231,12 @@ var commonSteps = []guideStep{
 	{"pending", "", "", "List the steps your launcher recorded and has not settled."},
 	{"recover", "", "", "Finish the recorded steps after a failure or a restart."},
 }
+
+// workerMergeMessage is what a worker does with the message that its pull
+// request was merged: the coordinator's launcher checks the delivery, and
+// its confirmation is a message of its own.
+const workerMergeMessage = "A message that your pull request was merged needs no step from you: acknowledge it. " +
+	"The coordinator's launcher checks the delivery, and its confirmation comes as its own message."
 
 // guideOps are the operations the guidance teaches: inbox and ack through
 // `aicrew-agent inbox`, the rest through `aicrew-agent step`.

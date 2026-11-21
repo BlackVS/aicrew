@@ -363,12 +363,14 @@ func (l *TurnLoop) briefTrigger(ctx context.Context, b *strings.Builder, in brie
 		b.WriteString("No new message: go on with the attempt's work, and submit or block when it is done.\n")
 		return nil
 	}
+	// The launcher's delivery lines come before the messages, so the
+	// brief's bound never cuts them.
+	l.briefDeliveries(b, in.deliveries)
 	msgs, err := l.Host.Inbox(ctx, maxBriefMessages)
 	if err != nil {
 		fmt.Fprintf(b, "The messages could not be read for the brief (%s): run `aicrew-agent inbox`.\n",
 			redactBrief(l.Home, err.Error(), maxBriefText))
 		briefUnacked(b, in.unacked)
-		l.briefDeliveries(b, in.deliveries)
 		return nil
 	}
 	msgs = slices.DeleteFunc(msgs, func(m inboxMessage) bool { return in.held[m.ID] })
@@ -380,7 +382,6 @@ func (l *TurnLoop) briefTrigger(ctx context.Context, b *strings.Builder, in brie
 		fmt.Fprintf(b, "\n%d more message(s) are pending: `aicrew-agent inbox`.\n", more)
 	}
 	briefUnacked(b, in.unacked)
-	l.briefDeliveries(b, in.deliveries)
 	return msgs
 }
 

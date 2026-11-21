@@ -208,11 +208,14 @@ func (l *TurnLoop) deliveries(ctx context.Context, st *turnState, pending []Pend
 			"accepted: the launcher's delivery check starts once the result is accepted; do not run it.", e,
 			st.DeliveryEarly[e]))
 	}
+	lines = append(lines, st.DeliveryNotes...)
+	if len(st.DeliveryReleased) > 0 || len(st.DeliveryNotes) > 0 {
+		handed = append(handed, "")
+	}
 	if len(st.DeliveryReleased) > 0 {
-		lines = append(lines, "The launcher could not read message(s) "+strings.Join(st.DeliveryReleased, ", ")+
+		lines = append(lines, releasedMark+strings.Join(st.DeliveryReleased, ", ")+
 			" for its delivery checks. If one says that an accepted result's pull request was merged, escalate it "+
 			"with that message: the launcher did not start its check.")
-		handed = append(handed, "")
 	}
 	var out []PendingMessage
 	for _, p := range pending {
@@ -228,16 +231,50 @@ func (l *TurnLoop) deliveries(ctx context.Context, st *turnState, pending []Pend
 	return out, held, lines, handed
 }
 
-// toldDeliveries records that a turn's brief carried the handed answers and
-// the released messages' line.
-func toldDeliveries(st *turnState, ids []string, now time.Time) {
+// toldDeliveries records the handed answers, and the released messages'
+// line ("" in ids), that a turn's brief carried: only a finished turn's, and
+// only the lines the brief kept within its bound. Any other stays to be
+// given to the next turn.
+func toldDeliveries(st *turnState, ids []string, brief string, now time.Time) {
 	for _, id := range ids {
-		if id == "" {
-			st.DeliveryReleased = nil
-		} else if c := st.Deliveries[id]; c != nil {
+		if c := st.Deliveries[id]; c != nil && strings.Contains(brief, handedMark(id)) {
 			c.ToldAt = now
 		}
+		if id != "" {
+			continue
+		}
+		if strings.Contains(brief, releasedMark) {
+			st.DeliveryReleased = nil
+		}
+		st.DeliveryNotes = slices.DeleteFunc(st.DeliveryNotes, func(n string) bool {
+			return strings.Contains(brief, n[:min(len(n), 120)])
+		})
 	}
+}
+
+// otherPullMark begins the line on a merge notice of another pull request
+// than the accepted result's.
+const otherPullMark = "The pull request "
+
+// turnRan says whether a turn ran on its brief: finished, cut by its own
+// budget, or stopped by its time limit (as the count of unacknowledged
+// turns reads it). Any other outcome leaves a handoff to the next turn.
+func turnRan(outcome, limitKind string, stopping bool) bool {
+	return outcome == TurnFinished || (outcome == TurnStopped && !stopping) ||
+		(outcome == TurnLimitReached && limitKind == "budget")
+}
+
+// releasedMark and handedMark begin the brief's lines that toldDeliveries
+// looks for.
+const releasedMark = "The launcher could not read message(s) "
+
+func handedMark(id string) string { return "The launcher's delivery check of attempt " + id + " (" }
+
+func nilIfEmpty[M ~map[K]V, K comparable, V any](m M) M {
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 func sortedEarly(m map[string]string) []string {
@@ -367,6 +404,12 @@ func (l *TurnLoop) classify(st *turnState, m inboxMessage, open *OpenAttempts, n
 		if !isMerged {
 			pure = false
 			l.newMessageFor(st, s.AttemptID, now)
+			if s.Kind == deliverySubjectKind && slices.Contains(s.Needs, deliveryNeed) && s.Pull != nil && a != nil {
+				ref := a.LatestResult.Kind + " " + a.LatestResult.Ref
+				st.DeliveryNotes = append(st.DeliveryNotes, fmt.Sprintf("%s%s (%s) was merged, but attempt %s's "+
+					"accepted result is %s, not that pull request: the launcher starts no delivery check for it. If the "+
+					"merge is the result's delivery, escalate it.", otherPullMark, s.Pull.URL, m.ID, s.AttemptID, ref))
+			}
 			if s.Kind == deliverySubjectKind && slices.Contains(s.Needs, deliveryNeed) && s.Pull != nil &&
 				s.Pull.URL != "" && a == nil && openAttempt(open, s.AttemptID) && st.Deliveries[s.AttemptID] == nil {
 				// Merged before the result was accepted: the check starts once
@@ -567,6 +610,14 @@ func (l *TurnLoop) confirm(ctx context.Context, st *turnState, id string, c *del
 		}
 		c.Next = now.Add(deliverySchedule[min(c.AckFails-1, len(deliverySchedule)-1)])
 		return
+	}
+	if !ans.OK && ans.Error != nil && ans.Error.Code == "idempotency_conflict" {
+		// aicrewd keeps a receipt only for a committed step, and the key
+		// names this attempt and result: the call committed before the
+		// launcher recorded its answer. A resumed session's generation is
+		// part of the step's input, so the same call reads as another.
+		l.Log.Info("the confirm-delivery step had committed before the restart", "attempt", id)
+		ans = StepAnswer{OK: true, Status: StepDone}
 	}
 	c.Body, c.AckFails = "", 0
 	if !ans.OK {
@@ -906,10 +957,11 @@ func deliveryState(st turnState) []byte {
 		F  int
 		U  []string
 		R  []string
+		N  []string
 		E  map[string]string
 		EN time.Time
 		UN *unackedState
-	}{st.Deliveries, st.DeliverySeen, st.DeliveryReadFails, st.DeliveryUnread, st.DeliveryReleased, st.DeliveryEarly,
-		st.DeliveryEarlyNext, st.Unacked})
+	}{nilIfEmpty(st.Deliveries), st.DeliverySeen, st.DeliveryReadFails, st.DeliveryUnread, st.DeliveryReleased,
+		st.DeliveryNotes, nilIfEmpty(st.DeliveryEarly), st.DeliveryEarlyNext, st.Unacked})
 	return raw
 }

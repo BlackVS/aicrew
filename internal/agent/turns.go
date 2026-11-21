@@ -177,7 +177,10 @@ type turnState struct {
 	// are, named once in a brief; DeliveryEarly are pull requests merged
 	// before their attempt's result was accepted, by attempt, read again
 	// at DeliveryEarlyNext.
-	DeliveryReleased  []string          `json:"delivery_released,omitempty"`
+	DeliveryReleased []string `json:"delivery_released,omitempty"`
+	// DeliveryNotes are lines on merge notices the launcher starts no check
+	// for, each given to one turn.
+	DeliveryNotes     []string          `json:"delivery_notes,omitempty"`
 	DeliveryEarly     map[string]string `json:"delivery_early,omitempty"`
 	DeliveryEarlyNext time.Time         `json:"delivery_early_next,omitzero"`
 }

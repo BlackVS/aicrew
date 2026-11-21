@@ -1125,7 +1125,9 @@ names the home's credentials. Nothing of aicrewd's routes changes.
   whose reference is that pull request. The check is bound to that result:
   its pull request and its `result_seq`, compared again with the listed
   result before each read. A merge notice of another pull request starts
-  no check and goes to a turn as it is; a check whose attempt was since
+  no check and goes to a turn as it is, with one brief line naming the
+  accepted result's reference, so the coordinator escalates it if the
+  merge is the delivery; a check whose attempt was since
   accepted with another result ends. A pull request merged while its
   attempt is still open but not accepted (a merge before the review) is
   remembered: its turn's brief says the check starts once the result is
@@ -1173,7 +1175,11 @@ names the home's credentials. Nothing of aicrewd's routes changes.
     records the confirm-delivery call, its body and a request key of the
     attempt and result, before it sends it; it sends that same call on
     every try and after a restart, so aicrewd answers a repeat as a replay
-    and announces the confirmation once. A call aicrewd did not answer, or
+    and announces the confirmation once. A repeat after a session resume is
+    answered as an idempotency conflict (the session's generation is part
+    of the step's input); a receipt exists only for a committed call, so
+    the launcher takes the conflict on its own key as the confirmation. A
+    call aicrewd did not answer, or
     answered as retryable, goes again on the schedule within the day. Once
     aicrewd recorded it, the launcher records that, then acknowledges the
     attempt's deferred messages (none, after a mixed one); a launcher
@@ -1187,8 +1193,14 @@ names the home's credentials. Nothing of aicrewd's routes changes.
     parse or is over the bound, any other exit code or verdict), goes to
     a turn once, with the failed checks or the reason in the brief, and
     the launcher reads on every 15 minutes until the day is over. The
-    answer wakes a turn of its own when no message is pending; later
-    briefs say it was handed over and when, and ask nothing. A run the
+    answer wakes a turn of its own when no message is pending. It counts
+    as handed over only after a turn that ran on its brief (finished, cut
+    by its own budget or stopped by its time limit) and whose brief
+    carried it; the launcher's lines come before the messages, so the
+    brief's bound never cuts them. A turn that ends on the provider's
+    limit, fails, needs a login or is interrupted by a restart leaves it
+    to the next turn. Later briefs say it was handed over and when, and
+    ask nothing. A run the
     launcher's own stop ends (a service restart) records nothing: the
     check reads again after the restart. A cause
     repaired outside, such as a re-run CI job, is then confirmed without

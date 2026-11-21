@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -793,5 +794,141 @@ func TestDeliveryReleasedNamed(t *testing.T) {
 	}
 	if len(readTurnState(e.home).DeliveryReleased) != 0 {
 		t.Fatal("the released messages' line was not consumed")
+	}
+}
+
+// A handed answer is consumed only by a turn that ran on its brief: a turn
+// that ends on the provider's limit leaves it to the next turn.
+func TestDeliveryHandedAfterProviderLimit(t *testing.T) {
+	e := deliveryEnv(t)
+	m := mergedMessage("m1", testAttempt, actionSubject{Kind: "board", Board: &briefBoard{Revision: 3}})
+	e.host.inbox = []inboxMessage{m}
+	e.host.pending = []PendingMessage{{ID: m.ID, Seq: m.Seq, Kind: m.Kind, AttemptID: m.AttemptID}}
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult { h.ack("m1"); return TurnResult{Outcome: TurnFinished} }
+	e.tick(t)
+	setScript(t, e, fakeVerify{Exit: 3, Stdout: verdictNotConfirmed})
+	e.next = func(TurnSpec, *fakeHost) TurnResult {
+		return TurnResult{Outcome: TurnLimitReached, LimitKind: "provider", ResetAt: e.clock.Add(time.Hour)}
+	}
+	e.ticksTo(t, e.clock.Add(3*time.Minute))
+	if len(e.specs) != 2 || !strings.Contains(e.specs[1].Prompt, "Escalate with this reason") {
+		t.Fatalf("the handed turn: %d turns", len(e.specs))
+	}
+	if !readTurnState(e.home).Deliveries[testAttempt].ToldAt.IsZero() {
+		t.Fatal("a turn cut by the provider's limit consumed the handoff")
+	}
+	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished} }
+	e.ticksTo(t, e.clock.Add(2*time.Hour))
+	if len(e.specs) != 3 || !strings.Contains(e.specs[2].Prompt, "Escalate with this reason") {
+		t.Fatalf("after the limit: %d turns; brief: %s", len(e.specs), lastPrompt(e))
+	}
+	if readTurnState(e.home).Deliveries[testAttempt].ToldAt.IsZero() {
+		t.Fatal("the turn that ran did not consume the handoff")
+	}
+}
+
+// A launcher stopped after it recorded the turn and before the runner
+// started leaves the handoff outstanding for the next turn.
+func TestDeliveryHandedAcrossRestart(t *testing.T) {
+	e := deliveryEnv(t)
+	e.host.pending, e.host.inbox = nil, nil
+	st := turnState{DeliverySeen: msgSeq.Add(1), Running: &TurnRecord{ID: "turn-1", StartedAt: e.clock},
+		Deliveries: map[string]*deliveryCheck{testAttempt: {Pull: testPull, ResultSeq: 2, Worker: "worker-1",
+			Since: e.clock, Next: e.clock.Add(time.Hour), Reads: 3, Verdict: deliveryNotConfirmed,
+			Reason: "the CI on the merge commit failed", Handed: true}}}
+	if err := writeTurnState(e.home, st); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	e.loop.Loop(ctx)
+	if readTurnState(e.home).Running != nil {
+		t.Fatal("the interrupted turn is still running")
+	}
+	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished} }
+	e.tick(t)
+	if len(e.specs) != 1 || !strings.Contains(e.specs[0].Prompt, "the CI on the merge commit failed") {
+		t.Fatalf("after the restart: %d turns; brief: %s", len(e.specs), lastPrompt(e))
+	}
+}
+
+// A brief whose messages fill its bound still carries the delivery lines:
+// they come before the messages.
+func TestDeliveryLinesBeforeTheBound(t *testing.T) {
+	e := deliveryEnv(t)
+	m := mergedMessage("m1", testAttempt, actionSubject{Kind: "board", Board: &briefBoard{Revision: 3}})
+	e.host.inbox = []inboxMessage{m}
+	for i := 0; i < 60; i++ {
+		n := inboxMessage{ID: fmt.Sprintf("n%d", i), Seq: msgSeq.Add(1), Kind: "message", Text: strings.Repeat("x", 1500)}
+		e.host.inbox = append(e.host.inbox, n)
+	}
+	e.host.pending = nil
+	for _, n := range e.host.inbox {
+		e.host.pending = append(e.host.pending, PendingMessage{ID: n.ID, Seq: n.Seq, Kind: n.Kind, AttemptID: n.AttemptID})
+	}
+	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished} }
+	e.tick(t)
+	if len(e.specs) != 1 || !strings.Contains(e.specs[0].Prompt, "delivery check") {
+		t.Fatalf("%d turns; the delivery line is not in the cut brief", len(e.specs))
+	}
+}
+
+// A recorded confirm sent again after a session resume is answered as an
+// idempotency conflict: aicrewd keeps a receipt only for a committed call,
+// so the delivery counts as confirmed and no turn is woken.
+func TestDeliveryConfirmConflictAfterResume(t *testing.T) {
+	e := deliveryEnv(t)
+	const body = `{"result_seq":2,"evidence":[{"kind":"reviewed_head","ref":"R"}]}`
+	st := turnState{DeliverySeen: e.host.pending[0].Seq, Deliveries: map[string]*deliveryCheck{testAttempt: {
+		Pull: testPull, ResultSeq: 2, Worker: "worker-1", Deferred: []string{"m1"}, Since: e.clock, Reads: 1,
+		Verdict: deliveryConfirmed, Key: "aicrew-agent-delivery-" + testAttempt + "-2", Body: body}}}
+	if err := writeTurnState(e.home, st); err != nil {
+		t.Fatal(err)
+	}
+	e.host.refuse = map[string]*StepError{"confirm-delivery": {Code: "idempotency_conflict",
+		Message: "idempotency key reused with different input"}}
+	e.tick(t)
+	if len(e.specs) != 0 || len(e.host.pending) != 0 || readTurnState(e.home).Deliveries[testAttempt] != nil {
+		t.Fatalf("after the conflict: %d turns, pending %v", len(e.specs), e.host.pending)
+	}
+}
+
+// An idle coordinator does not write its turn state on every tick.
+func TestDeliveryIdleWritesNothing(t *testing.T) {
+	e := deliveryEnv(t)
+	e.host.pending, e.host.inbox = nil, nil
+	if err := writeTurnState(e.home, turnState{DeliverySeen: msgSeq.Add(1)}); err != nil {
+		t.Fatal(err)
+	}
+	e.tick(t)
+	path := filepath.Join(e.home, TurnStateFile)
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(path, before.ModTime().Add(-time.Hour), before.ModTime().Add(-time.Hour))
+	old, _ := os.Stat(path)
+	e.ticksTo(t, e.clock.Add(5*time.Minute))
+	if now, _ := os.Stat(path); !now.ModTime().Equal(old.ModTime()) {
+		t.Fatal("an idle tick wrote the turn state")
+	}
+}
+
+// A merge notice of another pull request than the accepted result's starts
+// no check and gives its turn one line saying so, with the result's
+// reference.
+func TestDeliveryOtherPullNamed(t *testing.T) {
+	e := deliveryEnv(t)
+	e.host.inbox[0].Action.Subjects[0].Pull.URL = "https://github.com/owner/repo/pull/8"
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult { h.ack("m1"); return TurnResult{Outcome: TurnFinished} }
+	e.tick(t)
+	if len(e.specs) != 1 || !strings.Contains(e.specs[0].Prompt, "pull/8 (m1) was merged") ||
+		!strings.Contains(e.specs[0].Prompt, "pull_request "+testPull) {
+		t.Fatalf("%d turns; brief: %s", len(e.specs), lastPrompt(e))
+	}
+	e.host.pending = append(e.host.pending, msg("n1", "message"))
+	e.ticksTo(t, e.clock.Add(time.Minute))
+	if len(e.specs) != 2 || strings.Contains(e.specs[1].Prompt, "pull/8 (m1) was merged") {
+		t.Fatalf("the line again: %d turns", len(e.specs))
 	}
 }

@@ -302,8 +302,7 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	setHold(&st, unackedHold(st))
 	l.syncHold(ctx, &st)
 	l.lastStart = now
-	toldDeliveries(&st, handed, now)
-	l.turn(ctx, &st, status, attempt, trigger, pending, continuation, limits, held, deliveryLines)
+	l.turn(ctx, &st, status, attempt, trigger, pending, continuation, limits, held, deliveryLines, handed)
 }
 
 // settingsFile is the per-turn settings of a member in role. A coordinator's
@@ -369,7 +368,7 @@ func (l *TurnLoop) hold(st *turnState, until time.Time, why string) {
 // turn runs one turn and records it. Every turn is a fresh conversation
 // (docs/DESIGN-TURNS.md, T1) whose prompt is the brief written now.
 func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus, attempt *memberAttempt, trigger string,
-	pending []PendingMessage, continuation bool, limits TurnLimits, held heldMessages, deliveryLines []string) {
+	pending []PendingMessage, continuation bool, limits TurnLimits, held heldMessages, deliveryLines, handed []string) {
 	now := l.Now()
 	var a *attemptTurns
 	if attempt != nil {
@@ -431,6 +430,9 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		Settings: l.settingsFile(status.Session.Role), Conversation: rec.Conversation, Model: limits.Model,
 		BudgetUSD: limits.TurnBudgetUSD, Timeout: limits.TurnTimeout, Transcript: transcript})
 	closeTranscript()
+	if turnRan(res.Outcome, res.LimitKind, res.LoopStopping) {
+		toldDeliveries(st, handed, brief, l.Now())
+	}
 	rec.EndedAt = l.Now()
 	rec.DurationMS = rec.EndedAt.Sub(rec.StartedAt).Milliseconds()
 	rec.Error, rec.LimitKind, rec.ResetAt = res.Error, res.LimitKind, res.ResetAt

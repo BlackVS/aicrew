@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/rand"
@@ -229,12 +230,15 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	// that ask for one are kept from the turn gate, the count of
 	// unacknowledged turns and the brief while it runs (delivery.go).
 	var held heldMessages
-	var deliveryLines []string
+	var deliveryLines, handed []string
 	if status.Session.Role == "coordinator" {
-		pending, held, deliveryLines = l.deliveries(ctx, &st, pending)
+		before := deliveryState(st)
+		pending, held, deliveryLines, handed = l.deliveries(ctx, &st, pending)
 		l.uncountHeld(&st, held)
-		if err := writeTurnState(l.Home, st); err != nil {
-			l.Log.Warn("record the turn state", "error", err.Error())
+		if !bytes.Equal(before, deliveryState(st)) {
+			if err := writeTurnState(l.Home, st); err != nil {
+				l.Log.Warn("record the turn state", "error", err.Error())
+			}
 		}
 	}
 	// Whether the state knew the attempt before this tick touched it.
@@ -245,6 +249,11 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	switch {
 	case len(pending) > 0:
 		trigger = pendingSummary(pending)
+	case len(handed) > 0:
+		trigger = "the launcher's delivery checks need you"
+		if ids := slices.DeleteFunc(slices.Clone(handed), func(s string) bool { return s == "" }); len(ids) > 0 {
+			trigger = "the launcher's delivery check of attempt(s) " + strings.Join(ids, ", ") + " is not confirmed"
+		}
 	case attempt.inWork() && st.Continue == attempt.ID:
 		a := st.attempt(attempt.ID)
 		if a.Stalled || a.Continuations >= limits.MaxContinuations {
@@ -293,6 +302,7 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	setHold(&st, unackedHold(st))
 	l.syncHold(ctx, &st)
 	l.lastStart = now
+	toldDeliveries(&st, handed, now)
 	l.turn(ctx, &st, status, attempt, trigger, pending, continuation, limits, held, deliveryLines)
 }
 

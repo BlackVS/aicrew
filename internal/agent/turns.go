@@ -170,6 +170,16 @@ type turnState struct {
 	Deliveries        map[string]*deliveryCheck `json:"deliveries,omitempty"`
 	DeliverySeen      int64                     `json:"delivery_seen,omitempty"`
 	DeliveryReadFails int                       `json:"delivery_read_fails,omitempty"`
+	// DeliveryUnread are messages past DeliverySeen whose read failed,
+	// read again at the next tick.
+	DeliveryUnread []string `json:"delivery_unread,omitempty"`
+	// DeliveryReleased are unread messages that went to turns as they
+	// are, named once in a brief; DeliveryEarly are pull requests merged
+	// before their attempt's result was accepted, by attempt, read again
+	// at DeliveryEarlyNext.
+	DeliveryReleased  []string          `json:"delivery_released,omitempty"`
+	DeliveryEarly     map[string]string `json:"delivery_early,omitempty"`
+	DeliveryEarlyNext time.Time         `json:"delivery_early_next,omitzero"`
 }
 
 func turnStatePath(home string) string { return filepath.Join(home, filepath.FromSlash(TurnStateFile)) }

@@ -219,7 +219,7 @@ func TestDeliveryPendingThenConfirmed(t *testing.T) {
 	setScript(t, e, fakeVerify{Exit: 0, Stdout: verdictConfirmed})
 	e.ticksTo(t, e.clock.Add(16*time.Minute))
 	confirms := e.host.opCalls("confirm-delivery")
-	if len(confirms) != 1 || confirms[0].AttemptID != testAttempt {
+	if len(confirms) != 1 || confirms[0].AttemptID != testAttempt || confirms[0].Key != "aicrew-agent-delivery-"+testAttempt+"-2" {
 		t.Fatalf("confirm steps: %+v", confirms)
 	}
 	var body struct {
@@ -400,6 +400,7 @@ func TestDeliveryGiteaAuthors(t *testing.T) {
 		"kind": "gitea", "account": "coord", "purpose": "repo-write", "file": "git-example-org.coord.repo-write"}}})
 	os.WriteFile(filepath.Join(e.home, "creds", "git-example-org.coord.repo-write"), []byte("tok\n"), 0o600)
 	e.host.inbox[0].Action.Subjects[0].Pull.URL = pull
+	e.host.open.Attempts[0].LatestResult.Ref = pull
 	e.next = func(_ TurnSpec, h *fakeHost) TurnResult { h.ack("m1"); return TurnResult{Outcome: TurnFinished} }
 	e.tick(t)
 	if len(e.specs) != 1 || !strings.Contains(e.specs[0].Prompt, "forge.git.example.org.external_reviewer") {
@@ -425,6 +426,35 @@ func TestDeliveryGiteaAuthors(t *testing.T) {
 		t.Fatalf("args %q, %d confirms", run.Args, len(e.host.opCalls("confirm-delivery")))
 	}
 	if !slices.Contains(run.Env, "GITEA_TOKEN_FILE="+filepath.Join(e.home, "creds", "git-example-org.coord.repo-write")) {
+		t.Errorf("env %q", run.Env)
+	}
+}
+
+// On GitLab the check is told the forge kind, takes no API base, and reads
+// the token from GITLAB_TOKEN_FILE.
+func TestDeliveryGitLabAuthors(t *testing.T) {
+	e := deliveryEnv(t)
+	const pull = "https://gitlab.example.org/group/repo/-/merge_requests/7"
+	writeAgentDoc(t, e.home, map[string]any{"forge": map[string]any{"gitlab.example.org": map[string]any{
+		"kind": "gitlab", "account": "coord", "purpose": "repo-write", "file": "gitlab-example-org.coord.repo-write",
+		"external_reviewer": "hands-bot"}}})
+	os.WriteFile(filepath.Join(e.home, "creds", "gitlab-example-org.coord.repo-write"), []byte("tok\n"), 0o600)
+	e.host.inbox[0].Action.Subjects[0].Pull.URL = pull
+	e.host.open.Attempts[0].LatestResult.Ref = pull
+	record := filepath.Join(t.TempDir(), "run.json")
+	setScript(t, e, fakeVerify{Exit: 0, Stdout: verdictConfirmed, Record: record})
+	e.tick(t)
+	var run struct {
+		Args []string `json:"args"`
+		Env  []string `json:"env"`
+	}
+	raw, _ := os.ReadFile(record)
+	json.Unmarshal(raw, &run)
+	want := []string{"--pr", pull, "--forge", "gitlab", "--review-author", "local=coord", "--review-author", "external=hands-bot"}
+	if !slices.Equal(run.Args, want) || len(e.host.opCalls("confirm-delivery")) != 1 {
+		t.Fatalf("args %q, %d confirms", run.Args, len(e.host.opCalls("confirm-delivery")))
+	}
+	if !slices.Contains(run.Env, "GITLAB_TOKEN_FILE="+filepath.Join(e.home, "creds", "gitlab-example-org.coord.repo-write")) {
 		t.Errorf("env %q", run.Env)
 	}
 }
@@ -539,8 +569,29 @@ func TestDeliveryLeavesTheCount(t *testing.T) {
 	}
 	e.tick(t)
 	st := readTurnState(e.home)
-	if st.Unacked == nil || !slices.Equal(st.Unacked.Stuck, []string{"n1"}) || slices.Contains(st.Unacked.Messages, "m1") {
+	// The same count, not one begun again: its start is the old one's.
+	if st.Unacked == nil || !slices.Equal(st.Unacked.Stuck, []string{"n1"}) || slices.Contains(st.Unacked.Messages, "m1") ||
+		!st.Unacked.Since.Equal(u.Since) {
 		t.Fatalf("the count: %+v", st.Unacked)
+	}
+
+	// A check that confirms at once acknowledges the message: the count
+	// drops it too, and keeps waiting on the note.
+	e = deliveryEnv(t)
+	setScript(t, e, fakeVerify{Exit: 0, Stdout: verdictConfirmed})
+	note = inboxMessage{ID: "n1", Seq: msgSeq.Add(1), Kind: "note", AttemptID: testAttempt, Text: "About the attempt."}
+	e.host.inbox = append(e.host.inbox, note)
+	e.host.pending = append(e.host.pending, PendingMessage{ID: note.ID, Seq: note.Seq, Kind: note.Kind, AttemptID: testAttempt})
+	u = &unackedState{Messages: []string{"m1", "n1"}, Stuck: []string{"m1", "n1"}, Served: note.Seq, Turns: 1,
+		Since: e.clock, LastEnded: e.clock}
+	if err := writeTurnState(e.home, turnState{Unacked: u}); err != nil {
+		t.Fatal(err)
+	}
+	e.tick(t)
+	e.tick(t)
+	if st := readTurnState(e.home); len(e.host.opCalls("confirm-delivery")) != 1 || st.Unacked == nil ||
+		!slices.Equal(st.Unacked.Stuck, []string{"n1"}) || !st.Unacked.Since.Equal(u.Since) {
+		t.Fatalf("after an immediate confirm: %d confirms, count %+v", len(e.host.opCalls("confirm-delivery")), st.Unacked)
 	}
 
 	e = deliveryEnv(t)
@@ -552,5 +603,195 @@ func TestDeliveryLeavesTheCount(t *testing.T) {
 	e.tick(t)
 	if st := readTurnState(e.home); st.Unacked != nil || len(e.specs) != 0 {
 		t.Fatalf("a count of the held message alone: %+v, %d turns", st.Unacked, len(e.specs))
+	}
+}
+
+// A merge notice of another pull request than the accepted result's starts
+// no check: it goes to a turn as it is, and nothing is confirmed.
+func TestDeliveryOtherPull(t *testing.T) {
+	e := deliveryEnv(t)
+	e.host.inbox[0].Action.Subjects[0].Pull.URL = "https://github.com/owner/repo/pull/8"
+	setScript(t, e, fakeVerify{Exit: 0, Stdout: verdictConfirmed})
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult { h.ack("m1"); return TurnResult{Outcome: TurnFinished} }
+	e.ticksTo(t, e.clock.Add(20*time.Minute))
+	if len(e.specs) != 1 || len(readTurnState(e.home).Deliveries) != 0 || len(e.host.opCalls("confirm-delivery")) != 0 {
+		t.Fatalf("%d turns, checks %v, %d confirms", len(e.specs), readTurnState(e.home).Deliveries,
+			len(e.host.opCalls("confirm-delivery")))
+	}
+	// A check whose attempt was since accepted with another result ends.
+	e = deliveryEnv(t)
+	e.tick(t)
+	e.host.open.Attempts[0].LatestResult = &LatestResult{ResultSeq: 3, Kind: "pull_request", Ref: testPull}
+	setScript(t, e, fakeVerify{Exit: 0, Stdout: verdictConfirmed})
+	e.ticksTo(t, e.clock.Add(3*time.Minute))
+	if len(e.host.opCalls("confirm-delivery")) != 0 || readTurnState(e.home).Deliveries[testAttempt] != nil {
+		t.Fatalf("a check of an earlier result confirmed: %d confirms", len(e.host.opCalls("confirm-delivery")))
+	}
+}
+
+// A not-confirmed answer whose messages a turn already acknowledged still
+// wakes a turn, once; later turns do not get it again.
+func TestDeliveryHandedWakesOnce(t *testing.T) {
+	e := deliveryEnv(t)
+	m := mergedMessage("m1", testAttempt, actionSubject{Kind: "board", Board: &briefBoard{Revision: 3}})
+	e.host.inbox = []inboxMessage{m}
+	e.host.pending = []PendingMessage{{ID: m.ID, Seq: m.Seq, Kind: m.Kind, AttemptID: m.AttemptID}}
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult { h.ack("m1"); return TurnResult{Outcome: TurnFinished} }
+	e.tick(t)
+	if len(e.specs) != 1 {
+		t.Fatalf("the mixed message: %d turns", len(e.specs))
+	}
+	setScript(t, e, fakeVerify{Exit: 3, Stdout: verdictNotConfirmed})
+	e.ticksTo(t, e.clock.Add(3*time.Minute))
+	if len(e.specs) != 2 || !strings.Contains(e.specs[1].Prompt, "delivery check of attempt(s) "+testAttempt+" is not confirmed") ||
+		!strings.Contains(e.specs[1].Prompt, "Escalate with this reason") {
+		t.Fatalf("%d turns; brief: %s", len(e.specs), lastPrompt(e))
+	}
+	e.ticksTo(t, e.clock.Add(time.Hour))
+	note := msg("n1", "message")
+	e.host.pending = append(e.host.pending, note)
+	e.ticksTo(t, e.clock.Add(time.Minute))
+	if len(e.specs) != 3 || strings.Contains(e.specs[2].Prompt, "Escalate with this reason") {
+		t.Fatalf("%d turns; the later brief: %s", len(e.specs), lastPrompt(e))
+	}
+}
+
+// A launcher stopped after aicrewd recorded the confirmation but before it
+// recorded the answer sends the same call again, with the same request key,
+// and runs no second check.
+func TestDeliveryStopAfterConfirmSent(t *testing.T) {
+	e := deliveryEnv(t)
+	const body = `{"result_seq":2,"evidence":[{"kind":"reviewed_head","ref":"R"}]}`
+	key := "aicrew-agent-delivery-" + testAttempt + "-2"
+	st := turnState{DeliverySeen: e.host.pending[0].Seq, Deliveries: map[string]*deliveryCheck{testAttempt: {
+		Pull: testPull, ResultSeq: 2, Worker: "worker-1", Deferred: []string{"m1"}, Since: e.clock, Reads: 1,
+		Verdict: deliveryConfirmed, Key: key, Body: body}}}
+	if err := writeTurnState(e.home, st); err != nil {
+		t.Fatal(err)
+	}
+	record := filepath.Join(t.TempDir(), "run.json")
+	setScript(t, e, fakeVerify{Exit: 3, Stdout: verdictNotConfirmed, Record: record})
+	e.tick(t)
+	confirms := e.host.opCalls("confirm-delivery")
+	if len(confirms) != 1 || confirms[0].Key != key || string(confirms[0].Body) != body {
+		t.Fatalf("the replayed confirm: %+v", confirms)
+	}
+	if _, err := os.Stat(record); err == nil {
+		t.Error("the check ran again")
+	}
+	if len(e.host.pending) != 0 || len(e.specs) != 0 || readTurnState(e.home).Deliveries[testAttempt] != nil {
+		t.Fatalf("after the replay: pending %v, %d turns", e.host.pending, len(e.specs))
+	}
+}
+
+// A merge notice classified on a tick whose read missed another message is
+// not classified again while that read is retried: the forge is not asked
+// again before the schedule says.
+func TestDeliveryReadFailKeepsTheSchedule(t *testing.T) {
+	e := deliveryEnv(t)
+	other := PendingMessage{ID: "m2", Seq: msgSeq.Add(1), Kind: deliveryMessageKind}
+	e.host.pending = append(e.host.pending, other)
+	for i := 0; i < maxDeliveryReadFails-1; i++ {
+		e.tick(t)
+	}
+	if c := readTurnState(e.home).Deliveries[testAttempt]; c == nil || c.Reads != 1 {
+		t.Fatalf("the check: %+v", c)
+	}
+	if len(e.specs) != 0 {
+		t.Fatalf("%d turns while the other message is unread", len(e.specs))
+	}
+}
+
+// A confirm step aicrewd did not answer is not a refusal: the same call,
+// with the same request key, goes again on the schedule, and the delivery is
+// confirmed with no turn.
+func TestDeliveryConfirmUnavailableOnce(t *testing.T) {
+	e := deliveryEnv(t)
+	setScript(t, e, fakeVerify{Exit: 0, Stdout: verdictConfirmed})
+	e.host.refuse = map[string]*StepError{"confirm-delivery": {Code: "unavailable", Message: "aicrewd did not answer",
+		Retryable: true}}
+	e.tick(t)
+	c := readTurnState(e.home).Deliveries[testAttempt]
+	if c == nil || c.Body == "" || c.Handed || len(e.specs) != 0 {
+		t.Fatalf("after the unanswered confirm: %+v, %d turns", c, len(e.specs))
+	}
+	e.host.refuse = nil
+	e.ticksTo(t, e.clock.Add(3*time.Minute))
+	confirms := e.host.opCalls("confirm-delivery")
+	if len(confirms) != 2 || confirms[0].Key != confirms[1].Key || string(confirms[0].Body) != string(confirms[1].Body) {
+		t.Fatalf("the confirm calls: %+v", confirms)
+	}
+	if len(e.specs) != 0 || len(e.host.pending) != 0 || readTurnState(e.home).Deliveries[testAttempt] != nil {
+		t.Fatalf("after the retry: %d turns, pending %v", len(e.specs), e.host.pending)
+	}
+}
+
+// A pull request merged before its result was accepted: the turn that
+// accepts is told the check starts then, and the launcher starts it once
+// aicrewd lists the attempt accepted; an attempt that left the open list is
+// forgotten.
+func TestDeliveryMergedBeforeAccept(t *testing.T) {
+	e := deliveryEnv(t)
+	e.host.open.Attempts[0].Phase = "submitted"
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult {
+		h.open.Attempts[0].Phase = "accepted" // the coordinator accepts the result
+		h.ack("m1")
+		return TurnResult{Outcome: TurnFinished}
+	}
+	e.tick(t)
+	if len(e.specs) != 1 || !strings.Contains(e.specs[0].Prompt, "was merged before its result was accepted") {
+		t.Fatalf("%d turns; brief: %s", len(e.specs), lastPrompt(e))
+	}
+	setScript(t, e, fakeVerify{Exit: 0, Stdout: verdictConfirmed})
+	e.ticksTo(t, e.clock.Add(time.Minute))
+	if len(e.host.opCalls("confirm-delivery")) != 1 || len(e.specs) != 1 || len(readTurnState(e.home).DeliveryEarly) != 0 {
+		t.Fatalf("after the accept: %d confirms, %d turns", len(e.host.opCalls("confirm-delivery")), len(e.specs))
+	}
+
+	e = deliveryEnv(t)
+	e.host.open.Attempts[0].Phase = "submitted"
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult { h.ack("m1"); return TurnResult{Outcome: TurnFinished} }
+	e.tick(t)
+	e.host.open.Attempts = nil
+	e.ticksTo(t, e.clock.Add(time.Minute))
+	if st := readTurnState(e.home); len(st.DeliveryEarly) != 0 || len(st.Deliveries) != 0 {
+		t.Fatalf("an attempt that left the open list: early %v, checks %v", st.DeliveryEarly, st.Deliveries)
+	}
+}
+
+// A launcher stopped while the script runs records nothing of the run: the
+// check reads again after the restart, and no turn is given a fault.
+func TestDeliveryStopDuringRun(t *testing.T) {
+	e := deliveryEnv(t)
+	setScript(t, e, fakeVerify{Exit: 0, Stdout: verdictConfirmed, Sleep: "3s"})
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(500*time.Millisecond, cancel)
+	e.clock = e.clock.Add(turnGap + time.Second)
+	e.loop.Tick(ctx)
+	c := readTurnState(e.home).Deliveries[testAttempt]
+	if c == nil || c.Reads != 0 || c.Handed || c.Verdict != "" || len(e.specs) != 0 {
+		t.Fatalf("after the stop: %+v, %d turns", c, len(e.specs))
+	}
+	setScript(t, e, fakeVerify{Exit: 0, Stdout: verdictConfirmed})
+	e.tick(t)
+	if len(e.host.opCalls("confirm-delivery")) != 1 || len(e.specs) != 0 {
+		t.Fatalf("after the restart: %d confirms, %d turns", len(e.host.opCalls("confirm-delivery")), len(e.specs))
+	}
+}
+
+// A message the launcher never read goes to a turn whose brief names it,
+// once.
+func TestDeliveryReleasedNamed(t *testing.T) {
+	e := deliveryEnv(t)
+	e.host.inboxErr = errors.New("aicrewd did not answer")
+	for i := 0; i < maxDeliveryReadFails; i++ {
+		e.tick(t)
+	}
+	e.host.inboxErr = nil
+	if len(e.specs) != 1 || !strings.Contains(e.specs[0].Prompt, "could not read message(s) m1") {
+		t.Fatalf("%d turns; brief: %s", len(e.specs), lastPrompt(e))
+	}
+	if len(readTurnState(e.home).DeliveryReleased) != 0 {
+		t.Fatal("the released messages' line was not consumed")
 	}
 }

@@ -55,6 +55,9 @@ type StepCall struct {
 	AttemptID string          `json:"attempt_id,omitempty"`
 	TaskID    string          `json:"task_id,omitempty"`
 	Body      json.RawMessage `json:"body,omitempty"`
+	// Key is the request key of a call the launcher makes itself, which it
+	// recorded to send again; it never crosses the step channel.
+	Key string `json:"-"`
 }
 
 // Where an answered call stands.
@@ -405,7 +408,11 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 		if !attemptIDShape(call.AttemptID) {
 			return refuse("invalid_request", "A local step needs the attempt's ID.", "Pass -attempt.")
 		}
-		out, err := s.local.LocalStep(ctx, newKey(call.Op), s.driver.Session.stepToken(),
+		key := call.Key
+		if key == "" {
+			key = newKey(call.Op)
+		}
+		out, err := s.local.LocalStep(ctx, key, s.driver.Session.stepToken(),
 			attemptsPath+"/"+url.PathEscape(call.AttemptID)+"/"+call.Op, bodyOrEmpty(call.Body))
 		if err != nil {
 			return answerErr(err)

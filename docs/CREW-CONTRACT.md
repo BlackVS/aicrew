@@ -1121,15 +1121,27 @@ checks the delivery and takes the confirm-delivery step itself (task
 names the home's credentials. Nothing of aicrewd's routes changes.
 - **What starts a check.** An `action.needed` message with a `pull`
   subject whose `needs` hold `merged`, for an attempt that
-  `GET /v1/crew/attempts` lists in phase `accepted` with a latest result.
+  `GET /v1/crew/attempts` lists in phase `accepted` with a latest result
+  whose reference is that pull request. The check is bound to that result:
+  its pull request and its `result_seq`, compared again with the listed
+  result before each read. A merge notice of another pull request starts
+  no check and goes to a turn as it is; a check whose attempt was since
+  accepted with another result ends. A pull request merged while its
+  attempt is still open but not accepted (a merge before the review) is
+  remembered: its turn's brief says the check starts once the result is
+  accepted, the launcher reads the open attempts every 30 seconds (not the
+  forge) and starts the check when the attempt is listed accepted with
+  that pull request, and forgets it when the attempt leaves the list.
   The launcher reads the message once, at first sight, with the inbox
   read the brief makes (`GET /v1/crew/inbox`, up to 100 messages); the
   pending list names a message's kind but not its subjects. That read
   raises the message's delivery count, which only the brief's "delivered
   N times" shows: no limit, hold or rule in aicrewd or the launcher
-  decides on it. A read that fails, or a page that does not list the
-  message, holds it from turns for up to five ticks and reads again;
-  after that it goes to a turn as an ordinary message.
+  decides on it. Each message is classified once. A read that fails, or a
+  page that does not list the message, holds it from turns for up to five
+  ticks and reads it again; after that it goes to a turn as an ordinary
+  message, and that turn's brief names it as not read by the launcher, so
+  a merge notice among such messages is escalated.
 - **Which messages are deferred.** A message whose subjects are all such
   `pull` subjects needing only `merged`. While the check runs it is kept
   from the turn gate, from the count of unacknowledged turns and from the
@@ -1158,18 +1170,27 @@ names the home's credentials. Nothing of aicrewd's routes changes.
   naming the attempt gives one more read at once, also after the day.
 - **The answers.**
   - `confirmed` counts only with exit code 0 and evidence: the launcher
-    takes `confirm-delivery` with the check's evidence, records that it
-    did, then acknowledges the attempt's deferred messages (none, after a
-    mixed one). A launcher stopped between the two acknowledges after its
-    restart without a second confirm. A confirm aicrewd refuses goes to
-    a turn once with the refusal, and is not repeated.
+    records the confirm-delivery call, its body and a request key of the
+    attempt and result, before it sends it; it sends that same call on
+    every try and after a restart, so aicrewd answers a repeat as a replay
+    and announces the confirmation once. A call aicrewd did not answer, or
+    answered as retryable, goes again on the schedule within the day. Once
+    aicrewd recorded it, the launcher records that, then acknowledges the
+    attempt's deferred messages (none, after a mixed one); a launcher
+    stopped between the two acknowledges after its restart. A confirm
+    aicrewd refuses for good goes to a turn once with the refusal, and is
+    not repeated.
   - `pending` (exit code 4) gives no turn; after a day it goes to a turn
     as not confirmed with that reason.
   - `not_confirmed` (exit code 3), or a fault of the check itself (no
     interpreter, no script, exit code 2, a timeout, output that does not
     parse or is over the bound, any other exit code or verdict), goes to
     a turn once, with the failed checks or the reason in the brief, and
-    the launcher reads on every 15 minutes until the day is over. A cause
+    the launcher reads on every 15 minutes until the day is over. The
+    answer wakes a turn of its own when no message is pending; later
+    briefs say it was handed over and when, and ask nothing. A run the
+    launcher's own stop ends (a service restart) records nothing: the
+    check reads again after the restart. A cause
     repaired outside, such as a re-run CI job, is then confirmed without
     a turn. A Gitea or GitLab check without the external reviewer's
     account is not confirmed with a reason that names

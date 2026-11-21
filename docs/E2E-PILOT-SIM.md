@@ -630,13 +630,17 @@ itself, as the coordinator ran it, and its `confirmed` evidence
 (`reviewed_head`, `human_merge`, `post_merge_ci`) must be the attempt's
 delivery and terminal evidence and among the task's evidence refs.
 
-The launcher's delivery check runs here against sim-gitea only. What the
-simulation does not cover, and the unit tests in
-`internal/agent/delivery_test.go` do with a stand-in script: GitHub's
-trust by author association and GitLab; the interpreter on Windows
-(`python`) and a host without one; a check that answers not confirmed and
-the coordinator's escalation that follows; a confirm aicrewd refuses; and
-the day's bound on pending reads.
+The launcher's delivery check runs here against sim-gitea only. The unit
+tests in `internal/agent/delivery_test.go` run the launcher against a
+stand-in script that prints a preset verdict, so they verify the
+launcher's side and none of the check's own rules: the argument list and
+environment for GitHub, Gitea and GitLab; each verdict and fault; the
+retries of the confirm step; and the day's bound on pending reads. Not
+covered by either: the check's own reading of GitHub (its trust by author
+association) and of GitLab, which the verify-delivery skill's tests own;
+the interpreter on Windows (`python`) and a host without one; and a check
+that answers not confirmed on a real forge, with the escalation that
+follows.
 
 The snapshots stay in `DIR/cycle-<n>/<step>/`.
 

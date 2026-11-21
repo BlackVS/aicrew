@@ -200,6 +200,9 @@ func (h *fakeHost) Do(_ context.Context, call StepCall) StepAnswer {
 		h.attempt.Phase = "blocked"
 	}
 	if e := h.refuse[call.Op]; e != nil {
+		if e.Retryable {
+			return StepAnswer{Status: StepFailed, Error: e}
+		}
 		return StepAnswer{Status: StepRefused, Error: e}
 	}
 	switch call.Op {

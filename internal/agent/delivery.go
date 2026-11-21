@@ -94,6 +94,9 @@ const (
 	deliveryPending      = "pending"
 	deliveryFault        = "fault"
 	deliveryRefused      = "refused"
+	// deliveryStopped is a run the launcher's own stop ended: nothing of
+	// it is recorded, and the check is read again after the restart.
+	deliveryStopped = "stopped"
 )
 
 // deliveryCheck is one attempt's delivery check.
@@ -120,6 +123,15 @@ type deliveryCheck struct {
 	Done      bool `json:"done,omitempty"`
 	Confirmed bool `json:"confirmed,omitempty"`
 	AckFails  int  `json:"ack_fails,omitempty"`
+	// ToldAt is when a turn's brief carried the handed answer, which is
+	// given once; later briefs only say it was handed over.
+	ToldAt time.Time `json:"told_at,omitzero"`
+	// Key and Body are the confirm-delivery call, recorded before it is
+	// sent: a launcher stopped before it recorded the answer sends the same
+	// call again, which aicrewd answers as a replay. Body is kept as its
+	// bytes, which the state file's indentation does not touch.
+	Key  string `json:"key,omitempty"`
+	Body string `json:"body,omitempty"`
 }
 
 // deliveryResult is one run of the check.
@@ -143,13 +155,15 @@ type heldMessages map[string]bool
 // deliveries applies the coordinator's delivery checks: it looks at the new
 // messages, runs the checks that are due, and returns the pending messages
 // a turn may have, the messages it held back, and the brief's lines.
-func (l *TurnLoop) deliveries(ctx context.Context, st *turnState, pending []PendingMessage) ([]PendingMessage, heldMessages, []string) {
+func (l *TurnLoop) deliveries(ctx context.Context, st *turnState, pending []PendingMessage) ([]PendingMessage, heldMessages,
+	[]string, []string) {
 	if st.Deliveries == nil {
 		st.Deliveries = map[string]*deliveryCheck{}
 	}
 	now := l.Now()
 	var open *OpenAttempts
 	held := l.lookAtNew(ctx, st, pending, &open, now)
+	l.startEarly(ctx, st, &open, now)
 	// gone are the messages acknowledged this tick: the pending list read
 	// before still names them.
 	gone := heldMessages{}
@@ -158,6 +172,8 @@ func (l *TurnLoop) deliveries(ctx context.Context, st *turnState, pending []Pend
 		switch {
 		case c.Confirmed:
 			l.ackDelivered(ctx, st, id, c, gone)
+		case c.Body != "" && !now.Before(c.Next):
+			l.confirm(ctx, st, id, c, gone, now)
 		case !c.Done && !now.Before(c.Next):
 			l.runCheck(ctx, st, id, c, &open, now, gone)
 		}
@@ -167,15 +183,36 @@ func (l *TurnLoop) deliveries(ctx context.Context, st *turnState, pending []Pend
 			delete(st.Deliveries, id)
 		}
 	}
-	var lines []string
+	// A check still reading holds its messages and gives each turn one
+	// line; a handed answer is given to one turn, which it wakes.
+	var lines, handed []string
 	for _, id := range sortedChecks(st.Deliveries) {
 		c := st.Deliveries[id]
-		if !c.Handed {
+		switch {
+		case !c.Handed:
 			for _, m := range c.Deferred {
 				held[m] = true
 			}
+			lines = append(lines, deliveryLine(id, c))
+		case c.ToldAt.IsZero():
+			lines = append(lines, deliveryLine(id, c))
+			handed = append(handed, id)
+		default:
+			lines = append(lines, fmt.Sprintf("The launcher's delivery check of attempt %s (%s) is not confirmed; "+
+				"it was handed to a turn at %s. Nothing is asked of this turn for it.", id, c.Pull,
+				c.ToldAt.UTC().Format(time.RFC3339)))
 		}
-		lines = append(lines, deliveryLine(id, c))
+	}
+	for _, e := range sortedEarly(st.DeliveryEarly) {
+		lines = append(lines, fmt.Sprintf("Attempt %s's pull request (%s) was merged before its result was "+
+			"accepted: the launcher's delivery check starts once the result is accepted; do not run it.", e,
+			st.DeliveryEarly[e]))
+	}
+	if len(st.DeliveryReleased) > 0 {
+		lines = append(lines, "The launcher could not read message(s) "+strings.Join(st.DeliveryReleased, ", ")+
+			" for its delivery checks. If one says that an accepted result's pull request was merged, escalate it "+
+			"with that message: the launcher did not start its check.")
+		handed = append(handed, "")
 	}
 	var out []PendingMessage
 	for _, p := range pending {
@@ -183,7 +220,33 @@ func (l *TurnLoop) deliveries(ctx context.Context, st *turnState, pending []Pend
 			out = append(out, p)
 		}
 	}
-	return out, held, lines
+	// The messages acknowledged this tick leave the turns' view too: the
+	// count of unacknowledged turns drops them as it drops held ones.
+	for id := range gone {
+		held[id] = true
+	}
+	return out, held, lines, handed
+}
+
+// toldDeliveries records that a turn's brief carried the handed answers and
+// the released messages' line.
+func toldDeliveries(st *turnState, ids []string, now time.Time) {
+	for _, id := range ids {
+		if id == "" {
+			st.DeliveryReleased = nil
+		} else if c := st.Deliveries[id]; c != nil {
+			c.ToldAt = now
+		}
+	}
+}
+
+func sortedEarly(m map[string]string) []string {
+	ids := make([]string, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func sortedChecks(m map[string]*deliveryCheck) []string {
@@ -204,11 +267,18 @@ func (l *TurnLoop) lookAtNew(ctx context.Context, st *turnState, pending []Pendi
 	held := heldMessages{}
 	var fresh []PendingMessage
 	for _, p := range pending {
-		if p.Seq > st.DeliverySeen {
+		if p.Seq > st.DeliverySeen || slices.Contains(st.DeliveryUnread, p.ID) {
 			fresh = append(fresh, p)
 		}
 	}
+	// Every message looked at now is classified at most once: an unread
+	// one is kept by its id, and the others are past the mark.
+	for _, p := range fresh {
+		st.DeliverySeen = max(st.DeliverySeen, p.Seq)
+	}
+	st.DeliveryUnread = nil
 	if len(fresh) == 0 {
+		st.DeliveryReadFails = 0
 		return held
 	}
 	var toRead []PendingMessage
@@ -250,16 +320,17 @@ func (l *TurnLoop) lookAtNew(ctx context.Context, st *turnState, pending []Pendi
 		if st.DeliveryReadFails < maxDeliveryReadFails {
 			for _, p := range unread {
 				held[p.ID] = true
+				st.DeliveryUnread = append(st.DeliveryUnread, p.ID)
 			}
 			return held
 		}
 		l.Log.Warn("new messages were not read for the delivery checks: they go to a turn as they are",
 			"messages", len(unread), "ticks", st.DeliveryReadFails)
+		for _, p := range unread {
+			st.DeliveryReleased = append(st.DeliveryReleased, p.ID)
+		}
 	}
 	st.DeliveryReadFails = 0
-	for _, p := range fresh {
-		st.DeliverySeen = max(st.DeliverySeen, p.Seq)
-	}
 	return held
 }
 
@@ -289,11 +360,23 @@ func (l *TurnLoop) classify(st *turnState, m inboxMessage, open *OpenAttempts, n
 	var merged []string
 	for _, s := range m.Action.Subjects {
 		a := acceptedAttempt(open, s.AttemptID)
+		// Only the merge of the accepted result's own pull request starts
+		// its check: a notice of another pull goes to a turn as it is.
 		isMerged := s.Kind == deliverySubjectKind && slices.Contains(s.Needs, deliveryNeed) && a != nil &&
-			s.Pull != nil && s.Pull.URL != ""
+			s.Pull != nil && samePull(s.Pull.URL, a.LatestResult)
 		if !isMerged {
 			pure = false
 			l.newMessageFor(st, s.AttemptID, now)
+			if s.Kind == deliverySubjectKind && slices.Contains(s.Needs, deliveryNeed) && s.Pull != nil &&
+				s.Pull.URL != "" && a == nil && openAttempt(open, s.AttemptID) && st.Deliveries[s.AttemptID] == nil {
+				// Merged before the result was accepted: the check starts once
+				// aicrewd lists the attempt accepted with that pull request.
+				if st.DeliveryEarly == nil {
+					st.DeliveryEarly = map[string]string{}
+				}
+				st.DeliveryEarly[s.AttemptID] = s.Pull.URL
+				l.Log.Info("a pull request was merged before its result was accepted", "attempt", s.AttemptID)
+			}
 			continue
 		}
 		if len(s.Needs) != 1 {
@@ -301,8 +384,12 @@ func (l *TurnLoop) classify(st *turnState, m inboxMessage, open *OpenAttempts, n
 		}
 		merged = append(merged, s.AttemptID)
 		c := st.Deliveries[s.AttemptID]
+		if c != nil && !c.Confirmed && c.Body == "" && !c.binds(a) {
+			l.Log.Info("the delivery check starts again: the attempt's accepted result changed", "attempt", s.AttemptID)
+			c = nil
+		}
 		if c == nil {
-			c = &deliveryCheck{Pull: s.Pull.URL, ResultSeq: a.LatestResult.ResultSeq, Worker: a.WorkerAgentID,
+			c = &deliveryCheck{Pull: a.LatestResult.Ref, ResultSeq: a.LatestResult.ResultSeq, Worker: a.WorkerAgentID,
 				Since: now, Next: now}
 			st.Deliveries[s.AttemptID] = c
 			l.Log.Info("the delivery check of an accepted attempt starts", "attempt", s.AttemptID, "pull", c.Pull)
@@ -319,6 +406,64 @@ func (l *TurnLoop) classify(st *turnState, m inboxMessage, open *OpenAttempts, n
 			c.Deferred = append(c.Deferred, m.ID)
 		}
 	}
+}
+
+// openAttempt says whether the attempt is among the open ones.
+func openAttempt(open *OpenAttempts, id string) bool {
+	return open != nil && slices.ContainsFunc(open.Attempts, func(a OpenAttempt) bool { return a.ID == id })
+}
+
+// startEarly starts the checks of the pull requests merged before their
+// result was accepted, once aicrewd lists the attempt accepted with that
+// pull request as its result, and forgets those whose attempt left the open
+// list. It reads the open attempts, not the forge, at most every
+// deliveryEarlyEvery.
+func (l *TurnLoop) startEarly(ctx context.Context, st *turnState, open **OpenAttempts, now time.Time) {
+	if len(st.DeliveryEarly) == 0 || now.Before(st.DeliveryEarlyNext) {
+		return
+	}
+	st.DeliveryEarlyNext = now.Add(deliveryEarlyEvery)
+	o, err := l.openAttempts(ctx, *open)
+	if err != nil {
+		l.Log.Warn("the open attempts were not read for an early merge", "error", err.Error())
+		return
+	}
+	*open = o
+	for id, pull := range st.DeliveryEarly {
+		switch a := acceptedAttempt(o, id); {
+		case !openAttempt(o, id):
+			delete(st.DeliveryEarly, id)
+		case a != nil && samePull(pull, a.LatestResult):
+			delete(st.DeliveryEarly, id)
+			if st.Deliveries[id] == nil {
+				st.Deliveries[id] = &deliveryCheck{Pull: a.LatestResult.Ref, ResultSeq: a.LatestResult.ResultSeq,
+					Worker: a.WorkerAgentID, Since: now, Next: now}
+				l.Log.Info("the delivery check of an accepted attempt starts", "attempt", id, "pull", pull)
+			}
+		case a != nil:
+			// Accepted with another pull request: that merge is not its result.
+			delete(st.DeliveryEarly, id)
+		}
+	}
+}
+
+// deliveryEarlyEvery is how often the open attempts are read for a pull
+// request merged before its result was accepted.
+const deliveryEarlyEvery = 30 * time.Second
+
+// samePull says whether url is the pull request of the accepted result r.
+func samePull(url string, r *LatestResult) bool {
+	norm := func(s string) string { return strings.ToLower(strings.TrimRight(s, "/")) }
+	return r != nil && r.Kind == resultPullRequest && url != "" && norm(url) == norm(r.Ref)
+}
+
+// resultPullRequest is the kind of a result whose reference is the
+// attempt's watched pull request.
+const resultPullRequest = "pull_request"
+
+// binds says whether the check is the attempt's accepted result.
+func (c *deliveryCheck) binds(a *OpenAttempt) bool {
+	return a != nil && a.LatestResult != nil && a.LatestResult.ResultSeq == c.ResultSeq && samePull(c.Pull, a.LatestResult)
 }
 
 // acceptedAttempt is the open attempt id when it is accepted with a result,
@@ -355,10 +500,11 @@ func (l *TurnLoop) runCheck(ctx context.Context, st *turnState, id string, c *de
 		return
 	}
 	*open = o
-	if acceptedAttempt(o, id) == nil {
-		// Finalized, sent back or stopped: nothing is left to confirm, and
-		// its messages go to a turn as they are.
-		l.Log.Info("the delivery check ends: the attempt is no longer accepted", "attempt", id)
+	if a := acceptedAttempt(o, id); a == nil || !c.binds(a) {
+		// Finalized, sent back, stopped or accepted with another result:
+		// nothing of this check is left to confirm, and its messages go to
+		// a turn as they are.
+		l.Log.Info("the delivery check ends: the attempt's accepted result is not the check's", "attempt", id)
 		delete(st.Deliveries, id)
 		return
 	}
@@ -367,27 +513,25 @@ func (l *TurnLoop) runCheck(ctx context.Context, st *turnState, id string, c *de
 	if r.Verdict == "" {
 		r = l.verify(ctx, run)
 	}
+	if r.Verdict == deliveryStopped || ctx.Err() != nil {
+		return
+	}
 	c.Reads++
 	c.Verdict, c.Reason, c.Failed = r.Verdict, r.Reason, r.Failed
 	l.Log.Info("delivery check", "attempt", id, "pull", c.Pull, "verdict", r.Verdict, "reason", r.Reason)
 	past := now.Sub(c.Since) >= deliveryDay
 	switch r.Verdict {
 	case deliveryConfirmed:
+		// The call is recorded before it is sent: a launcher stopped at any
+		// point after sends the same call again, never a second confirm.
 		body, _ := json.Marshal(map[string]any{"result_seq": c.ResultSeq, "evidence": r.Evidence})
-		ans := l.Host.Do(ctx, StepCall{Version: 1, Op: "confirm-delivery", AttemptID: id, Body: body})
-		if !ans.OK {
-			c.Verdict, c.Reason = deliveryRefused, "aicrewd refused the confirm-delivery step: "+stepRefusal(ans)
-			c.Handed, c.Done = true, true
+		c.Body = string(body)
+		c.Key = fmt.Sprintf("aicrew-agent-delivery-%s-%d", id, c.ResultSeq)
+		if err := writeTurnState(l.Home, *st); err != nil {
+			l.Log.Warn("record the turn state: the confirm waits for the next tick", "error", err.Error())
 			return
 		}
-		c.Confirmed = true
-		// The confirmation is recorded before the acknowledgement, so a
-		// launcher stopped between the two acknowledges without a second
-		// confirm.
-		if err := writeTurnState(l.Home, *st); err != nil {
-			l.Log.Warn("record the turn state", "error", err.Error())
-		}
-		l.ackDelivered(ctx, st, id, c, gone)
+		l.confirm(ctx, st, id, c, gone, now)
 	case deliveryPending:
 		if past {
 			c.Verdict, c.Reason = deliveryNotConfirmed, "the delivery check answered pending for a day"
@@ -400,6 +544,44 @@ func (l *TurnLoop) runCheck(ctx context.Context, st *turnState, id string, c *de
 		c.Done = past
 		c.Next = now.Add(deliverySchedule[len(deliverySchedule)-1])
 	}
+}
+
+// confirm sends the recorded confirm-delivery call and, once aicrewd
+// recorded it, acknowledges the deferred messages.
+func (l *TurnLoop) confirm(ctx context.Context, st *turnState, id string, c *deliveryCheck, gone heldMessages,
+	now time.Time) {
+	ans := l.Host.Do(ctx, StepCall{Version: 1, Op: "confirm-delivery", AttemptID: id, Body: json.RawMessage(c.Body),
+		Key: c.Key})
+	if !ans.OK && (ans.Status == StepFailed || ans.Error != nil && ans.Error.Retryable) {
+		// Not answered, or to be tried again: the same call, with the same
+		// key, goes again on the schedule, which aicrewd answers as a
+		// replay if the first one committed.
+		l.Log.Warn("the confirm-delivery step was not recorded: it is sent again", "attempt", id, "error", stepRefusal(ans))
+		c.AckFails++ // counts the tries of the call, too
+		if now.Sub(c.Since) >= deliveryDay {
+			c.Body = ""
+			c.Verdict, c.Reason = deliveryRefused, "aicrewd did not record the confirm-delivery step for a day: "+
+				stepRefusal(ans)
+			c.Handed, c.Done = true, true
+			return
+		}
+		c.Next = now.Add(deliverySchedule[min(c.AckFails-1, len(deliverySchedule)-1)])
+		return
+	}
+	c.Body, c.AckFails = "", 0
+	if !ans.OK {
+		c.Verdict, c.Reason = deliveryRefused, "aicrewd refused the confirm-delivery step: "+stepRefusal(ans)
+		c.Handed, c.Done = true, true
+		return
+	}
+	c.Confirmed = true
+	// The confirmation is recorded before the acknowledgement; without
+	// the record the acknowledgement waits for the next tick.
+	if err := writeTurnState(l.Home, *st); err != nil {
+		l.Log.Warn("record the turn state: the acknowledgement waits for the next tick", "error", err.Error())
+		return
+	}
+	l.ackDelivered(ctx, st, id, c, gone)
 }
 
 // prepareRun fills the review authors a Gitea or GitLab check needs, or
@@ -637,7 +819,7 @@ func (l *TurnLoop) verify(ctx context.Context, run deliveryRun) deliveryResult {
 	case cctx.Err() != nil && ctx.Err() == nil:
 		return fault("the check did not end within %s", deliveryTimeout)
 	case ctx.Err() != nil:
-		return fault("the launcher stopped during the check")
+		return deliveryResult{Verdict: deliveryStopped}
 	case rerr != nil:
 		return fault("the check's output was not read: %v", rerr)
 	case len(raw) > maxDeliveryOutput:
@@ -713,4 +895,21 @@ func first(s ...string) string {
 		}
 	}
 	return ""
+}
+
+// deliveryState is what a tick's delivery checks may change of the turn
+// state, so that an idle tick writes nothing.
+func deliveryState(st turnState) []byte {
+	raw, _ := json.Marshal(struct {
+		D  map[string]*deliveryCheck
+		S  int64
+		F  int
+		U  []string
+		R  []string
+		E  map[string]string
+		EN time.Time
+		UN *unackedState
+	}{st.Deliveries, st.DeliverySeen, st.DeliveryReadFails, st.DeliveryUnread, st.DeliveryReleased, st.DeliveryEarly,
+		st.DeliveryEarlyNext, st.Unacked})
+	return raw
 }

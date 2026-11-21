@@ -258,7 +258,7 @@ first and start its work later, pause it now:
 aicrew team pause --team-name crew --reason "bring-up"
 ```
 
-and resume it in step 8. A pause holds the members' turns, not their
+and resume it in step 9. A pause holds the members' turns, not their
 joins: the first team's members joined it paused on 2026-11-19, and ended
 `ready` in it on 2026-11-20 (seen).
 
@@ -539,7 +539,156 @@ stops at the last logout.
 
 Check: `service status` says `running`.
 
-### 8. The team (operator)
+### 8. The team's architect (operator and the architect's machine)
+
+The team's architect is the operator's own interactive Claude Code
+session, started from an architect directory (DEVELOPMENT.md, "The
+architect directory", is its reference). It reads the team's state, the
+pull requests that wait for the merge and the coordinator's escalations,
+and answers an escalation on the operator's word. It works with its own
+architect credential, which reads and answers escalations and reads the
+merges list and the team states, and nothing else. The operator
+credential never reaches it.
+
+**Two arrangements.** The architect's directory lies either on the
+machine where the operator's `aicrew` commands run (one machine), or on
+another machine, such as the operator's workstation while the commands
+run on aicrewd's host (two machines; "Where the operator's `aicrew`
+commands run", above). Both make the directory first, on the architect's
+machine. They differ only in how the credential reaches it.
+
+**The directory** (architect's machine, as the user who will run the
+session; `aicrew` installed with step 5's one-liner). On Linux or macOS:
+
+<!-- run: architect-init -->
+```sh
+aicrew architect init --dir ~/aicrew/architect --project PROJECT --url https://AICREWD:PORT --tls-trust-mode ca_dns --tls-trust-value AICREWD
+```
+
+On Windows, in PowerShell:
+
+<!-- run: architect-init-windows -->
+```powershell
+aicrew architect init --dir $HOME\aicrew\architect --project PROJECT --url https://AICREWD:PORT --tls-trust-mode ca_dns --tls-trust-value AICREWD
+```
+
+With a pinned key instead of the system's roots, both take
+`--tls-trust-mode spki_sha256 --tls-trust-value sha256-PIN` <!-- run-alt: architect-init architect-status -->,
+as in step 6.
+
+Check: it ends with "the architect directory is ready". Its `creds/` is
+owner-only: on Linux and macOS mode 700, on Windows a protected access
+list of the user, SYSTEM and Administrators, which the files in it
+inherit.
+
+**One machine.** Where the operator credential is, issue the architect's
+straight into the directory:
+`aicrew architect credential issue --label planning --output ~/aicrew/architect/creds/aicrew.architect` <!-- run: architect-credential-here -->.
+On Windows, in PowerShell, the output is
+`$HOME\aicrew\architect\creds\aicrew.architect`: Windows PowerShell 5.1
+passes a leading `~` to `aicrew` unchanged. The operator credential then
+lies on that machine too, as arrangement 2 of "Where the operator's
+`aicrew` commands run" says.
+
+**Two machines.** The credential is issued to a file where the operator
+credential is, and carried to the directory as a file. Its value never
+passes through a terminal's screen, a chat or an AI session's tools.
+Steps 1, 2 and 4 run on aicrewd's host, which is Linux; step 3 runs on
+the architect's machine. In this order:
+
+1. On aicrewd's host, as the service user (`sudo -iu sessiond`, with the
+   four variables above):
+
+   <!-- run: architect-credential-file -->
+   ```sh
+   aicrew architect credential issue --label planning --output ~/aicrew/etc/architect-planning.token
+   ```
+
+   Check: its JSON names that output, and
+   `aicrew architect credential list` <!-- run: architect-credential-list -->
+   lists the label `planning`.
+   `stat -c '%a %U' ~/aicrew/etc/architect-planning.token` <!-- run: architect-file-rights -->
+   prints `600 sessiond`: the new file is the service user's alone.
+2. On aicrewd's host, back as the operator's login user, the one the
+   architect's machine reaches by SSH (`sessiond` has no SSH login):
+
+   <!-- run: architect-handover -->
+   ```sh
+   sudo install -m 600 -o "$USER" ~sessiond/aicrew/etc/architect-planning.token ~/architect-planning.token && sudo rm ~sessiond/aicrew/etc/architect-planning.token
+   ```
+
+3. On the architect's machine, where `AICREWD_HOST` is that login on
+   aicrewd's host as `ssh` takes it (`user@host`). On Linux or macOS:
+
+   <!-- run: architect-carry -->
+   ```sh
+   scp AICREWD_HOST:architect-planning.token ~/aicrew/architect/creds/aicrew.architect && ssh AICREWD_HOST rm architect-planning.token
+   ```
+
+   On Windows, in PowerShell, with its built-in OpenSSH client:
+
+   <!-- run: architect-carry-windows -->
+   ```powershell
+   scp AICREWD_HOST:architect-planning.token $HOME\aicrew\architect\creds\aicrew.architect; if ($?) { ssh AICREWD_HOST rm architect-planning.token }
+   ```
+
+   Check: on Linux `stat -c %a ~/aicrew/architect/creds/aicrew.architect` <!-- run: architect-carried-rights -->
+   prints `600` (on macOS `stat -f %Lp`). On Windows
+   `icacls $HOME\aicrew\architect\creds\aicrew.architect` lists only the
+   user, `NT AUTHORITY\SYSTEM` and `BUILTIN\Administrators`, each
+   `(I)(F)`, inherited from `creds\`. `aicrew` itself refuses a token
+   file that another account can read.
+4. On aicrewd's host, as the login user, no copy is left:
+   `test ! -e ~/architect-planning.token && sudo test ! -e ~sessiond/aicrew/etc/architect-planning.token && echo gone` <!-- run: architect-carry-gone -->
+   prints `gone`.
+
+**A carrying left half done.** Between steps 2 and 3 the credential is a
+file in the login user's home, readable by that user only: carry it with
+step 3, or remove it there (`rm ~/architect-planning.token`, on
+aicrewd's host as the login user) and withdraw it.
+A credential that is lost, or was left anywhere else, is withdrawn where
+the operator credential is: `aicrew architect credential list` gives its
+id, and `aicrew architect credential revoke --id ID` <!-- run: architect-credential-revoke -->
+ends it. Then issue a new one.
+
+**The seat works** (architect's machine). On Linux or macOS:
+
+<!-- run: architect-status -->
+```sh
+aicrew status --url https://AICREWD:PORT --tls-trust-mode ca_dns --tls-trust-value AICREWD --token-file ~/aicrew/architect/creds/aicrew.architect
+```
+
+Check: it lists the team's members, as from the operator's seat. On
+Windows the same line names `$HOME\aicrew\architect\creds\aicrew.architect`.
+
+**The operator credential is not here** (two machines, architect's
+machine). `aicrew` has no default path for a credential: it reads the
+file that `--token-file` or `AICREW_OPERATOR_TOKEN_FILE` names. On
+aicrewd's host the installer writes the operator credential to
+`~/aicrew/etc/operator.token`, so that is the path to check:
+`test ! -e ~/aicrew/etc/operator.token && echo absent` <!-- run: architect-no-operator-token -->
+prints `absent` (on Windows `Test-Path $HOME\aicrew\etc\operator.token`
+is `False`). This checks that path. It does not search the machine for a
+copy kept under another name.
+
+**The first start** (architect's machine, the person):
+`cd ~/aicrew/architect` (in PowerShell `cd $HOME\aicrew\architect`)
+and `claude`. The client asks to trust the
+directory and to approve its `aimem` server, and each aimem tool asks
+once for permission: the person answers. The directory's settings give
+the session the connection and its credential's path, so its `aicrew`
+commands take no flags.
+
+Check: the session's first context holds the start hook's list of open
+escalations, empty on a new team. `/arch-status` answers with each
+member, from `aicrew status`, and `/arch-merges` with the pull requests
+that wait for the merge, from `aicrew merges` <!-- run: architect-merges -->.
+The session reads and answers an escalation with the lines of "The
+operator during a cycle" (below), on the operator's word. Its `aicrew`
+commands are the operator's lines, run in the directory with its
+credential.
+
+### 9. The team (operator)
 
 If the team was paused in step 1, resume it when every member is
 `ready`: `aicrew team resume --team-name crew` <!-- run: team-resume -->.
@@ -900,7 +1049,7 @@ machine account for both members:
   coordinator escalated. That is why step 1 now selects the toolchain,
   the host table names the build tools, and "A team already up without a
   toolchain" says what such a team does.
-- **Not seen yet:** `aicrew team show` of step 8.
+- **Not seen yet:** `aicrew team show` of step 9.
 
 On 2026-11-16, step 5 and the start of step 6 were run as an unprivileged
 user in a scratch `debian:bookworm-slim` container on the lab simulation

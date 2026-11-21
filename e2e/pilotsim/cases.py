@@ -236,8 +236,15 @@ def e1_answered(d, q, ids, a, expect):
     # 3. Answered under the architect credential, and mirrored.
     by = e["answered_by"]
     expect(by.startswith("architect:"), "aicrewd: answered by %r" % by)
-    cred = q("SELECT label FROM architect_credentials WHERE id = ?", by.partition(":")[2])
-    expect(cred and cred[0]["label"] == "sim-e1", "aicrewd: %r is not the case's architect credential" % by)
+    facts = loadj(d, "facts.json", {}) or {}
+    expect(by.partition(":")[2] == facts.get("architect_credential"),
+           "aicrewd: %r is not the credential carried to the directory (%s)" % (by, facts.get("architect_credential")))
+    cred = q("SELECT label, revoked_at FROM architect_credentials WHERE id = ?", by.partition(":")[2])
+    expect(cred and cred[0]["label"] == "planning" and not cred[0]["revoked_at"],
+           "aicrewd: the carried credential is %s" % cred)
+    gone = q("SELECT revoked_at FROM architect_credentials WHERE id = ?", facts.get("architect_throwaway") or "")
+    expect(gone and gone[0]["revoked_at"], "aicrewd: the one-machine credential %s was not revoked" %
+           facts.get("architect_throwaway"))
     expect(E1_DECISION in e["answer"], "aicrewd: the answer is %s" % e["answer"])
     expect(any(b.startswith("[escalation.answer %s]" % e["id"]) for b in comments),
            "aimem: no [escalation.answer %s] comment on the task" % e["id"])

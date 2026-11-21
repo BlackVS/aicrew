@@ -32,4 +32,9 @@ if [ -f /opt/aicrew-upgrade/install-aicrewd.sh ]; then
   env "${settings[@]}" AICREW_PREBUILT_DIR=/opt/aicrew-upgrade/prebuilt bash /opt/aicrew-upgrade/install-aicrewd.sh
   mv /opt/aicrew-upgrade /opt/aicrew-upgrade.done
 fi
+# The operator's SSH login (the image's Dockerfile): host keys made at the
+# container's first start, so each run has its own.
+ssh-keygen -A > /dev/null
+install -d -m 755 /run/sshd
+/usr/sbin/sshd
 exec runuser -u sessiond -- env HOME="$home" "$home/aicrew/bin/aicrewd" -config "$home/aicrew/etc/aicrewd.json"

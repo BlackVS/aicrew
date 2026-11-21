@@ -260,7 +260,12 @@ case_p4() {
 # aicrewd's audit records commands, not reads, so that no list or show ran
 # between the raise and the wait's return rests on the runner's own log of
 # the architect's commands (CYC/architect.log), not on a record of aicrewd.
-ARCH_DIR=/home/sessiond/architect
+# The architect's machine is sim-architect, its user sessiond (the image's
+# user; no aicrewd runs there), and its directory the document's
+# ~/aicrew/architect. The operator's commands run in sim-aicrewd, as the
+# service user (op) or as the operator's SSH login `ops` (the
+# image's Debian already has a group named operator).
+ARCH_DIR=/home/sessiond/aicrew/architect
 ARCH_ENV=()
 # arch CMD...: the architect session's command, in its directory, with the
 # environment the directory's .claude/settings.json gives the session; each
@@ -269,19 +274,91 @@ arch() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" "$*" >> "$CYC/architect.log"
   dc exec -T -u sessiond -w "$ARCH_DIR" -e PATH=/opt/aicrew-prebuilt:/usr/bin:/bin "${ARCH_ENV[@]}" sim-architect "$@"
 }
-# architect_init: the directory, and the architect credential the operator
-# issues where the operator credential lives, piped into its creds/.
+# On the architect's machine, as its user, in its home, with aicrew on PATH
+# as the one-liner leaves it; and as the operator's login on aicrewd's host.
+archhost() {
+  dc exec -T -u sessiond -w /home/sessiond -e HOME=/home/sessiond -e PATH=/opt/aicrew-prebuilt:/usr/bin:/bin sim-architect "$@"
+}
+oplogin() { dc exec -T -u ops -w /home/ops -e HOME=/home/ops -e USER=ops sim-aicrewd "$@"; }
+# archdoc RUNNER ID [docstep options]: step ID's line run by RUNNER in its
+# home, its output on stdout; the step is recorded as run.
+archdoc() {
+  local runner=$1 id=$2 line
+  shift 2
+  line=$(docline "$id" "$@") || fail "docs/BRING-UP.md: no line for step $id"
+  "$runner" sh -c "$line" || return
+  echo "$id" >> "$OUT/docsteps.ran"
+}
+# expect_out WHAT WANT GOT: a step's printed line is the document's.
+expect_out() { [ "$3" = "$2" ] || fail "case E1: $1 printed '$3', not '$2'"; }
+# known_secret RUNNER FILE: a credential carried without the runner is
+# added to the run's known secrets, for the redaction check, by a pipe.
+known_secret() { { "$1" cat "$2"; echo; } >> "$KNOWN_DIR/secrets"; }
+# architect_ssh: the architect's machine logs in to aicrewd's host as
+# `ops` with a key made for this run in sim-architect, which trusts
+# sim-aicrewd's own host key, read from it rather than scanned. Both stay in
+# the containers' filesystems, which the run's `down -v` removes.
+architect_ssh() {
+  archhost sh -c 'install -d -m 700 ~/.ssh && rm -f ~/.ssh/id_ed25519* && ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/id_ed25519' ||
+    fail "case E1: the architect machine's SSH key"
+  archhost cat .ssh/id_ed25519.pub |
+    oplogin sh -c 'install -d -m 700 ~/.ssh && cat > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys' ||
+    fail "case E1: the operator login's authorized key"
+  dc exec -T sim-aicrewd cat /etc/ssh/ssh_host_ed25519_key.pub | awk '{print "sim-aicrewd", $1, $2}' |
+    archhost sh -c 'cat > ~/.ssh/known_hosts' || fail "case E1: aicrewd host's key on the architect machine"
+}
+# architect_init: docs/BRING-UP.md step 8, both arrangements, by the
+# document's lines: the directory on the architect's machine; on aicrewd's
+# host the one-machine line into a directory there (the throwaway
+# credential that the revoke then ends), and the two-machine carrying:
+# issued to a file as the service user, handed to the login user, carried
+# by scp, and gone from the host. The seat then answers with the carried
+# credential.
 architect_init() {
-  dc exec -T -u sessiond sim-architect /opt/aicrew-prebuilt/aicrew architect init --dir "$ARCH_DIR" \
-    --project "$PROJECT" --url https://sim-aicrewd:9443 --tls-trust-mode spki_sha256 \
-    --tls-trust-value "$PIN_SIM_AICREWD" > /dev/null || fail "case E1: aicrew architect init"
-  op aicrew architect credential issue --label sim-e1 --output - |
-    into sim-architect sessiond "$ARCH_DIR/creds/aicrew.architect" || fail "case E1: the architect credential"
+  local conn=(-set PROJECT="$PROJECT" -set AICREWD=sim-aicrewd -set PORT=9443 -alt -set "PIN=${PIN_SIM_AICREWD#sha256-}")
+  archdoc archhost architect-init "${conn[@]}" > /dev/null || fail "case E1: aicrew architect init on the architect's machine"
+  # One machine: the directory and its credential where the operator's are.
+  archdoc op architect-init "${conn[@]}" > /dev/null || fail "case E1: aicrew architect init on aicrewd's host"
+  archdoc op architect-credential-here > "$CYC/credential-here.json" || fail "case E1: the one-machine credential"
+  known_secret op /home/sessiond/aicrew/architect/creds/aicrew.architect
+  # Two machines, in the document's order.
+  archdoc op architect-credential-file > "$CYC/credential-file.json" || fail "case E1: the credential issued to a file"
+  known_secret op /home/sessiond/aicrew/etc/architect-planning.token
+  expect_out "the issued file's rights" "600 sessiond" "$(archdoc op architect-file-rights)"
+  archdoc op architect-credential-list > "$CYC/credential-list.json" || fail "case E1: aicrew architect credential list"
+  grep -q '"planning"' "$CYC/credential-list.json" || fail "case E1: the credential list has no label planning ($CYC/credential-list.json)"
+  archdoc oplogin architect-handover || fail "case E1: the handover to the operator's login"
+  architect_ssh
+  archdoc archhost architect-carry -set AICREWD_HOST=ops@sim-aicrewd || fail "case E1: the carrying by scp"
+  expect_out "the carried file's rights" 600 "$(archdoc archhost architect-carried-rights)"
+  expect_out "the host's copies" gone "$(archdoc oplogin architect-carry-gone)"
+  oplogin sh -c 'test ! -e ~/architect-planning.token && sudo test ! -e ~sessiond/aicrew/etc/architect-planning.token' ||
+    fail "case E1: a copy of the carried credential is left on aicrewd's host"
+  expect_out "the operator credential's path" absent "$(archdoc archhost architect-no-operator-token)"
+  # The whole filesystem, but the kernel's pseudo-filesystems: the search
+  # must complete, and then find nothing.
+  local found
+  found=$(dc exec -T sim-architect find / \( -path /proc -o -path /sys -o -path /dev \) -prune -o \
+    -name operator.token -print -quit) || fail "case E1: the search for an operator.token on the architect's machine"
+  [ -z "$found" ] || fail "case E1: an operator.token is on the architect's machine: $found"
+  # The throwaway one-machine credential is withdrawn; the carried one stays.
+  ARCH_THROWAWAY=$(json_field id < "$CYC/credential-here.json") ||
+    fail "case E1: the one-machine credential's id ($CYC/credential-here.json)"
+  ARCH_CRED_ID=$(json_field id < "$CYC/credential-file.json") || fail "case E1: the carried credential's id ($CYC/credential-file.json)"
+  archdoc op architect-credential-revoke -set ID="$ARCH_THROWAWAY" > /dev/null || fail "case E1: aicrew architect credential revoke"
+  archdoc archhost architect-status "${conn[@]}" > "$CYC/architect-status.json" || fail "case E1: aicrew status from the seat"
+  python3 "$SIM/smoke.py" status "$CYC/architect-status.json" coordinator worker independent ||
+    fail "case E1: the seat's aicrew status ($CYC/architect-status.json)"
   mapfile -t ARCH_ENV < <(dc exec -T -u sessiond sim-architect cat "$ARCH_DIR/.claude/settings.json" |
     python3 -c 'import json,sys
 for k, v in json.load(sys.stdin)["env"].items():
     print("-e"); print("%s=%s" % (k, v))')
   [ "${#ARCH_ENV[@]}" -gt 0 ] || fail "case E1: the architect directory's settings name no environment"
+  # The seat's merges list, as /arch-merges reads it.
+  local merges
+  merges=$(docline architect-merges) || fail "docs/BRING-UP.md: no line for step architect-merges"
+  arch sh -c "$merges" > "$CYC/architect-merges.out" || fail "case E1: aicrew merges from the seat"
+  echo architect-merges >> "$OUT/docsteps.ran"
 }
 # architect_wait: the session's background wait. Its output, exit code and
 # the time it returned go to CYC/wait.*.
@@ -343,6 +420,8 @@ case_e1() {
   waitfor "the attempt to leave blocked" 300 not_blocked
   waitfor "sim-coordinator's turn to end" 120 idle coordinator
   fact wait "$(python3 "$SIM/cases.py" wait_fact "$CYC")"
+  fact architect_credential "$ARCH_CRED_ID"
+  fact architect_throwaway "$ARCH_THROWAWAY"
   fact architect_creds "$(dc exec -T -u sessiond sim-architect ls -A "$ARCH_DIR/creds" |
     python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().split()))')"
   check_case E1 answered

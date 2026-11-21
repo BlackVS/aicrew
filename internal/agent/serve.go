@@ -249,9 +249,9 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	switch {
 	case len(pending) > 0:
 		trigger = pendingSummary(pending)
-	case len(handed) > 0:
+	case len(wakers(&st, handed)) > 0:
 		trigger = "the launcher's delivery checks need you"
-		if ids := slices.DeleteFunc(slices.Clone(handed), func(s string) bool { return s == "" }); len(ids) > 0 {
+		if ids := slices.DeleteFunc(wakers(&st, handed), func(s string) bool { return s == "" }); len(ids) > 0 {
 			trigger = "the launcher's delivery check of attempt(s) " + strings.Join(ids, ", ") + " is not confirmed"
 		}
 	case attempt.inWork() && st.Continue == attempt.ID:
@@ -430,11 +430,16 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		Settings: l.settingsFile(status.Session.Role), Conversation: rec.Conversation, Model: limits.Model,
 		BudgetUSD: limits.TurnBudgetUSD, Timeout: limits.TurnTimeout, Transcript: transcript})
 	closeTranscript()
-	// A turn that ran gave its brief's delivery lines; one that ran on the
-	// launcher's own wake (nothing pending) ends that wake whatever its
-	// brief held, so the lines never start a turn again by themselves.
-	if turnRan(res.Outcome, res.LimitKind, res.LoopStopping) && (delivered || len(pending) == 0 && !continuation) {
-		toldDeliveries(st, handed, l.Now())
+	// A turn that ran with the delivery lines whole in its brief got them.
+	// One that ran on the launcher's own wake (nothing pending) without
+	// them used the wake: the lines wait for a turn a message starts.
+	if turnRan(res.Outcome, res.LimitKind, res.LoopStopping) {
+		switch {
+		case delivered:
+			toldDeliveries(st, handed, l.Now())
+		case len(pending) == 0 && !continuation:
+			wokeDeliveries(st, handed, l.Now())
+		}
 	}
 	rec.EndedAt = l.Now()
 	rec.DurationMS = rec.EndedAt.Sub(rec.StartedAt).Milliseconds()

@@ -126,6 +126,9 @@ type deliveryCheck struct {
 	// ToldAt is when a turn's brief carried the handed answer, which is
 	// given once; later briefs only say it was handed over.
 	ToldAt time.Time `json:"told_at,omitzero"`
+	// WokeAt is when a turn that ran on the launcher's own wake did not get
+	// the answer whole: it starts no turn again by itself.
+	WokeAt time.Time `json:"woke_at,omitzero"`
 	// Key and Body are the confirm-delivery call, recorded before it is
 	// sent: a launcher stopped before it recorded the answer sends the same
 	// call again, which aicrewd answers as a replay. Body is kept as its
@@ -198,14 +201,14 @@ func (l *TurnLoop) deliveries(ctx context.Context, st *turnState, pending []Pend
 			lines = append(lines, deliveryLine(id, c))
 			handed = append(handed, id)
 		default:
-			lines = append(lines, fmt.Sprintf("The launcher's delivery check of attempt %s (%s) is not confirmed; "+
-				"it was handed to a turn at %s. Nothing is asked of this turn for it.", id, c.Pull,
-				c.ToldAt.UTC().Format(time.RFC3339)))
+			lines = append(lines, fmt.Sprintf("The launcher's delivery check of attempt %s is not confirmed; it was "+
+				"handed to a turn at %s. Nothing is asked of this turn for it. Pull request: %s.", id,
+				c.ToldAt.UTC().Format(time.RFC3339), c.Pull))
 		}
 	}
 	for _, e := range sortedEarly(st.DeliveryEarly) {
-		lines = append(lines, fmt.Sprintf("Attempt %s's pull request (%s) was merged before its result was "+
-			"accepted: the launcher's delivery check starts once the result is accepted; do not run it.", e,
+		lines = append(lines, fmt.Sprintf("Attempt %s's pull request was merged before its result was accepted: "+
+			"the launcher's delivery check starts once the result is accepted; do not run it. Pull request: %s.", e,
 			st.DeliveryEarly[e]))
 	}
 	lines = append(lines, st.DeliveryNotes...)
@@ -229,18 +232,43 @@ func (l *TurnLoop) deliveries(ctx context.Context, st *turnState, pending []Pend
 	return out, held, lines, handed
 }
 
+// wakers are the handed entries that may still start a turn by themselves:
+// the launcher wakes a turn once for each, and an entry whose wake a turn
+// used waits for a turn a message starts.
+func wakers(st *turnState, handed []string) []string {
+	var out []string
+	for _, id := range handed {
+		if c := st.Deliveries[id]; c != nil && c.WokeAt.IsZero() || id == "" && !st.DeliveryLinesWoke {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// wokeDeliveries records that a turn that ran on the launcher's own wake did
+// not get the handed entries whole: they start no turn again by themselves,
+// and stay for the next turn a message starts.
+func wokeDeliveries(st *turnState, ids []string, now time.Time) {
+	for _, id := range ids {
+		if c := st.Deliveries[id]; c != nil {
+			c.WokeAt = now
+		}
+		if id == "" {
+			st.DeliveryLinesWoke = true
+		}
+	}
+}
+
 // toldDeliveries records the handed answers, and the released messages' and
-// notes' lines ("" in ids), as given to a turn. The caller decides when: a
-// turn that ran with the lines in its brief, or one that ran on the
-// launcher's own wake whatever its brief held, so those lines never start
-// a turn twice.
+// notes' lines ("" in ids), as given to a turn: one that ran with the lines
+// whole in its brief.
 func toldDeliveries(st *turnState, ids []string, now time.Time) {
 	for _, id := range ids {
 		if c := st.Deliveries[id]; c != nil {
 			c.ToldAt = now
 		}
 		if id == "" {
-			st.DeliveryReleased, st.DeliveryNotes = nil, nil
+			st.DeliveryReleased, st.DeliveryNotes, st.DeliveryLinesWoke = nil, nil, false
 		}
 	}
 }
@@ -388,10 +416,10 @@ func (l *TurnLoop) classify(st *turnState, m inboxMessage, open *OpenAttempts, n
 			pure = false
 			l.newMessageFor(st, s.AttemptID, now)
 			if s.Kind == deliverySubjectKind && slices.Contains(s.Needs, deliveryNeed) && s.Pull != nil && a != nil {
-				ref := a.LatestResult.Kind + " " + a.LatestResult.Ref
-				st.DeliveryNotes = append(st.DeliveryNotes, fmt.Sprintf("%s%s (%s) was merged, but attempt %s's "+
-					"accepted result is %s, not that pull request: the launcher starts no delivery check for it. If the "+
-					"merge is the result's delivery, escalate it.", "The pull request ", s.Pull.URL, m.ID, s.AttemptID, ref))
+				st.DeliveryNotes = append(st.DeliveryNotes, fmt.Sprintf("Merge notice %s for attempt %s names another "+
+					"pull request than the attempt's accepted result: the launcher starts no delivery check for it. If "+
+					"the merge is the result's delivery, escalate it. Accepted result: %s %s. Merged: %s.", m.ID,
+					s.AttemptID, a.LatestResult.Kind, a.LatestResult.Ref, s.Pull.URL))
 			}
 			if s.Kind == deliverySubjectKind && slices.Contains(s.Needs, deliveryNeed) && s.Pull != nil &&
 				s.Pull.URL != "" && a == nil && openAttempt(open, s.AttemptID) && st.Deliveries[s.AttemptID] == nil {
@@ -723,19 +751,19 @@ func (l *TurnLoop) ackDelivered(ctx context.Context, st *turnState, id string, c
 // deliveryLine is the brief's line on one check.
 func deliveryLine(id string, c *deliveryCheck) string {
 	if !c.Handed {
-		return fmt.Sprintf("The delivery check of attempt %s (%s) is the launcher's and is pending (%d read(s) since %s): "+
-			"do not run it; the launcher confirms the delivery and acknowledges its messages.", id, c.Pull, c.Reads,
-			c.Since.UTC().Format(time.RFC3339))
+		return fmt.Sprintf("The delivery check of attempt %s is the launcher's and is pending (%d read(s) since %s): "+
+			"do not run it; the launcher confirms the delivery and acknowledges its messages. Pull request: %s.", id,
+			c.Reads, c.Since.UTC().Format(time.RFC3339), c.Pull)
 	}
 	// The action and the reason come first: the brief bounds each line, and
 	// a cut takes only the failed checks' tail.
 	var b strings.Builder
-	fmt.Fprintf(&b, "The launcher's delivery check of attempt %s (%s) is not confirmed (%s). Escalate with this "+
-		"reason, and acknowledge the attempt's messages.", id, c.Pull, c.Verdict)
+	fmt.Fprintf(&b, "The launcher's delivery check of attempt %s is not confirmed (%s). Escalate with this "+
+		"reason, and acknowledge the attempt's messages.", id, c.Verdict)
 	if !c.Done {
 		b.WriteString(" The launcher reads it again until a day has passed, and confirms it if it passes then.")
 	}
-	b.WriteString(" Reason: " + c.Reason + ".")
+	b.WriteString(" Reason: " + c.Reason + ". Pull request: " + c.Pull + ".")
 	for _, f := range c.Failed {
 		b.WriteString(" Failed: " + f + ".")
 	}
@@ -964,10 +992,11 @@ func deliveryState(st turnState) []byte {
 		U  []string
 		R  []string
 		N  []string
+		W  bool
 		E  map[string]string
 		EN time.Time
 		UN *unackedState
 	}{nilIfEmpty(st.Deliveries), st.DeliverySeen, st.DeliveryReadFails, st.DeliveryUnread, st.DeliveryReleased,
-		st.DeliveryNotes, nilIfEmpty(st.DeliveryEarly), st.DeliveryEarlyNext, st.Unacked})
+		st.DeliveryNotes, st.DeliveryLinesWoke, nilIfEmpty(st.DeliveryEarly), st.DeliveryEarlyNext, st.Unacked})
 	return raw
 }

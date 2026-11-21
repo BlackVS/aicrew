@@ -153,6 +153,8 @@ type briefCheck struct {
 
 // briefInput is what a turn's brief is written from.
 type briefInput struct {
+	// deliveryEnd, set by the brief, is where its delivery section ends.
+	deliveryEnd  *int
 	status       memberStatus
 	attempt      *memberAttempt // the open attempt, nil when none
 	trigger      string
@@ -174,10 +176,13 @@ type briefInput struct {
 // carried.
 //
 // delivered says whether the launcher's delivery lines were handed over
-// whole: written (not a continuation) into a brief the bound did not cut.
-// It is the brief's own record, never a search of its text.
+// whole: written (not a continuation), and ending within the bound's cut.
+// It is the brief's own record of where it wrote them, never a search of
+// its text.
 func (l *TurnLoop) brief(ctx context.Context, in briefInput) (brief string, ids []string, delivered bool) {
 	var b strings.Builder
+	deliveryEnd := -1
+	in.deliveryEnd = &deliveryEnd
 	l.briefHead(&b, in)
 	l.briefTask(ctx, &b, in.attempt)
 	msgs := l.briefTrigger(ctx, &b, in)
@@ -188,7 +193,8 @@ func (l *TurnLoop) brief(ctx context.Context, in briefInput) (brief string, ids 
 	}
 	l.briefPulls(&b)
 	redact := func(s string) string { return tokenShapes.ReplaceAllString(RedactForgeTokens(l.Home, s), "[redacted]") }
-	rest := redact(b.String())
+	rest0 := b.String()
+	rest := redact(rest0)
 	fetch := briefFetch(role, kind)
 	// The handoff and the ledger take the room the other parts leave, so
 	// they are what the bound cuts first.
@@ -205,16 +211,21 @@ func (l *TurnLoop) brief(ctx context.Context, in briefInput) (brief string, ids 
 	// resort cuts the body, never the last part, which names the turn's
 	// ROLES.md sections (hands review of #193).
 	body, fetch := redact(rest+memory), redact(fetch)
-	cut := len(body)+len(fetch) > maxBriefBytes
-	if cut {
+	kept := len(body)
+	if len(body)+len(fetch) > maxBriefBytes {
 		const note = "\n\n(The brief was cut at its bound; `aicrew-agent inbox` has the rest.)\n"
-		body = cutText(body, max(maxBriefBytes-len(fetch)-len(note), 0)) + note
+		kept = max(maxBriefBytes-len(fetch)-len(note), 0)
+		body = cutText(body, kept) + note
+		// cutText keeps n less its ellipsis, then trims only white space.
+		kept -= len("…")
 	}
 	ids = make([]string, 0, len(msgs))
 	for _, m := range msgs {
 		ids = append(ids, m.ID)
 	}
-	delivered = len(in.deliveries) > 0 && !in.continuation && !cut
+	// The section ends with a line break and the redaction rewrites no line
+	// break, so the redacted text up to its end is the body's prefix.
+	delivered = len(in.deliveries) > 0 && deliveryEnd >= 0 && len(redact(redact(rest0[:deliveryEnd]))) <= kept
 	return body + fetch, ids, delivered
 }
 
@@ -372,6 +383,9 @@ func (l *TurnLoop) briefTrigger(ctx context.Context, b *strings.Builder, in brie
 	// The launcher's delivery lines come before the messages, so the
 	// brief's bound never cuts them.
 	l.briefDeliveries(b, in.deliveries)
+	if in.deliveryEnd != nil {
+		*in.deliveryEnd = b.Len()
+	}
 	msgs, err := l.Host.Inbox(ctx, maxBriefMessages)
 	if err != nil {
 		fmt.Fprintf(b, "The messages could not be read for the brief (%s): run `aicrew-agent inbox`.\n",

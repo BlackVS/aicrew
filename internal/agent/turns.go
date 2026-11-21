@@ -180,7 +180,10 @@ type turnState struct {
 	DeliveryReleased []string `json:"delivery_released,omitempty"`
 	// DeliveryNotes are lines on merge notices the launcher starts no check
 	// for, each given to one turn.
-	DeliveryNotes     []string          `json:"delivery_notes,omitempty"`
+	DeliveryNotes []string `json:"delivery_notes,omitempty"`
+	// DeliveryLinesWoke says the released and notes' lines used their wake
+	// of a turn: they wait for a turn a message starts.
+	DeliveryLinesWoke bool              `json:"delivery_lines_woke,omitempty"`
 	DeliveryEarly     map[string]string `json:"delivery_early,omitempty"`
 	DeliveryEarlyNext time.Time         `json:"delivery_early_next,omitzero"`
 }

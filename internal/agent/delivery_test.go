@@ -922,13 +922,13 @@ func TestDeliveryOtherPullNamed(t *testing.T) {
 	e.host.inbox[0].Action.Subjects[0].Pull.URL = "https://github.com/owner/repo/pull/8"
 	e.next = func(_ TurnSpec, h *fakeHost) TurnResult { h.ack("m1"); return TurnResult{Outcome: TurnFinished} }
 	e.tick(t)
-	if len(e.specs) != 1 || !strings.Contains(e.specs[0].Prompt, "pull/8 (m1) was merged") ||
-		!strings.Contains(e.specs[0].Prompt, "pull_request "+testPull) {
+	if len(e.specs) != 1 || !strings.Contains(e.specs[0].Prompt, "Merge notice m1 for attempt") ||
+		!strings.Contains(e.specs[0].Prompt, "Accepted result: pull_request "+testPull) {
 		t.Fatalf("%d turns; brief: %s", len(e.specs), lastPrompt(e))
 	}
 	e.host.pending = append(e.host.pending, msg("n1", "message"))
 	e.ticksTo(t, e.clock.Add(time.Minute))
-	if len(e.specs) != 2 || strings.Contains(e.specs[1].Prompt, "pull/8 (m1) was merged") {
+	if len(e.specs) != 2 || strings.Contains(e.specs[1].Prompt, "Merge notice m1 for attempt") {
 		t.Fatalf("the line again: %d turns", len(e.specs))
 	}
 }
@@ -966,6 +966,23 @@ func TestDeliveryHandedCutWakesOnce(t *testing.T) {
 	e.ticksTo(t, e.clock.Add(30*time.Minute))
 	if len(e.specs) != 1 || strings.Contains(e.specs[0].Prompt, "the CI on the merge commit failed") {
 		t.Fatalf("%d turns; the line was not cut", len(e.specs))
+	}
+	// The wake is used; the answer waits for a turn a message starts, and
+	// that turn, with room in its brief, gets it.
+	if c := readTurnState(e.home).Deliveries[testAttempt]; !c.ToldAt.IsZero() || c.WokeAt.IsZero() {
+		t.Fatalf("after the wake: %+v", c)
+	}
+	e.host.attempt = nil
+	note := msg("n1", "message")
+	e.host.pending = append(e.host.pending, note)
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult { h.ack("n1"); return TurnResult{Outcome: TurnFinished} }
+	e.ticksTo(t, e.clock.Add(time.Minute))
+	if len(e.specs) != 2 || !strings.Contains(e.specs[1].Prompt, "the CI on the merge commit failed") ||
+		strings.Contains(e.specs[1].Prompt, "Nothing is asked of this turn") {
+		t.Fatalf("%d turns; the message turn's brief: %s", len(e.specs), lastPrompt(e))
+	}
+	if readTurnState(e.home).Deliveries[testAttempt].ToldAt.IsZero() {
+		t.Fatal("the message turn did not consume the answer")
 	}
 }
 
@@ -1021,5 +1038,50 @@ func TestDeliveryHandedCutStaysForAMessageTurn(t *testing.T) {
 	e.tick(t)
 	if len(e.specs) != 1 || !readTurnState(e.home).Deliveries[testAttempt].ToldAt.IsZero() {
 		t.Fatalf("%d turns; a cut brief consumed the handoff", len(e.specs))
+	}
+}
+
+// A message turn whose brief the bound cut after the delivery lines got
+// them whole: no second turn is asked to escalate.
+func TestDeliveryCutAfterTheLines(t *testing.T) {
+	e := deliveryEnv(t)
+	e.host.inbox = nil
+	for i := 0; i < 60; i++ {
+		e.host.inbox = append(e.host.inbox, inboxMessage{ID: fmt.Sprintf("n%d", i), Seq: msgSeq.Add(1), Kind: "message",
+			Text: strings.Repeat("x", 1500)})
+	}
+	e.host.pending = nil
+	for _, n := range e.host.inbox {
+		e.host.pending = append(e.host.pending, PendingMessage{ID: n.ID, Seq: n.Seq, Kind: n.Kind})
+	}
+	st := turnState{DeliverySeen: msgSeq.Add(1), Deliveries: map[string]*deliveryCheck{testAttempt: {Pull: testPull,
+		ResultSeq: 2, Worker: "worker-1", Since: e.clock, Next: e.clock.Add(2 * time.Hour), Reads: 3,
+		Verdict: deliveryNotConfirmed, Reason: "the CI on the merge commit failed", Handed: true, Done: true}}}
+	if err := writeTurnState(e.home, st); err != nil {
+		t.Fatal(err)
+	}
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult {
+		for _, n := range slices.Clone(h.pending) {
+			h.ack(n.ID)
+		}
+		return TurnResult{Outcome: TurnFinished}
+	}
+	e.ticksTo(t, e.clock.Add(time.Hour))
+	if len(e.specs) != 1 || !strings.Contains(e.specs[0].Prompt, "the CI on the merge commit failed") ||
+		!strings.Contains(e.specs[0].Prompt, "The brief was cut at its bound") {
+		t.Fatalf("%d turns in an hour after a brief cut past its delivery lines", len(e.specs))
+	}
+}
+
+// A merge notice with a long URL keeps its action and the accepted result's
+// reference within the brief's line bound.
+func TestDeliveryLongMergedURL(t *testing.T) {
+	e := deliveryEnv(t)
+	long := "https://github.com/owner/repo/pull/8?" + strings.Repeat("q", 1100)
+	e.host.inbox[0].Action.Subjects[0].Pull.URL = long
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult { h.ack("m1"); return TurnResult{Outcome: TurnFinished} }
+	e.tick(t)
+	if len(e.specs) != 1 || !strings.Contains(e.specs[0].Prompt, "escalate it. Accepted result: pull_request "+testPull) {
+		t.Fatalf("%d turns; brief: %s", len(e.specs), lastPrompt(e))
 	}
 }

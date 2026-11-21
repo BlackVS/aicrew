@@ -59,7 +59,9 @@ EXPECT = {
 # kind.
 OPERATOR_OPS = {"control.pause", "control.resume", "introspection.credential.issue", "invitation.issue",
                 "team.create", "team.record_registration", "team.set_toolchain", "team.pause", "team.resume"}
-CASE_OPS = {"control.nudge", "architect.credential.issue", "escalation.answer"}
+# Case E1 issues the architect's credentials and revokes the throwaway one
+# (docs/BRING-UP.md step 8) before its raise.
+CASE_OPS = {"control.nudge", "architect.credential.issue", "architect.credential.revoke", "escalation.answer"}
 # The cases whose cycle cycle.py checks at the step done.
 CASES = ("P1", "P2", "P4", "E1", "O1", "P5", "F1", "F2", "F3")
 REVIEW_HEAD = re.compile(r"^\[(oh-code-review \(high\) review|hands-bot review)\] reviewed at head ([0-9a-f]{40})$", re.M)

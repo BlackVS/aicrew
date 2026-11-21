@@ -775,7 +775,7 @@ member_lines() {
 dc up -d sim-coordinator sim-worker sim-indep sim-architect >/dev/null
 own_volumes
 # The team is paused for the bring-up, as the document's step 1 offers,
-# and resumed in its step 8 once every member is ready (below).
+# and resumed in its step 9 once every member is ready (below).
 doc op $OPS_HOME team-pause-bring-up >/dev/null || fail "aicrew team pause for the bring-up"
 for role in coordinator worker indep; do
   svc=sim-$role
@@ -841,7 +841,7 @@ for role in coordinator worker indep; do
 done
 doc op $OPS_HOME status > "$OUT/status.json" || fail "aicrew status"
 python3 "$SIM/smoke.py" status "$OUT/status.json" coordinator worker independent || fail "aicrew status ($OUT/status.json)"
-# Every member is ready: the team paused for the bring-up resumes (step 8).
+# Every member is ready: the team paused for the bring-up resumes (step 9).
 doc op $OPS_HOME team-resume >/dev/null || fail "aicrew team resume after the bring-up"
 dc exec -T -u member sim-coordinator sh -c \
   "$VERIFY_DELIVERY"' --help >/dev/null' ||

@@ -515,11 +515,26 @@ func Split(s string) []string {
 func Join(words []string) string {
 	out := make([]string, len(words))
 	for i, w := range words {
-		if w != "" && strings.Trim(w, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./:=@,+%") == "" {
+		switch {
+		case w != "" && strings.Trim(w, safeChars) == "":
 			out[i] = w
-			continue
+		case w == "&&" || homeWord.MatchString(w):
+			// The shell's own words, as a person's shell reads them: the
+			// list operator, and a path from a home (~/x, ~sessiond/x).
+			out[i] = w
+		case shellVar.MatchString(w):
+			// "$USER": the variable, expanded and kept one word.
+			out[i] = `"` + w + `"`
+		default:
+			out[i] = "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
 		}
-		out[i] = "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
 	}
 	return strings.Join(out, " ")
 }
+
+const safeChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./:=@,+%"
+
+var (
+	homeWord = regexp.MustCompile(`^~[a-z_][a-z0-9_-]*(/[A-Za-z0-9._/-]*)?$|^~(/[A-Za-z0-9._/-]*)?$`)
+	shellVar = regexp.MustCompile(`^\$[A-Z_][A-Z0-9_]*$`)
+)

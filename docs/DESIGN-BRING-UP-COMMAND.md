@@ -442,7 +442,7 @@ the role, the projects and the forge account.
 ### 5.4 What it prints at the end
 
 The check that the bring-up reached its outcome is the table of BRING-UP
-step 8, read from `aicrew-agent check --json` on each host and from
+step 9, read from `aicrew-agent check --json` on each host and from
 aicrewd:
 
 ```text

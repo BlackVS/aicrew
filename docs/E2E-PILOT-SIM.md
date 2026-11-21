@@ -371,10 +371,16 @@ Each difference is in one place in the scripts, named in the table.
 | aimem-timed is `/usr/local/bin/aimem`, ahead of the real aimem on PATH | `member/Dockerfile`, `member/aimem-timed` | join in the document's form records no aimem command, and the fault cases' gates need the wrapper |
 | sim-indep joins with the document's pinned alternative (`spki_sha256`) | `member_lines` in `scripts/pilot-sim.sh` | one scenario runs the alternative the document marks |
 | the below-minimum run's first join is the simulation's own | `member/member.sh` | its start, aicrew v0.11.0, predates the document's form (no preflight); it runs no member line of the document |
-| aicrew-agent check runs with `--json` | `mcheck` in `scripts/pilot-sim.sh` | the runner reads the report; the flag is document text (step 8) |
+| aicrew-agent check runs with `--json` | `mcheck` in `scripts/pilot-sim.sh` | the runner reads the report; the flag is document text (step 9) |
+| step 8's architect machine is sim-architect, its user the image's `sessiond`, and the operator's SSH login the image's `ops` | `e2e/pilotsim/aicrewd/Dockerfile`, `architect_init` in `e2e/pilotsim/cases.sh` | sim-architect runs aicrewd's image for its `aicrew`; the login exists only for the carrying ([The escalation case](#the-escalation-case)) |
+| step 8 runs with the document's pinned alternative (`spki_sha256`) | `architect_init` in `e2e/pilotsim/cases.sh` | sim-architect has no simulation CA in its system trust |
 
 The marked lines no scenario runs, each with its reason (also in
 `e2e/docsteps/docsteps_test.go`), are still parsed:
+- step 8's Windows lines, `aicrew architect init` in PowerShell and the
+  carrying with Windows' OpenSSH client: the simulation's containers are
+  Linux. They were tried by hand on Windows 11, with the directory's
+  `creds\` and a carried file's rights read with `icacls`;
 - `aicrew-agent service restart` and `service status`: no systemd user
   manager in the members' containers;
 - `loginctl enable-linger`: a systemd login setting of a real host;
@@ -922,17 +928,44 @@ E1 is the check of the architect role's feature
 running team raises an escalation, the architect is told by the wait and
 answers, and the team acts on the answer, under the turns model.
 
-**The architect's directory.** The compose service `sim-architect` runs
-aicrewd's image, which holds this tree's `aicrew`, idle, with no volume:
-the directory lives in the container and goes with `down -v`. At the
-case's start the runner writes it there with `aicrew architect init --url
-https://sim-aicrewd:9443` and the trust pin of aicrewd's key. The operator
-issues the architect credential where the operator credential lives, in
-sim-aicrewd, with `aicrew architect credential issue --output -`, and the
-runner pipes it into the directory's `creds/aicrew.architect`, owner-only.
-The operator credential never enters sim-architect. The runner plays the
-architect session: it runs the session's commands in the directory with the
-environment the directory's `.claude/settings.json` gives a session.
+**The architect's directory.** The compose service `sim-architect` is the
+architect's machine. It runs aicrewd's image, which holds this tree's
+`aicrew`, idle, with no volume: the directory lives in the container and
+goes with `down -v`. Its user is the image's `sessiond`; no aicrewd runs
+there. At the case's start the runner follows docs/BRING-UP.md step 8 by
+the document's own lines, in its order:
+1. the directory, `~/aicrew/architect`, with `aicrew architect init` and
+   the document's pinned alternative (`spki_sha256`), in sim-architect;
+2. the one-machine arrangement in sim-aicrewd, where the operator
+   credential lives: a directory there and a credential issued straight
+   into it. That credential is the throwaway one the revoke ends (5);
+3. the two-machine carrying: the credential issued to
+   `~/aicrew/etc/architect-planning.token` as the service user, its rights
+   checked (`600 sessiond`), the credential list read; the file handed to
+   the operator's login `ops` with `sudo install`; carried with `scp`
+   from sim-architect as `ops@sim-aicrewd`, and removed there with
+   `ssh`;
+4. the checks: the carried file is mode 600; neither copy is left in
+   sim-aicrewd (the document's line, and the runner's own test of both
+   paths); the document's operator-credential path is absent in
+   sim-architect, and the runner finds no `operator.token` anywhere in it;
+5. `aicrew architect credential revoke` of the throwaway credential, and
+   `aicrew status` from the seat with the carried one.
+
+The image gives sim-aicrewd an SSH server for this, on the compose network
+only (no port is published), with the login `ops`, passwordless sudo
+and key logins only. sim-architect gets a key made for the run, and trusts
+sim-aicrewd's host key, read from it rather than scanned. Both live in the
+containers' filesystems, so `down -v` removes them: no volume, anonymous or
+named, is added, and a member's image has none of this. The carried
+credential's value never passes through the runner's output: it goes from
+file to file by `scp`, and the runner only adds it, by a pipe, to the
+run's known secrets for the redaction check.
+
+The runner plays the architect session: it runs the session's commands in
+the directory with the environment the directory's `.claude/settings.json`
+gives a session, `aicrew merges` among them (the document's line, as
+`/arch-merges` reads it).
 
 **The run.** As in P4, the worker stalls and the launcher blocks the
 attempt. Under the member scenario `escalate_blocked`, the coordinator
@@ -961,9 +994,10 @@ worker the decision with its `answer` step, and the cycle goes on to DONE.
 2. The wait exited 0 with that escalation's line, within 30 seconds (two
    intervals) of its `created_at`, and no `aicrew escalations list` or
    `show` ran between the raise and the wait's return.
-3. `answered_by` names the case's architect credential (`architect:<ID>`,
-   label `sim-e1`), the answer carries the decision, and the task has the
-   `[escalation.answer ID]` comment.
+3. `answered_by` names the credential carried to the directory
+   (`architect:<ID>`, label `planning`, not revoked), the one-machine
+   credential is revoked, the answer carries the decision, and the task
+   has the `[escalation.answer ID]` comment.
 4. The answer's message to the coordinator and to the worker, each
    acknowledged, each the trigger of a turn in the member's
    `logs/turns.jsonl`; the coordinator's `attempt.answer`, and the attempt

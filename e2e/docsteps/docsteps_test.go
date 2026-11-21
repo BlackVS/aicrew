@@ -25,6 +25,9 @@ var exempt = map[string]string{
 		"installed; the runner restarts serve as the installed service would (docs/E2E-PILOT-SIM.md)",
 	"service-status": "the same: no systemd user manager in the simulation's member containers",
 	"enable-linger":  "a systemd login setting of a real host, not an aicrew or aimem line",
+	"architect-init-windows": "a Windows architect machine's PowerShell line; the simulation's containers are Linux " +
+		"(tried by hand on Windows 11, docs/E2E-PILOT-SIM.md)",
+	"architect-carry-windows": "the same: the Windows OpenSSH client's carrying, tried by hand",
 	"session-leave": "named only in join's skills_conversation reason, which no scenario reaches: it needs the " +
 		"hub to refuse a conversation for a session the home recorded earlier, a hub fault no harness injects",
 }
@@ -110,14 +113,54 @@ func dummy(home string) map[string]string {
 		"HUB_URL": "https://hub.invalid:1", "FORGE_HOST": "forge.invalid", "PIN": "AAAA"}
 }
 
+// givesConnection says whether an aicrew line names its own connection
+// (the architect's directory and its seat, which have no operator
+// credential): parseLine's probe, which expects a line without one to stop
+// for it, would then reach for the network or write the directory.
+func givesConnection(words []string) bool {
+	return slices.Contains(words, "--url") || slices.Contains(words, "-url")
+}
+
+// aicrewUsage checks such a line against its command's usage: the verbs
+// name a command, and each flag is one it reads.
+func aicrewUsage(bins, home, line string, words []string) error {
+	var verbs, flags []string
+	for _, w := range words[1:] {
+		switch {
+		case strings.HasPrefix(w, "-"):
+			name, _, _ := strings.Cut(strings.TrimPrefix(w[1:], "-"), "=")
+			flags = append(flags, name)
+		case len(flags) == 0:
+			verbs = append(verbs, w)
+		}
+	}
+	cmd := exec.Command(filepath.Join(bins, "aicrew"+exe()), append(slices.Clone(verbs), "-h")...)
+	cmd.Env = cleanEnv(home)
+	cmd.Dir = home
+	out, _ := cmd.CombinedOutput()
+	head := "Usage of aicrew " + strings.Join(verbs, " ") + ":"
+	if !strings.HasPrefix(string(out), head) {
+		return fmt.Errorf("%q: aicrew names no command %s:\n%s", line, strings.Join(verbs, " "), out)
+	}
+	for _, f := range flags {
+		if !regexp.MustCompile(`(?m)^  -` + regexp.QuoteMeta(f) + `(\s|$)`).Match(out) {
+			return fmt.Errorf("%q: aicrew %s reads no flag --%s", line, strings.Join(verbs, " "), f)
+		}
+	}
+	return nil
+}
+
 // parseLine checks one line against the product's own parser: an aicrew
-// line runs with no connection configured and must stop at the
+// line that gives no connection runs with none configured and must stop at the
 // connection, after its flags were taken; an aicrew-agent line's verbs and
 // flags must be those its usage names.
 func parseLine(bins, home, line string) error {
 	words := Invocation(line)
 	switch path.Base(words[0]) {
 	case "aicrew":
+		if givesConnection(words) {
+			return aicrewUsage(bins, home, line, words)
+		}
 		cmd := exec.Command(filepath.Join(bins, "aicrew"+exe()), words[1:]...)
 		cmd.Env = cleanEnv(home)
 		cmd.Dir = home
@@ -454,5 +497,24 @@ func TestSkillsImportVersion(t *testing.T) {
 	want := "aiskills-" + r[len(r)-1].Tested + ".tar.gz"
 	if s := d.Steps["skills-import"]; s == nil || !strings.HasSuffix(s.Line, " "+want) {
 		t.Errorf("docs/BRING-UP.md's skills import does not name %s", want)
+	}
+}
+
+// Join keeps the shell's own words of a document line as a person's shell
+// reads them, and quotes every other word that is not plain.
+func TestJoinShellWords(t *testing.T) {
+	for _, c := range []struct {
+		in   []string
+		want string
+	}{
+		{[]string{"sudo", "install", "-o", "$USER", "~sessiond/aicrew/etc/a.token", "~/a.token", "&&", "sudo", "rm", "~sessiond/x"},
+			`sudo install -o "$USER" ~sessiond/aicrew/etc/a.token ~/a.token && sudo rm ~sessiond/x`},
+		{[]string{"test", "!", "-e", "~", "&&", "echo", "gone"}, `test '!' -e ~ && echo gone`},
+		{[]string{"echo", "a b", "$user", "~/x y", "~root;rm", "&&&", "$(id)"},
+			`echo 'a b' '$user' '~/x y' '~root;rm' '&&&' '$(id)'`},
+	} {
+		if got := Join(c.in); got != c.want {
+			t.Errorf("Join(%q) = %s, want %s", c.in, got, c.want)
+		}
 	}
 }

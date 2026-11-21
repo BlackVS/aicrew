@@ -1663,7 +1663,9 @@ plans with the operator and writes epics and tasks to the aimem board
 - no forge credential, and no Stop hook;
 - the control plane does not run it.
 
-`aicrew architect init` writes its directory. It calls no service.
+`aicrew architect init` writes its directory. It calls no service. A
+team's bring-up makes it in docs/BRING-UP.md, step 8; this section is the
+directory's reference.
 
 ```sh
 bin/aicrew architect init --dir ~/aicrew/architect --project PROJECT [--project PROJECT ...] [--hub HUB] \
@@ -1730,13 +1732,20 @@ refused, never migrated.
 with `AICREW_OPERATOR_TOKEN_FILE` naming `creds/aicrew.architect`. The
 session's `aicrew escalations` commands then connect with no flags, and
 never name the credential's path in a command, where the deny rules would
-stop them. Put the credential there with the operator credential:
+stop them. docs/BRING-UP.md, step 8 ("The team's architect"), puts the
+credential there: issued straight into the directory where the operator
+credential is, or issued to a file on aicrewd's host and carried to the
+directory on another machine, with each line's check. The credential's
+commands are:
 
 ```sh
-bin/aicrew architect credential issue --label planning --output ~/aicrew/architect/creds/aicrew.architect
+bin/aicrew architect credential issue  --label LABEL --output PATH|-
 bin/aicrew architect credential list
 bin/aicrew architect credential revoke --id ID
 ```
+
+`--output` creates a new owner-only file and refuses one that exists; `-`
+writes to a pipe and refuses a terminal.
 
 An architect credential reads and answers escalations and reads the
 merges list (`aicrew merges`) and the team states (`aicrew status`), and

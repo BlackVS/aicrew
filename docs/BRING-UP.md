@@ -584,13 +584,17 @@ inherit.
 **One machine.** Where the operator credential is, issue the architect's
 straight into the directory:
 `aicrew architect credential issue --label planning --output ~/aicrew/architect/creds/aicrew.architect` <!-- run: architect-credential-here -->.
-The operator credential then lies on that machine too, as arrangement 2
-of "Where the operator's `aicrew` commands run" says.
+On Windows, in PowerShell, the output is
+`$HOME\aicrew\architect\creds\aicrew.architect`: Windows PowerShell 5.1
+passes a leading `~` to `aicrew` unchanged. The operator credential then
+lies on that machine too, as arrangement 2 of "Where the operator's
+`aicrew` commands run" says.
 
 **Two machines.** The credential is issued to a file where the operator
 credential is, and carried to the directory as a file. Its value never
-passes through a terminal's screen, a chat or an AI session's tools. In
-this order:
+passes through a terminal's screen, a chat or an AI session's tools.
+Steps 1, 2 and 4 run on aicrewd's host, which is Linux; step 3 runs on
+the architect's machine. In this order:
 
 1. On aicrewd's host, as the service user (`sudo -iu sessiond`, with the
    four variables above):
@@ -640,7 +644,8 @@ this order:
 
 **A carrying left half done.** Between steps 2 and 3 the credential is a
 file in the login user's home, readable by that user only: carry it with
-step 3, or remove it (`rm ~/architect-planning.token`) and withdraw it.
+step 3, or remove it there (`rm ~/architect-planning.token`, on
+aicrewd's host as the login user) and withdraw it.
 A credential that is lost, or was left anywhere else, is withdrawn where
 the operator credential is: `aicrew architect credential list` gives its
 id, and `aicrew architect credential revoke --id ID` <!-- run: architect-credential-revoke -->
@@ -667,7 +672,8 @@ is `False`). This checks that path. It does not search the machine for a
 copy kept under another name.
 
 **The first start** (architect's machine, the person):
-`cd ~/aicrew/architect` and `claude`. The client asks to trust the
+`cd ~/aicrew/architect` (in PowerShell `cd $HOME\aicrew\architect`)
+and `claude`. The client asks to trust the
 directory and to approve its `aimem` server, and each aimem tool asks
 once for permission: the person answers. The directory's settings give
 the session the connection and its credential's path, so its `aicrew`

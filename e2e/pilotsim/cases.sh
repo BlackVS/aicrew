@@ -335,14 +335,20 @@ architect_init() {
   oplogin sh -c 'test ! -e ~/architect-planning.token && sudo test ! -e ~sessiond/aicrew/etc/architect-planning.token' ||
     fail "case E1: a copy of the carried credential is left on aicrewd's host"
   expect_out "the operator credential's path" absent "$(archdoc archhost architect-no-operator-token)"
-  [ -z "$(dc exec -T sim-architect find / -xdev -name operator.token -print -quit 2> /dev/null)" ] ||
-    fail "case E1: an operator.token is on the architect's machine"
+  # The whole filesystem, but the kernel's pseudo-filesystems: the search
+  # must complete, and then find nothing.
+  local found
+  found=$(dc exec -T sim-architect find / \( -path /proc -o -path /sys -o -path /dev \) -prune -o \
+    -name operator.token -print -quit) || fail "case E1: the search for an operator.token on the architect's machine"
+  [ -z "$found" ] || fail "case E1: an operator.token is on the architect's machine: $found"
   # The throwaway one-machine credential is withdrawn; the carried one stays.
   ARCH_THROWAWAY=$(json_field id < "$CYC/credential-here.json") ||
     fail "case E1: the one-machine credential's id ($CYC/credential-here.json)"
   ARCH_CRED_ID=$(json_field id < "$CYC/credential-file.json") || fail "case E1: the carried credential's id ($CYC/credential-file.json)"
   archdoc op architect-credential-revoke -set ID="$ARCH_THROWAWAY" > /dev/null || fail "case E1: aicrew architect credential revoke"
   archdoc archhost architect-status "${conn[@]}" > "$CYC/architect-status.json" || fail "case E1: aicrew status from the seat"
+  python3 "$SIM/smoke.py" status "$CYC/architect-status.json" coordinator worker independent ||
+    fail "case E1: the seat's aicrew status ($CYC/architect-status.json)"
   mapfile -t ARCH_ENV < <(dc exec -T -u sessiond sim-architect cat "$ARCH_DIR/.claude/settings.json" |
     python3 -c 'import json,sys
 for k, v in json.load(sys.stdin)["env"].items():

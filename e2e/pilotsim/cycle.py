@@ -271,7 +271,7 @@ def check(step, d, case=""):
             expect(text in handoff, "worker: the handoff does not record %r" % text)
     coordinator = load(d, "homes/coordinator/HANDOFF.md", "") or ""
     for s, text in (("review", "Accepted result 1 of attempt " + a["id"]),
-                    ("done", "Finalized attempt " + a["id"])):
+                    ("done", "Attempt %s was finalized" % a["id"])):
         if after(s):
             expect(text in coordinator, "coordinator: the handoff does not record %r" % text)
     return errs

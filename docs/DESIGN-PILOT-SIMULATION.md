@@ -113,15 +113,16 @@ The role scripts follow ROLES.md as code:
 - **Worker:** accept the offer, commit to the attempt branch, open the
   pull request, add `review-this`, wait while `hands-reviewing` is
   present, and answer a rework with a new commit and a new `review-this`.
-  Then submit through `work`, and ack each message it is sent.
+  Then submit through `work`, and ack each message it is sent. Once
+  aicrewd says the delivery was confirmed, finalize.
 - **Coordinator:** triage a READY task, offer it, follow up on a silent
   worker, and post the local review in the oh-code-review format at the
-  full head SHA. After the merge, run verify-delivery (section 4) and
-  confirm the delivery with the evidence it returns, then finalize.
-  verify-delivery is the ai-skills skill's Python helper, and the script
-  runs it at its installed path, `verify-delivery/verify_delivery.py` in
-  the skill directory the home's client reads (section 3), as a model's
-  tool call would.
+  full head SHA. After the merge the script does nothing: the
+  coordinator's launcher, the real `aicrew-agent serve`, runs
+  verify-delivery (section 4), the ai-skills skill's Python helper, at its
+  installed path, `verify-delivery/verify_delivery.py` in the skill
+  directory the home's client reads (section 3), and confirms the
+  delivery with the evidence it returns (task 01a1fa19-19a4).
   Escalate when the scenario says the worker blocked.
 
 Each scenario chooses the member's behaviour for the faults the pilot hit:

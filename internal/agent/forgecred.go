@@ -56,6 +56,59 @@ func ParseForgeCred(v string) (ForgeCred, error) {
 	return ForgeCred{Host: h, Source: src}, nil
 }
 
+// ForgeReviewer is one --reviewer: a forge host and the account whose
+// reviews the delivery check counts as the external one there.
+type ForgeReviewer struct {
+	Host    string
+	Account string
+}
+
+// reviewerShape is a forge account name: letters, digits, '-', '_' and '.'.
+var reviewerShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
+
+// ParseForgeReviewer reads one --reviewer value, host=account.
+func ParseForgeReviewer(v string) (ForgeReviewer, error) {
+	host, account, ok := strings.Cut(v, "=")
+	if !ok || !reviewerShape.MatchString(account) {
+		return ForgeReviewer{}, errors.New("--reviewer takes HOST=ACCOUNT, a forge account name")
+	}
+	h, err := forge.NormalizeHost(host)
+	if err != nil {
+		return ForgeReviewer{}, fmt.Errorf("--reviewer: %w", err)
+	}
+	return ForgeReviewer{Host: h, Account: account}, nil
+}
+
+// checkForgeReviewers refuses two reviewers for one host.
+func checkForgeReviewers(rs []ForgeReviewer) error {
+	seen := map[string]bool{}
+	for _, r := range rs {
+		if seen[r.Host] {
+			return fmt.Errorf("--reviewer names %s twice: one external reviewer per host", r.Host)
+		}
+		seen[r.Host] = true
+	}
+	return nil
+}
+
+// setForgeReviewers records each reviewer in its host's forge entry, which
+// must exist: the credential comes first, with --cred.
+func setForgeReviewers(doc *agentDoc, rs []ForgeReviewer, out io.Writer) error {
+	entries := doc.forgeEntries()
+	for _, r := range rs {
+		e, ok := entries[r.Host]
+		if !ok {
+			return fmt.Errorf("--reviewer names %s, which has no forge credential in this home: give --cred %s=FILE too",
+				r.Host, r.Host)
+		}
+		e.ExternalReviewer = r.Account
+		entries[r.Host] = e
+		fmt.Fprintf(out, "External reviewer for %s: %s.\n", r.Host, r.Account)
+	}
+	doc.set(doc.top, "forge", entries)
+	return nil
+}
+
 // checkForgeCreds refuses two credentials for one host, or two that read
 // standard input.
 func checkForgeCreds(creds []ForgeCred) error {
@@ -90,6 +143,10 @@ type forgeEntry struct {
 	File        string `json:"file"` // the credential reference, under creds/
 	CommitName  string `json:"commit_name"`
 	CommitEmail string `json:"commit_email"`
+	// ExternalReviewer is the forge account whose reviews the delivery
+	// check counts as the external one on Gitea and GitLab (join
+	// --reviewer); GitHub needs none.
+	ExternalReviewer string `json:"external_reviewer,omitempty"`
 }
 
 // refShape is a credential reference in WORKSPACE's grammar: three parts of
@@ -227,7 +284,7 @@ func provisionForge(ctx context.Context, home string, doc *agentDoc, toks []forg
 		}
 		prev, had := entries[t.Host]
 		next := forgeEntry{Kind: string(kind), Account: id.Account, Purpose: forgePurpose, File: file,
-			CommitName: id.Name, CommitEmail: id.CommitEmail}
+			CommitName: id.Name, CommitEmail: id.CommitEmail, ExternalReviewer: prev.ExternalReviewer}
 		if had && prev.File != "" && prev.File != file {
 			// Rotation to another account: the new file is confirmed, so the
 			// old one goes.

@@ -19,7 +19,8 @@ const joinUsage = `usage: aicrew-agent join --label LABEL [--home DIR] --url htt
          --tls-trust-mode ca_dns|spki_sha256 --tls-trust-value VALUE --aimem-hub NAME
          --client claude|opencode[,…] [--aimem-command PATH] [--json]
          [--aimem-url https://HUB --aimem-token-file PATH|- [--aimem-ca-file PATH]]
-         [--cred HOST=PATH|- ...] [--wake stop-hook|turns] [--no-service]
+         [--cred HOST=PATH|- ...] [--reviewer HOST=ACCOUNT ...]
+         [--wake stop-hook|turns] [--no-service]
          [--code-file PATH|-]
        The invitation code is read at a hidden prompt, or with --code-file
        from its owner-only file or, with -, from standard input (a hidden
@@ -29,6 +30,10 @@ const joinUsage = `usage: aicrew-agent join --label LABEL [--home DIR] --url htt
        --cred gives the member's own token for one forge host, from its
        owner-only file or, with -, from standard input (a hidden prompt on a
        terminal); join verifies it with the forge and writes it to creds/.
+       Each --reviewer names, for a Gitea or GitLab host the home has a
+       credential for, the account whose reviews the coordinator's delivery
+       check counts as the external one; a rerun on a linked home sets or
+       changes it.
        On a linked home, only --home (or --label) is needed: the run
        refreshes the home's files, takes any --cred, and checks its
        dependencies and clients. --wake records how the member is woken:
@@ -151,6 +156,15 @@ func join(ctx context.Context, args []string, terminal bool, stdout, stderr io.W
 	fs.StringVar(&o.CodeFile, "code-file", "", "")
 	var credRefused error
 	fs.Var(credFlags{&o.Creds, &credRefused}, "cred", "")
+	fs.Func("reviewer", "", func(v string) error {
+		r, err := agent.ParseForgeReviewer(v)
+		if err == nil {
+			o.Reviewers = append(o.Reviewers, r)
+		} else {
+			credRefused = err
+		}
+		return err
+	})
 	fs.StringVar(&o.Wake, "wake", "", "")
 	clients := fs.String("client", "", "")
 	asJSON := fs.Bool("json", false, "")

@@ -37,8 +37,6 @@ type fakeTools struct {
 	pull     *agent.PullReport  // what forge pr show answers
 	// labelFails makes forge pr label fail.
 	labelFails bool
-	verify     string // what verify-delivery prints
-	verifyCode int
 	tasks      map[string]map[string]any
 	calls      []string
 	bodies     map[string]map[string]any // step bodies by op
@@ -123,9 +121,6 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 	}
 	if name == "go" {
 		return []byte(f.goOut), f.goCode, nil
-	}
-	if name == "env" {
-		return []byte(f.verify), f.verifyCode, nil
 	}
 	switch {
 	case args[0] == "inbox" && len(args) > 1 && args[1] == "--ack":
@@ -729,60 +724,45 @@ func deliveryHome(t *testing.T, f *fakeTools) {
 	f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: forge.PullMerged, HeadCommit: tHead}}
 }
 
-func TestCoordinatorConfirmsTheDelivery(t *testing.T) {
+// After a merge the coordinator's turn runs no delivery check and takes no
+// step: the launcher does (task 01a1fa19-19a4).
+func TestCoordinatorLeavesTheDeliveryToTheLauncher(t *testing.T) {
 	f := newFake(t)
 	deliveryHome(t, f)
-	f.verify = `{"verdict": "confirmed", "evidence": [{"kind": "reviewed_head", "ref": "R"}, ` +
-		`{"kind": "human_merge", "ref": "M"}, {"kind": "post_merge_ci", "ref": "C"}]}`
 	var out bytes.Buffer
 	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
 		t.Fatalf("turnRun = %d: %s", code, out.String())
 	}
-	verify := "env GITEA_TOKEN_FILE=" + filepath.Join(f.home, "creds", "sim-gitea-3000.sim-coordinator.forge") + " python3 " +
-		filepath.Join(f.home, ".claude", "skills", "verify-delivery", "verify_delivery.py") + " --pr " + tPull +
-		" --api-base https://sim-gitea:3000/api/v1 --review-author local=sim-coordinator --review-author external=sim-hands"
-	if !f.called(verify) {
-		t.Fatalf("verify-delivery was not run as expected: %v", f.calls)
+	if f.called("env ") || f.called("python") || f.called("aicrew-agent step") {
+		t.Fatalf("the turn checked or confirmed the delivery: %v", f.calls)
 	}
-	ev, _ := f.bodies["confirm-delivery"]["evidence"].([]any)
-	if f.bodies["confirm-delivery"]["result_seq"] != float64(1) || len(ev) != 3 {
-		t.Fatalf("confirm-delivery body = %v", f.bodies["confirm-delivery"])
-	}
-	if f.bodies["finalize"]["result_seq"] != float64(1) {
-		t.Fatalf("finalize body = %v; calls %v", f.bodies["finalize"], f.calls)
-	}
-	i, j := slices.Index(f.calls, "aicrew-agent step confirm-delivery"), slices.Index(f.calls, "aicrew-agent step finalize")
-	if i < 0 || j < i {
-		t.Fatalf("confirm-delivery does not come before finalize: %v", f.calls)
+	if doc := readHandoff(t, f.home); !strings.Contains(doc, "Attempt "+tAttempt+" is accepted: its delivery is the launcher's check.") {
+		t.Fatalf("the handoff:\n%s", doc)
 	}
 }
 
-func TestCoordinatorWaitsOnAnUnconfirmedDelivery(t *testing.T) {
-	for _, verdict := range []string{"pending", "not_confirmed"} {
-		f := newFake(t)
-		deliveryHome(t, f)
-		f.verify, f.verifyCode = `{"verdict": "`+verdict+`"}`, 4
-		var out bytes.Buffer
-		if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
-			t.Fatalf("%s: turnRun = %d: %s", verdict, code, out.String())
-		}
-		if f.called("aicrew-agent step") {
-			t.Fatalf("%s: a step followed: %v", verdict, f.calls)
-		}
-		if doc := readHandoff(t, f.home); !strings.Contains(doc, "verify-delivery: "+verdict) {
-			t.Fatalf("%s: the handoff:\n%s", verdict, doc)
-		}
-	}
-	// An open pull request runs no verify-delivery.
+// The worker finalizes its accepted attempt on aicrewd's message that the
+// delivery was confirmed, with that message's result, and waits without it.
+func TestWorkerFinalizesTheConfirmedDelivery(t *testing.T) {
 	f := newFake(t)
-	deliveryHome(t, f)
-	f.pull.Pull.State = forge.PullOpen
+	writeSection(t, f.home)
 	var out bytes.Buffer
-	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
-		t.Fatalf("turnRun = %d: %s", code, out.String())
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "accepted")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 1 = %d: %s", code, out.String())
 	}
-	if f.called("env ") || f.called("aicrew-agent step") {
-		t.Fatalf("an open pull request was verified: %v", f.calls)
+	if f.called("aicrew-agent step") || !strings.Contains(out.String(), "waiting for the confirmed delivery") {
+		t.Fatalf("turn 1 without the message: %v\n%s", f.calls, out.String())
+	}
+	f.calls = nil
+	f.inbox = []map[string]any{{"id": "m4", "kind": "lifecycle", "attempt_id": tAttempt,
+		"task": map[string]string{"task_id": tTask},
+		"text": "sim-coordinator confirmed the delivery of result 2 of task main/aicrew/" + tTask + "."}}
+	out.Reset()
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "accepted")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 2 = %d: %s", code, out.String())
+	}
+	if f.bodies["finalize"]["result_seq"] != float64(2) {
+		t.Fatalf("finalize body = %v; calls %v", f.bodies["finalize"], f.calls)
 	}
 }
 

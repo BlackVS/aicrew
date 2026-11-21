@@ -163,6 +163,13 @@ type turnState struct {
 	// Unacked is the count of turns that left the member's messages
 	// unacknowledged (unacked.go).
 	Unacked *unackedState `json:"unacked,omitempty"`
+	// Deliveries are a coordinator's delivery checks by attempt,
+	// DeliverySeen the newest message seq looked at for them, and
+	// DeliveryReadFails the ticks in a row whose read of a new message
+	// failed (delivery.go).
+	Deliveries        map[string]*deliveryCheck `json:"deliveries,omitempty"`
+	DeliverySeen      int64                     `json:"delivery_seen,omitempty"`
+	DeliveryReadFails int                       `json:"delivery_read_fails,omitempty"`
 }
 
 func turnStatePath(home string) string { return filepath.Join(home, filepath.FromSlash(TurnStateFile)) }

@@ -133,6 +133,9 @@ type TurnLoop struct {
 	Now    func() time.Time
 	// Head reads the commit a worktree is at; "" when it cannot.
 	Head func(ctx context.Context, worktree string) string
+	// Interpreters are the names a coordinator's delivery check looks its
+	// interpreter up by; nil means deliveryInterpreters (delivery.go).
+	Interpreters []string
 	// Clean reports whether a worktree has no uncommitted change, tracked
 	// or untracked; false when it cannot tell, or when it is nil.
 	Clean func(ctx context.Context, worktree string) bool
@@ -222,6 +225,18 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	if attempt != nil && attempt.State == "closed" {
 		attempt = nil
 	}
+	// A coordinator's delivery checks are the launcher's: the messages
+	// that ask for one are kept from the turn gate, the count of
+	// unacknowledged turns and the brief while it runs (delivery.go).
+	var held heldMessages
+	var deliveryLines []string
+	if status.Session.Role == "coordinator" {
+		pending, held, deliveryLines = l.deliveries(ctx, &st, pending)
+		l.uncountHeld(&st, held)
+		if err := writeTurnState(l.Home, st); err != nil {
+			l.Log.Warn("record the turn state", "error", err.Error())
+		}
+	}
 	// Whether the state knew the attempt before this tick touched it.
 	knownAttempt := attempt != nil && st.Attempts[attempt.ID] != nil
 	limits := ReadTurnLimits(l.Home)
@@ -278,7 +293,7 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	setHold(&st, unackedHold(st))
 	l.syncHold(ctx, &st)
 	l.lastStart = now
-	l.turn(ctx, &st, status, attempt, trigger, pending, continuation, limits)
+	l.turn(ctx, &st, status, attempt, trigger, pending, continuation, limits, held, deliveryLines)
 }
 
 // settingsFile is the per-turn settings of a member in role. A coordinator's
@@ -344,7 +359,7 @@ func (l *TurnLoop) hold(st *turnState, until time.Time, why string) {
 // turn runs one turn and records it. Every turn is a fresh conversation
 // (docs/DESIGN-TURNS.md, T1) whose prompt is the brief written now.
 func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus, attempt *memberAttempt, trigger string,
-	pending []PendingMessage, continuation bool, limits TurnLimits) {
+	pending []PendingMessage, continuation bool, limits TurnLimits, held heldMessages, deliveryLines []string) {
 	now := l.Now()
 	var a *attemptTurns
 	if attempt != nil {
@@ -391,7 +406,7 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		unacked = st.Unacked
 	}
 	brief, carried := l.brief(ctx, briefInput{status: status, attempt: attempt, trigger: trigger, pending: pending,
-		continuation: continuation, handoff: doc, unacked: unacked})
+		continuation: continuation, handoff: doc, unacked: unacked, held: held, deliveries: deliveryLines})
 	// The running turn names the brief's messages before the brief is
 	// handed over, so a turn found running at a restart names them too.
 	if rec.BriefMessages = carried; len(carried) > 0 {
@@ -453,6 +468,7 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	// message is gone.
 	if countable && !(afterErr == nil && boundedAttempt(*st, after.Attempt)) {
 		again, paused, err := l.Host.PendingNow(ctx)
+		again = slices.DeleteFunc(again, func(m PendingMessage) bool { return held[m.ID] })
 		switch {
 		case err != nil:
 			l.countUnacked(st, rec, pending, nil, false, res.LoopStopping)

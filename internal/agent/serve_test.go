@@ -39,11 +39,12 @@ type fakeHost struct {
 	polls        int
 	// The brief's sources: the inbox as the member would read it, the
 	// board's tasks, and the forge watch's last observations.
-	inbox     []inboxMessage
-	inboxErr  error
-	tasks     map[string]TaskDoc
-	taskReads int
-	observed  []PullObservation
+	inbox      []inboxMessage
+	inboxErr   error
+	inboxReads int
+	tasks      map[string]TaskDoc
+	taskReads  int
+	observed   []PullObservation
 	// The attempts' handoffs as aicrewd keeps them, the pushes made, and
 	// the refusal a push gets.
 	handoffs map[string]string
@@ -63,6 +64,10 @@ type fakeHost struct {
 	// The holds reported to aicrewd, and the error a report gets.
 	holds   []holdReport
 	holdErr error
+	// refuse is the refusal a step op gets, and members the members op's
+	// answer.
+	refuse  map[string]*StepError
+	members json.RawMessage
 }
 
 func (h *fakeHost) ReportHold(_ context.Context, r holdReport) error {
@@ -125,6 +130,15 @@ func (h *fakeHost) ReadHandoff(_ context.Context, attemptID string) (string, err
 func (h *fakeHost) Inbox(context.Context, int) ([]inboxMessage, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.inboxReads++
+	if h.inbox == nil && h.inboxErr == nil {
+		// Without a given inbox, the pending messages as the read lists them.
+		var out []inboxMessage
+		for _, p := range h.pending {
+			out = append(out, inboxMessage{ID: p.ID, Seq: p.Seq, Kind: p.Kind, AttemptID: p.AttemptID})
+		}
+		return out, nil
+	}
 	return append([]inboxMessage(nil), h.inbox...), h.inboxErr
 }
 
@@ -184,6 +198,20 @@ func (h *fakeHost) Do(_ context.Context, call StepCall) StepAnswer {
 	h.calls = append(h.calls, call)
 	if call.Op == "work" && h.attempt != nil {
 		h.attempt.Phase = "blocked"
+	}
+	if e := h.refuse[call.Op]; e != nil {
+		return StepAnswer{Status: StepRefused, Error: e}
+	}
+	switch call.Op {
+	case "ack":
+		var in struct {
+			IDs []string `json:"ids"`
+		}
+		_ = json.Unmarshal(call.Body, &in)
+		h.ack(in.IDs...)
+		h.inbox = slices.DeleteFunc(h.inbox, func(m inboxMessage) bool { return slices.Contains(in.IDs, m.ID) })
+	case "members":
+		return StepAnswer{OK: true, Status: StepDone, Result: h.members}
 	}
 	return StepAnswer{OK: true, Status: StepDone}
 }

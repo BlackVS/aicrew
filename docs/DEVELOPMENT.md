@@ -2975,6 +2975,15 @@ Messages that arrive during a turn wait for the next one.
     on the first day and 2 USD on each later one. At the 0.24 USD a turn
     seen on 2026-11-20, that is 0.72 USD, against 10.01 USD spent in
     twelve minutes before the hold existed.
+- **A coordinator's delivery check** (task 01a1fa19-19a4). After a
+  merge the coordinator's launcher checks the delivery itself and
+  confirms it with the check's evidence (CREW-CONTRACT.md, "A
+  coordinator's delivery check"). The message that asks for the
+  confirmation is kept from turns while the check runs, so the count
+  above never sees it, and the check's pending reads cost no turn.
+  `state/turns.json` keeps each check (`deliveries`, by attempt) and the
+  newest message looked at (`delivery_seen`), so a restart goes on where
+  it stopped.
 
 - A spent daily budget gives no turn until the next UTC day. A spent
   attempt budget gives no turn while that attempt is open, and is checked

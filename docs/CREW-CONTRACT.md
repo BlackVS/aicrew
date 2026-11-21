@@ -644,10 +644,11 @@ begin needs an `Idempotency-Key`; settle does not.
   - aimem also refuses secret-shaped text, which aicrew does not mirror: a
     confirmation whose reference looks like a secret is refused by aimem at
     finalize, and is then confirmed again.
-  - Aicrew queries no forge. The confirming member gathers the evidence
-    (for example with the verify-delivery skill), and aicrew records it,
-    bound to the accepted result and to the confirming agent, session,
-    generation and time.
+  - aicrewd queries no forge. The confirming member gathers the evidence,
+    and aicrew records it, bound to the accepted result and to the
+    confirming agent, session, generation and time. A coordinator's
+    launcher gathers it itself with the verify-delivery skill ("A
+    coordinator's delivery check").
   - Today the confirming member is the team's current coordinator, who is
     not the attempt's worker. That rule is one predicate, so a dedicated
     verifier role would change only it.
@@ -1112,7 +1113,75 @@ still holds its member. An aicrewd
 older than the route answers `not_found`: the launcher says once that the
 coordinators are not told, and the hold stays its own.
 
-### Ordering across the two stores
+#### A coordinator's delivery check
+
+After a person merged an accepted result, the coordinator's launcher
+checks the delivery and takes the confirm-delivery step itself (task
+01a1fa19-19a4); a turn cannot, since its settings deny any command that
+names the home's credentials. Nothing of aicrewd's routes changes.
+- **What starts a check.** An `action.needed` message with a `pull`
+  subject whose `needs` hold `merged`, for an attempt that
+  `GET /v1/crew/attempts` lists in phase `accepted` with a latest result.
+  The launcher reads the message once, at first sight, with the inbox
+  read the brief makes (`GET /v1/crew/inbox`, up to 100 messages); the
+  pending list names a message's kind but not its subjects. That read
+  raises the message's delivery count, which only the brief's "delivered
+  N times" shows: no limit, hold or rule in aicrewd or the launcher
+  decides on it. A read that fails, or a page that does not list the
+  message, holds it from turns for up to five ticks and reads again;
+  after that it goes to a turn as an ordinary message.
+- **Which messages are deferred.** A message whose subjects are all such
+  `pull` subjects needing only `merged`. While the check runs it is kept
+  from the turn gate, from the count of unacknowledged turns and from the
+  brief. Any other message, a mixed one, a person's or a member's note
+  about the same attempt included, goes to a turn as before; a mixed one
+  still starts the check, and its turn's brief says the check is the
+  launcher's. The check is the attempt's, not the message's: a turn that
+  acknowledges a mixed message does not end it.
+- **The check.** The launcher runs the home's installed
+  `verify-delivery/verify_delivery.py` (from `.claude/skills`, then the
+  client's user directory) with `python3 -I`, or `python -I`, the first
+  found on PATH. The argument list is fixed: `--pr URL`, and on Gitea
+  `--forge gitea --api-base https://HOST/api/v1`, on GitLab `--forge
+  gitlab`, with `--review-author local=` the attempt's worker's forge
+  account (from the team's capability reports) and the coordinator's own
+  (either may post the local review), and `external=` the forge entry's
+  `external_reviewer` (join's `--reviewer`). No shell; the home's
+  `state/` directory as the working directory; an environment of `PATH`,
+  the one token file variable (`GITHUB_TOKEN_FILE`, `GITEA_TOKEN_FILE` or
+  `GITLAB_TOKEN_FILE`, naming the credential's file), `SSL_CERT_FILE` when
+  the launcher has one, and `SYSTEMROOT` on Windows, which the
+  interpreter needs there. The token's value is in no argument and no log
+  line. A run is bounded by two minutes and 1 MiB of output.
+- **The schedule.** The first read is at first sight, then 2, 5 and 10
+  minutes later and every 15 minutes, for a day at most. A new message
+  naming the attempt gives one more read at once, also after the day.
+- **The answers.**
+  - `confirmed` counts only with exit code 0 and evidence: the launcher
+    takes `confirm-delivery` with the check's evidence, records that it
+    did, then acknowledges the attempt's deferred messages (none, after a
+    mixed one). A launcher stopped between the two acknowledges after its
+    restart without a second confirm. A confirm aicrewd refuses goes to
+    a turn once with the refusal, and is not repeated.
+  - `pending` (exit code 4) gives no turn; after a day it goes to a turn
+    as not confirmed with that reason.
+  - `not_confirmed` (exit code 3), or a fault of the check itself (no
+    interpreter, no script, exit code 2, a timeout, output that does not
+    parse or is over the bound, any other exit code or verdict), goes to
+    a turn once, with the failed checks or the reason in the brief, and
+    the launcher reads on every 15 minutes until the day is over. A cause
+    repaired outside, such as a re-run CI job, is then confirmed without
+    a turn. A Gitea or GitLab check without the external reviewer's
+    account is not confirmed with a reason that names
+    `forge.HOST.external_reviewer`.
+- **The turn's part.** The coordinator escalates a check that is not
+  confirmed with its reason, and acknowledges the attempt's messages. It
+  does not run the check.
+- Only a coordinator's launcher checks; a worker's defers nothing. The
+  team state does not show a pending check; the launcher's log has each
+  read as `delivery check`, with the verdict.
+
+## Ordering across the two stores
 
 The two services share no transaction, so every step that touches the
 reservation follows one rule:

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -163,6 +164,10 @@ type briefInput struct {
 	// unacked is the count of earlier turns that left the messages
 	// unacknowledged, nil when there were none (unacked.go).
 	unacked *unackedState
+	// held are the messages the launcher kept from this turn, and
+	// deliveries its lines on a coordinator's delivery checks (delivery.go).
+	held       heldMessages
+	deliveries []string
 }
 
 // brief writes the turn's brief, and returns the ids of the messages it
@@ -363,8 +368,10 @@ func (l *TurnLoop) briefTrigger(ctx context.Context, b *strings.Builder, in brie
 		fmt.Fprintf(b, "The messages could not be read for the brief (%s): run `aicrew-agent inbox`.\n",
 			redactBrief(l.Home, err.Error(), maxBriefText))
 		briefUnacked(b, in.unacked)
+		l.briefDeliveries(b, in.deliveries)
 		return nil
 	}
+	msgs = slices.DeleteFunc(msgs, func(m inboxMessage) bool { return in.held[m.ID] })
 	b.WriteString("\n")
 	for _, m := range msgs {
 		l.briefMessage(b, m)
@@ -373,7 +380,19 @@ func (l *TurnLoop) briefTrigger(ctx context.Context, b *strings.Builder, in brie
 		fmt.Fprintf(b, "\n%d more message(s) are pending: `aicrew-agent inbox`.\n", more)
 	}
 	briefUnacked(b, in.unacked)
+	l.briefDeliveries(b, in.deliveries)
 	return msgs
+}
+
+// briefDeliveries names the launcher's delivery checks.
+func (l *TurnLoop) briefDeliveries(b *strings.Builder, lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	b.WriteString("\nDelivery checks:\n")
+	for _, s := range lines {
+		b.WriteString("- " + redactBrief(l.Home, s, maxBriefText) + "\n")
+	}
 }
 
 // briefMessage writes one message: its id to acknowledge, its kind, sender,

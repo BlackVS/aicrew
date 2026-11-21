@@ -85,6 +85,11 @@ func TestRoleGuidanceContent(t *testing.T) {
 			if !strings.Contains(s.What, finalizeEvidence) {
 				t.Errorf("the %s's finalize step does not teach the delivery evidence: %s", r.Role, s.What)
 			}
+			// The worker acknowledges the merge message; the launcher's
+			// confirmation comes as its own message (19a4).
+			if r.Role == "worker" && !strings.Contains(s.What, workerMergeMessage) {
+				t.Errorf("the worker's finalize step does not say what the merge message needs: %s", s.What)
+			}
 		}
 	}
 	if finalizes != 2 {

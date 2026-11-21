@@ -432,6 +432,16 @@ aicrew-agent join --label worker --url https://AICREWD:PORT \
 - **The forge host.** `FORGE_HOST` is `github.com`, or the Gitea host with
   its port. With `--cred FORGE_HOST=-` the token is typed at a hidden
   prompt instead of read from a file.
+- **The external reviewer, on Gitea or GitLab.** The coordinator's join
+  adds `--reviewer FORGE_HOST=ACCOUNT` <!-- run-add: join -->, the account the external reviewer
+  posts its reviews as. The coordinator's launcher checks each merged
+  delivery with the verify-delivery skill, which on Gitea and GitLab
+  counts a review only from an account it is told. On a home that is
+  already joined, `aicrew-agent join --home HOME --reviewer
+  FORGE_HOST=ACCOUNT` sets or changes it. GitHub needs none: the check
+  trusts the repository's owners, members and collaborators. Without it,
+  the coordinator's brief says the delivery is not confirmed and names
+  the missing field.
 - **The hub's CA.** A hub on a private CA adds
   `--aimem-ca-file hub-ca.pem` <!-- run-add: join -->. Pin aicrewd as its trust mode requires
   ([DEVELOPMENT.md](DEVELOPMENT.md), "Joining a team").
@@ -697,6 +707,16 @@ task 01a1fa07-5db2 is done, the readiness check does not read the
 worker's and the coordinator's reviews, whose headers are not yet in the
 form it reads, so the pull request waits for the person's own look at
 the three reviews.
+
+**After the merge.** The coordinator's launcher, not a turn, checks the
+delivery: it runs the installed verify-delivery skill's script with the
+coordinator's forge credential, reads again while CI on the merge commit
+runs, and records the delivery with the check's own evidence. The worker
+then finalizes the task. The coordinator gets no turn for the merge while
+the check is pending; when the check does not confirm, its brief names the
+failed checks and it escalates. The launcher's log has each read
+(`delivery check`, with the verdict); the team state does not show a
+pending check.
 
 ## The forge token's rights
 

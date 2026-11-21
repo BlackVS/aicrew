@@ -721,7 +721,13 @@ member_lines() {
   member_doc "$role" aimem-version
   member_doc "$role" client-version
   member_doc "$role" preflight "${v[@]}"
-  member_doc "$role" join -per "$per" "${v[@]}" -add "--aimem-ca-file hub-ca.pem" -add "--code-file PATH" -set PATH=invite.code
+  # The coordinator's launcher checks the delivery on Gitea, which counts
+  # the external review only from the account it is told. The upgrade
+  # scenario's members join with the previous release, which predates
+  # --reviewer, so they go without it.
+  local rev=()
+  [ "$role" != coordinator ] || [ -n "$UPGRADE" ] || rev=(-add "--reviewer FORGE_HOST=ACCOUNT" -set ACCOUNT=sim-hands)
+  member_doc "$role" join -per "$per" "${v[@]}" -add "--aimem-ca-file hub-ca.pem" -add "--code-file PATH" -set PATH=invite.code     "${rev[@]}"
 }
 dc up -d sim-coordinator sim-worker sim-indep sim-architect >/dev/null
 own_volumes

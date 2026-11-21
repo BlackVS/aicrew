@@ -156,6 +156,10 @@ survey, the options and the decision (D-STORE) are recorded in
   mode:
   - the Read and Edit tools on `creds/**` and `aimem/hub.json` (which also
     covers Write and Claude Code's own file searches);
+  - the Edit tool on `.claude/skills/**`, whose verify-delivery script a
+    coordinator's launcher runs (CREW-CONTRACT.md, "A coordinator's
+    delivery check"). A Bash line can still write there: the rule catches
+    a member's mistake, it is no sandbox;
   - any Bash or PowerShell command naming `creds/` or `aimem/hub.json`
     (with either slash);
   - `config --global` and `config --system`;

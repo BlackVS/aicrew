@@ -290,8 +290,8 @@ def p5_pending(d, q, ids, a, expect):
     expect((loadj(d, "forge/status.json", {}) or {}).get("state") == "pending", "forge: the merge commit's CI is not pending")
     t = loadj(d, "aimem/task.json", {})
     expect(t.get("state") == "REVIEW", "aimem: the task is %s, not REVIEW" % t.get("state"))
-    expect("verify-delivery: pending for" in (load(d, "homes/coordinator/HANDOFF.md", "") or ""),
-           "coordinator: the handoff does not record verify-delivery's pending answer")
+    # The pending answer is the launcher's log line, which cases.sh waited
+    # for; the coordinator had no turn for it.
 
 
 # ---- the fault cases ---------------------------------------------------------------

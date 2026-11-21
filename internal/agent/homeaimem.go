@@ -308,7 +308,8 @@ var denyPatterns = []string{
 // permission mode; it stops an accidental violation through these tools,
 // not a determined bypass through another command.
 func denyRules() []string {
-	rules := []string{"Read(/creds/**)", "Edit(/creds/**)", "Read(/aimem/hub.json)", "Edit(/aimem/hub.json)"}
+	rules := []string{"Read(/creds/**)", "Edit(/creds/**)", "Read(/aimem/hub.json)", "Edit(/aimem/hub.json)",
+		"Edit(/.claude/skills/**)"}
 	for _, tool := range []string{"Bash", "PowerShell"} {
 		for _, p := range denyPatterns {
 			rules = append(rules, tool+"("+p+")")

@@ -1,0 +1,716 @@
+package agent
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/BlackVS/aicrew/internal/forge"
+)
+
+// A coordinator's delivery checks (task 01a1fa19-19a4). After a person
+// merged an accepted result, aicrewd asks the team's coordinator to confirm
+// the delivery. A turn cannot run the delivery check: its settings admit no
+// such command, and any command that names the home's credentials is
+// denied. So the coordinator's launcher runs the installed verify-delivery
+// script itself, with the home's forge credential, and records the
+// confirmation with the script's own evidence; no model call is needed to
+// learn a fact the forge states.
+//
+// - At first sight of a new action.needed message the launcher reads the
+//   inbox once (the read the brief makes) and looks at its subjects. A pull
+//   subject that needs `merged`, for an attempt aicrewd lists as accepted,
+//   starts that attempt's check. A message whose subjects are all such
+//   subjects is deferred: it is kept from the turn gate, the count of
+//   unacknowledged turns and the brief while the check runs. Any other
+//   message, a mixed one included, goes to a turn as before.
+// - The check reads the forge on its own schedule only (deliverySchedule),
+//   never on every tick. Pending gives no turn; after a day it goes to a
+//   turn as not confirmed. Not confirmed, or a fault of the check itself,
+//   goes to a turn once, and the launcher keeps reading at the slowest step
+//   until the day is over, and once more when a new message names the
+//   attempt, so a cause repaired outside (a re-run CI job) is confirmed
+//   without a turn.
+// - Confirmed (exit code 0 and the verdict) takes the confirm-delivery step
+//   with the script's evidence, then acknowledges the attempt's deferred
+//   messages. A refused confirm goes to a turn once and is not repeated.
+
+// The kinds of message the launcher defers: an action.needed message
+// (KindActionNeeded) whose subjects are all pull subjects of an accepted
+// attempt that need exactly NeedMerged.
+const (
+	deliveryMessageKind = "action.needed"
+	deliverySubjectKind = "pull"
+	deliveryNeed        = "merged"
+)
+
+const (
+	// deliveryScript is the installed verify-delivery helper, under a
+	// skill directory.
+	deliveryScript = "verify-delivery/verify_delivery.py"
+	// maxDeliveryOutput bounds what is read of the script's output, and
+	// maxDeliveryStderr of its error stream.
+	maxDeliveryOutput = 1 << 20
+	maxDeliveryStderr = 4 << 10
+	// deliveryDay is how long the launcher reads a check.
+	deliveryDay = 24 * time.Hour
+	// deliveryKeep is how long a finished check is kept, for a new
+	// message's one more read.
+	deliveryKeep = 7 * 24 * time.Hour
+	// maxDeliveryReadFails is how many ticks in a row a new message may go
+	// unread before it goes to a turn as an ordinary message.
+	maxDeliveryReadFails = 5
+	// maxDeliveryAckFails is how often the acknowledgement of a confirmed
+	// delivery's messages is tried before they go to a turn.
+	maxDeliveryAckFails = 10
+)
+
+// deliveryTimeout bounds one run of the script.
+var deliveryTimeout = 2 * time.Minute
+
+// deliverySchedule is the wait after each pending answer: 2, 5, 10, then
+// every 15 minutes. The first read is at first sight.
+var deliverySchedule = []time.Duration{2 * time.Minute, 5 * time.Minute, 10 * time.Minute, 15 * time.Minute}
+
+// deliveryInterpreters are the names the interpreter is looked up by on
+// PATH, in order.
+var deliveryInterpreters = []string{"python3", "python"}
+
+// The verdicts and outcomes a check records.
+const (
+	deliveryConfirmed    = "confirmed"
+	deliveryNotConfirmed = "not_confirmed"
+	deliveryPending      = "pending"
+	deliveryFault        = "fault"
+	deliveryRefused      = "refused"
+)
+
+// deliveryCheck is one attempt's delivery check.
+type deliveryCheck struct {
+	Pull      string `json:"pull"`
+	ResultSeq int64  `json:"result_seq"`
+	// Worker is the attempt's worker agent, whose forge account is the
+	// local review's author on Gitea and GitLab.
+	Worker string `json:"worker,omitempty"`
+	// Deferred are the attempt's messages kept from turns.
+	Deferred []string  `json:"deferred,omitempty"`
+	Since    time.Time `json:"since"`
+	Next     time.Time `json:"next,omitzero"`
+	Reads    int       `json:"reads,omitempty"`
+	// Verdict and Reason are the last answer, Failed its failed checks.
+	Verdict string   `json:"verdict,omitempty"`
+	Reason  string   `json:"reason,omitempty"`
+	Failed  []string `json:"failed,omitempty"`
+	// Handed says the check went to a turn: its deferred messages are
+	// released. Done says it reads no more, until a new message for the
+	// attempt. Confirmed says the confirm step was recorded, and AckFails
+	// how often the acknowledgement since failed.
+	Handed    bool `json:"handed,omitempty"`
+	Done      bool `json:"done,omitempty"`
+	Confirmed bool `json:"confirmed,omitempty"`
+	AckFails  int  `json:"ack_fails,omitempty"`
+}
+
+// deliveryResult is one run of the check.
+type deliveryResult struct {
+	Verdict  string
+	Reason   string
+	Failed   []string
+	Evidence []StepEvidence
+}
+
+// deliveryRun is what one run of the check is given.
+type deliveryRun struct {
+	Pull     string
+	External string   // the external review's author, "" on GitHub
+	Local    []string // the local review's authors, none on GitHub
+}
+
+// heldMessages are the messages the turn gate does not see this tick.
+type heldMessages map[string]bool
+
+// deliveries applies the coordinator's delivery checks: it looks at the new
+// messages, runs the checks that are due, and returns the pending messages
+// a turn may have, the messages it held back, and the brief's lines.
+func (l *TurnLoop) deliveries(ctx context.Context, st *turnState, pending []PendingMessage) ([]PendingMessage, heldMessages, []string) {
+	if st.Deliveries == nil {
+		st.Deliveries = map[string]*deliveryCheck{}
+	}
+	now := l.Now()
+	var open *OpenAttempts
+	held := l.lookAtNew(ctx, st, pending, &open, now)
+	// gone are the messages acknowledged this tick: the pending list read
+	// before still names them.
+	gone := heldMessages{}
+	for _, id := range sortedChecks(st.Deliveries) {
+		c := st.Deliveries[id]
+		switch {
+		case c.Confirmed:
+			l.ackDelivered(ctx, st, id, c, gone)
+		case !c.Done && !now.Before(c.Next):
+			l.runCheck(ctx, st, id, c, &open, now, gone)
+		}
+	}
+	for id, c := range st.Deliveries {
+		if (c.Done || c.Handed) && now.Sub(c.Since) > deliveryKeep {
+			delete(st.Deliveries, id)
+		}
+	}
+	var lines []string
+	for _, id := range sortedChecks(st.Deliveries) {
+		c := st.Deliveries[id]
+		if !c.Handed {
+			for _, m := range c.Deferred {
+				held[m] = true
+			}
+		}
+		lines = append(lines, deliveryLine(id, c))
+	}
+	var out []PendingMessage
+	for _, p := range pending {
+		if !held[p.ID] && !gone[p.ID] {
+			out = append(out, p)
+		}
+	}
+	return out, held, lines
+}
+
+func sortedChecks(m map[string]*deliveryCheck) []string {
+	ids := make([]string, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// lookAtNew classifies the messages newer than the last one looked at. An
+// action.needed message is read once from the inbox; while that read
+// fails, the message is held for up to maxDeliveryReadFails ticks, then goes
+// to a turn as an ordinary message.
+func (l *TurnLoop) lookAtNew(ctx context.Context, st *turnState, pending []PendingMessage, open **OpenAttempts,
+	now time.Time) heldMessages {
+	held := heldMessages{}
+	var fresh []PendingMessage
+	for _, p := range pending {
+		if p.Seq > st.DeliverySeen {
+			fresh = append(fresh, p)
+		}
+	}
+	if len(fresh) == 0 {
+		return held
+	}
+	var toRead []PendingMessage
+	for _, p := range fresh {
+		if p.Kind == deliveryMessageKind {
+			toRead = append(toRead, p)
+			continue
+		}
+		// A note about an attempt is never deferred; it is a new message
+		// for the attempt's check.
+		l.newMessageFor(st, p.AttemptID, now)
+	}
+	unread := toRead
+	if len(toRead) > 0 {
+		items, err := l.Host.Inbox(ctx, maxInboxRead)
+		if err == nil {
+			*open, err = l.openAttempts(ctx, *open)
+		}
+		if err == nil {
+			byID := map[string]inboxMessage{}
+			for _, m := range items {
+				byID[m.ID] = m
+			}
+			unread = nil
+			for _, p := range toRead {
+				m, ok := byID[p.ID]
+				if !ok {
+					unread = append(unread, p)
+					continue
+				}
+				l.classify(st, m, *open, now)
+			}
+		} else {
+			l.Log.Warn("the inbox was not read for the delivery checks", "error", err.Error())
+		}
+	}
+	if len(unread) > 0 {
+		st.DeliveryReadFails++
+		if st.DeliveryReadFails < maxDeliveryReadFails {
+			for _, p := range unread {
+				held[p.ID] = true
+			}
+			return held
+		}
+		l.Log.Warn("new messages were not read for the delivery checks: they go to a turn as they are",
+			"messages", len(unread), "ticks", st.DeliveryReadFails)
+	}
+	st.DeliveryReadFails = 0
+	for _, p := range fresh {
+		st.DeliverySeen = max(st.DeliverySeen, p.Seq)
+	}
+	return held
+}
+
+// maxInboxRead is the inbox page the launcher reads for its checks.
+const maxInboxRead = 100
+
+// openAttempts reads the team's open attempts once per tick.
+func (l *TurnLoop) openAttempts(ctx context.Context, have *OpenAttempts) (*OpenAttempts, error) {
+	if have != nil {
+		return have, nil
+	}
+	o, err := l.Host.OpenAttempts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &o, nil
+}
+
+// classify starts the check of each accepted attempt a message says was
+// merged, and defers the message when that is all it says.
+func (l *TurnLoop) classify(st *turnState, m inboxMessage, open *OpenAttempts, now time.Time) {
+	if m.Action == nil || len(m.Action.Subjects) == 0 {
+		l.newMessageFor(st, m.AttemptID, now)
+		return
+	}
+	pure := true
+	var merged []string
+	for _, s := range m.Action.Subjects {
+		a := acceptedAttempt(open, s.AttemptID)
+		isMerged := s.Kind == deliverySubjectKind && slices.Contains(s.Needs, deliveryNeed) && a != nil &&
+			s.Pull != nil && s.Pull.URL != ""
+		if !isMerged {
+			pure = false
+			l.newMessageFor(st, s.AttemptID, now)
+			continue
+		}
+		if len(s.Needs) != 1 {
+			pure = false
+		}
+		merged = append(merged, s.AttemptID)
+		c := st.Deliveries[s.AttemptID]
+		if c == nil {
+			c = &deliveryCheck{Pull: s.Pull.URL, ResultSeq: a.LatestResult.ResultSeq, Worker: a.WorkerAgentID,
+				Since: now, Next: now}
+			st.Deliveries[s.AttemptID] = c
+			l.Log.Info("the delivery check of an accepted attempt starts", "attempt", s.AttemptID, "pull", c.Pull)
+		} else {
+			l.newMessageFor(st, s.AttemptID, now)
+		}
+	}
+	if !pure {
+		return
+	}
+	for _, id := range merged {
+		c := st.Deliveries[id]
+		if !slices.Contains(c.Deferred, m.ID) {
+			c.Deferred = append(c.Deferred, m.ID)
+		}
+	}
+}
+
+// acceptedAttempt is the open attempt id when it is accepted with a result,
+// nil otherwise.
+func acceptedAttempt(open *OpenAttempts, id string) *OpenAttempt {
+	if open == nil || id == "" {
+		return nil
+	}
+	for i := range open.Attempts {
+		a := &open.Attempts[i]
+		if a.ID == id && a.Phase == "accepted" && a.LatestResult != nil {
+			return a
+		}
+	}
+	return nil
+}
+
+// newMessageFor gives a finished or waiting check of the attempt one more
+// read now: a new message may follow a repair made outside.
+func (l *TurnLoop) newMessageFor(st *turnState, attemptID string, now time.Time) {
+	c := st.Deliveries[attemptID]
+	if attemptID == "" || c == nil || c.Confirmed || c.Verdict == deliveryRefused {
+		return
+	}
+	c.Done, c.Next = false, now
+}
+
+// runCheck runs one check that is due and applies its answer.
+func (l *TurnLoop) runCheck(ctx context.Context, st *turnState, id string, c *deliveryCheck, open **OpenAttempts,
+	now time.Time, gone heldMessages) {
+	o, err := l.openAttempts(ctx, *open)
+	if err != nil {
+		l.Log.Warn("the open attempts were not read for a delivery check", "attempt", id, "error", err.Error())
+		return
+	}
+	*open = o
+	if acceptedAttempt(o, id) == nil {
+		// Finalized, sent back or stopped: nothing is left to confirm, and
+		// its messages go to a turn as they are.
+		l.Log.Info("the delivery check ends: the attempt is no longer accepted", "attempt", id)
+		delete(st.Deliveries, id)
+		return
+	}
+	run := deliveryRun{Pull: c.Pull}
+	r := l.prepareRun(ctx, c, &run)
+	if r.Verdict == "" {
+		r = l.verify(ctx, run)
+	}
+	c.Reads++
+	c.Verdict, c.Reason, c.Failed = r.Verdict, r.Reason, r.Failed
+	l.Log.Info("delivery check", "attempt", id, "pull", c.Pull, "verdict", r.Verdict, "reason", r.Reason)
+	past := now.Sub(c.Since) >= deliveryDay
+	switch r.Verdict {
+	case deliveryConfirmed:
+		body, _ := json.Marshal(map[string]any{"result_seq": c.ResultSeq, "evidence": r.Evidence})
+		ans := l.Host.Do(ctx, StepCall{Version: 1, Op: "confirm-delivery", AttemptID: id, Body: body})
+		if !ans.OK {
+			c.Verdict, c.Reason = deliveryRefused, "aicrewd refused the confirm-delivery step: "+stepRefusal(ans)
+			c.Handed, c.Done = true, true
+			return
+		}
+		c.Confirmed = true
+		// The confirmation is recorded before the acknowledgement, so a
+		// launcher stopped between the two acknowledges without a second
+		// confirm.
+		if err := writeTurnState(l.Home, *st); err != nil {
+			l.Log.Warn("record the turn state", "error", err.Error())
+		}
+		l.ackDelivered(ctx, st, id, c, gone)
+	case deliveryPending:
+		if past {
+			c.Verdict, c.Reason = deliveryNotConfirmed, "the delivery check answered pending for a day"
+			c.Handed, c.Done = true, true
+			return
+		}
+		c.Next = now.Add(deliverySchedule[min(c.Reads-1, len(deliverySchedule)-1)])
+	default:
+		c.Handed = true
+		c.Done = past
+		c.Next = now.Add(deliverySchedule[len(deliverySchedule)-1])
+	}
+}
+
+// prepareRun fills the review authors a Gitea or GitLab check needs, or
+// answers not confirmed with the reason one is missing.
+func (l *TurnLoop) prepareRun(ctx context.Context, c *deliveryCheck, run *deliveryRun) deliveryResult {
+	host, err := pullHost(c.Pull)
+	if err != nil {
+		return deliveryResult{Verdict: deliveryFault, Reason: err.Error()}
+	}
+	doc, _, _ := readAgentDoc(l.Home)
+	e, ok := doc.forgeEntries()[host]
+	if !ok || e.File == "" {
+		return deliveryResult{Verdict: deliveryFault, Reason: "the home has no forge credential for " + host}
+	}
+	if forge.Kind(e.Kind) == forge.GitHub {
+		return deliveryResult{}
+	}
+	if e.ExternalReviewer == "" {
+		return deliveryResult{Verdict: deliveryNotConfirmed, Reason: fmt.Sprintf("the external review's author on %s "+
+			"is not configured: agent.json's forge.%s.external_reviewer is empty (join --reviewer %s=ACCOUNT sets it)",
+			host, host, host)}
+	}
+	run.External = e.ExternalReviewer
+	// The local review is the worker's or the coordinator's own: either
+	// author counts.
+	account, err := l.memberAccount(ctx, c.Worker, host)
+	if err != nil {
+		l.Log.Warn("the worker's forge account was not read for a delivery check", "attempt", c.Pull,
+			"error", err.Error())
+	}
+	for _, a := range []string{account, e.Account} {
+		if a != "" && !slices.Contains(run.Local, a) {
+			run.Local = append(run.Local, a)
+		}
+	}
+	if len(run.Local) == 0 {
+		return deliveryResult{Verdict: deliveryNotConfirmed, Reason: fmt.Sprintf("no local review's author is known "+
+			"on %s: neither worker %s's account nor this home's", host, c.Worker)}
+	}
+	return deliveryResult{}
+}
+
+// memberAccount is a member's forge account on host, from the team's
+// capability reports.
+func (l *TurnLoop) memberAccount(ctx context.Context, agentID, host string) (string, error) {
+	ans := l.Host.Do(ctx, StepCall{Version: 1, Op: "members"})
+	if !ans.OK {
+		return "", errors.New("the team's members were not read: " + stepRefusal(ans))
+	}
+	var team struct {
+		Members []struct {
+			AgentID      string `json:"agent_id"`
+			Capabilities []struct {
+				Host    string `json:"host"`
+				Account string `json:"account"`
+			} `json:"capabilities"`
+		} `json:"members"`
+	}
+	if err := json.Unmarshal(ans.Result, &team); err != nil {
+		return "", fmt.Errorf("the team's members are not the expected JSON: %w", err)
+	}
+	for _, m := range team.Members {
+		if m.AgentID != agentID {
+			continue
+		}
+		for _, c := range m.Capabilities {
+			if c.Host == host {
+				return c.Account, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+func stepRefusal(ans StepAnswer) string {
+	if ans.Error != nil {
+		return ans.Error.Code + ": " + ans.Error.Message
+	}
+	return "no answer"
+}
+
+// ackDelivered acknowledges a confirmed delivery's deferred messages,
+// possibly none, and ends the check.
+func (l *TurnLoop) ackDelivered(ctx context.Context, st *turnState, id string, c *deliveryCheck, gone heldMessages) {
+	if len(c.Deferred) > 0 {
+		body, _ := json.Marshal(map[string][]string{"ids": c.Deferred})
+		if ans := l.Host.Do(ctx, StepCall{Version: 1, Op: "ack", Body: body}); !ans.OK {
+			c.AckFails++
+			l.Log.Warn("the confirmed delivery's messages were not acknowledged", "attempt", id, "error", stepRefusal(ans))
+			if c.AckFails >= maxDeliveryAckFails {
+				c.Confirmed, c.Handed, c.Done = false, true, true
+				c.Verdict = deliveryConfirmed
+				c.Reason = "the launcher confirmed the delivery, but did not acknowledge its messages: acknowledge them"
+			}
+			return
+		}
+	}
+	for _, m := range c.Deferred {
+		gone[m] = true
+	}
+	l.Log.Info("the delivery is confirmed", "attempt", id, "pull", c.Pull)
+	delete(st.Deliveries, id)
+}
+
+// deliveryLine is the brief's line on one check.
+func deliveryLine(id string, c *deliveryCheck) string {
+	if !c.Handed {
+		return fmt.Sprintf("The delivery check of attempt %s (%s) is the launcher's and is pending (%d read(s) since %s): "+
+			"do not run it; the launcher confirms the delivery and acknowledges its messages.", id, c.Pull, c.Reads,
+			c.Since.UTC().Format(time.RFC3339))
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "The launcher's delivery check of attempt %s (%s) is not confirmed (%s): %s.", id, c.Pull, c.Verdict,
+		c.Reason)
+	for _, f := range c.Failed {
+		b.WriteString(" Failed: " + f + ".")
+	}
+	if !c.Done {
+		b.WriteString(" The launcher reads it again until a day has passed, and confirms it if it passes then.")
+	}
+	b.WriteString(" Escalate with this reason, and acknowledge the attempt's messages.")
+	return b.String()
+}
+
+// pullHost is a pull request URL's host.
+func pullHost(pull string) (string, error) {
+	rest, ok := strings.CutPrefix(pull, "https://")
+	host, _, found := strings.Cut(rest, "/")
+	if !ok || !found || host == "" {
+		return "", fmt.Errorf("the pull request %q is not an https URL", pull)
+	}
+	return forge.NormalizeHost(host)
+}
+
+// deliveryTokenVar is the environment variable the script reads the
+// token's file from, by forge kind.
+func deliveryTokenVar(k forge.Kind) string {
+	switch k {
+	case forge.GitHub:
+		return "GITHUB_TOKEN_FILE"
+	case forge.GitLab:
+		return "GITLAB_TOKEN_FILE"
+	}
+	return "GITEA_TOKEN_FILE"
+}
+
+// verify runs the installed script once: a fixed argument list and no
+// shell, the interpreter in isolated mode, the home's state directory as
+// its working directory, an environment of PATH and the token file's
+// variable (with SSL_CERT_FILE when the launcher has one, and SYSTEMROOT on
+// Windows, which the interpreter needs there), a timeout and a bound on its
+// output. The token's value is never in an argument or a log line.
+func (l *TurnLoop) verify(ctx context.Context, run deliveryRun) deliveryResult {
+	fault := func(f string, a ...any) deliveryResult {
+		return deliveryResult{Verdict: deliveryFault, Reason: fmt.Sprintf(f, a...)}
+	}
+	script := ""
+	for _, d := range skillDirs("claude", l.Home) {
+		p := filepath.Join(d, filepath.FromSlash(deliveryScript))
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+			script = p
+			break
+		}
+	}
+	if script == "" {
+		return fault("the verify-delivery skill's script %s is not installed", deliveryScript)
+	}
+	names := l.Interpreters
+	if len(names) == 0 {
+		names = deliveryInterpreters
+	}
+	interp := ""
+	for _, n := range names {
+		if p, err := exec.LookPath(n); err == nil {
+			interp = p
+			break
+		}
+	}
+	if interp == "" {
+		return fault("no interpreter for the delivery check: none of %s is on PATH", strings.Join(names, ", "))
+	}
+	host, err := pullHost(run.Pull)
+	if err != nil {
+		return fault("%s", err.Error())
+	}
+	doc, _, _ := readAgentDoc(l.Home)
+	e := doc.forgeEntries()[host]
+	if e.File == "" {
+		return fault("the home has no forge credential for %s", host)
+	}
+	kind := forge.Kind(e.Kind)
+	args := []string{"-I", script, "--pr", run.Pull}
+	switch kind {
+	case forge.Gitea:
+		args = append(args, "--forge", "gitea", "--api-base", "https://"+host+"/api/v1")
+	case forge.GitLab:
+		args = append(args, "--forge", "gitlab")
+	}
+	for _, a := range run.Local {
+		args = append(args, "--review-author", "local="+a)
+	}
+	if run.External != "" {
+		args = append(args, "--review-author", "external="+run.External)
+	}
+	env := []string{"PATH=" + os.Getenv("PATH"),
+		deliveryTokenVar(kind) + "=" + filepath.Join(l.Home, "creds", e.File)}
+	if v := os.Getenv("SSL_CERT_FILE"); v != "" {
+		env = append(env, "SSL_CERT_FILE="+v)
+	}
+	if runtime.GOOS == "windows" {
+		env = append(env, "SYSTEMROOT="+os.Getenv("SYSTEMROOT"))
+	}
+	dir := filepath.Join(l.Home, "state")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fault("the check's working directory: %v", err)
+	}
+	cctx, cancel := context.WithTimeout(ctx, deliveryTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, interp, args...)
+	cmd.Dir, cmd.Env = dir, env
+	cmd.WaitDelay = 5 * time.Second
+	var stderr bytes.Buffer
+	cmd.Stderr = &limitedWriter{w: &stderr, n: maxDeliveryStderr}
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return fault("the check's output: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fault("the check did not start: %v", err)
+	}
+	raw, rerr := io.ReadAll(io.LimitReader(out, maxDeliveryOutput+1))
+	_, _ = io.Copy(io.Discard, out)
+	werr := cmd.Wait()
+	switch {
+	case cctx.Err() != nil && ctx.Err() == nil:
+		return fault("the check did not end within %s", deliveryTimeout)
+	case ctx.Err() != nil:
+		return fault("the launcher stopped during the check")
+	case rerr != nil:
+		return fault("the check's output was not read: %v", rerr)
+	case len(raw) > maxDeliveryOutput:
+		return fault("the check's output is over %d bytes", maxDeliveryOutput)
+	}
+	code := 0
+	var exitErr *exec.ExitError
+	if errors.As(werr, &exitErr) {
+		code = exitErr.ExitCode()
+	} else if werr != nil {
+		return fault("the check failed: %v", werr)
+	}
+	return parseDelivery(raw, code, strings.TrimSpace(stderr.String()))
+}
+
+// parseDelivery reads the script's answer. Only exit code 0 with the
+// verdict confirmed and its evidence confirms.
+func parseDelivery(raw []byte, code int, stderr string) deliveryResult {
+	var v struct {
+		Verdict string `json:"verdict"`
+		Checks  []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+			Detail string `json:"detail"`
+			Reason string `json:"reason"`
+		} `json:"checks"`
+		Evidence []StepEvidence `json:"evidence"`
+		Error    *struct {
+			Kind    string `json:"kind"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	jerr := json.Unmarshal(raw, &v)
+	tail := func() string {
+		if stderr == "" {
+			return ""
+		}
+		return ": " + cutText(stderr, 300)
+	}
+	if code == 2 {
+		return deliveryResult{Verdict: deliveryFault, Reason: "the check refused its invocation (exit code 2)" + tail()}
+	}
+	if jerr != nil || v.Verdict == "" {
+		return deliveryResult{Verdict: deliveryFault, Reason: fmt.Sprintf("the check exited %d without a verdict that parses%s",
+			code, tail())}
+	}
+	var failed []string
+	for _, c := range v.Checks {
+		if c.Status == "failed" || c.Status == "pending" {
+			f := c.Name + " " + c.Status
+			if d := first(c.Detail, c.Reason); d != "" {
+				f += " (" + cutText(d, 200) + ")"
+			}
+			failed = append(failed, f)
+		}
+	}
+	switch {
+	case code == 0 && v.Verdict == deliveryConfirmed && len(v.Evidence) > 0:
+		return deliveryResult{Verdict: deliveryConfirmed, Evidence: v.Evidence}
+	case code == 4 && v.Verdict == deliveryPending:
+		return deliveryResult{Verdict: deliveryPending, Reason: "CI on the merge commit or the forge is not done", Failed: failed}
+	case code == 3 && v.Verdict == "not_confirmed":
+		return deliveryResult{Verdict: deliveryNotConfirmed, Reason: "the check did not confirm the delivery", Failed: failed}
+	}
+	return deliveryResult{Verdict: deliveryFault, Reason: fmt.Sprintf("the check exited %d with the verdict %q", code,
+		cutText(v.Verdict, 40))}
+}
+
+func first(s ...string) string {
+	for _, v := range s {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}

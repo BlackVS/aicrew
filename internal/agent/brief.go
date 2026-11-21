@@ -172,7 +172,11 @@ type briefInput struct {
 
 // brief writes the turn's brief, and returns the ids of the messages it
 // carried.
-func (l *TurnLoop) brief(ctx context.Context, in briefInput) (string, []string) {
+//
+// delivered says whether the launcher's delivery lines were handed over
+// whole: written (not a continuation) into a brief the bound did not cut.
+// It is the brief's own record, never a search of its text.
+func (l *TurnLoop) brief(ctx context.Context, in briefInput) (brief string, ids []string, delivered bool) {
 	var b strings.Builder
 	l.briefHead(&b, in)
 	l.briefTask(ctx, &b, in.attempt)
@@ -201,15 +205,17 @@ func (l *TurnLoop) brief(ctx context.Context, in briefInput) (string, []string) 
 	// resort cuts the body, never the last part, which names the turn's
 	// ROLES.md sections (hands review of #193).
 	body, fetch := redact(rest+memory), redact(fetch)
-	if len(body)+len(fetch) > maxBriefBytes {
+	cut := len(body)+len(fetch) > maxBriefBytes
+	if cut {
 		const note = "\n\n(The brief was cut at its bound; `aicrew-agent inbox` has the rest.)\n"
 		body = cutText(body, max(maxBriefBytes-len(fetch)-len(note), 0)) + note
 	}
-	ids := make([]string, 0, len(msgs))
+	ids = make([]string, 0, len(msgs))
 	for _, m := range msgs {
 		ids = append(ids, m.ID)
 	}
-	return body + fetch, ids
+	delivered = len(in.deliveries) > 0 && !in.continuation && !cut
+	return body + fetch, ids, delivered
 }
 
 // briefHead is the first line, the attempt's state as aicrewd's status
@@ -387,13 +393,20 @@ func (l *TurnLoop) briefTrigger(ctx context.Context, b *strings.Builder, in brie
 
 // briefDeliveries names the launcher's delivery checks.
 func (l *TurnLoop) briefDeliveries(b *strings.Builder, lines []string) {
+	b.WriteString(l.deliverySection(lines))
+}
+
+// deliverySection is the brief's section of delivery lines, as written.
+func (l *TurnLoop) deliverySection(lines []string) string {
 	if len(lines) == 0 {
-		return
+		return ""
 	}
+	var b strings.Builder
 	b.WriteString("\nDelivery checks:\n")
 	for _, s := range lines {
 		b.WriteString("- " + redactBrief(l.Home, s, maxBriefText) + "\n")
 	}
+	return b.String()
 }
 
 // briefMessage writes one message: its id to acknowledge, its kind, sender,

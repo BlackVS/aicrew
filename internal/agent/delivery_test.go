@@ -789,7 +789,7 @@ func TestDeliveryReleasedNamed(t *testing.T) {
 		e.tick(t)
 	}
 	e.host.inboxErr = nil
-	if len(e.specs) != 1 || !strings.Contains(e.specs[0].Prompt, "could not read message(s) m1") {
+	if len(e.specs) != 1 || !strings.Contains(e.specs[0].Prompt, "Not read by the launcher: m1.") {
 		t.Fatalf("%d turns; brief: %s", len(e.specs), lastPrompt(e))
 	}
 	if len(readTurnState(e.home).DeliveryReleased) != 0 {
@@ -930,5 +930,96 @@ func TestDeliveryOtherPullNamed(t *testing.T) {
 	e.ticksTo(t, e.clock.Add(time.Minute))
 	if len(e.specs) != 2 || strings.Contains(e.specs[1].Prompt, "pull/8 (m1) was merged") {
 		t.Fatalf("the line again: %d turns", len(e.specs))
+	}
+}
+
+// A note whose pull request URL the brief's redaction rewrites (a name with
+// a token's shape) is given to one turn: the turn that ran on the launcher's
+// own wake ends it, and no turn follows with nothing pending.
+func TestDeliveryRedactedNoteWakesOnce(t *testing.T) {
+	e := deliveryEnv(t)
+	e.host.inbox[0].Action.Subjects[0].Pull.URL = "https://github.com/owner/task-runner-app/pull/8"
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult { h.ack("m1"); return TurnResult{Outcome: TurnFinished} }
+	e.ticksTo(t, e.clock.Add(time.Hour))
+	if len(e.specs) != 1 {
+		t.Fatalf("%d turns in an hour with nothing pending", len(e.specs))
+	}
+	if st := readTurnState(e.home); len(st.DeliveryNotes) != 0 {
+		t.Fatalf("the note is kept: %v", st.DeliveryNotes)
+	}
+}
+
+// A handed answer whose line the bound cut from the brief of a turn that ran
+// on the launcher's own wake wakes no second turn.
+func TestDeliveryHandedCutWakesOnce(t *testing.T) {
+	e := deliveryEnv(t)
+	e.host.pending, e.host.inbox = nil, nil
+	// The attempt's state line alone fills the brief's bound.
+	e.host.attempt = &memberAttempt{ID: testAttempt, State: strings.Repeat("x", maxBriefBytes), Phase: "accepted"}
+	st := turnState{DeliverySeen: msgSeq.Add(1), Deliveries: map[string]*deliveryCheck{testAttempt: {Pull: testPull,
+		ResultSeq: 2, Worker: "worker-1", Since: e.clock, Next: e.clock.Add(time.Hour), Reads: 3,
+		Verdict: deliveryNotConfirmed, Reason: "the CI on the merge commit failed", Handed: true}}}
+	if err := writeTurnState(e.home, st); err != nil {
+		t.Fatal(err)
+	}
+	e.next = func(TurnSpec, *fakeHost) TurnResult { return TurnResult{Outcome: TurnFinished} }
+	e.ticksTo(t, e.clock.Add(30*time.Minute))
+	if len(e.specs) != 1 || strings.Contains(e.specs[0].Prompt, "the CI on the merge commit failed") {
+		t.Fatalf("%d turns; the line was not cut", len(e.specs))
+	}
+}
+
+// Released ids past one line's bound go into further lines, each kept
+// whole, after the action they need.
+func TestDeliveryReleasedLines(t *testing.T) {
+	var ids []string
+	for i := 0; i < 30; i++ {
+		ids = append(ids, fmt.Sprintf("01a1fa19-19a4-7000-8000-%012d", i))
+	}
+	lines := releasedLines(ids)
+	if len(lines) < 3 || !strings.Contains(lines[0], "escalate it with that message") {
+		t.Fatalf("lines: %q", lines)
+	}
+	var got []string
+	for _, l := range lines[1:] {
+		if len(l) > maxBriefText {
+			t.Fatalf("a line over the bound: %d bytes", len(l))
+		}
+		got = append(got, strings.Split(strings.TrimSuffix(strings.TrimPrefix(l, "Not read by the launcher: "), "."), ", ")...)
+	}
+	if !slices.Equal(got, ids) {
+		t.Fatalf("ids: %v", got)
+	}
+}
+
+// A handed line puts its action and reason before the failed checks, so the
+// line bound cuts only their tail.
+func TestDeliveryHandedLineOrder(t *testing.T) {
+	c := &deliveryCheck{Pull: testPull, Verdict: deliveryNotConfirmed, Reason: "the CI failed", Handed: true, Done: true,
+		Failed: []string{strings.Repeat("f", 2*maxBriefText)}}
+	l := deliveryLine(testAttempt, c)
+	cut := l[:maxBriefText]
+	if !strings.Contains(cut, "Escalate with this reason") || !strings.Contains(cut, "Reason: the CI failed.") {
+		t.Fatalf("the cut line: %s", cut)
+	}
+}
+
+// A turn a message started, whose brief the bound cut before the delivery
+// lines, does not consume the handoff: it stays for the next turn.
+func TestDeliveryHandedCutStaysForAMessageTurn(t *testing.T) {
+	e := deliveryEnv(t)
+	note := msg("n1", "message")
+	e.host.pending, e.host.inbox = []PendingMessage{note}, nil
+	e.host.attempt = &memberAttempt{ID: testAttempt, State: strings.Repeat("x", maxBriefBytes), Phase: "accepted"}
+	st := turnState{DeliverySeen: note.Seq, Deliveries: map[string]*deliveryCheck{testAttempt: {Pull: testPull,
+		ResultSeq: 2, Worker: "worker-1", Since: e.clock, Next: e.clock.Add(time.Hour), Reads: 3,
+		Verdict: deliveryNotConfirmed, Reason: "the CI on the merge commit failed", Handed: true}}}
+	if err := writeTurnState(e.home, st); err != nil {
+		t.Fatal(err)
+	}
+	e.next = func(_ TurnSpec, h *fakeHost) TurnResult { h.ack("n1"); return TurnResult{Outcome: TurnFinished} }
+	e.tick(t)
+	if len(e.specs) != 1 || !readTurnState(e.home).Deliveries[testAttempt].ToldAt.IsZero() {
+		t.Fatalf("%d turns; a cut brief consumed the handoff", len(e.specs))
 	}
 }

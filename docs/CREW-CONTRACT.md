@@ -1196,8 +1196,14 @@ names the home's credentials. Nothing of aicrewd's routes changes.
     answer wakes a turn of its own when no message is pending. It counts
     as handed over only after a turn that ran on its brief (finished, cut
     by its own budget or stopped by its time limit) and whose brief
-    carried it; the launcher's lines come before the messages, so the
-    brief's bound never cuts them. A turn that ends on the provider's
+    carried the launcher's delivery lines whole: the brief records that it
+    wrote them and that its bound cut nothing. A turn that ran on the launcher's own wake, with nothing
+    pending, ends that wake whatever its brief held: the lines never start
+    a turn twice by themselves, and wait for a turn a message starts. The
+    lines come before the messages, each with its action first: a check's
+    line names the action and the reason before the failed checks, and
+    unread messages are named in lines that the brief's line bound keeps
+    whole. A turn that ends on the provider's
     limit, fails, needs a login or is interrupted by a restart leaves it
     to the next turn. Later briefs say it was handed over and when, and
     ask nothing. A run the

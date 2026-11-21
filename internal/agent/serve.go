@@ -414,7 +414,7 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	if countable {
 		unacked = st.Unacked
 	}
-	brief, carried := l.brief(ctx, briefInput{status: status, attempt: attempt, trigger: trigger, pending: pending,
+	brief, carried, delivered := l.brief(ctx, briefInput{status: status, attempt: attempt, trigger: trigger, pending: pending,
 		continuation: continuation, handoff: doc, unacked: unacked, held: held, deliveries: deliveryLines})
 	// The running turn names the brief's messages before the brief is
 	// handed over, so a turn found running at a restart names them too.
@@ -430,8 +430,11 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		Settings: l.settingsFile(status.Session.Role), Conversation: rec.Conversation, Model: limits.Model,
 		BudgetUSD: limits.TurnBudgetUSD, Timeout: limits.TurnTimeout, Transcript: transcript})
 	closeTranscript()
-	if turnRan(res.Outcome, res.LimitKind, res.LoopStopping) {
-		toldDeliveries(st, handed, brief, l.Now())
+	// A turn that ran gave its brief's delivery lines; one that ran on the
+	// launcher's own wake (nothing pending) ends that wake whatever its
+	// brief held, so the lines never start a turn again by themselves.
+	if turnRan(res.Outcome, res.LimitKind, res.LoopStopping) && (delivered || len(pending) == 0 && !continuation) {
+		toldDeliveries(st, handed, l.Now())
 	}
 	rec.EndedAt = l.Now()
 	rec.DurationMS = rec.EndedAt.Sub(rec.StartedAt).Milliseconds()

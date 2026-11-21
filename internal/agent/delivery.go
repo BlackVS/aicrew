@@ -213,9 +213,7 @@ func (l *TurnLoop) deliveries(ctx context.Context, st *turnState, pending []Pend
 		handed = append(handed, "")
 	}
 	if len(st.DeliveryReleased) > 0 {
-		lines = append(lines, releasedMark+strings.Join(st.DeliveryReleased, ", ")+
-			" for its delivery checks. If one says that an accepted result's pull request was merged, escalate it "+
-			"with that message: the launcher did not start its check.")
+		lines = append(lines, releasedLines(st.DeliveryReleased)...)
 	}
 	var out []PendingMessage
 	for _, p := range pending {
@@ -231,30 +229,21 @@ func (l *TurnLoop) deliveries(ctx context.Context, st *turnState, pending []Pend
 	return out, held, lines, handed
 }
 
-// toldDeliveries records the handed answers, and the released messages'
-// line ("" in ids), that a turn's brief carried: only a finished turn's, and
-// only the lines the brief kept within its bound. Any other stays to be
-// given to the next turn.
-func toldDeliveries(st *turnState, ids []string, brief string, now time.Time) {
+// toldDeliveries records the handed answers, and the released messages' and
+// notes' lines ("" in ids), as given to a turn. The caller decides when: a
+// turn that ran with the lines in its brief, or one that ran on the
+// launcher's own wake whatever its brief held, so those lines never start
+// a turn twice.
+func toldDeliveries(st *turnState, ids []string, now time.Time) {
 	for _, id := range ids {
-		if c := st.Deliveries[id]; c != nil && strings.Contains(brief, handedMark(id)) {
+		if c := st.Deliveries[id]; c != nil {
 			c.ToldAt = now
 		}
-		if id != "" {
-			continue
+		if id == "" {
+			st.DeliveryReleased, st.DeliveryNotes = nil, nil
 		}
-		if strings.Contains(brief, releasedMark) {
-			st.DeliveryReleased = nil
-		}
-		st.DeliveryNotes = slices.DeleteFunc(st.DeliveryNotes, func(n string) bool {
-			return strings.Contains(brief, n[:min(len(n), 120)])
-		})
 	}
 }
-
-// otherPullMark begins the line on a merge notice of another pull request
-// than the accepted result's.
-const otherPullMark = "The pull request "
 
 // turnRan says whether a turn ran on its brief: finished, cut by its own
 // budget, or stopped by its time limit (as the count of unacknowledged
@@ -263,12 +252,6 @@ func turnRan(outcome, limitKind string, stopping bool) bool {
 	return outcome == TurnFinished || (outcome == TurnStopped && !stopping) ||
 		(outcome == TurnLimitReached && limitKind == "budget")
 }
-
-// releasedMark and handedMark begin the brief's lines that toldDeliveries
-// looks for.
-const releasedMark = "The launcher could not read message(s) "
-
-func handedMark(id string) string { return "The launcher's delivery check of attempt " + id + " (" }
 
 func nilIfEmpty[M ~map[K]V, K comparable, V any](m M) M {
 	if len(m) == 0 {
@@ -408,7 +391,7 @@ func (l *TurnLoop) classify(st *turnState, m inboxMessage, open *OpenAttempts, n
 				ref := a.LatestResult.Kind + " " + a.LatestResult.Ref
 				st.DeliveryNotes = append(st.DeliveryNotes, fmt.Sprintf("%s%s (%s) was merged, but attempt %s's "+
 					"accepted result is %s, not that pull request: the launcher starts no delivery check for it. If the "+
-					"merge is the result's delivery, escalate it.", otherPullMark, s.Pull.URL, m.ID, s.AttemptID, ref))
+					"merge is the result's delivery, escalate it.", "The pull request ", s.Pull.URL, m.ID, s.AttemptID, ref))
 			}
 			if s.Kind == deliverySubjectKind && slices.Contains(s.Needs, deliveryNeed) && s.Pull != nil &&
 				s.Pull.URL != "" && a == nil && openAttempt(open, s.AttemptID) && st.Deliveries[s.AttemptID] == nil {
@@ -744,17 +727,40 @@ func deliveryLine(id string, c *deliveryCheck) string {
 			"do not run it; the launcher confirms the delivery and acknowledges its messages.", id, c.Pull, c.Reads,
 			c.Since.UTC().Format(time.RFC3339))
 	}
+	// The action and the reason come first: the brief bounds each line, and
+	// a cut takes only the failed checks' tail.
 	var b strings.Builder
-	fmt.Fprintf(&b, "The launcher's delivery check of attempt %s (%s) is not confirmed (%s): %s.", id, c.Pull, c.Verdict,
-		c.Reason)
-	for _, f := range c.Failed {
-		b.WriteString(" Failed: " + f + ".")
-	}
+	fmt.Fprintf(&b, "The launcher's delivery check of attempt %s (%s) is not confirmed (%s). Escalate with this "+
+		"reason, and acknowledge the attempt's messages.", id, c.Pull, c.Verdict)
 	if !c.Done {
 		b.WriteString(" The launcher reads it again until a day has passed, and confirms it if it passes then.")
 	}
-	b.WriteString(" Escalate with this reason, and acknowledge the attempt's messages.")
+	b.WriteString(" Reason: " + c.Reason + ".")
+	for _, f := range c.Failed {
+		b.WriteString(" Failed: " + f + ".")
+	}
 	return b.String()
+}
+
+// releasedLines name the messages released to turns unread: the action
+// first, then the ids in lines the brief's line bound keeps whole.
+func releasedLines(ids []string) []string {
+	lines := []string{"The launcher could not read the message(s) below for its delivery checks. If one says that " +
+		"an accepted result's pull request was merged, escalate it with that message: the launcher did not start " +
+		"its check."}
+	const prefix = "Not read by the launcher: "
+	line := ""
+	for _, id := range ids {
+		if line != "" && len(prefix)+len(line)+2+len(id) > maxBriefText-16 {
+			lines = append(lines, prefix+line+".")
+			line = ""
+		}
+		if line != "" {
+			line += ", "
+		}
+		line += id
+	}
+	return append(lines, prefix+line+".")
 }
 
 // pullHost is a pull request URL's host.

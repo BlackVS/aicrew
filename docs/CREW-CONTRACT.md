@@ -1034,22 +1034,35 @@ reports for an upgraded aicrewd.
 ### A member's hold
 
 The launcher holds its member, giving it no turn, while the attempt's or
-the day's budget is spent, the provider's limit is reached, or the
+the day's budget is spent, the provider's limit is reached, the
 client's login is missing or expired (DESIGN-CONTROL-PLANE.md, 3.3 and
-3.4). It reports each such hold to aicrewd, which keeps the member's
-current hold (store schema 39, one row per member, and the holds it
-told), shows it in the team state and tells the team's coordinators.
+3.4), or turns in a row left the same messages unacknowledged
+(DEVELOPMENT.md, "Turns that leave their messages unacknowledged"). It
+reports each such hold to aicrewd, which keeps the member's current hold
+(store schema 40, one row per member, and the holds it told), shows it
+in the team state and tells the team's coordinators.
 - `POST /v1/crew/holds` with the member's session token and `{kind,
-  attempt_id, spent_usd, limit_usd, next_check, reset_at, command}`
-  records the hold. `kind` is one of:
+  attempt_id, spent_usd, limit_usd, next_check, reset_at, command,
+  messages, turns, summary, stuck_since}` records the hold. `kind` is one
+  of:
   - `attempt_budget`: `attempt_id` names the attempt, which must be one
     the member is the worker of (any other is answered `no_attempt`);
   - `daily_budget`;
   - `provider_limit`, with `reset_at` when the provider gave one;
   - `needs_login`, with `command`, how the client logs in again (at most
-    512 bytes).
+    512 bytes);
+  - `unacknowledged`, with `messages` (1 to 10 distinct message ids the
+    last turn was admitted with), `turns` (how many turns in a row left
+    them unacknowledged, 1 to 10000; the launcher sends the smaller of
+    its count and 10000), `summary` (the last turn's summary: the model's own text,
+    redacted by the launcher, at most 1024 bytes of UTF-8 on one line
+    with no control character, so it is safe in a coordinator's brief and
+    on the operator's terminal; it may be empty) and `stuck_since` (when
+    the count began). It names no attempt.
 
-  Only the budgets carry `spent_usd` and `limit_usd` (from 0 to 1000000).
+  Only the budgets carry `spent_usd` and `limit_usd` (from 0 to 1000000),
+  and only `unacknowledged` carries `messages`, `turns`, `summary` and
+  `stuck_since`; anything else is refused `invalid_request`.
   `next_check` is when the launcher looks again: the next UTC day for the
   daily budget, an hour later for an attempt's, the reset time or the
   backoff's end otherwise. A body of `{"kind": ""}` alone clears the hold.
@@ -1059,7 +1072,11 @@ told), shows it in the team state and tells the team's coordinators.
 - **Once per hold.** A hold's identity is its kind with the attempt for an
   attempt's budget, aicrewd's UTC date for the daily budget, and for the
   provider's limit or a missing login the attempt with the reset time, or
-  with the date when there is none. aicrewd keeps the identities it told
+  with the date when there is none. An unacknowledged hold's identity is
+  its `stuck_since`: from the count's start to its clear it is one hold,
+  so a set that grew or a further turn refreshes the row and tells no
+  one, and the hold's message cannot loop between a coordinator and the
+  held member. aicrewd keeps the identities it told
   per member: at most 100, none last reported more than 7 days ago, since
   an identity carries its attempt or its day. A report of a told identity
   refreshes the row (the amounts and the next check) and sends nothing,
@@ -1067,7 +1084,8 @@ told), shows it in the team state and tells the team's coordinators.
   probe turn that hits the provider's limit again. A new identity writes one
   lifecycle message to the team's active coordinators, the member itself
   aside, naming the member, the amount and the limit or the reset or the
-  command, and the next check. A coordinator's own hold is kept and tells
+  command, or the messages, the turns and the last summary, and the next
+  check. A coordinator's own hold is kept and tells
   no one.
 - **The event.** A spent budget, an attempt's or the day's, is also
   journaled as a `budget.spent` event about the member, with the member
@@ -1075,15 +1093,22 @@ told), shows it in the team state and tells the team's coordinators.
   release's subscription file may name it.
 - **The team state** (`GET /v1/admin/team-states`, `aicrew status`) shows
   a member's current hold as `hold: {kind, attempt_id, spent_usd,
-  limit_usd, next_check, reset_at, command, since}`; a cleared hold is
-  not shown.
+  limit_usd, next_check, reset_at, command, messages, turns, summary,
+  stuck_since, since}`; a cleared hold is not shown. The output is JSON,
+  so a summary reaches the terminal escaped.
 
 The launcher reports a hold when it changes, and clears it when it admits
-a turn again. A hold that is only the launcher's own, the backoff after a
+a turn again, but for an unacknowledged hold, which only the member's
+acknowledgement of a message the count began with, or a pause, clears. A
+message the count began with that leaves the pending read for another
+reason, such as a project grant withdrawn, clears it as an
+acknowledgement does. A hold that is only the launcher's own, the backoff after a
 failed turn or a check of the budgets whose totals aicrewd did not answer,
 is not reported. A report that does not reach aicrewd stays in the home's
 `state/turns.json` and is sent again at the next tick; one refused with
-`invalid_request` or `no_attempt` is dropped with a log line. An aicrewd
+`invalid_request` or `no_attempt` is dropped with a log line: an aicrewd
+older than the `unacknowledged` kind refuses it so, and the launcher
+still holds its member. An aicrewd
 older than the route answers `not_found`: the launcher says once that the
 coordinators are not told, and the hold stays its own.
 

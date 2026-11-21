@@ -612,12 +612,25 @@ It lists each member under `members`:
 - `unacknowledged` counts the messages in the member's inbox that it
   has not acknowledged yet, delivered or not. A member acknowledges a
   message once a turn has handled it, so the count says only that these
-  messages are not handled yet. It stays above zero for one of two
-  causes: a turn is still working on them (on 2026-11-20 a
-  coordinator's turns ran for twelve minutes on one message with the
-  count at one), or no turn runs. `state` tells them apart: `working` is
-  the first; `waiting` with the same count for several minutes, or a
-  `hold`, points to the second.
+  messages are not handled yet. While a turn works on them, `state` is
+  `working`. A turn can also end without acknowledging them, for
+  example when a step it needs is refused. Then the next turn on the
+  same messages waits 5 minutes, the one after 20, and after three such
+  turns the member is held: `state` shows `waiting`, and its `hold` has
+  `kind` `unacknowledged` with the `messages`, the number of `turns`,
+  the last turn's `summary` and the `next_check`. A held member gets one
+  turn a day on those messages, and one turn on a new message no sooner
+  than 20 minutes after its last. The team's coordinators get a message
+  about a worker's hold. The operator learns of a coordinator's hold
+  only from this command. The hold ends when the member acknowledges
+  one of the messages the count began with (a message that leaves the
+  inbox for another reason, such as a project grant withdrawn, counts
+  the same), or when the operator pauses the team and then
+  resumes it (below), after the hold has left the team's state. On
+  2026-11-20, before this hold existed, a coordinator's turns ended and
+  started again every few seconds on one message for twelve minutes, its
+  `state` alternating between `working` and `waiting` with the count at
+  one.
 - `open_attempt` is the attempt the member works on: its `phase` is
   `working`, `blocked` (the worker stopped and said why), `submitted`
   (the coordinator reviews it), `rework`, `accepted` or `finalized`. A

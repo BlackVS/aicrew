@@ -3,10 +3,15 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"slices"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/BlackVS/aicrew/internal/events"
 )
@@ -27,10 +32,22 @@ const (
 	HoldDailyBudget   = "daily_budget"
 	HoldProviderLimit = "provider_limit"
 	HoldNeedsLogin    = "needs_login"
+	// HoldUnacknowledged: turns in a row finished, or were cut by their
+	// own budget, and left the same messages unacknowledged.
+	HoldUnacknowledged = "unacknowledged"
 )
 
 // maxHoldCommand bounds a needs_login hold's command.
 const maxHoldCommand = 512
+
+// An unacknowledged hold's bounds: the message ids it names, its count of
+// turns, and the last turn's summary, model-written text kept on one line
+// with no control character.
+const (
+	MaxHoldMessages = 10
+	MaxHoldTurns    = 10000
+	MaxHoldSummary  = 1024
+)
 
 // The announced holds a member keeps: at most maxAnnounced, none last
 // reported more than announcedFor ago. A hold's identity carries its
@@ -69,16 +86,48 @@ var schemaV39 = []string{
 	)`,
 }
 
+// schemaV40 keeps an unacknowledged hold's messages (a JSON array), its
+// count of turns, the last turn's summary and when the count began.
+var schemaV40 = []string{
+	`ALTER TABLE member_holds ADD COLUMN messages TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE member_holds ADD COLUMN turns INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE member_holds ADD COLUMN summary TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE member_holds ADD COLUMN stuck_since TEXT NOT NULL DEFAULT ''`,
+}
+
 // HoldReport is a launcher's report of its member's hold; an empty Kind
-// clears it. The amounts are a budget's, the command a needs_login's.
+// clears it. The amounts are a budget's, the command a needs_login's, and
+// the messages, turns, summary and the count's start an unacknowledged
+// hold's.
 type HoldReport struct {
-	Kind      string    `json:"kind"`
-	AttemptID string    `json:"attempt_id,omitempty"`
-	SpentUSD  float64   `json:"spent_usd,omitempty"`
-	LimitUSD  float64   `json:"limit_usd,omitempty"`
-	NextCheck time.Time `json:"next_check,omitzero"`
-	ResetAt   time.Time `json:"reset_at,omitzero"`
-	Command   string    `json:"command,omitempty"`
+	Kind       string    `json:"kind"`
+	AttemptID  string    `json:"attempt_id,omitempty"`
+	SpentUSD   float64   `json:"spent_usd,omitempty"`
+	LimitUSD   float64   `json:"limit_usd,omitempty"`
+	NextCheck  time.Time `json:"next_check,omitzero"`
+	ResetAt    time.Time `json:"reset_at,omitzero"`
+	Command    string    `json:"command,omitempty"`
+	Messages   []string  `json:"messages,omitempty"`
+	Turns      int       `json:"turns,omitempty"`
+	Summary    string    `json:"summary,omitempty"`
+	StuckSince time.Time `json:"stuck_since,omitzero"`
+}
+
+// isClear reports whether r names nothing: the clear.
+func (r HoldReport) isClear() bool {
+	return r.Kind == "" && r.AttemptID == "" && r.SpentUSD == 0 && r.LimitUSD == 0 && r.NextCheck.IsZero() &&
+		r.ResetAt.IsZero() && r.Command == "" && len(r.Messages) == 0 && r.Turns == 0 && r.Summary == "" &&
+		r.StuckSince.IsZero()
+}
+
+// validSummary reports whether s is a summary an unacknowledged hold may
+// carry: valid UTF-8, at most MaxHoldSummary bytes, one line, no control
+// character (it reaches a coordinator's brief and the operator's terminal).
+func validSummary(s string) bool {
+	if !utf8.ValidString(s) || len(s) > MaxHoldSummary {
+		return false
+	}
+	return !strings.ContainsFunc(s, unicode.IsControl)
 }
 
 // MemberHold is a member's current hold: the report, and when this hold
@@ -98,15 +147,28 @@ type HoldResult struct {
 func (r HoldReport) validate() error {
 	budget := r.Kind == HoldAttemptBudget || r.Kind == HoldDailyBudget
 	amount := func(v float64) bool { return !math.IsNaN(v) && v >= 0 && v <= MaxTurnCostUSD*100 }
+	stuck := r.Kind == HoldUnacknowledged
 	switch {
 	case r.Kind == "":
-		if r != (HoldReport{}) {
+		if !r.isClear() {
 			return fmt.Errorf("%w: a clear names nothing but the empty kind", ErrInvalid)
 		}
 		return nil
-	case !budget && r.Kind != HoldProviderLimit && r.Kind != HoldNeedsLogin:
-		return fmt.Errorf("%w: the hold's kind is one of %s, %s, %s or %s", ErrInvalid, HoldAttemptBudget, HoldDailyBudget,
-			HoldProviderLimit, HoldNeedsLogin)
+	case !budget && !stuck && r.Kind != HoldProviderLimit && r.Kind != HoldNeedsLogin:
+		return fmt.Errorf("%w: the hold's kind is one of %s, %s, %s, %s or %s", ErrInvalid, HoldAttemptBudget,
+			HoldDailyBudget, HoldProviderLimit, HoldNeedsLogin, HoldUnacknowledged)
+	case !stuck && (len(r.Messages) > 0 || r.Turns != 0 || r.Summary != "" || !r.StuckSince.IsZero()):
+		return fmt.Errorf("%w: only an unacknowledged hold has messages, turns, a summary and a start", ErrInvalid)
+	case stuck && (len(r.Messages) == 0 || len(r.Messages) > MaxHoldMessages || !validRefs(r.Messages...) ||
+		len(slices.Compact(slices.Sorted(slices.Values(r.Messages)))) != len(r.Messages)):
+		return fmt.Errorf("%w: an unacknowledged hold names 1 to %d distinct messages", ErrInvalid, MaxHoldMessages)
+	case stuck && (r.Turns < 1 || r.Turns > MaxHoldTurns):
+		return fmt.Errorf("%w: an unacknowledged hold's turns are from 1 to %d", ErrInvalid, MaxHoldTurns)
+	case stuck && !validSummary(r.Summary):
+		return fmt.Errorf("%w: an unacknowledged hold's summary is one line of UTF-8 text with no control character, "+
+			"at most %d bytes", ErrInvalid, MaxHoldSummary)
+	case stuck && (r.StuckSince.IsZero() || r.AttemptID != ""):
+		return fmt.Errorf("%w: an unacknowledged hold names when its count began, and no attempt", ErrInvalid)
 	case len(r.AttemptID) > maxRefLen || (r.AttemptID != "" && !validRefs(r.AttemptID)):
 		return fmt.Errorf("%w: the hold's attempt", ErrInvalid)
 	case r.Kind == HoldAttemptBudget && r.AttemptID == "":
@@ -138,6 +200,10 @@ func holdIdentity(r HoldReport, now time.Time) string {
 		return r.Kind + "/" + r.AttemptID
 	case HoldDailyBudget:
 		return r.Kind + "/" + dayKey(now)
+	case HoldUnacknowledged:
+		// One hold from the count's start to its clear: a set that grew
+		// refreshes the row and is not told again.
+		return r.Kind + "/" + formatTime(r.StuckSince)
 	case HoldProviderLimit:
 		if !r.ResetAt.IsZero() {
 			return r.Kind + "/" + r.AttemptID + "/" + formatTime(r.ResetAt)
@@ -163,6 +229,14 @@ func (s *Store) ReportHoldWithToken(ctx context.Context, token string, r HoldRep
 	b, err := tokenBinding(ctx, tx, token, now)
 	if err != nil {
 		return HoldResult{}, err
+	}
+	messages := ""
+	if len(r.Messages) > 0 {
+		raw, err := json.Marshal(r.Messages)
+		if err != nil {
+			return HoldResult{}, err
+		}
+		messages = string(raw)
 	}
 	if r.Kind == "" {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM member_holds WHERE team_id = ? AND agent_id = ?`,
@@ -198,14 +272,16 @@ func (s *Store) ReportHoldWithToken(ctx context.Context, token string, r HoldRep
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO member_holds (team_id, agent_id, kind, attempt_id, spent_usd, limit_usd, next_check, reset_at, command,
-		   identity, since, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   messages, turns, summary, stuck_since, identity, since, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (team_id, agent_id) DO UPDATE SET kind = excluded.kind, attempt_id = excluded.attempt_id,
 		   spent_usd = excluded.spent_usd, limit_usd = excluded.limit_usd, next_check = excluded.next_check,
-		   reset_at = excluded.reset_at, command = excluded.command, identity = excluded.identity,
-		   since = excluded.since, updated_at = excluded.updated_at`,
+		   reset_at = excluded.reset_at, command = excluded.command, messages = excluded.messages,
+		   turns = excluded.turns, summary = excluded.summary, stuck_since = excluded.stuck_since,
+		   identity = excluded.identity, since = excluded.since, updated_at = excluded.updated_at`,
 		b.TeamID, b.AgentID, r.Kind, r.AttemptID, r.SpentUSD, r.LimitUSD, formatTime(r.NextCheck), optionalTime(r.ResetAt),
-		r.Command, ident, formatTime(start), formatTime(now)); err != nil {
+		r.Command, messages, r.Turns, r.Summary, optionalTime(r.StuckSince), ident, formatTime(start),
+		formatTime(now)); err != nil {
 		return HoldResult{}, fmt.Errorf("record the hold: %w", err)
 	}
 	out := HoldResult{Hold: &MemberHold{HoldReport: r, Since: start}, Announced: announce}
@@ -307,6 +383,16 @@ func holdText(label, agentID string, r HoldReport) string {
 		return fmt.Sprintf("Member %s is held: the provider's limit is reached, with no reset time given. "+
 			"Its launcher tries a turn again at %s.", who, next)
 	}
+	if r.Kind == HoldUnacknowledged {
+		last := "no summary"
+		if r.Summary != "" {
+			last = "this summary: " + r.Summary
+		}
+		return fmt.Sprintf("Member %s is held: %d turns in a row ended and left message(s) %s unacknowledged; the last "+
+			"one ended with %s. Its launcher gives it one turn again at %s, or sooner when a new message reaches it, "+
+			"once its longest wait (20 minutes by default) has passed since the last turn. The hold ends when the member acknowledges one of the messages it was first held on, or when the operator "+
+			"pauses and then resumes it.", who, r.Turns, strings.Join(r.Messages, ", "), last, next)
+	}
 	return fmt.Sprintf("Member %s is held: the client's provider login is missing or expired. To log in: %s. "+
 		"Its launcher tries a turn again at %s.", who, r.Command, next)
 }
@@ -314,11 +400,13 @@ func holdText(label, agentID string, r HoldReport) string {
 // memberHold reads a member's current hold, nil when it has none.
 func memberHold(ctx context.Context, q querier, teamID, agentID string) (*MemberHold, error) {
 	var h MemberHold
-	var next, reset, since string
+	var next, reset, since, messages, stuckSince string
 	err := q.QueryRowContext(ctx,
-		`SELECT kind, attempt_id, spent_usd, limit_usd, next_check, reset_at, command, since FROM member_holds
+		`SELECT kind, attempt_id, spent_usd, limit_usd, next_check, reset_at, command, messages, turns, summary,
+		   stuck_since, since FROM member_holds
 		 WHERE team_id = ? AND agent_id = ?`, teamID, agentID).
-		Scan(&h.Kind, &h.AttemptID, &h.SpentUSD, &h.LimitUSD, &next, &reset, &h.Command, &since)
+		Scan(&h.Kind, &h.AttemptID, &h.SpentUSD, &h.LimitUSD, &next, &reset, &h.Command, &messages, &h.Turns,
+			&h.Summary, &stuckSince, &since)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -334,6 +422,16 @@ func memberHold(ctx context.Context, q querier, teamID, agentID string) (*Member
 	if reset != "" {
 		if h.ResetAt, err = parseTime(reset); err != nil {
 			return nil, fmt.Errorf("read the hold's reset time: %w", err)
+		}
+	}
+	if messages != "" {
+		if err := json.Unmarshal([]byte(messages), &h.Messages); err != nil {
+			return nil, fmt.Errorf("read the hold's messages: %w", err)
+		}
+	}
+	if stuckSince != "" {
+		if h.StuckSince, err = parseTime(stuckSince); err != nil {
+			return nil, fmt.Errorf("read the hold's count start: %w", err)
 		}
 	}
 	return &h, nil

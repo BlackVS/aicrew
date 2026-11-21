@@ -183,14 +183,39 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	st := readTurnState(l.Home)
 	l.syncHold(ctx, &st)
 	if now.Before(st.HoldUntil) {
+		// A pause during a backoff still clears the count: a resume
+		// leaves no trace to read later.
+		// So does a read that no longer lists a message the count
+		// began with. The backoff stands either way.
+		if st.Unacked != nil {
+			if pending, paused, err := l.Host.PendingNow(ctx); err == nil {
+				if paused != nil {
+					l.clearUnacked(&st, "the member or its team was paused")
+				} else {
+					l.noteGone(&st, pending)
+				}
+				l.syncHold(ctx, &st)
+			}
+		}
 		return
 	}
 	pending, paused, err := l.Host.PendingNow(ctx)
-	if err != nil || paused != nil {
+	if err != nil {
 		return
 	}
+	if paused != nil {
+		l.clearUnacked(&st, "the member or its team was paused")
+		l.syncHold(ctx, &st)
+		return
+	}
+	l.noteGone(&st, pending)
 	status, err := l.Host.Status(ctx)
-	if err != nil || status.Paused != nil {
+	if err != nil {
+		return
+	}
+	if status.Paused != nil {
+		l.clearUnacked(&st, "the member or its team was paused")
+		l.syncHold(ctx, &st)
 		return
 	}
 	attempt := status.Attempt
@@ -222,6 +247,12 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 	if now.Sub(l.lastStart) < turnGap {
 		return
 	}
+	// A turn whose only cause is messages earlier turns left
+	// unacknowledged waits, and a held member gets one a day or one per
+	// new message (unacked.go).
+	if unackedCountable(st, pending, continuation, attempt) && now.Before(unackedDue(st, pending, limits.UnackedWait)) {
+		return
+	}
 	day := dayOf(now)
 	l.reportTurns(ctx, &st)
 	if !l.pullTotals(ctx, &st, day, attempt, knownAttempt) {
@@ -242,8 +273,9 @@ func (l *TurnLoop) Tick(ctx context.Context) {
 		l.syncHold(ctx, &st)
 		return
 	}
-	// The admitted turn ends the hold aicrewd shows.
-	setHold(&st, nil)
+	// The admitted turn ends the hold aicrewd shows, but for the count's,
+	// which only an acknowledgement or a pause ends.
+	setHold(&st, unackedHold(st))
 	l.syncHold(ctx, &st)
 	l.lastStart = now
 	l.turn(ctx, &st, status, attempt, trigger, pending, continuation, limits)
@@ -353,8 +385,13 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	if doc != nil {
 		sectionBefore = sectionHash(*doc)
 	}
+	countable := unackedCountable(*st, pending, continuation, attempt)
+	var unacked *unackedState
+	if countable {
+		unacked = st.Unacked
+	}
 	brief, carried := l.brief(ctx, briefInput{status: status, attempt: attempt, trigger: trigger, pending: pending,
-		continuation: continuation, handoff: doc})
+		continuation: continuation, handoff: doc, unacked: unacked})
 	// The running turn names the brief's messages before the brief is
 	// handed over, so a turn found running at a restart names them too.
 	if rec.BriefMessages = carried; len(carried) > 0 {
@@ -409,7 +446,23 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	l.queueReport(st, rec)
 	l.reportTurns(ctx, st)
 	l.afterOutcome(st, res)
-	setHold(st, outcomeHold(*st, res, attemptID))
+	// A turn that left its member an attempt in work was not one on the
+	// messages alone.
+	// A pending read that fails counts the turn as one that acknowledged
+	// nothing; the next read that succeeds clears the count if a stuck
+	// message is gone.
+	if countable && !(afterErr == nil && boundedAttempt(*st, after.Attempt)) {
+		again, paused, err := l.Host.PendingNow(ctx)
+		switch {
+		case err != nil:
+			l.countUnacked(st, rec, pending, nil, false, res.LoopStopping)
+		case paused != nil:
+			l.clearUnacked(st, "the member or its team was paused")
+		default:
+			l.countUnacked(st, rec, pending, again, true, res.LoopStopping)
+		}
+	}
+	setHold(st, firstHold(outcomeHold(*st, res, attemptID), unackedHold(*st)))
 	l.syncHold(ctx, st)
 	if a != nil {
 		if !continuation {

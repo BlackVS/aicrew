@@ -34,6 +34,9 @@ type TurnLimits struct {
 	// Model is passed to the client with --model; empty is the client's
 	// default.
 	Model string
+	// UnackedWait is the wait after a turn that left the member's messages
+	// unacknowledged; the next is four times it (unacked.go).
+	UnackedWait time.Duration
 }
 
 // The design's defaults (3.1) and fixed rules (1.3, 1.7, 1.8).
@@ -69,7 +72,7 @@ func ReadTurnLimits(home string) TurnLimits {
 func (d agentDoc) turnLimits() TurnLimits {
 	l := TurnLimits{TurnTimeout: defaultTurnTimeout, TurnBudgetUSD: defaultTurnBudgetUSD,
 		AttemptBudgetUSD: defaultAttemptBudgetUSD, DailyBudgetUSD: defaultDailyBudgetUSD,
-		MaxContinuations: defaultMaxContinuations}
+		MaxContinuations: defaultMaxContinuations, UnackedWait: defaultUnackedWait}
 	var t struct {
 		TurnTimeout      string   `json:"turn_timeout"`
 		TurnBudgetUSD    *float64 `json:"turn_budget_usd"`
@@ -77,6 +80,7 @@ func (d agentDoc) turnLimits() TurnLimits {
 		DailyBudgetUSD   *float64 `json:"daily_budget_usd"`
 		MaxContinuations *int     `json:"max_continuations"`
 		Model            string   `json:"model"`
+		UnackedWait      string   `json:"unacked_wait"`
 	}
 	raw, ok := d.top["turns"]
 	if !ok || json.Unmarshal(raw, &t) != nil {
@@ -84,6 +88,9 @@ func (d agentDoc) turnLimits() TurnLimits {
 	}
 	if d, err := time.ParseDuration(t.TurnTimeout); err == nil && d >= time.Minute && d <= 6*time.Hour {
 		l.TurnTimeout = d
+	}
+	if d, err := time.ParseDuration(t.UnackedWait); err == nil && d >= 10*time.Second && d <= time.Hour {
+		l.UnackedWait = d
 	}
 	for _, f := range []struct {
 		in  *float64
@@ -153,6 +160,9 @@ type turnState struct {
 	// Handoff is the attempt whose CURRENT ATTEMPT section the launcher
 	// last kept in docs/HANDOFF.md (handoff.go).
 	Handoff string `json:"handoff_attempt,omitempty"`
+	// Unacked is the count of turns that left the member's messages
+	// unacknowledged (unacked.go).
+	Unacked *unackedState `json:"unacked,omitempty"`
 }
 
 func turnStatePath(home string) string { return filepath.Join(home, filepath.FromSlash(TurnStateFile)) }

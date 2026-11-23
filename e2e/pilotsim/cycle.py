@@ -318,13 +318,22 @@ LAUNCHER_SUBMITS = "the launcher submits it, since gates-green is in the set"
 def launcher_submits(d, case):
     """Whether the launcher, not the worker, submits the attempt, from the
     run's facts, and "" or why that is not known: the worker's check report
-    in the snapshot (its aicrew-agent build against PILOTSIM_BUILD_COMMIT,
-    and gates-green in its effective set and not disabled, as the stand-in
-    reads it) and the case (F1 submits itself)."""
-    rep = loadj(d, "homes/worker/check.json", None)
+    of the attempt's own time (its aicrew-agent build against
+    PILOTSIM_BUILD_COMMIT, and gates-green in its effective set and not
+    disabled, as the stand-in reads it) and the case (F1 submits itself)."""
+    # The report of the attempt's own time: the cycle's submit snapshot
+    # beside d, where the cycle took one (a re-check after an upgrade reads
+    # the first cycle's attempt, which ran on the earlier release), else d's.
+    src = os.path.join(os.path.dirname(os.path.abspath(d)), "submit")
+    if not os.path.isfile(os.path.join(src, "homes", "worker", "check.json")):
+        src = d
+    try:
+        rep = loadj(src, "homes/worker/check.json", None)
+    except ValueError:
+        rep = None
     build = os.environ.get("PILOTSIM_BUILD_COMMIT", "")
     if not isinstance(rep, dict) or not isinstance(rep.get("aicrew_agent"), dict):
-        return False, "no readable check report of the worker in the snapshot"
+        return False, "no readable check report of the worker in %s" % src
     if not build:
         return False, "PILOTSIM_BUILD_COMMIT is not set"
     if case == "F1" or rep["aicrew_agent"].get("commit") != build:

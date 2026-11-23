@@ -5,12 +5,24 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/BlackVS/aicrew/internal/forge"
 	"github.com/BlackVS/aicrew/internal/forge/fakeforge"
+)
+
+// The skill set's two readers of a review's verdict, copied from its
+// sources: a copy does not follow a change there by itself.
+var (
+	// deliveryReady is verify-delivery's DEFAULT_VERDICT
+	// (skills/verify-delivery/verify_delivery.py): the delivery check's READY.
+	deliveryReady = regexp.MustCompile(`(?m)^[ \t]*VERDICT[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*READY_FOR_HUMAN_MERGE\b`)
+	// gatesVerdict is forge-gates' VERDICT_WORD
+	// (skills/forge-gates/scripts/forge_gates.py): the verdict its gates read.
+	gatesVerdict = regexp.MustCompile(`(?m)^[ \t]*VERDICT[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*([A-Z_]+)`)
 )
 
 // pr279Review is the review the first team's worker posted on pull request
@@ -182,14 +194,32 @@ func TestReviewPostsTheCountedHeader(t *testing.T) {
 		t.Fatalf("a quoted verdict: %v %+v", err, content)
 	}
 
+	// A quoted READY after the review's own RETURN: every reader takes the
+	// RETURN.
+	returnBody := strings.Replace(body, "\nREADY_FOR_HUMAN_MERGE\n", "\nRETURN_TO_IMPLEMENTATION\n", 1)
+	quotedReady := returnBody + "\nThe layout:\n\n> VERDICT\n> READY_FOR_HUMAN_MERGE\n"
+	if _, err := pr.Review(ctx, 1, quotedReady, ""); err != nil {
+		t.Fatal(err)
+	}
+	posted := f.Pull(1).Comments[2]
+	if h, _, _ := forge.ReadReview(posted, fakeforge.HeadCommit); h == nil || h.Verdict != "RETURN_TO_IMPLEMENTATION" {
+		t.Errorf("the product's reader takes %+v", h)
+	}
+	if deliveryReady.MatchString(posted) {
+		t.Error("the delivery check reads the quoted READY")
+	}
+	if m := gatesVerdict.FindStringSubmatch(posted); m == nil || m[1] != "RETURN_TO_IMPLEMENTATION" {
+		t.Errorf("the skill set's gates read %q", m)
+	}
+
 	// --head names the commit read without a checkout; the level follows
 	// the attribution.
 	maxBody := strings.Replace(body, "(high)", "(max)", 1)
 	if _, err := pr.Review(ctx, 1, maxBody, strings.ToUpper(fakeforge.HeadCommit)); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.Pull(1).Comments; len(got) != 3 ||
-		!strings.HasPrefix(got[2], "[oh-code-review (max) review] reviewed at head "+fakeforge.HeadCommit+"\n\n") {
+	if got := f.Pull(1).Comments; len(got) != 4 ||
+		!strings.HasPrefix(got[3], "[oh-code-review (max) review] reviewed at head "+fakeforge.HeadCommit+"\n\n") {
 		t.Fatalf("with --head: %q", got)
 	}
 }
@@ -250,8 +280,14 @@ func TestReviewRefuses(t *testing.T) {
 			`as "OBSERVATIONS", from the line "Verdict reasoning is below."`},
 		"READY named above its own RETURN": {"Verdict: READY_FOR_HUMAN_MERGE was my first read.\n\n" + returnBody,
 			`as "READY_FOR_HUMAN_MERGE"`},
+		// The skill set's readers take a line VERDICT anywhere, code
+		// included: a second one is refused, before or after the own.
 		"a verdict shown as code": {"The form:\n\n```\nVERDICT\nREADY_FOR_HUMAN_MERGE\n```\n\n" + returnBody,
-			`as "READY_FOR_HUMAN_MERGE", from the line "VERDICT", not as RETURN_TO_IMPLEMENTATION`},
+			"2 lines VERDICT, code blocks included"},
+		"READY shown as code after its own RETURN": {returnBody + "\nThe form:\n\n```\nVERDICT\nREADY_FOR_HUMAN_MERGE\n```\n",
+			"put each of its lines after `> `"},
+		"READY indented after its own RETURN": {returnBody + "\nThe form:\n\n    VERDICT\n    READY_FOR_HUMAN_MERGE\n",
+			"2 lines VERDICT, code blocks included"},
 		"a verdict heading shown as code": {"```\n## VERDICT\nREADY_FOR_HUMAN_MERGE\n```\n\n" + returnBody,
 			`as "READY_FOR_HUMAN_MERGE", from the line "## VERDICT", not as RETURN_TO_IMPLEMENTATION`},
 		// Within the bound alone, past it once the header is written.

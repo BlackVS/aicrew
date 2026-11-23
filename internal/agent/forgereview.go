@@ -144,10 +144,13 @@ var errReviewByComment = errors.New("the comment is a review (a review header, o
 // reviewLevel checks a review body as `forge pr review` posts it and
 // returns its level, read from the attribution line, and its verdict, the
 // word on the line after its VERDICT line: the body must not begin with a
-// header of its own, must carry exactly one line VERDICT outside quotes and
-// code blocks with a verdict word alone on the next non-blank line, one
-// attribution line at level high, max or ultra, and no session link.
-// Whether the gates read that verdict is Review's check (readAs).
+// header of its own, must carry exactly one line VERDICT, code blocks and
+// indented lines included, with a verdict word alone on the next non-blank
+// line, one attribution line at level high, max or ultra, and no session
+// link. The skill set's readers (the delivery check and its gates) take a
+// line VERDICT anywhere in a comment, code included, and no quoted line
+// ("> VERDICT"), so with one such line each finds the verdict in that one
+// place. Whether the product's reader reads it is Review's check (readAs).
 func reviewLevel(body string) (level, verdict string, err error) {
 	if first, ok := nextLine(strings.Split(body, "\n")); !ok {
 		return "", "", errors.New("the review is empty")
@@ -155,24 +158,24 @@ func reviewLevel(body string) (level, verdict string, err error) {
 		return "", "", errors.New("the review file begins with a header of its own: remove that line, the command " +
 			"writes the header (" + ReviewHeaderForm + ")")
 	}
-	lines := ownLines(body)
-	verdicts := 0
+	lines := strings.Split(body, "\n")
+	var at []int
 	for i, l := range lines {
-		if strings.TrimSpace(l) != "VERDICT" {
-			continue
+		if strings.TrimSpace(l) == "VERDICT" {
+			at = append(at, i)
 		}
-		verdicts++
-		next, ok := nextLine(lines[i+1:])
-		if !ok || !verdictValue.MatchString(next) || strings.TrimSpace(next) != strings.Trim(strings.TrimSpace(next), "*_") {
-			return "", "", errors.New("the line after VERDICT must hold only READY_FOR_HUMAN_MERGE, " +
-				"RETURN_TO_IMPLEMENTATION or REVIEW_COULD_NOT_RUN")
-		}
-		verdict = strings.TrimSpace(next)
 	}
-	if verdicts != 1 {
-		return "", "", fmt.Errorf("the review has %d lines VERDICT: it needs exactly one, alone on its line, with the "+
-			"verdict alone on the next line", verdicts)
+	if len(at) != 1 {
+		return "", "", fmt.Errorf("the review has %d lines VERDICT, code blocks included: it needs exactly one, alone "+
+			"on its line, with the verdict alone on the next line; to show that layout in a review, put each of its "+
+			"lines after `> `", len(at))
 	}
+	next, ok := nextLine(lines[at[0]+1:])
+	if !ok || !verdictValue.MatchString(next) || strings.TrimSpace(next) != strings.Trim(strings.TrimSpace(next), "*_") {
+		return "", "", errors.New("the line after VERDICT must hold only READY_FOR_HUMAN_MERGE, " +
+			"RETURN_TO_IMPLEMENTATION or REVIEW_COULD_NOT_RUN")
+	}
+	verdict = strings.TrimSpace(next)
 	ms := attribution.FindAllStringSubmatch(body, -1)
 	if len(ms) != 1 {
 		return "", "", errors.New("the review needs exactly one attribution line `Review: oh-code-review (high) via CLIENT`")

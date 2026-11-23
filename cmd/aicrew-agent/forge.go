@@ -38,7 +38,8 @@ const forgeUsage = `usage: aicrew-agent forge pr open    [--home DIR] [--reposit
   file's line "Review: oh-code-review (LEVEL) via CLIENT" (high, max or
   ultra). The file must not begin with a header of its own and needs one
   line VERDICT with READY_FOR_HUMAN_MERGE, RETURN_TO_IMPLEMENTATION or
-  REVIEW_COULD_NOT_RUN alone on the next line; it is refused when the gates
+  REVIEW_COULD_NOT_RUN alone on the next line, counted in code blocks too
+  (show that layout as an example after "> "); it is refused when the gates
   would read another verdict from an earlier line starting with "verdict"
   (quote another's with "> "), or the verdict past a comment's first 32
   KiB, which is all they read. The head is the commit you

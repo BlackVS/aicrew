@@ -1316,6 +1316,18 @@ so a launcher and an aicrewd of different releases get today's refusal,
 and a home upgraded while its attempt was submitted has no record and
 gets the refusal with "no record". Nothing removes the records: the
 directory keeps one small file per attempt submitted through the home.
+
+**The worker's wait on the launcher's submit** (the same task). A worker
+that follows its guidance posts its review and leaves the submit to
+`gates-green`. The turn loop counts that as a wait on the gates, costing
+no turn and no stall (DESIGN-CONTROL-PLANE 1.8), while the launcher's last
+observation meets `pullPoints.gatesGreen`, the condition the point fires
+on, and names `gates-green` among its automations, for at most
+`3 × forgePoll` from the first observation at which it held for the head
+(`green_head`, `green_since` in the points state). The runner reads the
+watched pull requests at the tick after each worker turn that leaves the
+attempt in work, before it decides on a continuation: one status read per
+watched pull request, and its content only when the status changed.
 The event a script gets at a point names the point as its kind and the
 pull request with its head as its ID, and carries `base_only`: at
 `after-push`, whether the new head's patch identity (`git diff

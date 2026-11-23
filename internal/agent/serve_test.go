@@ -45,6 +45,11 @@ type fakeHost struct {
 	tasks      map[string]TaskDoc
 	taskReads  int
 	observed   []PullObservation
+	// greenHead is the head at which GatesGreenWait answers that the
+	// worker waits on the launcher's gates-green, "" for none; onPoll is
+	// what a read of the watched pull requests changes.
+	greenHead string
+	onPoll    func(h *fakeHost)
 	// The attempts' handoffs as aicrewd keeps them, the pushes made, and
 	// the refusal a push gets.
 	handoffs map[string]string
@@ -219,7 +224,21 @@ func (h *fakeHost) Do(_ context.Context, call StepCall) StepAnswer {
 	return StepAnswer{OK: true, Status: StepDone}
 }
 
-func (h *fakeHost) PollPulls(context.Context) { h.mu.Lock(); h.polls++; h.mu.Unlock() }
+func (h *fakeHost) PollPulls(context.Context) {
+	h.mu.Lock()
+	h.polls++
+	onPoll := h.onPoll
+	h.mu.Unlock()
+	if onPoll != nil {
+		onPoll(h)
+	}
+}
+
+func (h *fakeHost) GatesGreenWait(_, head string, _ time.Time) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.greenHead != "" && h.greenHead == head
+}
 
 // loopEnv is a turn loop over a fake host, a fake client and a fake clock.
 type loopEnv struct {

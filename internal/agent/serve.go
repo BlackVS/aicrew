@@ -106,6 +106,9 @@ type turnHost interface {
 	Inbox(ctx context.Context, limit int) ([]inboxMessage, error)
 	ReadTask(ctx context.Context, taskID string) (TaskDoc, error)
 	Observed() []PullObservation
+	// GatesGreenWait says whether the worker's attempt at head waits on
+	// the launcher's own gates-green submit (dispatch.go).
+	GatesGreenWait(attemptID, head string, now time.Time) bool
 	// PushHandoff replaces the attempt's handoff on aicrewd with doc, and
 	// ReadHandoff reads it, "" when it has none: the session doc's sync
 	// (handoff.go).
@@ -539,6 +542,12 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 			}
 		}
 	}
+	// A worker's turn may have moved its pull request, its review posted:
+	// the next Tick reads the watched pull requests before it decides on a
+	// continuation, so the wait on the gates sees what the turn did.
+	if worker && st.Continue != "" {
+		l.nextPoll = time.Time{}
+	}
 	if err := writeTurnState(l.Home, *st); err != nil {
 		l.Log.Warn("record the turn state", "error", err.Error())
 	}
@@ -620,7 +629,9 @@ func openTranscript(home, turnID string) (io.Writer, func()) {
 // clean, and a watched pull request, as last observed, is open at its head
 // (all the work is committed and pushed); no external review at the head
 // blocks it and no check failed; and the external review is requested or
-// in progress, or the checks are pending.
+// in progress, or the checks are pending. It also waits while both reviews
+// are READY at the head with CI green and the launcher's gates-green is to
+// submit, within that wait's bound (GatesGreenWait).
 func (l *TurnLoop) waitingOnGates(ctx context.Context, attempt *memberAttempt) bool {
 	observed := l.Host.Observed()
 	if len(observed) == 0 {
@@ -629,6 +640,11 @@ func (l *TurnLoop) waitingOnGates(ctx context.Context, attempt *memberAttempt) b
 	head := l.head(ctx, attempt.ID)
 	if head == "" || l.Clean == nil || !l.Clean(ctx, filepath.Join(l.Home, "worktrees", attempt.ID)) {
 		return false
+	}
+	// Both reviews READY at the head and CI green, with gates-green in
+	// the set: the launcher submits, within its bound (01a206f8-24d0).
+	if l.Host.GatesGreenWait(attempt.ID, head, l.Now()) {
+		return true
 	}
 	for _, o := range observed {
 		if o.State != forge.PullOpen || o.HeadCommit != head || o.Checks == forge.ChecksFailure ||

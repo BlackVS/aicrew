@@ -3303,11 +3303,19 @@ credential.
     line `VERDICT` with `READY_FOR_HUMAN_MERGE`, `RETURN_TO_IMPLEMENTATION`
     or `REVIEW_COULD_NOT_RUN` alone on the next non-blank line, and exactly
     one attribution line at level high, max or ultra. The header takes that
-    level. A link into an agent's session or conversation is refused.
-  - In the review itself, a code block counts: a second `VERDICT` line, or
-    a `VERDICT: WORD` label, inside one is refused, because the gates take
-    the first verdict line they find, also in a code block. A quoted line
-    (`> `) is no verdict line to them, so a review may quote another's.
+    level. A link into an agent's session or conversation is refused: on
+    an agent client's own host, or a path holding `/conversations/ID` on
+    any host.
+  - Before it posts, the command reads the exact text it would post with
+    the product's reader, `forge.ReadReview`, which is how the pull
+    request's content is read for the launcher too: the text cleaned, its
+    first 32 KiB, the header, and the first line starting with "verdict" in
+    any case, inside a code block too. It posts only when that reader finds
+    a local review at the attribution's level, at the head, with the word
+    on the review's `VERDICT` line. Otherwise it refuses, naming the line
+    the reader took, or saying that the verdict lies past the first 32 KiB.
+    A quoted line (`> `) is not read as a verdict, so a review may quote
+    another's.
   - The head is the commit the review read: the worktree's `HEAD`, or
     `--head SHA` (a full commit id), which `--repository` requires, since
     then no worktree names it. The command refuses when the pull request's
@@ -3321,7 +3329,9 @@ credential.
     the next non-blank line or after `VERDICT:`. The refusal names
     `review`, and says to quote another's review line by line after `> `.
     A quoted line and a code block count for neither rule, so a comment
-    may quote the external review's verdict. An ordinary comment and a
+    may quote the external review's verdict. A code block is a fenced one,
+    which closes only on its opening's character at least as long, or a
+    line indented four spaces or a tab. An ordinary comment and a
     base-only delta note pass.
   - Both post one new comment, or nothing, on the pull request named, in
     the repository of the worktree's `origin` or `--repository`, with the

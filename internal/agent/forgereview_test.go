@@ -102,7 +102,12 @@ func TestCommentRefusesAReview(t *testing.T) {
 	}
 	posted := []string{"Rebased on main; the tests pass again.\n",
 		"Base-only update: old head 1111111, new head 2222222, patch identities aaaa1111 and aaaa1111.\n",
-		"The external review:\n\n> VERDICT\n> READY_FOR_HUMAN_MERGE\n"}
+		"The external review:\n\n> VERDICT\n> READY_FOR_HUMAN_MERGE\n",
+		// A fence closes only on its own character, at least as long: the
+		// inner three backticks are code inside the four.
+		"How to write it:\n\n````markdown\n```\nVERDICT\nREADY_FOR_HUMAN_MERGE\n````\n",
+		// An indented code line is no header.
+		"    [oh-code-review (high) review] reviewed at head " + fakeforge.HeadCommit + "\n\nis the form the gates read.\n"}
 	for _, body := range posted {
 		if _, err := pr.Comment(ctx, 1, body); err != nil {
 			t.Errorf("comment %q: %v", body, err)
@@ -161,12 +166,30 @@ func TestReviewPostsTheCountedHeader(t *testing.T) {
 	}
 }
 
+// pastTheBound is #279's review without its header, padded so that its
+// VERDICT line lies within the first forge.MaxCommentBody bytes of the file
+// but past them once the header and its blank line are written before it.
+func pastTheBound(t *testing.T) string {
+	body := withoutFirstLine(pr279Review(t))
+	header := "[oh-code-review (high) review] reviewed at head " + fakeforge.HeadCommit + "\n\n"
+	at := strings.Index(body, "VERDICT\n")
+	pad := forge.MaxCommentBody - len(header) - at - 3 // the cut falls inside "VERDICT"
+	fill := strings.Repeat(strings.Repeat("x", 79)+"\n", pad/80+1)[:pad-1] + "\n"
+	out := fill + body
+	if i := strings.Index(out, "VERDICT\nREADY_FOR_HUMAN_MERGE"); i+len("VERDICT\nREADY_FOR_HUMAN_MERGE") > forge.MaxCommentBody ||
+		len(header)+i+len("VERDICT") <= forge.MaxCommentBody {
+		t.Fatalf("the padding misses the bound: the verdict at %d", i)
+	}
+	return out
+}
+
 // review refuses a head that is not the forge's, naming both, and a body
 // that is not a review as the gates read it; nothing reaches the forge.
 func TestReviewRefuses(t *testing.T) {
 	ctx := context.Background()
 	other := strings.Repeat("1", 40)
 	body := withoutFirstLine(pr279Review(t))
+	returnBody := strings.Replace(body, "\nREADY_FOR_HUMAN_MERGE\n", "\nRETURN_TO_IMPLEMENTATION\n", 1)
 	f, pr := reviewTest(t, other)
 	if _, err := pr.Review(ctx, 1, body, ""); err == nil || !strings.Contains(err.Error(), other) ||
 		!strings.Contains(err.Error(), fakeforge.HeadCommit) || !strings.Contains(err.Error(), "your checkout's HEAD") {
@@ -188,10 +211,27 @@ func TestReviewRefuses(t *testing.T) {
 		"a session link":       {body + "\nhttps://claude.ai/code/session_x\n", "session"},
 		"the token":            {body + "\n" + fakeforge.Token + "\n", "credential"},
 		"empty":                {"\n\n", "empty"},
-		// The gates read the first verdict, inside a code block too.
-		"a verdict shown as code": {"The form:\n\n```\nVERDICT\nREADY_FOR_HUMAN_MERGE\n```\n\n" +
-			strings.Replace(body, "\nREADY_FOR_HUMAN_MERGE\n", "\nRETURN_TO_IMPLEMENTATION\n", 1), "2 lines VERDICT"},
-		"a verdict label as code": {"```\nVERDICT: READY_FOR_HUMAN_MERGE\n```\n\n" + body, "after a label"},
+		// The gates read the first line that names a verdict, in any case,
+		// inside a code block too: a body they would read with another
+		// verdict than its own is refused, naming the line.
+		"a mixed-case label": {"Verdict: RETURN_TO_IMPLEMENTATION\n\n" + body,
+			`as "RETURN_TO_IMPLEMENTATION", from the line "Verdict: RETURN_TO_IMPLEMENTATION", not as READY_FOR_HUMAN_MERGE`},
+		"a label without a colon": {"VERDICT RETURN_TO_IMPLEMENTATION was the external answer.\n\n" + body,
+			`as "RETURN_TO_IMPLEMENTATION", from the line "VERDICT RETURN_TO_IMPLEMENTATION was the external answer."`},
+		"a prose heading": {"Verdict reasoning is below.\nOBSERVATIONS first.\n\n" + body,
+			`as "OBSERVATIONS", from the line "Verdict reasoning is below."`},
+		"READY named above its own RETURN": {"Verdict: READY_FOR_HUMAN_MERGE was my first read.\n\n" + returnBody,
+			`as "READY_FOR_HUMAN_MERGE"`},
+		"a verdict shown as code": {"The form:\n\n```\nVERDICT\nREADY_FOR_HUMAN_MERGE\n```\n\n" + returnBody,
+			`as "READY_FOR_HUMAN_MERGE", from the line "VERDICT", not as RETURN_TO_IMPLEMENTATION`},
+		"a verdict heading shown as code": {"```\n## VERDICT\nREADY_FOR_HUMAN_MERGE\n```\n\n" + returnBody,
+			`as "READY_FOR_HUMAN_MERGE", from the line "## VERDICT", not as RETURN_TO_IMPLEMENTATION`},
+		// Within the bound alone, past it once the header is written.
+		"a verdict past the bound": {pastTheBound(t), "past the first 32 KiB"},
+		"a conversation link in the attribution": {strings.Replace(body, "via Claude Code",
+			"via OpenHands https://agents.example.org/canvas/conversations/0123abcd", 1), "session or conversation"},
+		"a conversation link in the body": {body + "\nSee https://example.org/conversations/42 for the run.\n",
+			"session or conversation"},
 	} {
 		if _, err := pr.Review(ctx, 1, c.body, fakeforge.HeadCommit); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", name, err, c.want)

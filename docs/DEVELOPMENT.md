@@ -1332,7 +1332,10 @@ carried the content or wanted none (`wantsContent`: an earlier report
 carried it at the same status). An observation whose report failed, or
 whose content read failed while the content was wanted, may show what the
 points do not hold, and it waits on nothing (each new observation starts
-unmarked; the mark is never carried on).
+unmarked; the mark is never carried on). Content that was wanted and did
+not reach aicrewd, its read or its report failing, drops what the
+launcher last reported (`forgetSeen`), so the next poll reads it again at
+any comment count: the count is no identity of the content.
 The runner reads the watched pull requests once after each worker turn
 that leaves the attempt in work, before it decides: at the next tick, or,
 when the turn reached a stall count, before the stall, which it skips if

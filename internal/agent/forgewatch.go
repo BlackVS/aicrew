@@ -210,8 +210,9 @@ type pullSeen struct {
 
 // wantsContent reports whether a pull request's status calls for its
 // content: CI concluded, or it carries comments, and that changed since
-// this launcher last reported it with its content. A restarted launcher
-// reads the content once more.
+// this launcher last reported it with its content, or content it wanted
+// since did not reach aicrewd (forgetSeen). A restarted launcher reads the
+// content once more.
 func (s *StepServer) wantsContent(key string, st forge.PullStatus) bool {
 	if st.Checks != forge.ChecksFailure && st.Checks != forge.ChecksSuccess && st.Comments == 0 {
 		return false
@@ -272,6 +273,16 @@ func (s *StepServer) noteObserved(body []byte) {
 		}
 	}
 	s.last = append(s.last, o)
+}
+
+// forgetSeen drops what this launcher last reported of a pull request with
+// its content, after content it wanted did not reach aicrewd: the comment
+// count is no identity of the content, so a later status with the earlier
+// count reads the content again (hands review of #286 at 13a1604).
+func (s *StepServer) forgetSeen(key string) {
+	s.seenMu.Lock()
+	defer s.seenMu.Unlock()
+	delete(s.seen, key)
 }
 
 func (s *StepServer) markSeen(key string, st forge.PullStatus) {
@@ -501,6 +512,9 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 		last = append(last, withLastContent(prev, o))
 		if _, err := s.observePull(ctx, body, facts); err != nil {
 			s.log.Warn("forge events: report a pull request", "pull", w.Number, "error", err.Error())
+			if wanted {
+				s.forgetSeen(key)
+			}
 			continue
 		}
 		// aicrewd holds the content of this status when this report
@@ -509,6 +523,8 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 		last[len(last)-1].reported = !wanted || o.Content
 		if o.Content {
 			s.markSeen(key, st)
+		} else if wanted {
+			s.forgetSeen(key)
 		}
 	}
 }

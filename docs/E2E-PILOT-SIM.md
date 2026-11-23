@@ -617,9 +617,10 @@ the cycle's `submit` snapshot where the cycle took one, so a re-check of
 the first cycle after the upgrade reads the previous release's report,
 else the snapshot's own. The launcher submits where that report's build
 is the commit the run built (`PILOTSIM_BUILD_COMMIT`) and lists
-`gates-green`, not disabled, but in case F1. A snapshot with no readable
-report, or one whose report names no build commit, fails the check ("who
-submits is not known"). The checks read
+`gates-green`, not disabled, but in case F1, where the worker submits
+itself on every release. A snapshot with no readable report fails the
+check ("who submits is not known"), and outside case F1 so does one whose
+report names no build commit. The checks read
 only the notes of the attempt's own pull request.
 
 The script gives the members no input of its own. `--process` needs an

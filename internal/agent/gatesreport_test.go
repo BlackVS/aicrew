@@ -219,6 +219,75 @@ func TestGatesGreenWaitReadsOnlyReportedObservations(t *testing.T) {
 		t.Fatalf("no wait once the new comment's content was reported\n%s", s.logs.String())
 	}
 
+	// Three comments reported, a fourth (a blocking external review) read
+	// in a report that failed, then the note deleted: the count is three
+	// again, and the content is read again, since it never reached aicrewd
+	// (hands review of #286 at 13a1604).
+	blocking := review(forge.ReviewerExternal, "RETURN_TO_IMPLEMENTATION")
+	reports.set(true)
+	comments(append(append([]forge.PullComment{}, ready...), note, blocking)...)
+	poll()
+	if waits() {
+		t.Error("a blocking review in a report that failed: the worker waits")
+	}
+	reports.set(false)
+	comments(append(append([]forge.PullComment{}, ready...), blocking)...)
+	reads = fake.contentReads()
+	reports.set(true)
+	poll()
+	if fake.contentReads() != reads+1 {
+		t.Fatalf("the count back at its reported value after a failed delivery: %d content reads, want %d",
+			fake.contentReads(), reads+1)
+	}
+	if waits() || !continues() {
+		t.Error("the count back at its reported value, the blocking review never delivered: the worker waits")
+	}
+	// The status alone delivered, its content read failing: the content
+	// is still wanted at the next poll.
+	reports.set(false)
+	contentFails(true)
+	poll()
+	if waits() || !continues() {
+		t.Error("the blocking review's content read failing, the status delivered: the worker waits")
+	}
+	contentFails(false)
+	reads = fake.contentReads()
+	poll()
+	if fake.contentReads() != reads+1 {
+		t.Fatalf("after a content read that failed: %d content reads, want %d", fake.contentReads(), reads+1)
+	}
+	if waits() || !continues() {
+		t.Error("the blocking review reported: the worker waits")
+	}
+
+	// The same with the report delivered and the content read failing:
+	// four comments reported (a count not seen before), the fifth's
+	// content not read, a note deleted. The content is read again at the
+	// earlier count.
+	other := forge.PullComment{Kind: forge.CommentIssue, Author: "someone", Body: "another note"}
+	comments(append(append([]forge.PullComment{}, ready...), note, other)...)
+	poll()
+	if !waits() {
+		t.Fatal("both reviews READY and two notes, reported: no wait")
+	}
+	contentFails(true)
+	comments(append(append([]forge.PullComment{}, ready...), note, other, blocking)...)
+	poll()
+	if waits() || !continues() {
+		t.Error("a blocking review whose content read failed: the worker waits")
+	}
+	contentFails(false)
+	comments(append(append([]forge.PullComment{}, ready...), other, blocking)...)
+	reads = fake.contentReads()
+	poll()
+	if fake.contentReads() != reads+1 {
+		t.Fatalf("the count back at its reported value after a content read that failed: %d content reads, want %d",
+			fake.contentReads(), reads+1)
+	}
+	if waits() || !continues() {
+		t.Error("the count back at its reported value, the blocking review read: the worker waits")
+	}
+
 	// A reported observation followed by a failed one with its labels
 	// changed: no wait.
 	reports.set(true)

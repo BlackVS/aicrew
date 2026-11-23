@@ -275,13 +275,15 @@ def check(step, d, case=""):
         # The worker submits itself (a home of an earlier release, or case
         # F1), or, where its guidance leaves the submit to the launcher's
         # gates-green, posts its review and the launcher submits
-        # (01a206f8-24d0).
-        if LAUNCHER_SUBMITS in handoff:
-            expect("Submitted #" not in handoff, "worker: it submitted itself where the launcher submits")
+        # (01a206f8-24d0). Only the notes of this attempt's pull request
+        # decide: the handoff's archive keeps earlier attempts' notes.
+        n = pulls[0]["number"] if pulls else 0
+        if launcher_note(handoff, n):
+            expect("Submitted #%d (" % n not in handoff, "worker: it submitted itself where the launcher submits")
             expect(launcher_submitted(d, a["id"]), "worker's launcher: no committed submit of attempt %s among its "
                    "automation records" % a["id"])
         else:
-            expect("Submitted #" in handoff, "worker: the handoff records neither its submit nor the launcher's")
+            expect("Submitted #%d (" % n in handoff, "worker: the handoff records neither its submit nor the launcher's")
     coordinator = load(d, "homes/coordinator/HANDOFF.md", "") or ""
     for s, text in (("review", "Accepted result 1 of attempt " + a["id"]),
                     ("done", "Attempt %s was finalized" % a["id"])):
@@ -296,6 +298,14 @@ def check(step, d, case=""):
 
 # What the stand-in notes where the launcher submits (aicrew-simclient).
 LAUNCHER_SUBMITS = "the launcher submits it, since gates-green is in the set"
+
+
+def launcher_note(handoff, number):
+    """Whether the worker's handoff notes, for pull request number, that the
+    launcher submits it (aicrew-simclient: "Posted the review of #N at
+    HEAD; " + LAUNCHER_SUBMITS)."""
+    return re.search(r"(?m)^- \S+ Posted the review of #%d at [0-9a-f]+; %s\.$" % (number, re.escape(LAUNCHER_SUBMITS)),
+                     handoff) is not None
 
 
 def launcher_submitted(d, attempt):

@@ -346,8 +346,9 @@ func (f *ForgePR) Label(ctx context.Context, n int64, add bool, labels []string)
 
 // Comment posts body on pull request n. A body that is a review is
 // refused: one the product's reader counts as a review (forge.ReadReview),
-// and one a member meant as a review that the reader does not count
-// (reviewLike). A review goes through Review, which writes its header.
+// one a member meant as a review (reviewLike), and one holding a review's
+// header line on any line, which the skill set's readers count
+// (shownHeader). A review goes through Review, which writes its header.
 func (f *ForgePR) Comment(ctx context.Context, n int64, body string) (PullReport, error) {
 	if strings.TrimSpace(body) == "" {
 		return PullReport{}, errors.New("the comment is empty")
@@ -357,6 +358,10 @@ func (f *ForgePR) Comment(ctx context.Context, n int64, body string) (PullReport
 	}
 	if reviewLike(body) {
 		return PullReport{}, errReviewByComment
+	}
+	if n := shownHeader(body); n > 0 {
+		return PullReport{}, headerShown(n, "the comment", "they would count the comment as a review; post a "+
+			"review with `aicrew-agent forge pr review --pr N --body-file FILE`")
 	}
 	t, err := f.target(ctx)
 	if err != nil {

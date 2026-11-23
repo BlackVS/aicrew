@@ -46,9 +46,9 @@ const forgeUsage = `usage: aicrew-agent forge pr open    [--home DIR] [--reposit
   reviewed: your checkout's HEAD, or --head SHA (required with
   --repository); the review is refused when the pull request's head on the
   forge is another commit. comment refuses a body the gates would count as
-  a review (show a header as an example in a fenced block or after "> "),
-  and one that is shaped as a review; a quoted line ("> ") or a code block
-  is not one.
+  a review, and one that is shaped as a review; a quoted line ("> ") or a
+  code block is not one. Both refuse a header line ("[NAME] reviewed at
+  head SHA") on any line, in a code block too: show one after "> ".
   Never use another forge client or a credential by hand.
   Each command reports the pull request to the launcher, which then watches
   it: a change that needs a decision (a review asking for changes, CI

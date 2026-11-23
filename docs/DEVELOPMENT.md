@@ -3328,8 +3328,11 @@ credential.
   - `comment` first refuses any body the product's reader
     (`forge.ReadReview`) counts as a review, whatever its head, reviewer
     or verdict; the reader trims the first line, so an indented header is
-    counted too. A counted header shown as an example goes in a fenced
-    block or after `> `.
+    counted too. Both `comment` and `review` refuse a header line
+    (`[NAME] reviewed at head SHA`) on any line but the one `review` writes,
+    fenced, indented or in an HTML comment too, since the skill set's gates
+    and delivery check read a header there; a header shown as an example
+    goes after `> `.
   - Beyond that, `comment` refuses a body that is a review: its first non-empty line
     shaped like a header (`[NAME] reviewed at head`, any name, after an
     optional `#`, `*` or `_`), or a `VERDICT` line with a verdict word on

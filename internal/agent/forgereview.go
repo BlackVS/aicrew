@@ -46,6 +46,12 @@ var (
 	// on the clients' own hosts, or a path holding /conversations/ID on
 	// any host, as an agent client's own deployment serves them.
 	sessionLink = regexp.MustCompile(`(?i)https?://(?:(?:[a-z0-9-]+\.)*(?:claude\.ai|chatgpt\.com|chat\.openai\.com)/\S+|[^\s/]+(?:/[^\s/?#]+)*/conversations/[^\s/?#]+)`)
+	// headerLine is a review's header line, `[NAME] reviewed at head SHA`,
+	// in any case, read after a line's leading spaces and tabs. The skill
+	// set's delivery check and gates take a header from the start of any
+	// line of a comment, inside a code block too; this is wider than they
+	// are on purpose, so that a header is shown only after "> ".
+	headerLine = regexp.MustCompile(`(?i)^\[[^\]\n]+\] reviewed at head [0-9a-f]{7,40}`)
 	// fullSHA is a full commit id.
 	fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
@@ -133,7 +139,28 @@ func nextLine(lines []string) (string, bool) {
 // errCountedByComment refuses a comment the gates would count as a review.
 var errCountedByComment = errors.New("the gates would count this comment as a review: its first line is a review's " +
 	"header. Post a review with `aicrew-agent forge pr review --pr N --body-file FILE`, which writes the header; to " +
-	"show the header as an example, put it in a fenced code block or after `> `.")
+	"show the header as an example, put it after `> `.")
+
+// shownHeader is the number of body's first line, counted over LF and CR
+// alike, that is a review's header line (headerLine) after its leading
+// spaces and tabs, or 0. Fenced, indented and HTML-comment lines count: the
+// only way to show a header is after "> ".
+func shownHeader(body string) int {
+	for i, l := range strings.Split(strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\r", "\n"), "\n") {
+		if headerLine.MatchString(strings.TrimLeft(l, " \t")) {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// headerShown refuses a body that holds a review's header line: what
+// names the body ("the review" or "the comment") and the way out.
+func headerShown(n int, what, out string) error {
+	return fmt.Errorf("line %d of %s is a review's header line (`[NAME] reviewed at head SHA`), which the skill "+
+		"set's gates and delivery check read on any line of a comment, in a code block too: %s; to show a header "+
+		"as an example, put it after `> `", n, what, out)
+}
 
 // errReviewByComment refuses a review posted as an ordinary comment.
 var errReviewByComment = errors.New("the comment is a review (a review header, or a VERDICT line with its verdict): " +
@@ -157,6 +184,9 @@ func reviewLevel(body string) (level, verdict string, err error) {
 	} else if headerLike.MatchString(first) {
 		return "", "", errors.New("the review file begins with a header of its own: remove that line, the command " +
 			"writes the header (" + ReviewHeaderForm + ")")
+	}
+	if n := shownHeader(body); n > 0 {
+		return "", "", headerShown(n, "the review", "the command writes the review's only header")
 	}
 	lines := strings.Split(body, "\n")
 	var at []int

@@ -23,7 +23,40 @@ var (
 	// gatesVerdict is forge-gates' VERDICT_WORD
 	// (skills/forge-gates/scripts/forge_gates.py): the verdict its gates read.
 	gatesVerdict = regexp.MustCompile(`(?m)^[ \t]*VERDICT[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*([A-Z_]+)`)
+	// localHeader is verify-delivery's DEFAULT_REVIEWS "local" pattern,
+	// which forge-gates' gates and wait-review use too.
+	localHeader = regexp.MustCompile(`(?m)^\[oh-code-review(?: \((?:high|max|ultra)\) review| (?:high|max|ultra)| review)\]` +
+		` reviewed at head (?P<sha>[0-9a-fA-F]{7,40})\b`)
+	// externalShape is verify-delivery's DEFAULT_REVIEWS "external"
+	// pattern without its lookahead (?!oh-code-review\b), which Go's
+	// regexp lacks: externalHeaders drops those names instead. Each match
+	// lies on one line, so the matches are the same.
+	externalShape = regexp.MustCompile(`(?m)^\[([^\]\n]+) review\] reviewed at head (?P<sha>[0-9a-fA-F]{7,40})\b`)
+	ownName       = regexp.MustCompile(`^oh-code-review\b`)
 )
+
+// externalHeaders is the number of external review headers the skill
+// set's readers find in body.
+func externalHeaders(body string) int {
+	n := 0
+	for _, m := range externalShape.FindAllStringSubmatch(body, -1) {
+		if !ownName.MatchString(m[1]) {
+			n++
+		}
+	}
+	return n
+}
+
+// noSkillHeader fails t for each comment the skill set's readers would
+// count as a review.
+func noSkillHeader(t *testing.T, comments []string) {
+	t.Helper()
+	for _, c := range comments {
+		if localHeader.MatchString(c) || externalHeaders(c) != 0 {
+			t.Errorf("the skill set's readers count a posted comment as a review: %q", c)
+		}
+	}
+}
 
 // pr279Review is the review the first team's worker posted on pull request
 // #279 with a header of its own, which no gate counted.
@@ -119,12 +152,9 @@ func TestCommentRefusesAReview(t *testing.T) {
 		// A fence closes only on its own character, at least as long: the
 		// inner three backticks are code inside the four.
 		"How to write it:\n\n````markdown\n```\nVERDICT\nREADY_FOR_HUMAN_MERGE\n````\n",
-		// An indented code line of another shape is no header.
-		"    [worker review] reviewed at head " + fakeforge.HeadCommit + "\n\nwas #279's form.\n",
-		// The counted header shown in a fence or a quotation: the reader's
-		// first line is the fence or the quotation mark.
-		"```\n" + counted + "\nVERDICT\nREADY_FOR_HUMAN_MERGE\n```\n",
-		"> " + counted + "\n>\n> VERDICT\n> READY_FOR_HUMAN_MERGE\n"}
+		// A header shown after "> " is read by no gate.
+		"> " + counted + "\n>\n> VERDICT\n> READY_FOR_HUMAN_MERGE\n",
+		"#279 wrote:\n\n> [worker review] reviewed at head " + fakeforge.HeadCommit + "\n"}
 	for _, body := range posted {
 		if _, err := pr.Comment(ctx, 1, body); err != nil {
 			t.Errorf("comment %q: %v", body, err)
@@ -133,6 +163,7 @@ func TestCommentRefusesAReview(t *testing.T) {
 	if got := f.Pull(1).Comments; !slices.Equal(got, posted) {
 		t.Errorf("the forge holds %q", got)
 	}
+	noSkillHeader(t, f.Pull(1).Comments)
 	_, content, err := pr.API.GetPullContent(ctx, f.Host, forge.Gitea, fakeforge.Token, "team/app", 1)
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +183,26 @@ func TestCommentRefusesAReview(t *testing.T) {
 	if _, err := pr.Comment(ctx, 1, indented); err == nil || !strings.Contains(err.Error(), "the gates would count this comment as a review") ||
 		!strings.Contains(err.Error(), "aicrew-agent forge pr review") {
 		t.Errorf("an indented counted header: %v", err)
+	}
+
+	// The skill set's readers take a header from any line, code included:
+	// a header line anywhere but after "> " is refused, naming the line.
+	hands := "[hands-bot review] reviewed at head " + fakeforge.HeadCommit
+	for name, c := range map[string]struct {
+		body string
+		line string
+	}{
+		"the counted header fenced":    {"```\n" + counted + "\nVERDICT\nREADY_FOR_HUMAN_MERGE\n```\n", "line 2 "},
+		"another name indented":        {"    [worker review] reviewed at head " + fakeforge.HeadCommit + "\n\nwas #279's form.\n", "line 1 "},
+		"the external header fenced":   {"The answer:\n\n```\n" + hands + "\nVERDICT\nREADY_FOR_HUMAN_MERGE\n```\n", "line 4 "},
+		"in an HTML comment":           {"Rebased.\n<!--\n" + hands + "\n-->\n", "line 3 "},
+		"after a carriage return":      {"Rebased.\r" + hands + "\r\n", "line 2 "},
+		"after a tab, in another case": {"Note:\n\t[Hands-Bot Review] Reviewed At Head " + strings.ToUpper(fakeforge.HeadCommit) + "\n", "line 2 "},
+	} {
+		if _, err := pr.Comment(ctx, 1, c.body); err == nil || !strings.Contains(err.Error(), c.line+"of the comment is a review's header line") ||
+			!strings.Contains(err.Error(), "aicrew-agent forge pr review") || !strings.Contains(err.Error(), "after `> `") {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 	if got := f.Pull(1).Comments; len(got) != len(posted) {
 		t.Errorf("a refused comment reached the forge: %q", got[len(posted):])
@@ -217,6 +268,11 @@ func TestReviewPostsTheCountedHeader(t *testing.T) {
 	maxBody := strings.Replace(body, "(high)", "(max)", 1)
 	if _, err := pr.Review(ctx, 1, maxBody, strings.ToUpper(fakeforge.HeadCommit)); err != nil {
 		t.Fatal(err)
+	}
+	for _, c := range f.Pull(1).Comments {
+		if n := len(localHeader.FindAllString(c, -1)); n != 1 || externalHeaders(c) != 0 {
+			t.Errorf("the skill set's readers find %d local and %d external headers in a posted review", n, externalHeaders(c))
+		}
 	}
 	if got := f.Pull(1).Comments; len(got) != 4 ||
 		!strings.HasPrefix(got[3], "[oh-code-review (max) review] reviewed at head "+fakeforge.HeadCommit+"\n\n") {
@@ -296,6 +352,12 @@ func TestReviewRefuses(t *testing.T) {
 			"via OpenHands https://agents.example.org/canvas/conversations/0123abcd", 1), "session or conversation"},
 		"a conversation link in the body": {body + "\nSee https://example.org/conversations/42 for the run.\n",
 			"session or conversation"},
+		// The skill set's readers take a header from any line: the command
+		// writes the only one.
+		"an external header fenced": {body + "\nIt answered:\n\n```\n[hands-bot review] reviewed at head " +
+			fakeforge.HeadCommit + "\n```\n", "of the review is a review's header line"},
+		"a header in an HTML comment": {"<!--\n[oh-code-review (high) review] reviewed at head " + fakeforge.HeadCommit +
+			"\n-->\n" + body, "line 2 of the review is a review's header line"},
 	} {
 		if _, err := pr.Review(ctx, 1, c.body, fakeforge.HeadCommit); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", name, err, c.want)

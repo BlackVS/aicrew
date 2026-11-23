@@ -336,7 +336,12 @@ def launcher_submits(d, case):
         return False, "no readable check report of the worker in %s" % src
     if not build:
         return False, "PILOTSIM_BUILD_COMMIT is not set"
-    if case == "F1" or rep["aicrew_agent"].get("commit") != build:
+    if case == "F1":
+        return False, ""
+    commit = rep["aicrew_agent"].get("commit")
+    if not commit:
+        return False, "the worker's check report in %s names no build commit" % src
+    if commit != build:
         return False, ""
     if not isinstance(rep.get("automations"), dict):
         return False, "the worker's check report lists no automations (its launcher did not answer)"

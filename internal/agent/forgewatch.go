@@ -90,9 +90,11 @@ type PullObservation struct {
 	// itself; nil when the set could not be read.
 	Automations []string `json:"automations,omitempty"`
 	// reported is true for a poll's observation that aicrewd took
-	// (observePull returned without error), so the points hold what it
-	// showed (GatesGreenWait). Each new observation starts without it; it
-	// is never sent.
+	// (observePull returned without error) whose content aicrewd holds:
+	// this report carried it, or an earlier one did at the same status
+	// (wantsContent), so the points hold the reviews it shows
+	// (GatesGreenWait). Each new observation starts without it; it is
+	// never sent.
 	reported bool
 }
 
@@ -472,7 +474,8 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 		key := pullKey(w.Host, w.Repository, w.Number)
 		running := st.Running
 		facts := pullFacts{Base: st.Base, Running: &running}
-		if s.wantsContent(key, st) {
+		wanted := s.wantsContent(key, st)
+		if wanted {
 			// The content tells aicrewd whether a decision is needed; a read
 			// that fails sends the status alone, and the next poll tries again.
 			p, c, err := api.GetPullContent(ctx, w.Host, forge.Kind(e.Kind), tok, w.Repository, w.Number)
@@ -500,7 +503,10 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 			s.log.Warn("forge events: report a pull request", "pull", w.Number, "error", err.Error())
 			continue
 		}
-		last[len(last)-1].reported = true
+		// aicrewd holds the content of this status when this report
+		// carried it, or when no content was wanted: an earlier report
+		// carried it at the same status (markSeen).
+		last[len(last)-1].reported = !wanted || o.Content
 		if o.Content {
 			s.markSeen(key, st)
 		}

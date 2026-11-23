@@ -47,7 +47,11 @@ func (f *failingReports) set(fail bool) {
 // defaults (01a206f8-24d0, hands review of #286): a newer review in a
 // poll whose report failed is in the last observation but not in the
 // points, so the poll waits on nothing, whichever review it is, and a
-// reported observation followed by a failed one does not wait either.
+// reported observation followed by a failed one does not wait either. Nor
+// does the next poll whose content read fails, though its status report
+// succeeds and the content it carries on shows that review: aicrewd never
+// took it (hands review of #286 at ddad378). The worker's turn loop then
+// gives it its continuation.
 func TestGatesGreenWaitReadsOnlyReportedObservations(t *testing.T) {
 	ctx := context.Background()
 	a := setupAutomationSources(t)
@@ -112,6 +116,20 @@ func TestGatesGreenWaitReadsOnlyReportedObservations(t *testing.T) {
 		srv.waitPoints()
 	}
 	waits := func() bool { return srv.GatesGreenWait(id, head, time.Now()) }
+	contentFails := func(fail bool) {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		fake.contentErr = nil
+		if fail {
+			fake.contentErr = errors.New("the forge did not answer")
+		}
+	}
+	// The worker's turn loop, on this launcher's observations, with the
+	// worktree clean at the head.
+	loop := &TurnLoop{Home: s.cfg.Home, Host: srv, Log: s.d.Log, Now: time.Now,
+		Head:  func(context.Context, string) string { return head },
+		Clean: func(context.Context, string) bool { return true }}
+	continues := func() bool { return !loop.waitingOnGates(ctx, &memberAttempt{ID: id}) }
 
 	// The forge pr command's baseline puts the pull request on the watch.
 	var answers []byte
@@ -159,13 +177,46 @@ func TestGatesGreenWaitReadsOnlyReportedObservations(t *testing.T) {
 		if waits() {
 			t.Errorf("%s in a report that failed: the worker waits on the launcher", c.name)
 		}
-		// aicrewd back, the forge back to both READY: the wait again.
+		// aicrewd back, the content read failing: the status report
+		// succeeds and the observation carries the newer review on, which
+		// aicrewd never took.
 		reports.set(false)
+		contentFails(true)
+		poll()
+		obs = srv.Observed()
+		if len(obs) != 1 || !obs[0].Content || obs[0].Comments != int64(len(ready)+1) {
+			t.Fatalf("%s: the next poll does not carry the newer review on: %+v", c.name, obs)
+		}
+		if waits() || !continues() {
+			t.Errorf("%s, then a status-only report that succeeded: the worker waits (wait %v)", c.name, waits())
+		}
+		contentFails(false)
+		// The forge back to both READY: the wait again.
 		comments(ready...)
 		poll()
-		if !waits() {
+		if !waits() || continues() {
 			t.Fatalf("%s: no wait once a report succeeded again", c.name)
 		}
+	}
+
+	// The steady state: status-only polls after a reported content read
+	// wait. A new comment then stops the wait until its content is
+	// reported.
+	poll()
+	if !waits() {
+		t.Fatal("a status-only poll after a reported content read: no wait")
+	}
+	note := forge.PullComment{Kind: forge.CommentIssue, Author: "someone", Body: "a note"}
+	contentFails(true)
+	comments(append(append([]forge.PullComment{}, ready...), note)...)
+	poll()
+	if waits() || !continues() {
+		t.Error("a new comment whose content aicrewd does not hold: the worker waits")
+	}
+	contentFails(false)
+	poll()
+	if !waits() {
+		t.Fatalf("no wait once the new comment's content was reported\n%s", s.logs.String())
 	}
 
 	// A reported observation followed by a failed one with its labels

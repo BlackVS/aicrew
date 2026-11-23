@@ -241,4 +241,26 @@ func TestTurnLoopWaitsOnTheLaunchersSubmit(t *testing.T) {
 	if st := readTurnState(e.home).Attempts["att-1"]; st == nil || !st.Stalled {
 		t.Fatalf("past the bound the attempt is not stalled: %+v", st)
 	}
+
+	// A wait found by the read before the stall resets both stall counts,
+	// as every wait on the gates does: past its bound, the stall comes after
+	// stallTurns turns more, counted from the wait.
+	e = start(stallTurns)
+	for range 10 {
+		e.tick(t)
+	}
+	if len(e.specs) != 1+stallTurns || len(e.host.calls) != 0 {
+		t.Fatalf("while waiting from the read before the stall: %d turns and %d blocks", len(e.specs), len(e.host.calls))
+	}
+	e.host.onPoll = nil
+	e.host.mu.Lock()
+	e.host.greenHead = ""
+	e.host.mu.Unlock()
+	for range 10 {
+		e.tick(t)
+	}
+	if len(e.specs) != 1+2*stallTurns || len(e.host.calls) != 1 {
+		t.Fatalf("past the bound of a wait from the read before the stall: %d turns and %d blocks, want %d and 1",
+			len(e.specs), len(e.host.calls), 1+2*stallTurns)
+	}
 }

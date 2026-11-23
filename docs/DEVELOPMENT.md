@@ -1325,10 +1325,14 @@ observation meets `pullPoints.gatesGreen`, the condition the point fires
 on, and names `gates-green` among its automations, for at most
 `3 × forgePoll` from the first observation at which it held for the head
 (`green_head`, `green_since` in the points state). The wait reads only a
-poll's observation that aicrewd took: the points take an observation's
-reviews only with a report that succeeded, so an observation whose report
-failed may show what the points do not hold, and it waits on nothing
-(each new observation starts unmarked; the mark is never carried on).
+poll's observation whose content aicrewd holds: the points take an
+observation's reviews only with a report that carried them and succeeded,
+so the observation waits only when its report succeeded and either
+carried the content or wanted none (`wantsContent`: an earlier report
+carried it at the same status). An observation whose report failed, or
+whose content read failed while the content was wanted, may show what the
+points do not hold, and it waits on nothing (each new observation starts
+unmarked; the mark is never carried on).
 The runner reads the watched pull requests once after each worker turn
 that leaves the attempt in work, before it decides: at the next tick, or,
 when the turn reached a stall count, before the stall, which it skips if

@@ -294,7 +294,9 @@ the case when the pull request, as last observed, meets three conditions:
   `gates-green` point fires on (the worker's and the external review
   READY at the head, CI passed, no external review in flight) and names
   `gates-green` among the effective set's automations, in an observation
-  aicrewd took (so the launcher's record of the reviews is the forge's).
+  whose content aicrewd holds: its report succeeded and carried the
+  content, or an earlier report did at the same status (so the launcher's
+  record of the reviews is the forge's).
   That last wait lasts at most three forge reads (3 × the watch's
   interval, 3 minutes) from the first observation at which the condition
   held for the head; a new head starts a new count.
@@ -312,8 +314,8 @@ before the stall, which it skips if the read shows a wait.
 
 Past the bound of the wait on `gates-green`, the stall rule applies as to
 any turn: the continuation turns come back, each a model session; after
-three of them without a step or a commit (counting those before the
-wait), the runner blocks the attempt with the stall's text, and the
+three of them without a step or a commit, counted from the wait (a
+turn that ends in it resets both stall counts, as above), the runner blocks the attempt with the stall's text, and the
 block's lifecycle message reaches the coordinator. A `gates-green` run that
 failed has already woken the coordinators.
 

@@ -137,14 +137,26 @@ func TestReviewPostsTheCountedHeader(t *testing.T) {
 		t.Fatalf("the reader sees %+v", content.Comments[0].Review)
 	}
 
+	// A quoted verdict is no verdict line to the gates: the review's own
+	// is the one read.
+	quoted := "The external review answered:\n\n> VERDICT\n> RETURN_TO_IMPLEMENTATION\n\n" + body
+	if _, err := pr.Review(ctx, 1, quoted, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, content, err = pr.API.GetPullContent(ctx, f.Host, forge.Gitea, fakeforge.Token, "team/app", 1)
+	if err != nil || len(content.Comments) != 2 || content.Comments[1].Review == nil ||
+		content.Comments[1].Review.Verdict != "READY_FOR_HUMAN_MERGE" {
+		t.Fatalf("a quoted verdict: %v %+v", err, content)
+	}
+
 	// --head names the commit read without a checkout; the level follows
 	// the attribution.
 	maxBody := strings.Replace(body, "(high)", "(max)", 1)
 	if _, err := pr.Review(ctx, 1, maxBody, strings.ToUpper(fakeforge.HeadCommit)); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.Pull(1).Comments; len(got) != 2 ||
-		!strings.HasPrefix(got[1], "[oh-code-review (max) review] reviewed at head "+fakeforge.HeadCommit+"\n\n") {
+	if got := f.Pull(1).Comments; len(got) != 3 ||
+		!strings.HasPrefix(got[2], "[oh-code-review (max) review] reviewed at head "+fakeforge.HeadCommit+"\n\n") {
 		t.Fatalf("with --head: %q", got)
 	}
 }
@@ -176,6 +188,10 @@ func TestReviewRefuses(t *testing.T) {
 		"a session link":       {body + "\nhttps://claude.ai/code/session_x\n", "session"},
 		"the token":            {body + "\n" + fakeforge.Token + "\n", "credential"},
 		"empty":                {"\n\n", "empty"},
+		// The gates read the first verdict, inside a code block too.
+		"a verdict shown as code": {"The form:\n\n```\nVERDICT\nREADY_FOR_HUMAN_MERGE\n```\n\n" +
+			strings.Replace(body, "\nREADY_FOR_HUMAN_MERGE\n", "\nRETURN_TO_IMPLEMENTATION\n", 1), "2 lines VERDICT"},
+		"a verdict label as code": {"```\nVERDICT: READY_FOR_HUMAN_MERGE\n```\n\n" + body, "after a label"},
 	} {
 		if _, err := pr.Review(ctx, 1, c.body, fakeforge.HeadCommit); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", name, err, c.want)

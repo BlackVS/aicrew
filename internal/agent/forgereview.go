@@ -105,8 +105,12 @@ var errReviewByComment = errors.New("the comment is a review (a review header, o
 // reviewLevel checks a review body as `forge pr review` posts it and
 // returns its level, read from the attribution line: the body must not
 // begin with a header of its own, must carry exactly one VERDICT heading
-// with a verdict word alone on the next non-blank line, and one attribution
-// line at level high, max or ultra, and no session link.
+// with a verdict word alone on the next non-blank line and no VERDICT label,
+// and one attribution line at level high, max or ultra, and no session
+// link. The verdict is checked over every line, code blocks included: the
+// gates take the first verdict line they find, inside a code block too
+// (internal/forge/content.go, reviewVerdict), so a verdict shown as code
+// would be read as the review's. A quoted line is no verdict line to them.
 func reviewLevel(body string) (string, error) {
 	if first, ok := nextLine(strings.Split(body, "\n")); !ok {
 		return "", errors.New("the review is empty")
@@ -114,9 +118,13 @@ func reviewLevel(body string) (string, error) {
 		return "", errors.New("the review file begins with a header of its own: remove that line, the command " +
 			"writes the header (" + ReviewHeaderForm + ")")
 	}
-	lines := ownLines(body)
+	lines := strings.Split(body, "\n")
 	verdicts := 0
 	for i, l := range lines {
+		if verdictLabel.MatchString(l) {
+			return "", errors.New("the review names its verdict after a label (VERDICT: ...), which the gates may " +
+				"read first, also in a code block: give it only as a line VERDICT with the verdict alone on the next line")
+		}
 		if strings.TrimSpace(l) != "VERDICT" {
 			continue
 		}
@@ -128,8 +136,8 @@ func reviewLevel(body string) (string, error) {
 		}
 	}
 	if verdicts != 1 {
-		return "", fmt.Errorf("the review has %d lines VERDICT: it needs exactly one, alone on its line, with the "+
-			"verdict alone on the next line", verdicts)
+		return "", fmt.Errorf("the review has %d lines VERDICT, code blocks included: it needs exactly one, alone "+
+			"on its line, with the verdict alone on the next line; quote another's verdict with `> `", verdicts)
 	}
 	ms := attribution.FindAllStringSubmatch(body, -1)
 	if len(ms) != 1 {

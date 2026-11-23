@@ -38,7 +38,8 @@ const forgeUsage = `usage: aicrew-agent forge pr open    [--home DIR] [--reposit
   file's line "Review: oh-code-review (LEVEL) via CLIENT" (high, max or
   ultra). The file must not begin with a header of its own and needs one
   line VERDICT with READY_FOR_HUMAN_MERGE, RETURN_TO_IMPLEMENTATION or
-  REVIEW_COULD_NOT_RUN alone on the next line. The head is the commit you
+  REVIEW_COULD_NOT_RUN alone on the next line, and no other VERDICT line,
+  in a code block either (quote another's with "> "). The head is the commit you
   reviewed: your checkout's HEAD, or --head SHA (required with
   --repository); the review is refused when the pull request's head on the
   forge is another commit. comment refuses a body that is a review; a

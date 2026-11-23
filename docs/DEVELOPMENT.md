@@ -3304,6 +3304,10 @@ credential.
     or `REVIEW_COULD_NOT_RUN` alone on the next non-blank line, and exactly
     one attribution line at level high, max or ultra. The header takes that
     level. A link into an agent's session or conversation is refused.
+  - In the review itself, a code block counts: a second `VERDICT` line, or
+    a `VERDICT: WORD` label, inside one is refused, because the gates take
+    the first verdict line they find, also in a code block. A quoted line
+    (`> `) is no verdict line to them, so a review may quote another's.
   - The head is the commit the review read: the worktree's `HEAD`, or
     `--head SHA` (a full commit id), which `--repository` requires, since
     then no worktree names it. The command refuses when the pull request's

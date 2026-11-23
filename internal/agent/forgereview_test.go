@@ -14,15 +14,10 @@ import (
 	"github.com/BlackVS/aicrew/internal/forge/fakeforge"
 )
 
-// The skill set's two readers of a review's verdict, copied from its
-// sources: a copy does not follow a change there by itself.
+// The skill set's two readers of a review's header, copied from its
+// sources (its two verdict readers are product constants, skillVerdictWord
+// and skillReady): a copy does not follow a change there by itself.
 var (
-	// deliveryReady is verify-delivery's DEFAULT_VERDICT
-	// (skills/verify-delivery/verify_delivery.py): the delivery check's READY.
-	deliveryReady = regexp.MustCompile(`(?m)^[ \t]*VERDICT[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*READY_FOR_HUMAN_MERGE\b`)
-	// gatesVerdict is forge-gates' VERDICT_WORD
-	// (skills/forge-gates/scripts/forge_gates.py): the verdict its gates read.
-	gatesVerdict = regexp.MustCompile(`(?m)^[ \t]*VERDICT[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*([A-Z_]+)`)
 	// localHeader is verify-delivery's DEFAULT_REVIEWS "local" pattern,
 	// which forge-gates' gates and wait-review use too.
 	localHeader = regexp.MustCompile(`(?m)^\[oh-code-review(?: \((?:high|max|ultra)\) review| (?:high|max|ultra)| review)\]` +
@@ -192,11 +187,11 @@ func TestCommentRefusesAReview(t *testing.T) {
 		body string
 		line string
 	}{
-		"the counted header fenced":    {"```\n" + counted + "\nVERDICT\nREADY_FOR_HUMAN_MERGE\n```\n", "line 2 "},
-		"another name indented":        {"    [worker review] reviewed at head " + fakeforge.HeadCommit + "\n\nwas #279's form.\n", "line 1 "},
-		"the external header fenced":   {"The answer:\n\n```\n" + hands + "\nVERDICT\nREADY_FOR_HUMAN_MERGE\n```\n", "line 4 "},
-		"in an HTML comment":           {"Rebased.\n<!--\n" + hands + "\n-->\n", "line 3 "},
-		"after a carriage return":      {"Rebased.\r" + hands + "\r\n", "line 2 "},
+		"the counted header fenced":  {"```\n" + counted + "\nVERDICT\nREADY_FOR_HUMAN_MERGE\n```\n", "line 2 "},
+		"another name indented":      {"    [worker review] reviewed at head " + fakeforge.HeadCommit + "\n\nwas #279's form.\n", "line 1 "},
+		"the external header fenced": {"The answer:\n\n```\n" + hands + "\nVERDICT\nREADY_FOR_HUMAN_MERGE\n```\n", "line 4 "},
+		"in an HTML comment":         {"Rebased.\n<!--\n" + hands + "\n-->\n", "line 3 "},
+
 		"after a tab, in another case": {"Note:\n\t[Hands-Bot Review] Reviewed At Head " + strings.ToUpper(fakeforge.HeadCommit) + "\n", "line 2 "},
 	} {
 		if _, err := pr.Comment(ctx, 1, c.body); err == nil || !strings.Contains(err.Error(), c.line+"of the comment is a review's header line") ||
@@ -256,10 +251,10 @@ func TestReviewPostsTheCountedHeader(t *testing.T) {
 	if h, _, _ := forge.ReadReview(posted, fakeforge.HeadCommit); h == nil || h.Verdict != "RETURN_TO_IMPLEMENTATION" {
 		t.Errorf("the product's reader takes %+v", h)
 	}
-	if deliveryReady.MatchString(posted) {
+	if skillReady.MatchString(posted) {
 		t.Error("the delivery check reads the quoted READY")
 	}
-	if m := gatesVerdict.FindStringSubmatch(posted); m == nil || m[1] != "RETURN_TO_IMPLEMENTATION" {
+	if m := skillVerdictWord.FindStringSubmatch(posted); m == nil || m[1] != "RETURN_TO_IMPLEMENTATION" {
 		t.Errorf("the skill set's gates read %q", m)
 	}
 
@@ -365,5 +360,179 @@ func TestReviewRefuses(t *testing.T) {
 	}
 	if got := f.Pull(1).Comments; len(got) != 0 {
 		t.Fatalf("a refused review reached the forge: %q", got)
+	}
+}
+
+// odd are characters a pasted or generated file may hold that readers
+// treat differently: as a space or not, as a line end or not, or dropped.
+var odd = map[string]string{
+	"U+00A0": "\u00a0", "VT": "\v", "FF": "\f", "U+0085": "\u0085", "U+2028": "\u2028",
+	"U+2029": "\u2029", "U+200B": "\u200b", "U+FEFF": "\ufeff", "bare CR": "\r", "NUL": "\x00",
+}
+
+// Whatever review or comment posts, every reader reads as the command
+// means it; anything else is refused. Each odd character is put at each
+// place a reader's pattern looks at, and each case either is refused or
+// posts a text that the product's reader and the skill set's readers
+// (header, verdict word, READY) all read the same way.
+func TestPostedTextSatisfiesTheReaders(t *testing.T) {
+	ctx := context.Background()
+	f, pr := reviewTest(t, fakeforge.HeadCommit)
+	ready := withoutFirstLine(pr279Review(t))
+	hands := "[hands-bot review] reviewed at head " + fakeforge.HeadCommit
+	counted := "[oh-code-review (high) review] reviewed at head " + fakeforge.HeadCommit
+	at := func(body, old, new string) string {
+		if strings.Count(body, old) != 1 {
+			t.Fatalf("%q is not once in the body", old)
+		}
+		return strings.Replace(body, old, new, 1)
+	}
+	posted, refused := 0, 0
+	for _, verdict := range []string{"READY_FOR_HUMAN_MERGE", "RETURN_TO_IMPLEMENTATION"} {
+		body := at(ready, "\nREADY_FOR_HUMAN_MERGE\n", "\n"+verdict+"\n")
+		for name, c := range odd {
+			for place, text := range map[string]string{
+				"before VERDICT":         at(body, "\nVERDICT\n", "\n"+c+"VERDICT\n"),
+				"after VERDICT":          at(body, "\nVERDICT\n", "\nVERDICT"+c+"\n"),
+				"alone between":          at(body, "\nVERDICT\n", "\nVERDICT\n"+c+"\n"),
+				"before the word":        at(body, "\nVERDICT\n", "\nVERDICT\n"+c),
+				"after the word":         at(body, "\n"+verdict+"\n", "\n"+verdict+c+"\n"),
+				"inside a fenced header": body + "\n```\n[hands" + c + "-bot review] reviewed at head " + fakeforge.HeadCommit + "\n```\n",
+				"before a fenced header": body + "\n```\n" + c + hands + "\n```\n",
+			} {
+				before := len(f.Pull(1).Comments)
+				_, err := pr.Review(ctx, 1, text, "")
+				comments := f.Pull(1).Comments
+				if err != nil {
+					refused++
+					if len(comments) != before {
+						t.Errorf("review, %s %s, %s: refused but posted", name, place, verdict)
+					}
+					continue
+				}
+				posted++
+				if len(comments) != before+1 {
+					t.Fatalf("review, %s %s, %s: no comment", name, place, verdict)
+				}
+				out := comments[before]
+				if n := len(localHeader.FindAllString(out, -1)); n != 1 || externalHeaders(out) != 0 {
+					t.Errorf("review, %s %s, %s: %d local and %d external headers", name, place, verdict, n, externalHeaders(out))
+				}
+				if m := skillVerdictWord.FindStringSubmatch(out); m == nil || m[1] != verdict {
+					t.Errorf("review, %s %s, %s: the skill set's gates read %q", name, place, verdict, m)
+				}
+				if ok := skillReady.MatchString(out); ok != (verdict == "READY_FOR_HUMAN_MERGE") {
+					t.Errorf("review, %s %s, %s: the delivery check reads READY: %v", name, place, verdict, ok)
+				}
+				if h, _, _ := forge.ReadReview(out, fakeforge.HeadCommit); h == nil || h.Reviewer != forge.ReviewerLocal ||
+					h.Level != "high" || !h.AtHead || h.Verdict != verdict {
+					t.Errorf("review, %s %s, %s: the product's reader reads %+v", name, place, verdict, h)
+				}
+			}
+		}
+	}
+	for name, c := range odd {
+		for place, text := range map[string]string{
+			"inside a fenced header": "```\n[oh-code-review" + c + " (high) review] reviewed at head " + fakeforge.HeadCommit + "\n```\n",
+			"before a fenced header": "```\n" + c + counted + "\n```\n",
+			"inside a header at column 0": "[oh-code-review" + c + " (high) review] reviewed at head " + fakeforge.HeadCommit +
+				"\n\nVERDICT\nREADY_FOR_HUMAN_MERGE\n",
+			"before a header at column 0": c + counted + "\n\nVERDICT\nREADY_FOR_HUMAN_MERGE\n",
+		} {
+			before := len(f.Pull(1).Comments)
+			_, err := pr.Comment(ctx, 1, text)
+			comments := f.Pull(1).Comments
+			if err != nil {
+				refused++
+				if len(comments) != before {
+					t.Errorf("comment, %s %s: refused but posted", name, place)
+				}
+				continue
+			}
+			posted++
+			out := comments[before]
+			if localHeader.MatchString(out) || externalHeaders(out) != 0 {
+				t.Errorf("comment, %s %s: the skill set's readers count it as a review", name, place)
+			}
+			if h, _, _ := forge.ReadReview(out, fakeforge.HeadCommit); h != nil {
+				t.Errorf("comment, %s %s: the product's reader counts it: %+v", name, place, h)
+			}
+		}
+	}
+	t.Logf("%d cases posted, %d refused", posted, refused)
+	if posted == 0 || refused == 0 {
+		t.Errorf("%d cases posted, %d refused: the test no longer tells the two apart", posted, refused)
+	}
+}
+
+// A bare carriage return is refused by both commands, whatever it
+// separates; a CRLF body posts.
+func TestBareCarriageReturn(t *testing.T) {
+	ctx := context.Background()
+	f, pr := reviewTest(t, fakeforge.HeadCommit)
+	body := withoutFirstLine(pr279Review(t))
+	inName := body + "\n```\n[hands\rbot review] reviewed at head " + fakeforge.HeadCommit + "\n```\n"
+	if externalHeaders(inName) != 1 {
+		t.Fatalf("the skill set's external pattern does not read the header: %q", inName)
+	}
+	if _, err := pr.Review(ctx, 1, inName, ""); err == nil || !strings.Contains(err.Error(), "the review holds a carriage return without a line feed") {
+		t.Errorf("review, a CR inside a header's name: %v", err)
+	}
+	for _, c := range []string{"Rebased.\r[hands-bot review] reviewed at head " + fakeforge.HeadCommit + "\r\n",
+		"Rebased.\n```\n[hands\rbot review] reviewed at head " + fakeforge.HeadCommit + "\n```\n", "One.\rTwo.\n"} {
+		if _, err := pr.Comment(ctx, 1, c); err == nil || !strings.Contains(err.Error(), "the comment holds a carriage return without a line feed") {
+			t.Errorf("comment %q: %v", c, err)
+		}
+	}
+	if got := f.Pull(1).Comments; len(got) != 0 {
+		t.Fatalf("a refused body reached the forge: %q", got)
+	}
+	crlf := strings.ReplaceAll(body, "\n", "\r\n")
+	if _, err := pr.Review(ctx, 1, crlf, ""); err != nil {
+		t.Errorf("review, CRLF line ends: %v", err)
+	}
+	if _, err := pr.Comment(ctx, 1, "Rebased.\r\nThe tests pass.\r\n"); err != nil {
+		t.Errorf("comment, CRLF line ends: %v", err)
+	}
+}
+
+// A non-breaking space around VERDICT or its word passes the trimmed
+// count and the product's reader, but not the skill set's readers: the
+// review is refused.
+func TestReviewRefusesAVerdictTheSkillsMiss(t *testing.T) {
+	ctx := context.Background()
+	f, pr := reviewTest(t, fakeforge.HeadCommit)
+	body := withoutFirstLine(pr279Review(t))
+	skills := "the skill set's gates and delivery check would not read READY_FOR_HUMAN_MERGE"
+	for name, c := range map[string]struct{ text, want string }{
+		"before VERDICT": {strings.Replace(body, "\nVERDICT\n", "\n\u00a0VERDICT\n", 1), skills},
+		"after VERDICT":  {strings.Replace(body, "\nVERDICT\n", "\nVERDICT\u00a0\n", 1), skills},
+		"a line between": {strings.Replace(body, "\nVERDICT\n", "\nVERDICT\n\u00a0\n", 1), skills},
+		// The word's own line allows ASCII spaces only, before the skill
+		// set's readers are asked.
+		"before the word": {strings.Replace(body, "\nVERDICT\n", "\nVERDICT\n\u00a0", 1), "the line after VERDICT must hold only"},
+	} {
+		if _, err := pr.Review(ctx, 1, c.text, ""); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+	}
+	if got := f.Pull(1).Comments; len(got) != 0 {
+		t.Fatalf("a refused review reached the forge: %q", got)
+	}
+}
+
+// skillsRead requires, for a READY review, the delivery check's READY as
+// well as the gates' word: they differ on what may follow the word.
+func TestSkillsReadReady(t *testing.T) {
+	for text, ok := range map[string]bool{
+		"x\nVERDICT\nREADY_FOR_HUMAN_MERGE\n":   true,
+		"x\nVERDICT\n\t\nREADY_FOR_HUMAN_MERGE": true,
+		"x\nVERDICT\nREADY_FOR_HUMAN_MERGEx\n":  false,
+		"x\nVERDICT\nREADY_FOR_HUMAN_MERGE1\n":  false,
+		"x\nVERDICT\n READY_FOR_HUMAN_MERGE\n":  false,
+	} {
+		if err := skillsRead(text, "READY_FOR_HUMAN_MERGE"); (err == nil) != ok {
+			t.Errorf("%q: %v", text, err)
+		}
 	}
 }

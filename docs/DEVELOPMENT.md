@@ -3305,7 +3305,11 @@ credential.
     one attribution line at level high, max or ultra. The header takes that
     level. The line `VERDICT` is counted in code blocks and indented lines
     too, where the skill set's delivery check and `gates` also find it, so a
-    review shows that layout as an example only after `> `. A link into an agent's session or conversation is refused: on
+    review shows that layout as an example only after `> `. The posted text
+    must also give the review's verdict to those two readers' own patterns
+    (`skillVerdictWord` and `skillReady`, ported from the skill set), which
+    allow only spaces and tabs around `VERDICT` and the word, and both
+    commands refuse a carriage return without a line feed after it. A link into an agent's session or conversation is refused: on
     an agent client's own host, or a path holding `/conversations/ID` on
     any host.
   - Before it posts, the command reads the exact text it would post with

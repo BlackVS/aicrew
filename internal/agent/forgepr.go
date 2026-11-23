@@ -353,6 +353,9 @@ func (f *ForgePR) Comment(ctx context.Context, n int64, body string) (PullReport
 	if strings.TrimSpace(body) == "" {
 		return PullReport{}, errors.New("the comment is empty")
 	}
+	if bareCR(body) {
+		return PullReport{}, errBareCR("the comment")
+	}
 	if h, _, _ := forge.ReadReview(body, ""); h != nil {
 		return PullReport{}, errCountedByComment
 	}

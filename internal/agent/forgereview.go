@@ -52,6 +52,15 @@ var (
 	// line of a comment, inside a code block too; this is wider than they
 	// are on purpose, so that a header is shown only after "> ".
 	headerLine = regexp.MustCompile(`(?i)^\[[^\]\n]+\] reviewed at head [0-9a-f]{7,40}`)
+	// skillVerdictWord is the skill set's verdict reader, forge-gates'
+	// VERDICT_WORD (skills/forge-gates/scripts/forge_gates.py), ported
+	// verbatim: a line VERDICT with only spaces or tabs around it, then the
+	// word on the next line holding more than spaces or tabs.
+	skillVerdictWord = regexp.MustCompile(`(?m)^[ \t]*VERDICT[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*([A-Z_]+)`)
+	// skillReady is the skill set's READY, verify-delivery's
+	// DEFAULT_VERDICT (skills/verify-delivery/verify_delivery.py), ported
+	// verbatim.
+	skillReady = regexp.MustCompile(`(?m)^[ \t]*VERDICT[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*READY_FOR_HUMAN_MERGE\b`)
 	// fullSHA is a full commit id.
 	fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
@@ -141,12 +150,26 @@ var errCountedByComment = errors.New("the gates would count this comment as a re
 	"header. Post a review with `aicrew-agent forge pr review --pr N --body-file FILE`, which writes the header; to " +
 	"show the header as an example, put it after `> `.")
 
-// shownHeader is the number of body's first line, counted over LF and CR
-// alike, that is a review's header line (headerLine) after its leading
-// spaces and tabs, or 0. Fenced, indented and HTML-comment lines count: the
-// only way to show a header is after "> ".
+// bareCR reports whether body holds a carriage return without a line feed
+// after it. Readers split lines on it differently (the skill set's readers
+// read it inside a line, the product's reader drops it), so both commands
+// refuse it rather than choose one reading.
+func bareCR(body string) bool {
+	return strings.Contains(strings.ReplaceAll(body, "\r\n", "\n"), "\r")
+}
+
+// errBareCR refuses a body with a bare carriage return; what names it.
+func errBareCR(what string) error {
+	return fmt.Errorf("%s holds a carriage return without a line feed after it, which the gates read in different "+
+		"ways: save the file with LF or CRLF line ends", what)
+}
+
+// shownHeader is the number of body's first line (lines end at LF; body
+// holds no bare CR) that is a review's header line (headerLine) after its
+// leading spaces and tabs, or 0. Fenced, indented and HTML-comment lines
+// count: the only way to show a header is after "> ".
 func shownHeader(body string) int {
-	for i, l := range strings.Split(strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\r", "\n"), "\n") {
+	for i, l := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
 		if headerLine.MatchString(strings.TrimLeft(l, " \t")) {
 			return i + 1
 		}
@@ -179,6 +202,9 @@ var errReviewByComment = errors.New("the comment is a review (a review header, o
 // ("> VERDICT"), so with one such line each finds the verdict in that one
 // place. Whether the product's reader reads it is Review's check (readAs).
 func reviewLevel(body string) (level, verdict string, err error) {
+	if bareCR(body) {
+		return "", "", errBareCR("the review")
+	}
 	if first, ok := nextLine(strings.Split(body, "\n")); !ok {
 		return "", "", errors.New("the review is empty")
 	} else if headerLike.MatchString(first) {
@@ -241,6 +267,22 @@ func readAs(text, head, level, verdict string) error {
 		"line: reword that line so that it does not start with \"verdict\", or quote it with `> `", h.Verdict, line, verdict)
 }
 
+// skillsRead refuses a review whose text, as it would be posted, the skill
+// set's readers do not read with the verdict of its own VERDICT line: its
+// gates (skillVerdictWord) and, for a READY review, its delivery check
+// (skillReady). They allow only spaces and tabs around VERDICT and the
+// word and on the lines between, where reviewLevel's count trims any
+// space; with one such line counted, they can match only there.
+func skillsRead(text, verdict string) error {
+	m := skillVerdictWord.FindStringSubmatch(text)
+	if m != nil && m[1] == verdict && (verdict != "READY_FOR_HUMAN_MERGE" || skillReady.MatchString(text)) {
+		return nil
+	}
+	return fmt.Errorf("the skill set's gates and delivery check would not read %s from this review's VERDICT line: "+
+		"write VERDICT and the verdict alone on their lines, with only spaces or tabs around them and on any "+
+		"blank line between them", verdict)
+}
+
 // Review posts body on pull request n as the member's review, with the
 // header the gates read written by this command. head is the commit the
 // review read; empty means the commit the checkout in f.Dir stands on. The
@@ -279,6 +321,9 @@ func (f *ForgePR) Review(ctx context.Context, n int64, body, head string) (PullR
 	}
 	text := "[oh-code-review (" + level + ") review] reviewed at head " + head + "\n\n" + strings.TrimLeft(body, "\r\n")
 	if err := readAs(text, head, level, verdict); err != nil {
+		return PullReport{}, err
+	}
+	if err := skillsRead(text, verdict); err != nil {
 		return PullReport{}, err
 	}
 	c, err := f.API.CommentPull(ctx, t.host, t.kind(), t.token, t.path, n, text)

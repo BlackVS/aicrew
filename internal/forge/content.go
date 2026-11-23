@@ -239,7 +239,10 @@ func (c *Client) pullComments(ctx context.Context, host string, k Kind, token, p
 		}
 	}
 	for i := range out {
-		out[i].Review = reviewHeader(out[i].Body, p.HeadCommit)
+		// The body is cleaned and bounded already; ReadReview does both
+		// again, which changes nothing, so this reading is exactly the one
+		// `aicrew-agent forge pr review` checks before it posts.
+		out[i].Review, _, _ = ReadReview(out[i].Body, p.HeadCommit)
 		if out[i].Review == nil {
 			out[i].Notice = commentNotice(out[i].Body)
 		}
@@ -375,17 +378,30 @@ func commentNotice(body string) string {
 // reviewHeader reads body's first non-empty line as a review's header, or
 // nil.
 func reviewHeader(body, head string) *ReviewHeader {
+	h, _, _ := ReadReview(body, head)
+	return h
+}
+
+// ReadReview reads a comment's body as GetPullContent reads it for the pull
+// request whose head is head: cleaned (CleanText), cut to MaxCommentBody,
+// its first non-empty line as a review's header, or nil, with the verdict
+// the body names. line is the line the verdict was read from, and cut
+// says the body was longer than MaxCommentBody, so that only its start was
+// read. Cleaning and cutting a body that is clean and within the bound
+// change nothing.
+func ReadReview(body, head string) (h *ReviewHeader, line string, cut bool) {
+	body, cut = bounded(CleanText(body), MaxCommentBody)
 	m := reviewShape.FindStringSubmatch(firstLine(body))
 	if m == nil {
-		return nil
+		return nil, "", cut
 	}
-	h := &ReviewHeader{Reviewer: ReviewerLocal, Level: m[1], Head: m[3]}
+	h = &ReviewHeader{Reviewer: ReviewerLocal, Level: m[1], Head: m[3]}
 	if m[2] != "" {
 		h.Reviewer = ReviewerExternal
 	}
 	h.AtHead = head != "" && strings.HasPrefix(head, h.Head)
-	h.Verdict = reviewVerdict(body)
-	return h
+	h.Verdict, line = verdictOf(body)
+	return h, line, cut
 }
 
 var (
@@ -399,6 +415,13 @@ var (
 // reviewVerdict is the verdict a review body names: the word after its
 // verdict label, or on the first non-empty line after a verdict heading.
 func reviewVerdict(body string) string {
+	v, _ := verdictOf(body)
+	return v
+}
+
+// verdictOf is reviewVerdict with the line the verdict was read from
+// ("" for none).
+func verdictOf(body string) (verdict, line string) {
 	lines := strings.Split(body, "\n")
 	for i, l := range lines {
 		m := verdictLine.FindStringSubmatch(strings.TrimSpace(l))
@@ -406,19 +429,19 @@ func reviewVerdict(body string) string {
 			continue
 		}
 		if w := verdictWord.FindStringSubmatch(m[1]); w != nil {
-			return w[1]
+			return w[1], strings.TrimSpace(l)
 		}
 		for _, next := range lines[i+1:] {
 			if strings.TrimSpace(next) == "" {
 				continue
 			}
 			if w := verdictWord.FindStringSubmatch(next); w != nil {
-				return w[1]
+				return w[1], strings.TrimSpace(l)
 			}
 			break
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // commitChecks reads GitHub's and Gitea's checks of commit sha: its commit

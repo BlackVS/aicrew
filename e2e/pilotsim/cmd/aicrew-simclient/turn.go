@@ -673,6 +673,17 @@ func (m *member) followPull(ctx context.Context, b brief, wt string, n int64) er
 		if key != "" {
 			m.note("The submit superseded the pending one, request key %s.", key)
 		}
+		// The worker's own review comes after its submit: a READY local
+		// review before it would let the launcher's gates-green automation
+		// submit the attempt beside the stand-in's own step. Once the
+		// attempt is submitted, the automation does nothing. A home of an
+		// earlier release has no review command, and its worker posts no
+		// review of its own, as the stand-in did then.
+		if m.reviewCommand() && !ownReviewAt(shown.Content) {
+			if err := m.postOwnReview(ctx, wt, n, p.HeadCommit); err != nil {
+				return err
+			}
+		}
 	default:
 		m.note("Pull request #%d at %s: external verdict %q, checks %q; waiting.", n, p.HeadCommit, verdict, checks)
 	}
@@ -1199,11 +1210,24 @@ func (m *member) reviewResult(ctx context.Context, r submitted, a agent.OpenAtte
 	head := shown.Pull.HeadCommit
 	repo, n, _ := pullRef(r.pull)
 	var posted agent.PullReport
-	if err := m.agentJSON(ctx, m.home, localReview(head), &posted, "forge", "pr", "comment", "--repository", repo,
-		"--pr", n, "--body-file", "-"); err != nil {
-		return err
+	if m.reviewCommand() {
+		// The coordinator has no worktree on the worker's branch: --head
+		// names the commit it read, which the command checks against the
+		// forge's.
+		if err := m.agentJSON(ctx, m.home, reviewBody(coordinatorReview), &posted, "forge", "pr", "review",
+			"--repository", repo, "--pr", n, "--head", head, "--body-file", "-"); err != nil {
+			return err
+		}
+		m.note("Posted the local review of %s at head %s with forge pr review --head: READY_FOR_HUMAN_MERGE.", r.pull, head)
+	} else {
+		// A home of an earlier release posts the review, header and all,
+		// as a comment.
+		if err := m.agentJSON(ctx, m.home, countedHeader+head+"\n\n"+reviewBody(coordinatorReview), &posted, "forge",
+			"pr", "comment", "--repository", repo, "--pr", n, "--body-file", "-"); err != nil {
+			return err
+		}
+		m.note("Posted the local review of %s at head %s with forge pr comment: READY_FOR_HUMAN_MERGE.", r.pull, head)
 	}
-	m.note("Posted the local review of %s at head %s: READY_FOR_HUMAN_MERGE.", r.pull, head)
 	if _, err := m.step(ctx, "review", r.attempt, "", map[string]any{"result_seq": seq, "decision": "accept"}); err != nil {
 		return err
 	}
@@ -1211,11 +1235,17 @@ func (m *member) reviewResult(ctx context.Context, r submitted, a agent.OpenAtte
 	return nil
 }
 
-// localReview is the coordinator's review in the oh-code-review format.
-func localReview(head string) string {
-	return "[oh-code-review (high) review] reviewed at head " + head + `
+// The reviewers whose reviews the stand-ins write, named in the
+// attribution line.
+const (
+	coordinatorReview = "the pilot simulation's scripted coordinator"
+	workerReview      = "the pilot simulation's scripted worker"
+)
 
-CURRENT OBJECTIVE
+// reviewBody is a review in the oh-code-review format without its header
+// line, which `forge pr review` writes, attributed to by.
+func reviewBody(by string) string {
+	return `CURRENT OBJECTIVE
 The pilot simulation's task: one file, added through a reviewed pull request.
 
 BLOCKERS
@@ -1242,8 +1272,66 @@ READY_FOR_HUMAN_MERGE
 RISK
 LOW
 
-Review: oh-code-review (high) via the pilot simulation's scripted coordinator
+Review: oh-code-review (high) via ` + by + `
 `
+}
+
+// countedHeader is the header line the gates read, before the head.
+const countedHeader = "[oh-code-review (high) review] reviewed at head "
+
+// reviewGuidance is the wording of a home's docs/ROLES.md whose release has
+// `forge pr review` (task 01a1fa07-5db2); the releases before have none.
+const reviewGuidance = "`review --pr N --body-file FILE [--head SHA]` for a review"
+
+// reviewCommand says whether the home's own guidance names `forge pr
+// review`, as the stand-in follows its home's guidance: the upgrade
+// scenario's first cycle runs on the previous release's homes. A home
+// whose guidance cannot be read is taken as an earlier one.
+func (m *member) reviewCommand() bool {
+	raw, err := os.ReadFile(filepath.Join(m.home, "docs", "ROLES.md"))
+	return err == nil && bytes.Contains(raw, []byte(reviewGuidance))
+}
+
+// ownHeader is the header the first team's worker wrote on its own review of
+// pull request #279, which no gate counts.
+func ownHeader(head string) string { return "[worker review] reviewed at head " + head }
+
+// postOwnReview posts the worker's own review of pull request n at head, as
+// the first team's worker did on #279: first with a header of its own
+// through `forge pr comment`, which must refuse it and name the review
+// command, then through `forge pr review` in the worktree, which writes
+// the header the gates read at the worktree's commit.
+func (m *member) postOwnReview(ctx context.Context, wt string, n int64, head string) error {
+	body := reviewBody(workerReview)
+	out, code, err := m.run(ctx, wt, ownHeader(head)+"\n\n"+body, "aicrew-agent", "forge", "pr", "comment",
+		"--pr", fmt.Sprint(n), "--body-file", "-", "--json")
+	if err != nil {
+		return fmt.Errorf("aicrew-agent forge pr comment: %w", err)
+	}
+	if code == 0 || !strings.Contains(string(out), "aicrew-agent forge pr review") {
+		return fmt.Errorf("forge pr comment took a review with the header %q: exit %d: %s", ownHeader(head), code,
+			strings.TrimSpace(string(out)))
+	}
+	m.note("forge pr comment refused the worker's review of #%d with the header %q (exit %d).", n, ownHeader(head), code)
+	var posted agent.PullReport
+	if err := m.agentJSON(ctx, wt, body, &posted, "forge", "pr", "review", "--pr", fmt.Sprint(n), "--body-file", "-"); err != nil {
+		return err
+	}
+	m.note("Posted the worker's review of #%d at head %s with forge pr review: READY_FOR_HUMAN_MERGE.", n, head)
+	return nil
+}
+
+// ownReviewAt reports whether c holds a local review at the head.
+func ownReviewAt(c *forge.PullContent) bool {
+	if c == nil {
+		return false
+	}
+	for _, cm := range c.Comments {
+		if r := cm.Review; r != nil && r.Reviewer == forge.ReviewerLocal && r.AtHead {
+			return true
+		}
+	}
+	return false
 }
 
 // externalReviewer is the account of the simulation's external reviewer,

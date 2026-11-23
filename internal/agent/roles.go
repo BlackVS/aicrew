@@ -204,8 +204,8 @@ var guideRoles = []guideRole{
 		Steps: []guideStep{
 			{"work", "--attempt ATTEMPT_ID --task TASK_ID", `{"intent": "submit", "detail": "RESULT_URL"}`, "Report " +
 				"progress: `submit` with the result's link (a pull request), `block` with the reason as `detail`, " +
-				"or `resume` after a block or a rework decision. The coordinator's answer to a block arrives in " +
-				"your inbox as an `action.needed` message: act on it, then `resume`."},
+				"or `resume` after a block or a rework decision. " + submitOrder + " The coordinator's answer to " +
+				"a block arrives in your inbox as an `action.needed` message: act on it, then `resume`."},
 			{"finalize", "--attempt ATTEMPT_ID --task TASK_ID", `{"result_seq": 1}`, "Finalize your accepted result " +
 				"as DONE once the coordinator confirmed its delivery. " + workerMergeMessage + " " + workerResultSeq + " " + finalizeEvidence},
 			{"confirm-stop", "--attempt ATTEMPT_ID", "", "Confirm that you stopped, after the coordinator asked."},

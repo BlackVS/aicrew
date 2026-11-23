@@ -17,6 +17,7 @@ const forgeUsage = `usage: aicrew-agent forge pr open    [--home DIR] [--reposit
        aicrew-agent forge pr show    [--home DIR] [--repository URL] --pr NUMBER [--json]
        aicrew-agent forge pr label   add|remove [--home DIR] [--repository URL] --pr NUMBER LABEL... [--json]
        aicrew-agent forge pr comment [--home DIR] [--repository URL] --pr NUMBER --body-file FILE|- [--json]
+       aicrew-agent forge pr review  [--home DIR] [--repository URL --head SHA | --head SHA] --pr NUMBER --body-file FILE|- [--json]
        aicrew-agent forge pr ready   [--home DIR] [--repository URL] --pr NUMBER [--json]
   Opens, reads, labels and comments on a pull request with this home's own
   forge credential for the repository's host (join --cred), and prints the
@@ -31,7 +32,26 @@ const forgeUsage = `usage: aicrew-agent forge pr open    [--home DIR] [--reposit
   with a log excerpt of at most 8 KiB for a failed job where the forge
   offers its log, and the comments with their authors and bodies, oldest
   first; a review's header line ("reviewed at head SHA") is marked when it
-  names the head. Never use another forge client or a credential by hand.
+  names the head. review posts your review of the pull request with the
+  one header line the gates read, which it writes itself:
+  "` + agent.ReviewHeaderForm + `", at the level of the
+  file's line "Review: oh-code-review (LEVEL) via CLIENT" (high, max or
+  ultra). The file must not begin with a header of its own and needs one
+  line VERDICT with READY_FOR_HUMAN_MERGE, RETURN_TO_IMPLEMENTATION or
+  REVIEW_COULD_NOT_RUN alone on the next line, counted in code blocks too
+  (show that layout as an example after "> "), with only spaces or tabs
+  around VERDICT and the word; it is refused when the gates
+  would read another verdict from an earlier line starting with "verdict"
+  (quote another's with "> "), or the verdict past a comment's first 32
+  KiB, which is all they read. The head is the commit you
+  reviewed: your checkout's HEAD, or --head SHA (required with
+  --repository); the review is refused when the pull request's head on the
+  forge is another commit. comment refuses a body the gates would count as
+  a review, and one that is shaped as a review; a quoted line ("> ") or a
+  code block is not one. Both refuse a header line ("[NAME] reviewed at
+  head SHA") on any line, in a code block too: show one after "> ". Both
+  refuse a carriage return without a line feed after it.
+  Never use another forge client or a credential by hand.
   Each command reports the pull request to the launcher, which then watches
   it: a change that needs a decision (a review asking for changes, CI
   failing, both gates green, a merge or a close) arrives in the inbox as an
@@ -64,7 +84,7 @@ func forgeCmd(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	fs.StringVar(&f.Repository, "repository", "", "")
 	asJSON := fs.Bool("json", false, "")
 	var o agent.OpenPull
-	var bodyFile string
+	var bodyFile, head string
 	var pr int64
 	switch verb {
 	case "open":
@@ -73,10 +93,13 @@ func forgeCmd(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		fs.BoolVar(&o.Draft, "draft", false, "")
 		fs.StringVar(&o.Head, "head", "", "")
 		fs.StringVar(&o.Base, "base", "", "")
-	case "show", "label", "comment", "ready":
+	case "show", "label", "comment", "review", "ready":
 		fs.Int64Var(&pr, "pr", 0, "")
-		if verb == "comment" {
+		if verb == "comment" || verb == "review" {
 			fs.StringVar(&bodyFile, "body-file", "", "")
+		}
+		if verb == "review" {
+			fs.StringVar(&head, "head", "", "")
 		}
 	default:
 		fmt.Fprintln(stderr, forgeUsage)
@@ -87,7 +110,9 @@ func forgeCmd(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		(verb == "open" && (o.Title == "" || bodyFile == "" || fs.NArg() != 0)) ||
 		(verb != "open" && pr <= 0) ||
 		((verb == "show" || verb == "ready") && fs.NArg() != 0) ||
-		(verb == "comment" && (bodyFile == "" || fs.NArg() != 0)) ||
+		((verb == "comment" || verb == "review") && (bodyFile == "" || fs.NArg() != 0)) ||
+		// Without a checkout, nothing names the commit the review read.
+		(verb == "review" && f.Repository != "" && head == "") ||
 		(verb == "label" && fs.NArg() == 0)
 	if usage {
 		fmt.Fprintln(stderr, forgeUsage)
@@ -110,6 +135,11 @@ func forgeCmd(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		var body string
 		if body, err = agent.ReadPullText(f.Home, bodyFile, stdin); err == nil {
 			rep, err = f.Comment(ctx, pr, body)
+		}
+	case "review":
+		var body string
+		if body, err = agent.ReadPullText(f.Home, bodyFile, stdin); err == nil {
+			rep, err = f.Review(ctx, pr, body, head)
 		}
 	}
 	// Everything printed passes through RedactForgeTokens: an input quoted

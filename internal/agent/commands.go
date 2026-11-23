@@ -114,7 +114,8 @@ var crewCommands = []crewCommand{
 			"1. Read the task's frozen scope: objective, acceptance criteria and non-goals.\n" +
 			"2. Review the submitted pull request at level high with the `oh-code-review` skill, against that " +
 			"scope. Read its head and labels with `aicrew-agent forge pr show --pr N`, post the review with " +
-			"`aicrew-agent forge pr comment --pr N --body-file FILE`, and request an external review with " +
+			"`aicrew-agent forge pr review --pr N --head SHA --body-file FILE`, SHA being the head you reviewed (" +
+			reviewPostRule + "), and request an external review with " +
 			"`aicrew-agent forge pr label add --pr N LABEL` where the project's process asks for one. " +
 			pullRequestNever + "\n" +
 			"3. Decide with the review step below: `accept`, or `rework` to send it back. " + resultSeqSource + " Before you accept a pull " +
@@ -166,13 +167,13 @@ var crewCommands = []crewCommand{
 			"so. It prints the pull request's number and URL.\n" +
 			"2. Take it through the gates the project's process requires: `aicrew-agent forge pr show --pr N` " +
 			"reads it, `aicrew-agent forge pr label add|remove --pr N LABEL` labels it, `aicrew-agent forge " +
-			"pr comment --pr N --body-file FILE` comments on it, and `aicrew-agent forge pr ready --pr N` marks a " +
-			"draft ready when the process says its gates are green. The release's `gates-green` automation does " +
-			"that and submits the attempt for you once both reviews and CI are green at the head, and the " +
-			"attempt's lifecycle message tells you; mark ready and submit yourself only where the project's " +
-			"process disables it (`aicrew-agent check` lists the effective set). " + pullRequestNever + "\n" +
-			"3. Submit its URL with the work step below with `submit`; `block` with the reason, or `resume` " +
-			"after a block, use the same step.",
+			"pr comment --pr N --body-file FILE` comments on it, `aicrew-agent forge pr review --pr N --body-file " +
+			"FILE` posts your own review of it from the worktree at the commit you reviewed (" + reviewPostRule +
+			"), and `aicrew-agent forge pr ready --pr N` marks a " +
+			"draft ready when the process says its gates are green. " + submitOrder + " Mark ready and submit " +
+			"yourself only where the project's process disables it. " + pullRequestNever + "\n" +
+			"3. Where you submit yourself (the project's process disables `gates-green`), submit its URL with the " +
+			"work step below with `submit`; `block` with the reason, or `resume` after a block, use the same step.",
 		Ops: []string{"work"}},
 	{Name: "crew-claim", Role: "independent", Hint: "<task id>",
 		Desc: "Independent member: claim a READY task for yourself",
@@ -252,12 +253,29 @@ const blockAfterAccept = "`aicrew-agent step work --attempt ATTEMPT_ID --task TA
 const pullRequestNever = "Never use `gh`, `tea`, `glab` or another forge client, or a forge's API with a " +
 	"credential: their account is not yours. When a `forge pr` command is refused or fails, stop and report it."
 
+// submitOrder is the worker's order of the last steps while the release's
+// gates-green automation is in its set (01a1fa07-5db2): its own submit
+// beside the launcher's would meet it on aicrewd.
+const submitOrder = "Post your own review last. While `gates-green` is in your set (`aicrew-agent check` lists " +
+	"the effective set), do not mark the pull request ready and do not submit: the launcher does both once your " +
+	"review and the external one are READY at the head and CI is green there, and the attempt's lifecycle " +
+	"message tells you."
+
+// reviewPostRule says how a member's review is posted so that the gates
+// count it (01a1fa07-5db2): the header is the command's, never the
+// member's.
+const reviewPostRule = "the command writes the one header line the gates read, `" + ReviewHeaderForm + "`, at the " +
+	"level of the file's line `Review: oh-code-review (LEVEL) via CLIENT`, so the file starts below the header; " +
+	"the head is the commit your worktree stands on, or `--head SHA`, and must be the pull request's head on the " +
+	"forge. The gates read no other header, and `comment` refuses a review"
+
 // pullRequestRule is ROLES.md's rule on pull requests, which every member
 // follows.
 const pullRequestRule = "Open, read, label, comment on and mark ready pull requests with `aicrew-agent forge pr`, " +
 	"which uses your home's own forge credential for the repository's host: `open --title TITLE --body-file FILE " +
 	"[--draft]` in your worktree after pushing your branch, `show --pr N`, `label add|remove --pr N LABEL`, " +
-	"`comment --pr N --body-file FILE`, and `ready --pr N`, which drops the draft flag and a `WIP:` or `Draft:` " +
+	"`comment --pr N --body-file FILE`, `review --pr N --body-file FILE [--head SHA]` for a review (" + reviewPostRule +
+	"), and `ready --pr N`, which drops the draft flag and a `WIP:` or `Draft:` " +
 	"title prefix once the gates the project's process requires are green (the merge stays a person's). Each prints the pull request's number and URL, and whether your " +
 	"launcher watches it (`watch:`): a change of a watched pull request that needs your decision (the external " +
 	"review at the head asks for changes, CI fails, both gates turn green, a merge or a close) arrives in your inbox " +

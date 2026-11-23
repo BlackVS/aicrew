@@ -920,7 +920,7 @@ repository of the team's projects.
 | --- | --- |
 | `read:user` | `join --cred` and `check` ask the forge who the token authenticates as. Without it `join` refuses the token, naming the scope |
 | `write:repository` | git's clone and push; `forge pr open`; `forge pr ready` (it edits the title); reading the repository, its branches, the pull request and its reviews and statuses; an automation's base update, which pushes |
-| `write:issue` | `forge pr label` and `forge pr comment`, which go through the issue endpoints; `forge pr show` reads the comments there |
+| `write:issue` | `forge pr label`, `forge pr comment` and `forge pr review`, which go through the issue endpoints; `forge pr show` reads the comments there |
 | `read:organization` | only when a label the team uses is defined at the organization and not in the repository: `forge pr label add` reads the organization's labels only for a name the repository does not define |
 
 Tried on 2026-11-17 on the pilot simulation's Gitea (1.27), with tokens of
@@ -957,7 +957,7 @@ to the team's repositories:
 | Metadata: read | reading the repository and its default branch, including the account's push permission `check` reports (GitHub adds it to every token) |
 | Contents: read and write | git's clone and push; reading a branch's head; an automation's base update, which pushes |
 | Pull requests: read and write | `forge pr open`, `show` and `ready` (marking a draft ready and editing the title); labels and comments (see the next row) |
-| Issues: read and write (an alternative) | `forge pr label` and `forge pr comment` use the issue and label endpoints ([labels](https://docs.github.com/en/rest/issues/labels#add-labels-to-an-issue), [comments](https://docs.github.com/en/rest/issues/comments#create-an-issue-comment)). Each endpoint's page documents that a fine-grained token needs at least one of two permission sets, Issues or Pull requests (write to add, read to list), and [the permissions list](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens) names both for each of them. So Pull requests: read and write, which the row above needs anyway, should be enough; giving Issues as well does no harm. Not tried |
+| Issues: read and write (an alternative) | `forge pr label`, `forge pr comment` and `forge pr review` use the issue and label endpoints ([labels](https://docs.github.com/en/rest/issues/labels#add-labels-to-an-issue), [comments](https://docs.github.com/en/rest/issues/comments#create-an-issue-comment)). Each endpoint's page documents that a fine-grained token needs at least one of two permission sets, Issues or Pull requests (write to add, read to list), and [the permissions list](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens) names both for each of them. So Pull requests: read and write, which the row above needs anyway, should be enough; giving Issues as well does no harm. Not tried |
 | Commit statuses: read | the head's CI state, in `forge pr show` and the watch of a pull request |
 | Actions: read and write | read: a failed job's log in `forge pr show`. Write: the CI re-run automation, which is in every member's home by default and re-runs the failed jobs of a runner failure once per head, with the member's own token |
 

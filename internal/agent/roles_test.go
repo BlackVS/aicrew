@@ -414,8 +414,35 @@ func TestGuidancePullRequestsUseForgePR(t *testing.T) {
 		!strings.Contains(submit, "`aicrew-agent forge pr ready --pr N`") {
 		t.Errorf("/crew-submit does not open the pull request with forge pr before submitting: %s", submit)
 	}
+	// A member's review carries the one header the gates read, which the
+	// review command writes (01a1fa07-5db2): the worker's submit, the
+	// coordinator's review and every member's rule say so.
+	header := "`" + ReviewHeaderForm + "`"
+	for name, text := range map[string]string{"/crew-submit": submit, "/crew-review": bodies["crew-review"], "ROLES.md": every} {
+		for _, want := range []string{header, "The gates read no other header, and `comment` refuses a review",
+			"`Review: oh-code-review (LEVEL) via CLIENT`", "must be the pull request's head on the forge"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
+		}
+	}
+	// The worker's order while gates-green is in its set: its review last,
+	// no ready and no submit of its own.
+	worker := md[strings.Index(md, "## "+sectionWorkerAttempt):]
+	for name, text := range map[string]string{"/crew-submit": submit, "ROLES.md's running attempt": worker} {
+		for _, want := range []string{"Post your own review last.", "do not mark the pull request ready and do not submit: " +
+			"the launcher does both once your review and the external one are READY at the head and CI is green there"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
+		}
+	}
+	if !strings.Contains(submit, "`aicrew-agent forge pr review --pr N --body-file FILE` posts your own review") ||
+		!strings.Contains(every, "`review --pr N --body-file FILE [--head SHA]` for a review") {
+		t.Errorf("/crew-submit or ROLES.md does not name the review command: %s", submit)
+	}
 	review := bodies["crew-review"]
-	for _, want := range []string{"`aicrew-agent forge pr comment --pr N --body-file FILE`", "`aicrew-agent forge pr label add --pr N LABEL`",
+	for _, want := range []string{"`aicrew-agent forge pr review --pr N --head SHA --body-file FILE`", "`aicrew-agent forge pr label add --pr N LABEL`",
 		"`aicrew-agent forge pr show --pr N`", "Never use `gh`", "`aicrew-agent forge pr ready --pr N`: it needs no person"} {
 		if !strings.Contains(review, want) {
 			t.Errorf("/crew-review lacks %q: %s", want, review)

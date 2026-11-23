@@ -1887,8 +1887,8 @@ message ("Event delivery").
   change made meanwhile is announced then.
 - Changes between two reads are announced together; a label added and
   removed between them is not seen.
-- A comment the worker posts with `forge pr comment` is in its baseline and
-  is not announced; one it posts another way is.
+- A comment the worker posts with `forge pr comment` or `forge pr review`
+  is in its baseline and is not announced; one it posts another way is.
 
 **Reading the content.** The message carries what the decision needs.
 `aicrew-agent forge pr show --pr N` prints the rest, with the member's

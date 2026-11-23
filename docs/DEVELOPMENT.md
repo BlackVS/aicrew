@@ -3323,7 +3323,12 @@ credential.
     with a head it did not read would be worse than one that is not
     counted. The coordinator, which has no worktree on the worker's branch,
     posts with `--head`.
-  - `comment` refuses a body that is a review: its first non-empty line
+  - `comment` first refuses any body the product's reader
+    (`forge.ReadReview`) counts as a review, whatever its head, reviewer
+    or verdict; the reader trims the first line, so an indented header is
+    counted too. A counted header shown as an example goes in a fenced
+    block or after `> `.
+  - Beyond that, `comment` refuses a body that is a review: its first non-empty line
     shaped like a header (`[NAME] reviewed at head`, any name, after an
     optional `#`, `*` or `_`), or a `VERDICT` line with a verdict word on
     the next non-blank line or after `VERDICT:`. The refusal names

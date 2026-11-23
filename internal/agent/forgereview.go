@@ -130,6 +130,11 @@ func nextLine(lines []string) (string, bool) {
 	return "", false
 }
 
+// errCountedByComment refuses a comment the gates would count as a review.
+var errCountedByComment = errors.New("the gates would count this comment as a review: its first line is a review's " +
+	"header. Post a review with `aicrew-agent forge pr review --pr N --body-file FILE`, which writes the header; to " +
+	"show the header as an example, put it in a fenced code block or after `> `.")
+
 // errReviewByComment refuses a review posted as an ordinary comment.
 var errReviewByComment = errors.New("the comment is a review (a review header, or a VERDICT line with its verdict): " +
 	"post your review with `aicrew-agent forge pr review --pr N --body-file FILE`, which writes the header the gates " +

@@ -92,6 +92,7 @@ func reviewTest(t *testing.T, checkout string) (*fakeforge.Forge, ForgePR) {
 func TestCommentRefusesAReview(t *testing.T) {
 	ctx := context.Background()
 	f, pr := reviewTest(t, "")
+	counted := "[oh-code-review (high) review] reviewed at head " + fakeforge.HeadCommit
 	_, err := pr.Comment(ctx, 1, pr279Review(t))
 	if err == nil || !strings.Contains(err.Error(), "aicrew-agent forge pr review --pr N --body-file FILE") ||
 		!strings.Contains(err.Error(), ReviewHeaderForm) || !strings.Contains(err.Error(), "`> `") {
@@ -106,8 +107,12 @@ func TestCommentRefusesAReview(t *testing.T) {
 		// A fence closes only on its own character, at least as long: the
 		// inner three backticks are code inside the four.
 		"How to write it:\n\n````markdown\n```\nVERDICT\nREADY_FOR_HUMAN_MERGE\n````\n",
-		// An indented code line is no header.
-		"    [oh-code-review (high) review] reviewed at head " + fakeforge.HeadCommit + "\n\nis the form the gates read.\n"}
+		// An indented code line of another shape is no header.
+		"    [worker review] reviewed at head " + fakeforge.HeadCommit + "\n\nwas #279's form.\n",
+		// The counted header shown in a fence or a quotation: the reader's
+		// first line is the fence or the quotation mark.
+		"```\n" + counted + "\nVERDICT\nREADY_FOR_HUMAN_MERGE\n```\n",
+		"> " + counted + "\n>\n> VERDICT\n> READY_FOR_HUMAN_MERGE\n"}
 	for _, body := range posted {
 		if _, err := pr.Comment(ctx, 1, body); err != nil {
 			t.Errorf("comment %q: %v", body, err)
@@ -115,6 +120,29 @@ func TestCommentRefusesAReview(t *testing.T) {
 	}
 	if got := f.Pull(1).Comments; !slices.Equal(got, posted) {
 		t.Errorf("the forge holds %q", got)
+	}
+	_, content, err := pr.API.GetPullContent(ctx, f.Host, forge.Gitea, fakeforge.Token, "team/app", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range content.Comments {
+		if c.Review != nil {
+			t.Errorf("a posted comment is read as a review: %q", c.Body)
+		}
+	}
+
+	// The reader trims the first line: an indented counted header is a
+	// review to it, and is refused.
+	indented := "    " + counted + "\n\n    VERDICT\n    READY_FOR_HUMAN_MERGE\n"
+	if h, _, _ := forge.ReadReview(indented, fakeforge.HeadCommit); h == nil || !h.AtHead {
+		t.Fatalf("the reader does not count the indented header: %+v", h)
+	}
+	if _, err := pr.Comment(ctx, 1, indented); err == nil || !strings.Contains(err.Error(), "the gates would count this comment as a review") ||
+		!strings.Contains(err.Error(), "aicrew-agent forge pr review") {
+		t.Errorf("an indented counted header: %v", err)
+	}
+	if got := f.Pull(1).Comments; len(got) != len(posted) {
+		t.Errorf("a refused comment reached the forge: %q", got[len(posted):])
 	}
 }
 

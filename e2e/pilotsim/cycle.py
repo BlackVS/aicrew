@@ -17,6 +17,7 @@ DIR is the step's snapshot, which scripts/pilot-sim.sh takes read-only:
   forge/status.json      the merge commit's combined status, from the step merge on
   verify.json            verify-delivery's answer for the pull request, at the step done
   homes/ROLE/            turns.jsonl, guard.jsonl, turns.json and HANDOFF.md of each home
+  homes/worker/check.json the worker's aicrew-agent check --json report
 
 STEP is one of STEPS. CASE names the pilot case (cases.py) whose cycle the
 snapshot is, at the step done only: its own checks are in cases.py, and here
@@ -28,6 +29,10 @@ expectation and exits 1 when there is one; the snapshot stays for the report.
 PILOTSIM_OFFERED_NUDGES is the number of the operator's nudges the run made
 outside a case: the below-minimum upgrade run's offered turn, one, before
 the second cycle. The audit may hold that many control.nudge calls.
+
+PILOTSIM_BUILD_COMMIT is the commit this tree's members are built from: a
+worker home whose aicrew-agent is that build, with gates-green in its
+effective set, leaves the submit to its launcher, but in case F1.
 """
 import json
 import os
@@ -272,18 +277,28 @@ def check(step, d, case=""):
         if after(s) and not (case and s == "rework"):
             expect(text in handoff, "worker: the handoff does not record %r" % text)
     if after("submit"):
-        # The worker submits itself (a home of an earlier release, or case
-        # F1), or, where its guidance leaves the submit to the launcher's
-        # gates-green, posts its review and the launcher submits
-        # (01a206f8-24d0). Only the notes of this attempt's pull request
-        # decide: the handoff's archive keeps earlier attempts' notes.
+        # Who submits comes from the run's facts, not the worker's notes:
+        # where the worker home runs this tree's build, whose guidance
+        # leaves the submit to the launcher's gates-green, with gates-green
+        # in its effective set, the worker posts its review and the
+        # launcher submits (01a206f8-24d0), but in case F1 (submit_itself).
+        # A home of an earlier release, or case F1, submits itself. Only
+        # the notes of this attempt's pull request count: the handoff's
+        # archive keeps earlier attempts' notes.
         n = pulls[0]["number"] if pulls else 0
-        if launcher_note(handoff, n):
-            expect("Submitted #%d (" % n not in handoff, "worker: it submitted itself where the launcher submits")
+        launcher, why = launcher_submits(d, case)
+        expect(why == "", "worker: who submits is not known: %s" % why)
+        own = "Submitted #%d (" % n in handoff
+        if launcher:
+            expect(launcher_note(handoff, n), "worker: no note of its review of #%d leaving the submit to the "
+                   "launcher" % n)
+            expect(not own, "worker: it submitted itself where the launcher submits")
             expect(launcher_submitted(d, a["id"]), "worker's launcher: no committed submit of attempt %s among its "
                    "automation records" % a["id"])
-        else:
-            expect("Submitted #%d (" % n in handoff, "worker: the handoff records neither its submit nor the launcher's")
+        elif why == "":
+            expect(own, "worker: the handoff does not record its own submit of #%d" % n)
+            expect(not launcher_note(handoff, n), "worker: it left the submit of #%d to the launcher where it "
+                   "submits itself" % n)
     coordinator = load(d, "homes/coordinator/HANDOFF.md", "") or ""
     for s, text in (("review", "Accepted result 1 of attempt " + a["id"]),
                     ("done", "Attempt %s was finalized" % a["id"])):
@@ -298,6 +313,26 @@ def check(step, d, case=""):
 
 # What the stand-in notes where the launcher submits (aicrew-simclient).
 LAUNCHER_SUBMITS = "the launcher submits it, since gates-green is in the set"
+
+
+def launcher_submits(d, case):
+    """Whether the launcher, not the worker, submits the attempt, from the
+    run's facts, and "" or why that is not known: the worker's check report
+    in the snapshot (its aicrew-agent build against PILOTSIM_BUILD_COMMIT,
+    and gates-green in its effective set and not disabled, as the stand-in
+    reads it) and the case (F1 submits itself)."""
+    rep = loadj(d, "homes/worker/check.json", None)
+    build = os.environ.get("PILOTSIM_BUILD_COMMIT", "")
+    if not isinstance(rep, dict) or not isinstance(rep.get("aicrew_agent"), dict):
+        return False, "no readable check report of the worker in the snapshot"
+    if not build:
+        return False, "PILOTSIM_BUILD_COMMIT is not set"
+    if case == "F1" or rep["aicrew_agent"].get("commit") != build:
+        return False, ""
+    if not isinstance(rep.get("automations"), dict):
+        return False, "the worker's check report lists no automations (its launcher did not answer)"
+    entries = rep["automations"].get("entries") or []
+    return any(e.get("name") == "gates-green" and e.get("source") != "disabled" for e in entries), ""
 
 
 def launcher_note(handoff, number):

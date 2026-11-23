@@ -527,9 +527,20 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 		}
 	}
 	st.Continue = ""
+	polled := false
 	if afterErr == nil && after.Attempt.inWork() {
 		st.Continue = after.Attempt.ID
 		if a != nil && after.Attempt.ID == attemptID && !a.Stalled {
+			// Before a worker's attempt is stalled, the watched pull
+			// requests are read once: the turn may have posted the review
+			// that makes it wait on the launcher's submit (01a206f8-24d0).
+			if worker && (a.NoProgress >= stallTurns || a.Unchanged >= handoffStallTurns) {
+				l.Host.PollPulls(ctx)
+				l.nextPoll, polled = l.Now().Add(forgePoll), true
+				if l.waitingOnGates(ctx, attempt) {
+					a.NoProgress, a.Unchanged = 0, 0
+				}
+			}
 			switch {
 			case a.NoProgress >= stallTurns:
 				l.stall(ctx, after.Attempt, a, fmt.Sprintf(
@@ -544,8 +555,9 @@ func (l *TurnLoop) turn(ctx context.Context, st *turnState, status memberStatus,
 	}
 	// A worker's turn may have moved its pull request, its review posted:
 	// the next Tick reads the watched pull requests before it decides on a
-	// continuation, so the wait on the gates sees what the turn did.
-	if worker && st.Continue != "" {
+	// continuation, so the wait on the gates sees what the turn did, unless
+	// the read before a stall just did.
+	if worker && st.Continue != "" && !polled {
 		l.nextPoll = time.Time{}
 	}
 	if err := writeTurnState(l.Home, *st); err != nil {

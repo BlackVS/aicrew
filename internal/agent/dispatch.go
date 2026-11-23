@@ -472,11 +472,13 @@ func gatesGreenWait() time.Duration { return 3 * forgePoll }
 
 // GatesGreenWait says whether the worker's attempt at head waits on its
 // launcher's own submit: the launcher's last observation of the attempt's
-// pull request, at head, meets gates-green's firing condition (gatesGreen),
-// names gates-green among its automations, and less than gatesGreenWait has
+// pull request, at head, was taken by aicrewd (so the points hold what it
+// showed), meets gates-green's firing condition (gatesGreen), names
+// gates-green among its automations, and less than gatesGreenWait has
 // passed since the condition first held at head. A worker whose review is
-// not READY at the head, a set without gates-green, or one the launcher
-// could not read (no automations) waits on nothing here.
+// not READY at the head, a set without gates-green, one the launcher could
+// not read (no automations), or an observation aicrewd did not take, whose
+// reviews the points may not hold, waits on nothing here.
 func (s *StepServer) GatesGreenWait(attemptID, head string, now time.Time) bool {
 	if head == "" {
 		return false
@@ -488,8 +490,8 @@ func (s *StepServer) GatesGreenWait(attemptID, head string, now time.Time) bool 
 		p := doc.Pulls[pullKey(o.Host, o.Repository, o.Number)]
 		// p's head is the last observation's, and edges set GreenHead
 		// to it whenever the condition held there.
-		if p == nil || p.Attempt != attemptID || p.Head != head || !slices.Contains(o.Automations, automationGatesGreen) ||
-			!p.gatesGreen(o) {
+		if !o.reported || p == nil || p.Attempt != attemptID || p.Head != head ||
+			!slices.Contains(o.Automations, automationGatesGreen) || !p.gatesGreen(o) {
 			continue
 		}
 		if now.Sub(p.GreenSince) < gatesGreenWait() {

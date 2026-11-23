@@ -137,6 +137,11 @@ fi
 # The operator's nudges outside a case that the second cycle's audit check
 # allows (cycle.py): only the below-minimum run sets it, after its nudge.
 export PILOTSIM_OFFERED_NUDGES=0
+# The commit this tree's members are built from: a worker home that runs
+# it follows this tree's guidance, which leaves the submit to gates-green
+# (cycle.py).
+PILOTSIM_BUILD_COMMIT=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)
+export PILOTSIM_BUILD_COMMIT
 # An earlier run's report and snapshots go: each snapshot is taken once.
 rm -rf "$OUT/docsteps.ran" "$OUT/events.jsonl" "$OUT/report.jsonl" "$OUT/homes" "$OUT"/cycle-* "$OUT"/case-* "$OUT"/upgrade-*
 # ev TYPE KEY=VALUE...: one event of the run's report.
@@ -1096,7 +1101,8 @@ take_proxies() {
   done
 }
 # take_homes DIR: each home's turn records, guard log, turn state, handoff
-# and automation records.
+# and automation records, and the worker's check report, whose build and
+# effective automations say who submits (cycle.py).
 take_homes() {
   local d=$1 role f
   for role in coordinator worker indep; do
@@ -1106,6 +1112,7 @@ take_homes() {
         > "$d/homes/$role/${f##*/}"
     done
   done
+  mcheck worker > "$d/homes/worker/check.json" || true
 }
 # snapshot STEP [CASE]: take the step, then its cycle checks (for a case's
 # cycle, at the step done).

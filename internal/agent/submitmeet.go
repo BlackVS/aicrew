@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -60,38 +61,49 @@ type committedSubmit struct {
 }
 
 // noteSubmit records the link of a work submit that settled as committed,
-// replacing the attempt's earlier record. A step that is not a submit, an
-// attempt ID of another shape, an empty link, or a link that holds a token
-// of the home writes nothing; a write that fails leaves no record, which
-// reads as none.
+// replacing the attempt's earlier record. A step that is not a submit, or
+// an attempt ID of another shape, touches nothing. A committed submit whose
+// link is empty or holds a token of the home, or whose record cannot be
+// written, removes the attempt's earlier record: the latest committed
+// submit is then unknown, which reads as no record, never as the earlier
+// link.
 func (d *Driver) noteSubmit(p *pendingStep) {
-	ref := workDetail(p.Request.Body)
-	if workIntent(p.Request.Body) != "submit" || !attemptIDShape(p.AttemptID) || ref == "" ||
-		redactText(d.Home, ref) != ref {
+	if workIntent(p.Request.Body) != "submit" || !attemptIDShape(p.AttemptID) {
 		return
 	}
-	raw, err := json.Marshal(committedSubmit{Version: 1, AttemptID: p.AttemptID, Ref: ref})
+	path := filepath.Join(submitsDir(d.Home), p.AttemptID+".json")
+	if !writeSubmitRecord(path, p.AttemptID, workDetail(p.Request.Body), d.Home) {
+		os.Remove(path)
+	}
+}
+
+// writeSubmitRecord writes ref as attempt's record at path, atomically; it
+// is false when nothing was written.
+func writeSubmitRecord(path, attempt, ref, home string) bool {
+	if ref == "" || redactText(home, ref) != ref {
+		return false
+	}
+	raw, err := json.Marshal(committedSubmit{Version: 1, AttemptID: attempt, Ref: ref})
+	if err != nil || os.MkdirAll(filepath.Dir(path), 0o700) != nil {
+		return false
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".submit-*.json")
 	if err != nil {
-		return
-	}
-	dir := submitsDir(d.Home)
-	if os.MkdirAll(dir, 0o700) != nil {
-		return
-	}
-	tmp, err := os.CreateTemp(dir, ".submit-*.json")
-	if err != nil {
-		return
+		return false
 	}
 	_, werr := tmp.Write(append(raw, '\n'))
 	cerr := tmp.Close()
-	if werr != nil || cerr != nil || os.Rename(tmp.Name(), filepath.Join(dir, p.AttemptID+".json")) != nil {
+	if werr != nil || cerr != nil || os.Rename(tmp.Name(), path) != nil {
 		os.Remove(tmp.Name())
+		return false
 	}
+	return true
 }
 
 // submittedRef is the link of attemptID's latest committed submit as this
 // launcher recorded it, or "" for no record, an unreadable or malformed
-// one, or one of another attempt.
+// one (anything but white space after the object included), or one of
+// another attempt.
 func (d *Driver) submittedRef(attemptID string) string {
 	if !attemptIDShape(attemptID) {
 		return ""
@@ -104,6 +116,10 @@ func (d *Driver) submittedRef(attemptID string) string {
 	dec.DisallowUnknownFields()
 	var c committedSubmit
 	if dec.Decode(&c) != nil || c.Version != 1 || c.AttemptID != attemptID {
+		return ""
+	}
+	var rest json.RawMessage
+	if dec.Decode(&rest) != io.EOF {
 		return ""
 	}
 	return c.Ref

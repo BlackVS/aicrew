@@ -1324,10 +1324,16 @@ no turn and no stall (DESIGN-CONTROL-PLANE 1.8), while the launcher's last
 observation meets `pullPoints.gatesGreen`, the condition the point fires
 on, and names `gates-green` among its automations, for at most
 `3 × forgePoll` from the first observation at which it held for the head
-(`green_head`, `green_since` in the points state). The runner reads the
-watched pull requests at the tick after each worker turn that leaves the
-attempt in work, before it decides on a continuation: one status read per
-watched pull request, and its content only when the status changed.
+(`green_head`, `green_since` in the points state). The wait reads only a
+poll's observation that aicrewd took: the points take an observation's
+reviews only with a report that succeeded, so an observation whose report
+failed may show what the points do not hold, and it waits on nothing
+(each new observation starts unmarked; the mark is never carried on).
+The runner reads the watched pull requests once after each worker turn
+that leaves the attempt in work, before it decides: at the next tick, or,
+when the turn reached a stall count, before the stall, which it skips if
+that read shows the wait. One status read per watched pull request, and
+its content only when the status changed.
 The event a script gets at a point names the point as its kind and the
 pull request with its head as its ID, and carries `base_only`: at
 `after-push`, whether the new head's patch identity (`git diff

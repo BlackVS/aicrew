@@ -94,6 +94,11 @@ func TestMemberSubmitMeetsASettledSubmit(t *testing.T) {
 		"unknown field":   `{"version":1,"attempt_id":"` + id + `","ref":"` + submitLink + `","token":"x"}`,
 		"another version": `{"version":2,"attempt_id":"` + id + `","ref":"` + submitLink + `"}`,
 		"another attempt": `{"version":1,"attempt_id":"att-other","ref":"` + submitLink + `"}`,
+		// A matching record followed by anything but white space is
+		// malformed (hands review of #286).
+		"a stray byte after it": `{"version":1,"attempt_id":"` + id + `","ref":"` + submitLink + `"}x`,
+		"a second object after it": `{"version":1,"attempt_id":"` + id + `","ref":"` + submitLink + `"}` + "\n" +
+			`{"version":1,"attempt_id":"` + id + `","ref":"` + otherLink + `"}`,
 	} {
 		os.Remove(rec)
 		if content != "" {
@@ -105,6 +110,13 @@ func TestMemberSubmitMeetsASettledSubmit(t *testing.T) {
 		if ans.OK || ans.Status != StepRefused || ans.Error.Code != "attempt_state" || ans.Error.Message != noRecord {
 			t.Fatalf("%s: %+v", name, ans)
 		}
+	}
+	// White space after the object is the record still.
+	if err := os.WriteFile(rec, []byte(`{"version":1,"attempt_id":"`+id+`","ref":"`+submitLink+"\"}\n \r\n\t"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.d.submittedRef(id); got != submitLink {
+		t.Fatalf("a record with white space after it: %q", got)
 	}
 	s.submittedOnce(t, id, submitLink)
 }
@@ -338,6 +350,56 @@ func TestSubmitRecordAfterARework(t *testing.T) {
 	if m, ok := meetSubmit(&Refusal{Code: "attempt_state"}, "", func() (memberStatus, error) { return srv.Status(ctx) },
 		func() string { return s.d.submittedRef(id) }, id); ok {
 		t.Fatalf("met after a rework: %+v", m)
+	}
+}
+
+// After a rework, a committed submit whose link cannot be recorded (it
+// holds a home's token, or it is empty) removes the earlier submit's
+// record: the member's submit of the earlier link then gets the refusal
+// with "no record", never done (hands review of #286).
+func TestSubmitRecordReplacedOrRemovedAfterARework(t *testing.T) {
+	var answers []byte
+	ctx := context.Background()
+	s := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
+	provisionTestForge(t, s.cfg.Home, "git.example.test", "member-forge-token")
+	srv := s.serve(t)
+	id := s.claimedThrough(t, &answers)
+	if r, err := s.submitStep(t, id, submitLink); err != nil || r.Outcome != "committed" {
+		t.Fatalf("the first submit: %+v %v", r, err)
+	}
+	if _, err := s.store.ReviewResult(ctx, s.coord, "rework-"+id, id, store.ResultReview{SessionID: s.coordSess.ID,
+		Generation: s.coordSess.Generation, ResultSeq: s.resultSeq(t, id), Decision: store.ReviewRework}); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := s.run(t, attemptsPath+"/"+id+"/work", map[string]string{"intent": "resume"}); err != nil ||
+		r.Outcome != "committed" {
+		t.Fatalf("the resume: %+v %v", r, err)
+	}
+	token := otherLink + "?access_token=member-forge-token"
+	if r, err := s.submitStep(t, id, token); err != nil || r.Outcome != "committed" {
+		t.Fatalf("the second submit: %+v %v", r, err)
+	}
+	if st, err := srv.Status(ctx); err != nil || st.Attempt == nil || st.Attempt.Phase != "submitted" {
+		t.Fatalf("the status after the second submit: %+v %v", st.Attempt, err)
+	}
+	if _, err := os.Stat(filepath.Join(submitsDir(s.cfg.Home), id+".json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the first submit's record after a second one that cannot be recorded: %v", err)
+	}
+	ans := s.submitThrough(t, &answers, id, submitLink)
+	if ans.OK || ans.Status != StepRefused || ans.Error == nil || ans.Error.Code != "attempt_state" ||
+		!strings.HasSuffix(ans.Error.Message, " Attempt "+id+" is submitted already; this launcher has no record of a submit.") {
+		t.Fatalf("the first link after the second submit: %+v", ans)
+	}
+
+	// The same for an empty link, and a recordable link replaces the
+	// record, through the driver's settle.
+	for _, c := range []struct{ link, want string }{{"", ""}, {otherLink, otherLink}} {
+		writeSubmitRecord(filepath.Join(submitsDir(s.cfg.Home), id+".json"), id, submitLink, s.cfg.Home)
+		body, _ := json.Marshal(map[string]string{"intent": "submit", "detail": c.link})
+		s.d.noteSubmit(&pendingStep{AttemptID: id, Request: StepRequest{Path: attemptsPath + "/" + id + "/work", Body: body}})
+		if got := s.d.submittedRef(id); got != c.want {
+			t.Errorf("the record after a committed submit of %q: %q, want %q", c.link, got, c.want)
+		}
 	}
 }
 

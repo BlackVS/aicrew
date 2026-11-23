@@ -89,6 +89,11 @@ type PullObservation struct {
 	// so aicrewd sends no wake for a transition the launcher performs
 	// itself; nil when the set could not be read.
 	Automations []string `json:"automations,omitempty"`
+	// reported is true for a poll's observation that aicrewd took
+	// (observePull returned without error), so the points hold what it
+	// showed (GatesGreenWait). Each new observation starts without it; it
+	// is never sent.
+	reported bool
 }
 
 // PrePushFailure is a declared check that failed after a push, as the
@@ -495,6 +500,7 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 			s.log.Warn("forge events: report a pull request", "pull", w.Number, "error", err.Error())
 			continue
 		}
+		last[len(last)-1].reported = true
 		if o.Content {
 			s.markSeen(key, st)
 		}

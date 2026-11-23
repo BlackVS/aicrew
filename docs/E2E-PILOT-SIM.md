@@ -606,7 +606,12 @@ nothing to do ends, and the launcher's next message starts the next one.
   `docs/ROLES.md` does not name `forge pr review`, the upgrade scenario's
   first cycle on the previous release, the worker submits itself, posts
   no review of its own, and the coordinator posts its review through
-  `forge pr comment`, as before. In the `rework` phase it resumes
+  `forge pr comment`, as before. The cycle's checks take who submits from
+  the run's facts, never from the worker's notes: each snapshot holds the
+  worker's `aicrew-agent check --json` report, and the launcher submits
+  where that report's build is the commit the run built
+  (`PILOTSIM_BUILD_COMMIT`) and lists `gates-green`, not disabled, but in
+  case F1. They read only the notes of the attempt's own pull request. In the `rework` phase it resumes
   through `work` first, and in the `blocked` phase it waits for the
   coordinator's answer and then resumes the same way.
 

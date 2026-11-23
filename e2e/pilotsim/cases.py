@@ -53,7 +53,7 @@ import re
 import sqlite3
 import sys
 
-from cycle import load, loadj, items, reviews, LAUNCHER_SUBMITS, launcher_submitted
+from cycle import load, loadj, items, reviews, launcher_note, launcher_submitted
 
 
 # What a follow-up about an unacknowledged message says.
@@ -299,7 +299,8 @@ def p5_anyway(d, q, ids, a, expect):
     want = "(%s) after the launcher: exit 0, done: Attempt %s is submitted already, with the result %s: there is " \
            "nothing to submit." % (url, a["id"], url)
     expect(want in handoff, "worker: the handoff does not record the answer %r" % want)
-    expect(LAUNCHER_SUBMITS in handoff and "Submitted #" not in handoff,
+    n = (loadj(d, "forge/pull.json", {}) or {}).get("number", 0)
+    expect(launcher_note(handoff, n) and "Submitted #%d (" % n not in handoff,
            "worker: the launcher did not submit the attempt alone before")
     expect(launcher_submitted(d, a["id"]), "worker's launcher: no committed submit among its automation records")
     results = q("SELECT seq, result_ref FROM attempt_results WHERE attempt_id = ?", a["id"])

@@ -27,7 +27,8 @@ func TestGatesGreenWait(t *testing.T) {
 			forge.ReviewerExternal: {Head: head, Verdict: verdictReady}}
 	}
 	// observe takes o through the edges, as the launcher's notice of an
-	// observation does, keeps the state, and makes o the last observation.
+	// observation does, keeps the state, and makes o the last observation,
+	// one aicrewd took.
 	observe := func(s *StepServer, p *pullPoints, o PullObservation, f pullFacts) []string {
 		t.Helper()
 		got := p.edges(o, f, map[string]bool{}, key)
@@ -38,6 +39,7 @@ func TestGatesGreenWait(t *testing.T) {
 		if err := writePoints(s.home, doc, key); err != nil {
 			t.Fatal(err)
 		}
+		o.reported = true
 		s.seenMu.Lock()
 		s.last = []PullObservation{o}
 		s.seenMu.Unlock()
@@ -77,6 +79,14 @@ func TestGatesGreenWait(t *testing.T) {
 		if got := s.GatesGreenWait(c.attempt, c.head, since.Add(c.at)); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
+	}
+	// The same observation, not taken by aicrewd: the points may not hold
+	// what it showed, so there is no wait.
+	s.seenMu.Lock()
+	s.last[0].reported = false
+	s.seenMu.Unlock()
+	if s.GatesGreenWait("att-1", h1, since) {
+		t.Error("a wait on an observation aicrewd did not take")
 	}
 	// A later observation that leaves the condition ends the wait, and one
 	// that holds it again keeps the first start: the count is per head.
@@ -142,7 +152,8 @@ func TestGatesGreenWait(t *testing.T) {
 // that shows the worker's review READY beside the external one, with CI
 // green and gates-green in the set, makes the wait, with no further turn
 // and no stall. A read that shows it late costs the continuations before
-// it, within the stall rule. Past the wait's bound, or with no such wait,
+// it, within the stall rule; the turn that reaches the stall count reads
+// once more before the stall. Past the wait's bound, or with no such wait,
 // the continuations and the stall come as before.
 func TestTurnLoopWaitsOnTheLaunchersSubmit(t *testing.T) {
 	// The external review READY at the head with CI green: today's rule
@@ -187,6 +198,10 @@ func TestTurnLoopWaitsOnTheLaunchersSubmit(t *testing.T) {
 		{"the read after the turn shows it", 0, 1, 0},
 		{"the forge shows it one read late", 1, 2, 0},
 		{"the forge shows it two reads late", 2, 3, 0},
+		// The turn that reaches the stall count is read once more before
+		// the stall: a review that shows there waits (hands review of #286).
+		{"the forge shows it at the read before the stall", stallTurns, 1 + stallTurns, 0},
+		{"the forge shows it after the stall", stallTurns + 1, 1 + stallTurns, 1},
 		{"no wait on the launcher", -1, 1 + stallTurns, 1},
 	} {
 		e := start(c.showAfter)
@@ -197,8 +212,10 @@ func TestTurnLoopWaitsOnTheLaunchersSubmit(t *testing.T) {
 			t.Errorf("%s: %d turns and %d blocks, want %d and %d", c.name, len(e.specs), len(e.host.calls), c.turns,
 				c.blocks)
 		}
-		if c.showAfter >= 0 && e.host.polls < 1+c.turns {
-			t.Errorf("%s: %d reads, not one before each continuation's decision", c.name, e.host.polls)
+		// One read after each worker turn, before the continuation's or
+		// the stall's decision, and none more.
+		if e.host.polls != 1+c.turns {
+			t.Errorf("%s: %d reads for %d turns, not one after each", c.name, e.host.polls, c.turns)
 		}
 	}
 

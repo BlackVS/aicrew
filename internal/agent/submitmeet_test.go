@@ -203,13 +203,64 @@ func TestGatesGreenMeetsTheMembersSubmit(t *testing.T) {
 	}
 }
 
+// refuseSettle is the crew client with every settle refused with
+// attempt_state, as aicrewd's settle route can answer (server/attempts.go,
+// settle) when the attempt changed after the step's begin.
+type refuseSettle struct{ StepAPI }
+
+func (refuseSettle) SettleStep(context.Context, string, string, string, StepReport) (Settlement, error) {
+	return Settlement{}, &Refusal{Code: "attempt_state", Message: "The attempt's state does not allow this step now."}
+}
+
+// A submit whose own begin went through and whose own settle is then
+// refused with attempt_state met nothing: its own record, begun and not
+// settled, is never taken for another submit. The member gets the refusal
+// as it is, and gates-green's run fails as before, so it wakes the
+// coordinators.
+func TestSubmitRefusedAfterItsOwnBegin(t *testing.T) {
+	ctx := context.Background()
+	for _, side := range []string{"member", "gates-green"} {
+		var answers []byte
+		s := setupStepsWith(t, crewOptions{role: store.RoleIndependent, steps: true, shortHome: true})
+		srv := s.serve(t)
+		id := s.claimedThrough(t, &answers)
+		s.d.Crew = refuseSettle{s.d.Crew}
+		if side == "member" {
+			ans := s.submitThrough(t, &answers, id, submitLink)
+			if ans.Status != StepRefused || ans.Error == nil || ans.Error.Code != "attempt_state" ||
+				ans.Error.Message != "The attempt's state does not allow this step now." {
+				t.Fatalf("the member's answer: %+v %+v", ans, ans.Error)
+			}
+		} else {
+			run := gatesGreenRun(id)
+			err := srv.submitResult(ctx, run, submitLink)
+			var ref *Refusal
+			if !errors.As(err, &ref) || ref.Code != "attempt_state" {
+				t.Fatalf("gates-green's submit: %v", err)
+			}
+			for _, st := range run.steps {
+				if strings.Contains(st.Text, "nothing to do") {
+					t.Fatalf("gates-green's run met its own submit: %+v", run.steps)
+				}
+			}
+		}
+		// The call's own record is the one a meeting would have taken.
+		if s.d.submitInFlight(id) == "" {
+			t.Fatalf("%s: no begun record of the call's own submit", side)
+		}
+	}
+}
+
 // A refusal for any other reason is the refusal as it is, on both sides:
 // another code, an error that is no refusal, a status that cannot be read,
 // another attempt, a state or phase other than running and submitted. The
 // phase is the live status's: after a rework the record of the first
 // submit makes nothing clean.
 func TestSubmitMeetingFailsClosed(t *testing.T) {
-	state := &Refusal{Code: "attempt_state", Message: "The attempt's state does not allow this step now."}
+	// drive marks the refusal of a step's own first begin; the same code
+	// after the step's own begin is a bare refusal.
+	refusal := &Refusal{Code: "attempt_state", Message: "The attempt's state does not allow this step now."}
+	state := &firstBeginRefused{refusal}
 	status := func(id, st, phase string) func() (memberStatus, error) {
 		return func() (memberStatus, error) {
 			return memberStatus{Attempt: &memberAttempt{ID: id, State: st, Phase: phase}}, nil
@@ -221,7 +272,8 @@ func TestSubmitMeetingFailsClosed(t *testing.T) {
 		err    error
 		status func() (memberStatus, error)
 	}{
-		{"another code", &Refusal{Code: "attempt_forbidden"}, status("att-1", "running", "submitted")},
+		{"another code", &firstBeginRefused{&Refusal{Code: "attempt_forbidden"}}, status("att-1", "running", "submitted")},
+		{"after its own begin", refusal, status("att-1", "running", "submitted")},
 		{"no refusal", errors.New("aicrewd did not answer"), status("att-1", "running", "submitted")},
 		{"status unreadable", state, func() (memberStatus, error) { return memberStatus{}, errors.New("unavailable") }},
 		{"no attempt", state, func() (memberStatus, error) { return memberStatus{}, nil }},
@@ -236,9 +288,13 @@ func TestSubmitMeetingFailsClosed(t *testing.T) {
 		}
 	}
 	// A submit in flight decides only an attempt_state refusal.
-	if _, ok := meetSubmit(&Refusal{Code: "attempt_forbidden"}, "req-1", status("att-1", "running", "working"), recorded,
-		"att-1"); ok {
+	if _, ok := meetSubmit(&firstBeginRefused{&Refusal{Code: "attempt_forbidden"}}, "req-1", status("att-1", "running",
+		"working"), recorded, "att-1"); ok {
 		t.Error("another code with a submit in flight met it")
+	}
+	// A refusal after the call's own begin never meets its own record.
+	if _, ok := meetSubmit(refusal, "req-1", status("att-1", "running", "submitted"), recorded, "att-1"); ok {
+		t.Error("a refusal after the call's own begin met a submit in flight")
 	}
 	// The status is read once, and not at all for a submit in flight.
 	reads := 0

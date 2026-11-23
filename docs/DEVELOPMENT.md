@@ -1290,7 +1290,11 @@ is performed once the base reads.
 **When the two submits meet** (task 01a206f8-24d0). A worker that submits
 anyway, and the launcher's `gates-green` submit of the same attempt, both
 go through the launcher's step driver, so the second begin is refused
-with `attempt_state`. The launcher then answers from what it knows itself,
+with `attempt_state`. Only that refusal of the call's own first begin,
+which the step driver marks as it drops the call's record, can be such a
+meeting: a refusal after the call's own begin, by its update or settle,
+is never one, whatever its code, so the call's own record is never taken
+for the other submit. The launcher then answers from what it knows itself,
 never from aicrewd's text (which carries the code's fixed message only).
 A `work` submit of the attempt that has begun in the home's step records
 and not settled makes the member's answer `pending` ("This launcher is
@@ -1310,7 +1314,8 @@ member's submit it met then fails, nothing retries at that head, and the
 member's own step answers for it. Anything else is the refusal as it was,
 so a launcher and an aicrewd of different releases get today's refusal,
 and a home upgraded while its attempt was submitted has no record and
-gets the refusal with "no record".
+gets the refusal with "no record". Nothing removes the records: the
+directory keeps one small file per attempt submitted through the home.
 The event a script gets at a point names the point as its kind and the
 pull request with its head as its ID, and carries `base_only`: at
 `after-push`, whether the new head's patch identity (`git diff

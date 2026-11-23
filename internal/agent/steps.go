@@ -342,6 +342,15 @@ func (d *Driver) Recover(ctx context.Context) ([]StepResult, error) {
 	return out, first
 }
 
+// firstBeginRefused is aicrewd's refusal of a step's first begin, as
+// drive returns it: nothing of the step began. It is the only error a
+// submit that met another one can carry (submitmeet.go); a refusal after
+// the step's own begin, by its send or settle, never is one.
+type firstBeginRefused struct{ err error }
+
+func (e *firstBeginRefused) Error() string { return e.err.Error() }
+func (e *firstBeginRefused) Unwrap() error { return e.err }
+
 // drive takes a recorded step from its phase to its settle. fresh is true
 // for a step's first begin, whose answer is known to be the answer to the
 // only begin sent under its key.
@@ -365,7 +374,7 @@ func (d *Driver) drive(ctx context.Context, p *pendingStep, fresh bool) (StepRes
 			if derr := d.drop(p); derr != nil {
 				return StepResult{}, errors.Join(err, derr)
 			}
-			return StepResult{}, err
+			return StepResult{}, &firstBeginRefused{err}
 		case err != nil:
 			return StepResult{}, err
 		default:

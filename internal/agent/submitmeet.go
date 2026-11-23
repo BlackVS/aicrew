@@ -119,16 +119,20 @@ type submitMet struct {
 }
 
 // meetSubmit decides what a refused submit of attempt met; ok is false
-// when it met nothing, and then the refusal stands as it is. Only an
-// attempt_state refusal can have met another submit. A submit in flight
+// when it met nothing, and then the refusal stands as it is. Only the
+// call's own first begin refused with attempt_state can have met another
+// submit: drive marks that refusal (firstBeginRefused), so an error after
+// the call's own begin, whatever its code, is never a meeting, and the
+// call's own record is never taken for the other submit. A submit in flight
 // in this home decides first; otherwise the status, read once, must show
 // the same attempt running in the phase submitted. A status that cannot be
 // read, or shows anything else, decides nothing: the phase is always the
 // live status's, never the record's.
 func meetSubmit(err error, inFlight string, status func() (memberStatus, error), recorded func() string,
 	attempt string) (submitMet, bool) {
+	var first *firstBeginRefused
 	var ref *Refusal
-	if !errors.As(err, &ref) || ref.Code != "attempt_state" {
+	if !errors.As(err, &first) || !errors.As(first.err, &ref) || ref.Code != "attempt_state" {
 		return submitMet{}, false
 	}
 	if inFlight != "" {

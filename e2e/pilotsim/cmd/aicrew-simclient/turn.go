@@ -27,6 +27,7 @@ import (
 	"github.com/BlackVS/aicrew/internal/agent"
 	"github.com/BlackVS/aicrew/internal/automation"
 	"github.com/BlackVS/aicrew/internal/forge"
+	"github.com/BlackVS/aicrew/internal/store"
 )
 
 // turnMode reports the launcher's turn: print mode with a session ID.
@@ -164,6 +165,14 @@ type scenario struct {
 	// blocked attempt instead of answering it, and give the worker the
 	// architect's decision once the answer arrives (E1).
 	EscalateBlocked bool `json:"escalate_blocked"`
+	// SubmitItself keeps the worker's own submit, before its review, where
+	// its guidance leaves the submit to the launcher: case F1's faults are
+	// on the worker's own submit (01a206f8-24d0).
+	SubmitItself bool `json:"submit_itself"`
+	// SubmitAnyway makes the worker submit its pull request once more after
+	// the launcher submitted it, as a worker that ignores its guidance
+	// would, and record the answer (01a206f8-24d0).
+	SubmitAnyway bool `json:"submit_anyway"`
 }
 
 // readScenario reads path; a missing file is the zero scenario.
@@ -436,6 +445,9 @@ func (m *member) worker(ctx context.Context, b brief, msgs []message) error {
 		}
 		m.note("Attempt %s is accepted: the coordinator confirms its delivery and finalizes it.", b.Attempt)
 		return nil
+	} else if b.State == "running" && b.Phase == "submitted" && m.sc.SubmitAnyway &&
+		!strings.Contains(m.section(), submittedAnyway) {
+		return m.submitAnyway(ctx, b)
 	} else if b.State != "running" || (b.Phase != "working" && b.Phase != "rework") {
 		m.note("Attempt %s is %s/%s: nothing for the worker to do.", b.Attempt, b.State, b.Phase)
 		return nil
@@ -650,6 +662,26 @@ func (m *member) followPull(ctx context.Context, b brief, wt string, n int64) er
 		// No review at this head: a hands-reviewed label is an older head's.
 		return m.requestReview(ctx, wt, n, slices.Contains(p.Labels, "hands-reviewed"))
 	case verdict == "READY_FOR_HUMAN_MERGE" && checks == forge.ChecksSuccess:
+		// The guidance's order where the launcher submits: the worker's own
+		// review, and no submit of its own (01a206f8-24d0).
+		if m.reviewCommand() && !m.sc.SubmitItself {
+			launcher, err := m.gatesGreenInSet(ctx)
+			if err != nil {
+				return err
+			}
+			if launcher {
+				if ownReviewAt(shown.Content) {
+					m.note("Waiting for the launcher's submit of #%d at %s.", n, p.HeadCommit)
+					return nil
+				}
+				if err := m.postOwnReview(ctx, wt, n, p.HeadCommit); err != nil {
+					return err
+				}
+				m.note("Posted the review of #%d at %s; the launcher submits it, since gates-green is in the set.", n,
+					p.HeadCommit)
+				return nil
+			}
+		}
 		body := map[string]string{"intent": "submit", "detail": p.URL}
 		key := pendingSubmit(m.section())
 		if key != "" {
@@ -1282,6 +1314,51 @@ const countedHeader = "[oh-code-review (high) review] reviewed at head "
 // reviewGuidance is the wording of a home's docs/ROLES.md whose release has
 // `forge pr review` (task 01a1fa07-5db2); the releases before have none.
 const reviewGuidance = "`review --pr N --body-file FILE [--head SHA]` for a review"
+
+// gatesGreenInSet says whether `aicrew-agent check` lists gates-green in
+// the home's effective automations, not disabled: the guidance's test for
+// leaving the submit to the launcher.
+func (m *member) gatesGreenInSet(ctx context.Context) (bool, error) {
+	var rep agent.CheckReport
+	if err := m.agentJSON(ctx, m.home, "", &rep, "check", "--home", m.home); err != nil {
+		return false, err
+	}
+	if rep.Automations == nil || rep.Automations.AutomationSet == nil {
+		return false, nil
+	}
+	for _, e := range rep.Automations.Entries {
+		if e.Name == store.AutomationGatesGreen {
+			return e.Source != automation.SourceDisabled, nil
+		}
+	}
+	return false, nil
+}
+
+// submittedAnyway begins the note of the worker's submit after the
+// launcher's (SubmitAnyway).
+const submittedAnyway = "Submitted anyway"
+
+// submitAnyway submits the attempt's pull request once more after the
+// launcher submitted it, and records the step's answer as it came.
+func (m *member) submitAnyway(ctx context.Context, b brief) error {
+	n := recordedPull(m.section())
+	wt := filepath.Join(m.home, "worktrees", b.Attempt)
+	var shown agent.PullReport
+	if err := m.agentJSON(ctx, wt, "", &shown, "forge", "pr", "show", "--pr", fmt.Sprint(n)); err != nil {
+		return err
+	}
+	ans, code, err := m.stepOnce(ctx, "work", b.Attempt, b.Task, map[string]string{"intent": "submit",
+		"detail": shown.Pull.URL})
+	if err != nil {
+		return err
+	}
+	said := ans.NextAction
+	if ans.Error != nil {
+		said = ans.Error.Code + ": " + ans.Error.Message
+	}
+	m.note("%s #%d (%s) after the launcher: exit %d, %s: %s", submittedAnyway, n, shown.Pull.URL, code, ans.Status, said)
+	return nil
+}
 
 // reviewCommand says whether the home's own guidance names `forge pr
 // review`, as the stand-in follows its home's guidance: the upgrade

@@ -1286,6 +1286,31 @@ automation. A set that fails later, at a repository-sourced script's base
 read, still names its automations: the point then records no edge and
 fires again at the next observation, so the transition the names promise
 is performed once the base reads.
+
+**When the two submits meet** (task 01a206f8-24d0). A worker that submits
+anyway, and the launcher's `gates-green` submit of the same attempt, both
+go through the launcher's step driver, so the second begin is refused
+with `attempt_state`. The launcher then answers from what it knows itself,
+never from aicrewd's text (which carries the code's fixed message only).
+A `work` submit of the attempt that has begun in the home's step records
+and not settled makes the member's answer `pending` ("This launcher is
+submitting attempt ... already"; not that it is submitted, since it may
+settle as not committed) and gates-green's run "nothing to do". Otherwise
+the session status, read once, must show the same attempt running in the
+phase `submitted`. Then gates-green's run ends "nothing to do", and the
+member's answer is `done` ("is submitted already ... there is nothing to
+submit") only when `state/submits/ATTEMPT.json`, the launcher's record of
+the attempt's latest committed submit, names the member's own link. For
+another link, no record, or a record that cannot be read, the refusal
+stands with that fact added. The driver writes the record when a work
+submit settles as committed, never for a link that holds a home's token;
+a step record cannot serve, since a settled step's record is dropped. A
+run that ends "nothing to do" fails nothing, so it wakes nobody; if the
+member's submit it met then fails, nothing retries at that head, and the
+member's own step answers for it. Anything else is the refusal as it was,
+so a launcher and an aicrewd of different releases get today's refusal,
+and a home upgraded while its attempt was submitted has no record and
+gets the refusal with "no record".
 The event a script gets at a point names the point as its kind and the
 pull request with its head as its ID, and carries `base_only`: at
 `after-push`, whether the new head's patch identity (`git diff

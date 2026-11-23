@@ -437,6 +437,26 @@ func TestGuidancePullRequestsUseForgePR(t *testing.T) {
 			}
 		}
 	}
+	// What the worker reads when it submitted anyway (01a206f8-24d0): the
+	// guidance quotes the words the answers themselves begin with.
+	refused := &Refusal{Code: "attempt_state", Message: "refused."}
+	answers := []StepAnswer{submitMeetAnswer(refused, submitMet{inFlight: "req-1"}, "att-1", "L"),
+		submitMeetAnswer(refused, submitMet{ref: "L"}, "att-1", "L"), submitMeetAnswer(refused, submitMet{ref: "M"}, "att-1", "L")}
+	if answers[0].Status != StepPending || !strings.HasPrefix(answers[0].NextAction, inFlightWords+" ") ||
+		answers[1].Status != StepDone || !strings.Contains(answers[1].NextAction, " "+submittedWords+", ") ||
+		answers[2].Status != StepRefused || !strings.Contains(answers[2].Error.Message, " "+submittedWords+"; ") {
+		t.Errorf("the answers do not begin their facts with the quoted words: %+v", answers)
+	}
+	for name, text := range map[string]string{"/crew-submit": submit, "ROLES.md's running attempt": worker} {
+		for _, want := range []string{"If you submitted anyway, read the step's answer: `pending` with \"" + inFlightWords +
+			"\" means the launcher's submit is in flight, so do not submit again; `done` with \"" + submittedWords +
+			"\" means the attempt is submitted with your link, and there is nothing to submit; a refusal that says \"" +
+			submittedWords + "\" means it is submitted with another result, or this launcher has no record of one."} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
+		}
+	}
 	if !strings.Contains(submit, "`aicrew-agent forge pr review --pr N --body-file FILE` posts your own review") ||
 		!strings.Contains(every, "`review --pr N --body-file FILE [--head SHA]` for a review") {
 		t.Errorf("/crew-submit or ROLES.md does not name the review command: %s", submit)

@@ -815,6 +815,17 @@ func (s *StepServer) submitResult(ctx context.Context, run *liveRun, u string) e
 	res, err := s.driver.Run(ctx, StepRequest{Path: attemptsPath + "/" + url.PathEscape(run.attempt) + "/work", Body: body,
 		TaskID: st.Attempt.Task.TaskID})
 	if err != nil {
+		// The member's own submit of the attempt met this one
+		// (submitmeet.go): nothing to do, and the run is not failed, so it
+		// wakes nobody. Nothing retries at this head if that submit then
+		// fails; the member's step answers it.
+		if m, ok := s.meetSubmitFor(ctx, err, run.attempt); ok {
+			if m.inFlight != "" {
+				return s.recordStep(run, stepHostSubmit, "a submit of the attempt is in flight already (request key "+
+					m.inFlight+"); nothing to do")
+			}
+			return s.recordStep(run, stepHostSubmit, "the attempt is submitted already; nothing to do")
+		}
 		return fmt.Errorf("the submit step: %w", err)
 	}
 	if !res.Settled || res.Outcome == "committed" {

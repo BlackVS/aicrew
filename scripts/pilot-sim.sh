@@ -1095,12 +1095,13 @@ take_proxies() {
     px "$p" log > "$1/proxy/$p.jsonl" || fail "sim-px-$p's request log"
   done
 }
-# take_homes DIR: each home's turn records, guard log, turn state and handoff.
+# take_homes DIR: each home's turn records, guard log, turn state, handoff
+# and automation records.
 take_homes() {
   local d=$1 role f
   for role in coordinator worker indep; do
     mkdir -p "$d/homes/$role"
-    for f in logs/turns.jsonl logs/guard.jsonl docs/HANDOFF.md state/turns.json; do
+    for f in logs/turns.jsonl logs/guard.jsonl docs/HANDOFF.md state/turns.json logs/automations.jsonl; do
       dc exec -T -u member "sim-$role" sh -c '[ ! -f "$1" ] || cat "$1"' sh "$(mhome "$role")/$f" \
         > "$d/homes/$role/${f##*/}"
     done

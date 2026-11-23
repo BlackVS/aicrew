@@ -588,20 +588,25 @@ nothing to do ends, and the launcher's next message starts the next one.
   A `RETURN_TO_IMPLEMENTATION` from sim-hands at the head, or failed
   checks once the review is done, gets a new commit, the stale
   `hands-reviewed` taken off and a new `review-this`. Once sim-hands's
-  review at the head is READY and the checks passed, the worker submits
-  the pull request through `work` (intent `submit`). Then it posts its own
-  review at the head, as the first team's worker did on pull request #279:
-  first through `forge pr comment` with a header of its own
+  review at the head is READY and the checks passed, the worker follows
+  its guidance. Where `aicrew-agent check` lists `gates-green` in its
+  effective set, it posts its own review at the head and does not submit:
+  the launcher's `gates-green` marks the pull request ready and submits
+  the attempt, and its record of that submit is in the home's
+  `logs/automations.jsonl`, which the snapshots copy. The review is posted
+  as the first team's worker did on pull request #279: first through
+  `forge pr comment` with a header of its own
   (`[worker review] reviewed at head SHA`), which the command must refuse
   while naming `forge pr review`, then through `forge pr review` in the
   worktree, which writes the header the gates read at the worktree's
-  commit. The review comes after the submit because a READY local review
-  before it would let the launcher's `gates-green` automation submit the
-  attempt beside the worker's own step; once the attempt is submitted, the
-  automation does nothing. On a home whose `docs/ROLES.md` does not name
-  `forge pr review`, the upgrade scenario's first cycle on the previous
-  release, the worker posts no review of its own and the coordinator posts
-  its review through `forge pr comment`, as before. In the `rework` phase it resumes
+  commit. Where `gates-green` is not in the set, and in case F1, whose
+  faults are on the worker's own submit, the worker submits through
+  `work` (intent `submit`) first and posts its review after, so that the
+  automation finds the attempt submitted and does nothing. On a home whose
+  `docs/ROLES.md` does not name `forge pr review`, the upgrade scenario's
+  first cycle on the previous release, the worker submits itself, posts
+  no review of its own, and the coordinator posts its review through
+  `forge pr comment`, as before. In the `rework` phase it resumes
   through `work` first, and in the `blocked` phase it waits for the
   coordinator's answer and then resumes the same way.
 
@@ -862,6 +867,7 @@ cycle's checks at the step done, without the plain cycle's external RETURN.
 | --- | --- | --- | --- |
 | P2 | the worker pushes while `hands-reviewing` is on; a worker waiting on its gates gets no turn, so the operator's nudge gives it one during the review | submit | two commits; no review of the first head counts; sim-hands's READY at the second head after the renewed request |
 | P5 | sim-ci fails the first head | submit | the worker reworked for the failed checks; READY and CI success at the second head, the head aicrewd watches |
+| P5 | the worker submits once more after its launcher's submit (scenario `submit_anyway`, given a turn by the operator's nudge) | anyway | the step answered `done`, that the attempt is submitted already with the same result and there is nothing to submit; aicrewd holds one result; the launcher's record holds its own committed submit |
 | P5 | sim-ci leaves the merge commit pending | pending | the coordinator's launcher logged its delivery check as pending, and the attempt has no delivery, no finalize and no `confirm-delivery` step; the task stays in REVIEW. Once sim-ci succeeds, the launcher's next read confirms it with no wake, and the cycle ends with its delivery record |
 | P4 | the worker stalls after its accept | blocked | the launcher's stall rule blocked the attempt; the coordinator's blocked report; the task BLOCKED in aimem |
 | P4 | | answered | the coordinator's `answer` step and its handoff; the worker then resumes and the cycle reaches DONE |
@@ -1111,7 +1117,10 @@ the container. The proof never leaves it.
 ### The cases
 
 Each part is a skip-the-fault case of its own. `cases.py` checks it at
-its point:
+its point. F1's faults are on the worker's own submit, so its worker runs
+with the scenario `submit_itself` and submits before its review, as where
+`gates-green` is out of the set: the run's one process cannot take
+`gates-green` out for a single case.
 
 | Case | Fault | Point | What it shows |
 | --- | --- | --- | --- |

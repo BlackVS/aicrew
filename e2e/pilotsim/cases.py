@@ -53,7 +53,7 @@ import re
 import sqlite3
 import sys
 
-from cycle import load, loadj, items, reviews
+from cycle import load, loadj, items, reviews, LAUNCHER_SUBMITS, launcher_submitted
 
 
 # What a follow-up about an unacknowledged message says.
@@ -286,6 +286,25 @@ def p5_submit(d, q, ids, a, expect):
     pulls = q("SELECT head_commit FROM attempt_pulls WHERE attempt_id = ?", a["id"])
     expect(pulls and pulls[0]["head_commit"] == head, "aicrewd: the watched head is %s, not %s" %
            ([p["head_commit"] for p in pulls], head))
+    expect((a["state"], a["phase"]) == ("running", "submitted"), "aicrewd: the attempt is %s/%s" % (a["state"], a["phase"]))
+
+
+def p5_anyway(d, q, ids, a, expect):
+    """The worker's submit after its launcher's (01a206f8-24d0): the step's
+    answer as the stand-in noted it, one result on aicrewd, and the
+    launcher's own submit in its records."""
+    handoff = load(d, "homes/worker/HANDOFF.md", "") or ""
+    url = (loadj(d, "forge/pull.json", {}) or {}).get("html_url", "")
+    expect(url, "forge: the pull request has no URL")
+    want = "(%s) after the launcher: exit 0, done: Attempt %s is submitted already, with the result %s: there is " \
+           "nothing to submit." % (url, a["id"], url)
+    expect(want in handoff, "worker: the handoff does not record the answer %r" % want)
+    expect(LAUNCHER_SUBMITS in handoff and "Submitted #" not in handoff,
+           "worker: the launcher did not submit the attempt alone before")
+    expect(launcher_submitted(d, a["id"]), "worker's launcher: no committed submit among its automation records")
+    results = q("SELECT seq, result_ref FROM attempt_results WHERE attempt_id = ?", a["id"])
+    expect([(r["seq"], r["result_ref"]) for r in results] == [(1, url)], "aicrewd: the results are %s" %
+           [dict(r) for r in results])
     expect((a["state"], a["phase"]) == ("running", "submitted"), "aicrewd: the attempt is %s/%s" % (a["state"], a["phase"]))
 
 
@@ -655,6 +674,7 @@ CHECKS = {
     ("E1", "blocked"): p4_blocked,
     ("E1", "answered"): e1_answered,
     ("P5", "submit"): p5_submit,
+    ("P5", "anyway"): p5_anyway,
     ("P5", "pending"): p5_pending,
     ("F2-begin", "begin"): f2_begin,
     ("F3-aicrewd", "restart"): f3_aicrewd,

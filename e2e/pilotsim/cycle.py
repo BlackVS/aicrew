@@ -268,9 +268,20 @@ def check(step, d, case=""):
     handoff = load(d, "homes/worker/HANDOFF.md", "") or ""
     if after("accept") and not after("done"):
         expect("## CURRENT ATTEMPT" in handoff and a["id"] in handoff, "worker: no CURRENT ATTEMPT section for the attempt")
-    for s, text in (("pull", "Pull request #"), ("rework", "Reworked #"), ("submit", "Submitted #")):
+    for s, text in (("pull", "Pull request #"), ("rework", "Reworked #")):
         if after(s) and not (case and s == "rework"):
             expect(text in handoff, "worker: the handoff does not record %r" % text)
+    if after("submit"):
+        # The worker submits itself (a home of an earlier release, or case
+        # F1), or, where its guidance leaves the submit to the launcher's
+        # gates-green, posts its review and the launcher submits
+        # (01a206f8-24d0).
+        if LAUNCHER_SUBMITS in handoff:
+            expect("Submitted #" not in handoff, "worker: it submitted itself where the launcher submits")
+            expect(launcher_submitted(d, a["id"]), "worker's launcher: no committed submit of attempt %s among its "
+                   "automation records" % a["id"])
+        else:
+            expect("Submitted #" in handoff, "worker: the handoff records neither its submit nor the launcher's")
     coordinator = load(d, "homes/coordinator/HANDOFF.md", "") or ""
     for s, text in (("review", "Accepted result 1 of attempt " + a["id"]),
                     ("done", "Attempt %s was finalized" % a["id"])):
@@ -281,6 +292,25 @@ def check(step, d, case=""):
         if after(s):
             expect(text in coordinator, "coordinator: the handoff does not record %r" % text)
     return errs
+
+
+# What the stand-in notes where the launcher submits (aicrew-simclient).
+LAUNCHER_SUBMITS = "the launcher submits it, since gates-green is in the set"
+
+
+def launcher_submitted(d, attempt):
+    """Whether the worker's launcher's records hold gates-green's committed
+    submit of attempt (internal/agent/automation.go, submitResult)."""
+    for line in (load(d, "homes/worker/automations.jsonl", "") or "").splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        t = r.get("text", "")
+        if r.get("attempt") == attempt and r.get("kind") == "host_submit" and t.startswith("the result ") and \
+                t.endswith(" is submitted"):
+            return True
+    return False
 
 
 def state(store, task):

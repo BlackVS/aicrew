@@ -415,6 +415,11 @@ func (d *Driver) settle(ctx context.Context, p *pendingStep) (StepResult, error)
 		return res, err
 	}
 	res.Settled, res.Outcome, res.RetryAfter = set.Settled, set.Outcome, set.RetryAfter
+	if set.Settled && set.Outcome == "committed" {
+		// What a later submit that meets this one compares its link with
+		// (submitmeet.go): written before the step's record is dropped.
+		d.noteSubmit(p)
+	}
 	if set.Settled {
 		if err := d.drop(p); err != nil {
 			return res, fmt.Errorf("drop the settled step's record: %w", err)

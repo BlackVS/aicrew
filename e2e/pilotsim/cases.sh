@@ -590,6 +590,17 @@ case_p5() {
   waitfor "the worker's submit at a second head" 600 at 'running/submitted 1'
   hold worker "case P5: the submit checks"
   check_case P5 submit
+  # The worker submits once more after its launcher's submit, as a worker
+  # that ignores its guidance would (01a206f8-24d0): the step answers that
+  # the attempt is submitted already with that result, and aicrewd holds
+  # one result.
+  member_scenario worker '{"submit_anyway":true}'
+  member resume worker
+  member nudge worker "case P5: a submit after the launcher's"
+  waitfor "the worker's submit after the launcher's" 300 noted worker "Submitted anyway #"
+  hold worker "case P5: the second submit's checks"
+  check_case P5 anyway
+  member_scenario worker '{}'
   member resume worker
   member resume coordinator
   waitfor "the coordinator's review" 300 at 'running/accepted 1'

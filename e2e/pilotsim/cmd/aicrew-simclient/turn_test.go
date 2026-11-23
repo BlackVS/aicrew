@@ -183,7 +183,13 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 	case args[0] == "forge" && args[2] == "label":
 		out, _ := json.Marshal(agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, Labels: []string{"review-this"}}})
 		return out, 0, nil
-	case args[0] == "forge" && args[2] == "comment":
+	case args[0] == "forge" && args[2] == "comment" && strings.Contains(stdin, "] reviewed at head ") &&
+		(&member{home: f.home}).reviewCommand():
+		// This tree's agent refuses a review as a comment; an earlier
+		// release's takes it.
+		return []byte("forge pr comment: the comment is a review (...): post your review with " +
+			"`aicrew-agent forge pr review --pr N --body-file FILE`"), 1, nil
+	case args[0] == "forge" && (args[2] == "comment" || args[2] == "review"):
 		out, _ := json.Marshal(agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull}})
 		return out, 0, nil
 	case args[0] == "forge" && args[2] == "show":
@@ -422,6 +428,34 @@ func TestWorkerOpensAndSubmitsThePullRequest(t *testing.T) {
 	}
 	if got := f.bodies["work"]; got["intent"] != "submit" || got["detail"] != tPull {
 		t.Fatalf("work body = %v; calls %v", got, f.calls)
+	}
+	// After the submit the worker posted its own review as #279's worker
+	// did: through comment with its own header, refused, then through
+	// review in the worktree, with no header of its own.
+	comment := "aicrew-agent forge pr comment --pr 7 --body-file - --json"
+	posted := "aicrew-agent forge pr review --pr 7 --body-file - --json"
+	ci, ri := slices.Index(f.calls, comment), slices.Index(f.calls, posted)
+	si := slices.IndexFunc(f.calls, func(c string) bool { return strings.HasPrefix(c, "aicrew-agent step work") })
+	if si < 0 || ci < si || ri < ci || !strings.HasPrefix(f.stdin[comment], ownHeader(tHead)+"\n\n") ||
+		!strings.HasPrefix(f.stdin[posted], "CURRENT OBJECTIVE\n") ||
+		!strings.Contains(f.stdin[posted], "\nReview: oh-code-review (high) via "+workerReview+"\n") {
+		t.Fatalf("the worker's own review: %v\n%q", f.calls, f.stdin)
+	}
+	if doc := readHandoff(t, f.home); !strings.Contains(doc, "forge pr comment refused the worker's review of #7") ||
+		!strings.Contains(doc, "Posted the worker's review of #7 at head "+tHead+" with forge pr review") {
+		t.Fatalf("the handoff does not record the refusal and the review:\n%s", doc)
+	}
+
+	// Turn 5: a local review at the head is there already: no second one.
+	f.calls = nil
+	f.pull.Content.Comments = append(f.pull.Content.Comments, forge.PullComment{Author: "sim-worker",
+		Review: &forge.ReviewHeader{Reviewer: forge.ReviewerLocal, Head: tHead, AtHead: true, Verdict: "READY_FOR_HUMAN_MERGE"}})
+	out.Reset()
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 5 = %d: %s", code, out.String())
+	}
+	if f.called(comment) || f.called(posted) {
+		t.Fatalf("turn 5 reviewed again: %v", f.calls)
 	}
 }
 
@@ -684,12 +718,14 @@ func TestCoordinatorReviewsASubmit(t *testing.T) {
 	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
 		t.Fatalf("turnRun = %d: %s", code, out.String())
 	}
-	comment := "aicrew-agent forge pr comment --repository https://sim-gitea:3000/operator/pilot.git --pr 7 --body-file - --json"
-	if !f.called("aicrew-agent forge pr show --repository https://sim-gitea:3000/operator/pilot.git --pr 7") || !f.called(comment) {
-		t.Fatalf("the pull request was not read and commented on: %v", f.calls)
+	review := "aicrew-agent forge pr review --repository https://sim-gitea:3000/operator/pilot.git --pr 7 --head " + tHead +
+		" --body-file - --json"
+	if !f.called("aicrew-agent forge pr show --repository https://sim-gitea:3000/operator/pilot.git --pr 7") || !f.called(review) {
+		t.Fatalf("the pull request was not read and reviewed: %v", f.calls)
 	}
-	if body := f.stdin[comment]; !strings.HasPrefix(body, "[oh-code-review (high) review] reviewed at head "+tHead+"\n") ||
-		!strings.Contains(body, "\nVERDICT\nREADY_FOR_HUMAN_MERGE\n") {
+	if body := f.stdin[review]; !strings.HasPrefix(body, "CURRENT OBJECTIVE\n") ||
+		!strings.Contains(body, "\nVERDICT\nREADY_FOR_HUMAN_MERGE\n") ||
+		!strings.Contains(body, "\nReview: oh-code-review (high) via "+coordinatorReview+"\n") {
 		t.Fatalf("the local review:\n%s", body)
 	}
 	if got := f.bodies["review"]; got["result_seq"] != float64(1) || got["decision"] != "accept" {
@@ -973,6 +1009,62 @@ func TestWorkerTurnNeedsSettings(t *testing.T) {
 	m.settings = ""
 	if err := m.admitsTests(); err == nil || err.Error() != "the turn names no --settings file" {
 		t.Fatalf("no settings: %v", err)
+	}
+}
+
+// The stand-in reads from its home's own guidance whether its release has
+// `forge pr review`: this tree's managed docs/ROLES.md names it, v0.11.3's
+// (a copy of that release's text) does not, so a reworded sentence breaks
+// this test, not a simulation run.
+func TestReviewGuidance(t *testing.T) {
+	f := newFake(t)
+	if !f.member().reviewCommand() {
+		t.Errorf("this tree's guidance does not name the review command (%q)", reviewGuidance)
+	}
+	f.earlierGuidance()
+	if f.member().reviewCommand() {
+		t.Errorf("v0.11.3's guidance names the review command")
+	}
+}
+
+// On a home of an earlier release, the upgrade scenario's first cycle, the
+// coordinator posts the review with its header through `forge pr comment`,
+// which that release's agent takes, and the worker posts no review of its
+// own before it submits.
+func TestReviewsOnAnEarlierHome(t *testing.T) {
+	f := newFake(t)
+	f.earlierGuidance()
+	f.attempts = []agent.OpenAttempt{{ID: tAttempt, State: "running", Phase: "submitted", Task: agent.TaskRef{TaskID: tTask}}}
+	f.inbox = []map[string]any{submitMessage("m1")}
+	f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: "open", HeadCommit: tHead}}
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(coordinatorBrief), &out, f.member()); code != 0 {
+		t.Fatalf("coordinator turn = %d: %s", code, out.String())
+	}
+	comment := "aicrew-agent forge pr comment --repository https://sim-gitea:3000/operator/pilot.git --pr 7 --body-file - --json"
+	if f.called("aicrew-agent forge pr review") || !f.called(comment) ||
+		!strings.HasPrefix(f.stdin[comment], countedHeader+tHead+"\n\nCURRENT OBJECTIVE\n") {
+		t.Fatalf("the coordinator's review on an earlier home: %v\n%s", f.calls, f.stdin[comment])
+	}
+
+	w := newFake(t)
+	w.earlierGuidance()
+	writeSection(t, w.home)
+	if code := turnRun(context.Background(), w.home, strings.NewReader(workerBrief("running", "working")), &out, w.member()); code != 0 {
+		t.Fatalf("worker turn 1 = %d: %s", code, out.String())
+	}
+	w.calls = nil
+	w.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: "open", HeadCommit: tHead,
+		Labels: []string{"hands-reviewed"}}, Content: &forge.PullContent{
+		Checks: []forge.Check{{Name: "sim-ci", State: forge.ChecksSuccess}},
+		Comments: []forge.PullComment{{Author: "sim-hands", Review: &forge.ReviewHeader{Reviewer: forge.ReviewerExternal,
+			Head: tHead, AtHead: true, Verdict: "READY_FOR_HUMAN_MERGE"}}}}}
+	if code := turnRun(context.Background(), w.home, strings.NewReader(workerBrief("running", "working")), &out, w.member()); code != 0 {
+		t.Fatalf("worker turn 2 = %d: %s", code, out.String())
+	}
+	if got := w.bodies["work"]; got["intent"] != "submit" || w.called("aicrew-agent forge pr comment") ||
+		w.called("aicrew-agent forge pr review") {
+		t.Fatalf("the worker on an earlier home: work %v, calls %v", got, w.calls)
 	}
 }
 

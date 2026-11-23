@@ -160,6 +160,9 @@ func TestForgePRCommandRefusalsAndCheckout(t *testing.T) {
 		{"pr", "label", repo, "--pr", "1", "x"},
 		{"pr", "label", "add", repo, "--pr", "1"},
 		{"pr", "comment", repo, "--pr", "1"},
+		{"pr", "review", repo, "--pr", "1", "--head", fakeforge.HeadCommit},
+		{"pr", "review", repo, "--pr", "1", "--body-file", "-"},
+		{"pr", "review", repo, "--pr", "1", "--body-file", "-", "--head", fakeforge.HeadCommit, "extra"},
 		{"pr", "ready", repo},
 		{"pr", "ready", repo, "--pr", "1", "extra"},
 	} {
@@ -266,5 +269,36 @@ func TestPrintPullWatch(t *testing.T) {
 		if !strings.HasSuffix(b.String(), "watch: "+watch+"\n") {
 			t.Errorf("printed %q", b.String())
 		}
+	}
+}
+
+// `forge pr comment` refuses #279's review and names `forge pr review`,
+// which posts it, without its own header line, under the header the gates
+// read at the commit --head names.
+func TestForgePRReviewCommand(t *testing.T) {
+	f := fakeforge.New(t, "gitea")
+	home := forgeHome(t, f)
+	repo := "--repository=https://" + f.Host + "/team/app.git"
+	if code, out, errOut := runForge(t, home, "", "pr", "open", repo, "--title", "T", "--body-file", "-", "--head", "feat/x"); code != exitOK {
+		t.Fatalf("open: %d %s%s", code, out, errOut)
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "internal", "agent", "testdata", "pr279-review.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	review := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	code, _, errOut := runForge(t, home, review, "pr", "comment", repo, "--pr", "1", "--body-file", "-")
+	if code != exitFailed || !strings.Contains(errOut, "forge pr comment: the comment is a review") ||
+		!strings.Contains(errOut, "aicrew-agent forge pr review") {
+		t.Fatalf("#279's review as a comment: %d %s", code, errOut)
+	}
+	_, body, _ := strings.Cut(review, "\n")
+	code, out, errOut := runForge(t, home, body, "pr", "review", repo, "--pr", "1", "--body-file", "-", "--head", fakeforge.HeadCommit)
+	if code != exitOK || !strings.Contains(out, "comment: https://"+f.Host+"/") {
+		t.Fatalf("review: %d %s%s", code, out, errOut)
+	}
+	if got := f.Pull(1).Comments; len(got) != 1 ||
+		!strings.HasPrefix(got[0], "[oh-code-review (high) review] reviewed at head "+fakeforge.HeadCommit+"\n\nCURRENT OBJECTIVE\n") {
+		t.Fatalf("the forge holds %q", got)
 	}
 }

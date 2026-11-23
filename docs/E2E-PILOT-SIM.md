@@ -538,7 +538,8 @@ nothing to do ends, and the launcher's next message starts the next one.
     instruction digest from the hub's selection.
   - on a submit announcement, records the result and its number in its
     handoff, posts the local review at the pull request's full head SHA
-    (`forge pr comment`, headed `[oh-code-review (high) review]`), and
+    (`forge pr review --repository URL --head SHA`, which writes the header
+    `[oh-code-review (high) review] reviewed at head SHA`), and
     accepts the result with the `review` step. No member surface names a
     result's number yet (task `01a188f9-4d9a`), so the coordinator counts
     the attempt's submit announcements: the nth is result n.
@@ -587,8 +588,20 @@ nothing to do ends, and the launcher's next message starts the next one.
   A `RETURN_TO_IMPLEMENTATION` from sim-hands at the head, or failed
   checks once the review is done, gets a new commit, the stale
   `hands-reviewed` taken off and a new `review-this`. Once sim-hands's
-  review at the head is READY and the checks passed, the worker submits it
-  through `work` (intent `submit`). In the `rework` phase it resumes
+  review at the head is READY and the checks passed, the worker submits
+  the pull request through `work` (intent `submit`). Then it posts its own
+  review at the head, as the first team's worker did on pull request #279:
+  first through `forge pr comment` with a header of its own
+  (`[worker review] reviewed at head SHA`), which the command must refuse
+  while naming `forge pr review`, then through `forge pr review` in the
+  worktree, which writes the header the gates read at the worktree's
+  commit. The review comes after the submit because a READY local review
+  before it would let the launcher's `gates-green` automation submit the
+  attempt beside the worker's own step; once the attempt is submitted, the
+  automation does nothing. On a home whose `docs/ROLES.md` does not name
+  `forge pr review`, the upgrade scenario's first cycle on the previous
+  release, the worker posts no review of its own and the coordinator posts
+  its review through `forge pr comment`, as before. In the `rework` phase it resumes
   through `work` first, and in the `blocked` phase it waits for the
   coordinator's answer and then resumes the same way.
 

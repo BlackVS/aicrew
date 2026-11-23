@@ -3269,7 +3269,8 @@ aicrew-agent forge pr open --title "Fix the parser" --body-file pr.md --draft
 aicrew-agent forge pr show --pr 12
 aicrew-agent forge pr label add --pr 12 review-this
 aicrew-agent forge pr label remove --pr 12 hands-reviewed
-aicrew-agent forge pr comment --pr 12 --body-file review.md
+aicrew-agent forge pr comment --pr 12 --body-file note.md
+aicrew-agent forge pr review --pr 12 --body-file review.md
 aicrew-agent forge pr ready --pr 12
 ```
 
@@ -3289,6 +3290,39 @@ credential.
 - **The token** is read in the command's own process. It never appears in
   an argument, the output or an error. As for every forge call, a redirect
   to another host is refused.
+- **A review is posted with `review`, and its header is the command's.**
+  The gates read a member's review in one form only: the first line
+  `[oh-code-review (LEVEL) review] reviewed at head FULL_SHA`, a line
+  `VERDICT` with the verdict alone on the next line, and the line
+  `Review: oh-code-review (LEVEL) via CLIENT`. The product's reader
+  (`internal/forge/content.go`), the review skill set's `gates` and the
+  delivery check all read that form. The first team's worker wrote a header
+  of its own on pull request #279, and no gate counted its review
+  (01a1fa07-5db2). So `review` writes the header line itself:
+  - The file must not begin with a header of its own. It needs exactly one
+    line `VERDICT` with `READY_FOR_HUMAN_MERGE`, `RETURN_TO_IMPLEMENTATION`
+    or `REVIEW_COULD_NOT_RUN` alone on the next non-blank line, and exactly
+    one attribution line at level high, max or ultra. The header takes that
+    level. A link into an agent's session or conversation is refused.
+  - The head is the commit the review read: the worktree's `HEAD`, or
+    `--head SHA` (a full commit id), which `--repository` requires, since
+    then no worktree names it. The command refuses when the pull request's
+    head on the forge is another commit, and names both. A review stamped
+    with a head it did not read would be worse than one that is not
+    counted. The coordinator, which has no worktree on the worker's branch,
+    posts with `--head`.
+  - `comment` refuses a body that is a review: its first non-empty line
+    shaped like a header (`[NAME] reviewed at head`, any name, after an
+    optional `#`, `*` or `_`), or a `VERDICT` line with a verdict word on
+    the next non-blank line or after `VERDICT:`. The refusal names
+    `review`, and says to quote another's review line by line after `> `.
+    A quoted line and a code block count for neither rule, so a comment
+    may quote the external review's verdict. An ordinary comment and a
+    base-only delta note pass.
+  - Both post one new comment, or nothing, on the pull request named, in
+    the repository of the worktree's `origin` or `--repository`, with the
+    home's own credential. They never label, mark ready, submit, edit or
+    delete, and what counts as a review for the gates does not change.
 - **A credential is never posted.** A body file in the home's `creds/` is
   refused unread, whether named directly or through a link. Every input
   that holds the host's token is refused as soon as the token is read,

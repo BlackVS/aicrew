@@ -170,12 +170,10 @@ var crewCommands = []crewCommand{
 			"pr comment --pr N --body-file FILE` comments on it, `aicrew-agent forge pr review --pr N --body-file " +
 			"FILE` posts your own review of it from the worktree at the commit you reviewed (" + reviewPostRule +
 			"), and `aicrew-agent forge pr ready --pr N` marks a " +
-			"draft ready when the process says its gates are green. The release's `gates-green` automation does " +
-			"that and submits the attempt for you once both reviews and CI are green at the head, and the " +
-			"attempt's lifecycle message tells you; mark ready and submit yourself only where the project's " +
-			"process disables it (`aicrew-agent check` lists the effective set). " + pullRequestNever + "\n" +
-			"3. Submit its URL with the work step below with `submit`; `block` with the reason, or `resume` " +
-			"after a block, use the same step.",
+			"draft ready when the process says its gates are green. " + submitOrder + " Mark ready and submit " +
+			"yourself only where the project's process disables it. " + pullRequestNever + "\n" +
+			"3. Where you submit yourself (the project's process disables `gates-green`), submit its URL with the " +
+			"work step below with `submit`; `block` with the reason, or `resume` after a block, use the same step.",
 		Ops: []string{"work"}},
 	{Name: "crew-claim", Role: "independent", Hint: "<task id>",
 		Desc: "Independent member: claim a READY task for yourself",
@@ -254,6 +252,14 @@ const blockAfterAccept = "`aicrew-agent step work --attempt ATTEMPT_ID --task TA
 // forge clients (pilot finding 2026-10-11).
 const pullRequestNever = "Never use `gh`, `tea`, `glab` or another forge client, or a forge's API with a " +
 	"credential: their account is not yours. When a `forge pr` command is refused or fails, stop and report it."
+
+// submitOrder is the worker's order of the last steps while the release's
+// gates-green automation is in its set (01a1fa07-5db2): its own submit
+// beside the launcher's would meet it on aicrewd.
+const submitOrder = "Post your own review last. While `gates-green` is in your set (`aicrew-agent check` lists " +
+	"the effective set), do not mark the pull request ready and do not submit: the launcher does both once your " +
+	"review and the external one are READY at the head and CI is green there, and the attempt's lifecycle " +
+	"message tells you."
 
 // reviewPostRule says how a member's review is posted so that the gates
 // count it (01a1fa07-5db2): the header is the command's, never the

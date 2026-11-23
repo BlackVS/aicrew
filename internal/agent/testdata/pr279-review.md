@@ -31,4 +31,3 @@ RISK
 LOW — error text of one configuration field; no change of accepted input, routes, authentication or store.
 
 Review: oh-code-review (high) via Claude Code
-

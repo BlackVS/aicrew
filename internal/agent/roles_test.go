@@ -426,6 +426,17 @@ func TestGuidancePullRequestsUseForgePR(t *testing.T) {
 			}
 		}
 	}
+	// The worker's order while gates-green is in its set: its review last,
+	// no ready and no submit of its own.
+	worker := md[strings.Index(md, "## "+sectionWorkerAttempt):]
+	for name, text := range map[string]string{"/crew-submit": submit, "ROLES.md's running attempt": worker} {
+		for _, want := range []string{"Post your own review last.", "do not mark the pull request ready and do not submit: " +
+			"the launcher does both once your review and the external one are READY at the head and CI is green there"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
+		}
+	}
 	if !strings.Contains(submit, "`aicrew-agent forge pr review --pr N --body-file FILE` posts your own review") ||
 		!strings.Contains(every, "`review --pr N --body-file FILE [--head SHA]` for a review") {
 		t.Errorf("/crew-submit or ROLES.md does not name the review command: %s", submit)

@@ -9,8 +9,13 @@
 //
 // previous is PILOTSIM_PREVIOUS when that is set (a manual run's override),
 // and otherwise the newest vX.Y.Z tag merged into REPO's HEAD that does not
-// sit on HEAD itself: on a release's own commit that is the release before
-// it. No such tag is an error, never an empty answer.
+// sit on HEAD itself and was published: on a release's own commit that is
+// the release before it. A tag is published when its release's SHA256SUMS
+// downloads, the file the scenario fetches first; a tag whose release run
+// failed has none (404) and is passed over, named on stderr. Any other
+// answer is an error, so that an unreachable forge never changes the
+// version the scenario starts from. No such tag is an error, never an
+// empty answer.
 //
 // same reads the first cycle's records from two step snapshots that
 // pilot-sim.sh's take wrote (BEFORE taken before the upgrade, AFTER after
@@ -28,6 +33,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +42,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -49,7 +57,7 @@ func main() {
 func run(args []string) error {
 	switch {
 	case len(args) == 2 && args[0] == "previous":
-		tag, err := previous(args[1], os.Getenv("PILOTSIM_PREVIOUS"))
+		tag, err := previous(args[1], os.Getenv("PILOTSIM_PREVIOUS"), publishedAt(releases), os.Stderr)
 		if err != nil {
 			return err
 		}
@@ -94,9 +102,36 @@ const (
 
 var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
+// releases is where a tag's published release assets are downloaded from,
+// as scripts/pilot-sim.sh's export_previous downloads them.
+const releases = "https://github.com/BlackVS/aicrew/releases/download"
+
+// publishedAt says whether a tag's release under base has its SHA256SUMS:
+// true on 200, false on 404, an error on any other answer.
+func publishedAt(base string) func(tag string) (bool, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	return func(tag string) (bool, error) {
+		url := base + "/" + tag + "/SHA256SUMS"
+		resp, err := client.Get(url)
+		if err != nil {
+			return false, fmt.Errorf("%s: %v", url, err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		switch resp.StatusCode {
+		case http.StatusOK:
+			return true, nil
+		case http.StatusNotFound:
+			return false, nil
+		}
+		return false, fmt.Errorf("%s answered %s", url, resp.Status)
+	}
+}
+
 // previous is the release the scenario upgrades from: the override when
-// set, else the newest release tag merged into HEAD and not on HEAD.
-func previous(repo, override string) (string, error) {
+// set, else the newest release tag merged into HEAD, not on HEAD and
+// published. Each tag passed over is named on log.
+func previous(repo, override string, published func(string) (bool, error), log io.Writer) (string, error) {
 	if override != "" {
 		if !releaseTag.MatchString(override) {
 			return "", fmt.Errorf("PILOTSIM_PREVIOUS=%q is not a release tag vX.Y.Z", override)
@@ -108,10 +143,23 @@ func previous(repo, override string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git tag in %s: %v", repo, err)
 	}
+	var passed []string
 	for t := range strings.FieldsSeq(string(out)) {
-		if releaseTag.MatchString(t) {
+		if !releaseTag.MatchString(t) {
+			continue
+		}
+		ok, err := published(t)
+		if err != nil {
+			return "", fmt.Errorf("whether %s was published could not be read: %v", t, err)
+		}
+		if ok {
 			return t, nil
 		}
+		_, _ = fmt.Fprintf(log, "simupgrade: passed over %s: no published release (its SHA256SUMS answered 404)\n", t)
+		passed = append(passed, t)
+	}
+	if len(passed) > 0 {
+		return "", fmt.Errorf("%s has no published release before HEAD; passed over %s, none of which has a published release", repo, strings.Join(passed, ", "))
 	}
 	return "", fmt.Errorf("%s has no release tag vX.Y.Z merged into HEAD before it; fetch the tags (a full clone) or set PILOTSIM_PREVIOUS", repo)
 }

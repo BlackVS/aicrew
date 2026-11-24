@@ -12,6 +12,198 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
+## [0.11.4] - 2026-11-24
+
+Seven pull requests since 0.11.3 (#279, #280, #281, #282, #283, #285,
+#286). What changes for a running team:
+- **A worker posts its own review and waits; the launcher submits**
+  (#285, #286). A worker posts its review with `aicrew-agent forge pr
+  review`, which writes the header the gates read. While `gates-green` is in
+  the home's set of automations, the worker neither marks the pull request
+  ready nor submits the attempt: its launcher does both once both reviews
+  are READY at the head and CI passed. The two pull requests ship together.
+  #285's guidance alone would leave a worker that waits on the launcher to
+  be stalled within three continuations.
+- **A coordinator's launcher checks a merged delivery** (#282) and confirms
+  it with the check's own evidence. A turn no longer runs the check.
+- **Turns that leave their messages unacknowledged wait, then hold the
+  member** (#281). The member's state in `aicrew team state` shows the hold.
+
+The store moves to schema 40 (#281), so **aicrewd needs an upgrade** for a
+member's hold to reach the team state. This release is tested with aimem
+0.11.5, ai-skills 1.43.0 and Claude Code 2.1.286, as 0.11.3 was.
+
+### Upgrade steps
+
+1. **aicrewd, on the hub host.** As root, rerun the installer at the new tag:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.4/install-aicrewd.sh | bash
+   ```
+
+   It stops aicrewd, keeps a copy of the configuration and of the store
+   beside them as `<file>.backup-<UTC time>` and the previous binaries as
+   `aicrewd.prev` and `aicrew.prev`. It then starts the new release and
+   waits for it (docs/DEVELOPMENT.md, "Installing and upgrading on a hub
+   host"). The store migration to schema 40 adds four columns to the
+   member holds, and it is one-way: an aicrewd of 0.11.3 refuses the
+   migrated store. Going back means restoring the store copy the upgrade
+   made, which loses what was written since. The upgrade also installs the
+   operator's `aicrew` of this release.
+2. **Each member's host**, the three steps of docs/BRING-UP.md, "Upgrading
+   a member", in their order:
+   1. As that user, rerun the member one-liner. It stops the account's
+      registered member services, swaps the binaries and starts them again:
+      - Linux and macOS:
+
+        ```sh
+        curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.4/boot.sh | bash
+        ```
+
+      - Windows, in a PowerShell window that is already open:
+
+        ```powershell
+        irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.4/boot.ps1 | iex
+        ```
+
+      - Windows, from cmd or the Run dialog:
+
+        ```powershell
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.4/boot.ps1 | iex"
+        ```
+
+      In a closed network, install from the aiforge export instead, as
+      README's closed-network forms show (`AICREW_BASE`).
+   2. Rerun join for each home: `aicrew-agent join --home HOME --json`.
+      **The managed guidance changes with this release**, and only join
+      writes it. The rerun's report is `restart_required` with the
+      instruction "managed guidance changed: restart any client already
+      open in this home". Its `changes` list `update` for `docs/ROLES.md`,
+      `.claude/commands/crew-review.md`, `.claude/commands/crew-submit.md`,
+      `.claude/settings.json`, `.claude/turn-settings.json` and
+      `.claude/turn-settings-coordinator.json`, as the upgrade run from
+      0.11.3 shows. Without the rerun, a worker keeps 0.11.3's guidance and
+      submits itself, and a coordinator's settings lack the rule that keeps
+      a turn from editing the delivery check's script
+      (`Edit(/.claude/skills/**)`). A coordinator
+      on Gitea or GitLab also adds the external reviewer's account,
+      `--reviewer FORGE_HOST=ACCOUNT`, as in step 6 of docs/BRING-UP.md.
+      Without it, the launcher's check answers that the delivery is not
+      confirmed and names the missing field. On GitHub, the check trusts
+      the repository's owners, members and collaborators.
+   3. Restart the service: `aicrew-agent service restart --home HOME`. The
+      rerun does not restart a service that is already running.
+
+   A coordinator's launcher runs the delivery check with `python3`, or
+   `python` where there is no `python3`, from the service's PATH.
+   docs/BRING-UP.md, "What a member's host needs", already lists
+   `python3`. A missing interpreter is reported and never confirms.
+
+### What a worker does now
+
+- **It posts its review last, and waits.** `/crew-submit` and the worker's
+  role text give the order: post the worker's own review with `aicrew-agent
+  forge pr review --pr N --body-file FILE` in the worktree. While
+  `gates-green` is in the set, do not mark ready and do not submit. The
+  command takes the head from the worktree's commit. It refuses when the
+  forge's head is another commit, and it refuses a body that would not be
+  counted. `aicrew-agent forge pr comment` refuses a body the gates would
+  read as a review, and names `forge pr review`. A coordinator posts its
+  review with `forge pr review --pr N --head SHA --body-file FILE`, SHA
+  being the head it reviewed. Where the
+  project's process takes `gates-green` out of the set, the worker submits
+  itself, as before.
+- **The wait is bounded.** While both reviews are READY at the head, CI
+  passed and `gates-green` is to submit, the worker's turn loop starts no
+  continuation turn and counts no stall. The bound is three forge reads (3
+  minutes at the watch's 60 seconds) from the first observation at which
+  that held for the head. Normally `gates-green` submits at that same
+  observation. Past the bound, the stall rule applies as to any turn: the
+  continuation turns come back, and after three turns without a step or a
+  commit, counted from the wait, the launcher blocks the attempt with the
+  stall's text. The block's lifecycle message reaches the coordinator. The
+  launcher reads the watched pull requests once after each worker turn
+  that leaves the attempt in work, so it sees a review the turn just
+  posted.
+- **When the two submits meet**, both get a clean answer. A worker's
+  submit of the link the attempt is already submitted with answers `done`,
+  and there is nothing to submit. A worker's submit while its launcher's
+  submit is in flight is told that the launcher is submitting, and that
+  the result comes as the attempt's lifecycle message. `gates-green` that
+  meets the worker's pending or settled submit ends "nothing to do" and
+  wakes nobody. Any other refusal keeps its text.
+
+### Known limits
+
+- **A stall while aicrewd cannot be reached**
+  (01a209c6-f5a3-7000-8514-09236f251a1b). After the worker's review, while
+  aicrewd cannot be reached, the launcher's reports of the pull request fail
+  and the worker does not wait. Its continuation turns come and count
+  toward the stall. When the stall's block also cannot reach aicrewd, the
+  launcher marks the attempt stalled in the home and starts no continuation
+  turn. aicrewd still shows the attempt running, not blocked. The next turn
+  comes with a message: once aicrewd answers again, `gates-green` submits
+  at the next report that succeeds, and its lifecycle message starts that
+  turn.
+- **A review comment replaced or edited in place is not read**
+  (01a20ab1-d10d-7000-9cca-9fcdff9b2974). The forge watch reads a pull
+  request's comments again only when its head, its checks, its comment
+  count or its running flag changed since a report that carried them, or
+  after content it wanted did not reach aicrewd. A comment deleted and
+  another added between two reads, or a review edited in place, leaves the
+  count as it was. So the wait, `gates-green` and the turn brief do not see
+  it until something else moves.
+
+### Changed
+
+- **A member's review through `forge pr review`** (01a1fa07-5db2, #285).
+  The command writes line 1, `[oh-code-review (LEVEL) review] reviewed at
+  head FULL_SHA`, at the level of the file's `Review: oh-code-review
+  (LEVEL) via CLIENT` line, which must be high, max or ultra. It posts only
+  what the product's reader reads as that review, at that head, with the
+  file's own verdict. `forge pr comment` refuses a review.
+- **The worker's submit and the launcher's submit meet** (01a206f8-24d0,
+  #286): the clean answers above, and the worker's bounded wait. The
+  launcher keeps the link of each committed submit in the home
+  (`state/submits/ATTEMPT.json`) to answer a later submit of the same link.
+- **A coordinator's launcher checks a merged delivery** (01a1fa19-19a4,
+  #282). On a merge notice for an accepted attempt it runs the
+  verify-delivery skill's check itself: at first sight, then 2, 5 and 10
+  minutes later, then every 15 minutes, for a day at most. It takes the confirm-delivery step with the check's evidence only on its
+  `confirmed`. The launcher's log has each read as `delivery check`. join
+  takes `--reviewer HOST=ACCOUNT` for the external reviewer on Gitea and
+  GitLab. A merge notice acknowledged before the upgrade starts no check.
+- **Turns without progress wait, then hold the member** (01a1fa19-1994,
+  #281). A turn whose only cause is the member's unacknowledged messages,
+  and that ends without acknowledging them, is counted. The second such
+  turn waits 5 minutes (`turns.unacked_wait`), the third 20, and after the
+  third the member is held. A held member gets one turn a day on those
+  messages, and one turn on a new message no sooner than 20 minutes after
+  its last. `aicrew team state` shows the hold as `kind` `unacknowledged`
+  with its `messages`, `turns`, the last turn's `summary` and its
+  `next_check`, and the team's other coordinators are told once. The hold
+  ends when the member acknowledges one of those messages, or on a pause
+  and resume of the team. An aicrewd of 0.11.3 refuses the hold's report.
+  The launcher then logs it and still holds the member.
+- **docs/BRING-UP.md's command lines are run by the pilot simulation**
+  (#280). The document gains "The operator during a cycle" (team state,
+  escalations, pause and resume, the forge's gates). `aicrew`'s usage lists
+  `team … toolchain` and `escalations … wait`, and `aicrew-agent`'s usage
+  names `git-credential`.
+- **The team's architect is bring-up step 8** (01a1fa0d-7681, #283): the
+  architect's directory, its credential issued where the operator's
+  commands run and carried to another machine, and the check that the
+  operator credential is not there. The team's resume becomes step 9.
+- **aicrewd names `shutdown_timeout`** when its value is not a duration
+  (#279): `config: shutdown_timeout must be a duration: a duration is a
+  string such as "15s"`. What is accepted does not change.
+- **The pilot simulation** runs the submit the guidance describes. Its
+  stand-in worker posts its review and leaves the submit to the launcher.
+  Case P5 has the worker submit anyway after the launcher's submit and
+  shows its answer, and case F1 stays on the worker's own submit. New case U1 holds a member on
+  unacknowledged turns, case O1 runs "The operator during a cycle", and
+  case E1 runs the architect's step in the document's form.
+
 ## [0.11.3] - 2026-11-20
 
 Three pull requests since 0.11.2 (#275, #276, #277). The one that matters to

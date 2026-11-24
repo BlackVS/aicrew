@@ -233,7 +233,7 @@ says `ready` with no warning that names the project just selected. A team
 with several projects keeps a warning for each project without a
 selection. Such a warning names the operator's command with the team's ID,
 `--team ID`: it names the same team as `--team-name crew`. A worker's check
-reports the toolchain from aicrew 0.11.3 on, the release step 5 installs.
+reports the toolchain from aicrew 0.11.3 on.
 
 The hub also needs the skills set that the project's process pins: the
 members get their skills from the hub in step 6. The hub's admin imports
@@ -348,7 +348,7 @@ Check: `aicrew invitation list --team-name crew` <!-- run: invitation-list --> s
 ### 5. The tools (member host, as the member's user)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.3/boot.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.4/boot.sh | bash
 cd "$(mktemp -d)" && curl -fsSL https://raw.githubusercontent.com/BlackVS/aimem/v0.11.5/boot.sh | AIMEM_VERSION=v0.11.5 bash
 npm install -g @anthropic-ai/claude-code@2.1.286
 ```
@@ -380,7 +380,7 @@ npm install -g @anthropic-ai/claude-code@2.1.286
 Then the person logs the client in: `claude`, and its login flow.
 
 Check: `aicrew-agent version` <!-- run: agent-version -->, `aimem version` <!-- run: aimem-version --> and `claude --version` <!-- run: client-version --> print
-v0.11.3, v0.11.5 and 2.1.286.
+v0.11.4, v0.11.5 and 2.1.286.
 
 ### 6. Join (member host)
 

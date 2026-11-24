@@ -3709,8 +3709,9 @@ every pull request (`release-build`), publishing nothing.
   `docs/E2E-PILOT-SIM.md`, "The upgrade scenario") upgrades the previous
   release to the tree under test, and nothing has to be moved after a
   release: the previous release is the newest `vX.Y.Z` tag merged into
-  HEAD that does not sit on HEAD itself (`PILOTSIM_PREVIOUS` overrides it
-  for a run by hand). So a release-preparation pull request upgrades from
+  HEAD that does not sit on HEAD itself and was published, so a tag whose
+  release run failed is passed over (`PILOTSIM_PREVIOUS` overrides it for
+  a run by hand). So a release-preparation pull request upgrades from
   the last release, and main's tagged commit upgrades from the release
   before it, never from itself.
 

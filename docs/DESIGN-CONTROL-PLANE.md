@@ -286,7 +286,12 @@ turns until a message arrives for the worker.
 A wait on the pull request's gates costs no turn and is no stall. This is
 the case when the pull request, as last observed, meets three conditions:
 - it is open at the head of a clean worktree, so all the work is
-  committed and pushed;
+  committed and pushed. Clean means no change to a tracked file
+  (modified, staged, deleted or renamed). An untracked file is no
+  change: the guidance has a worker write its pull request's text and
+  its review into files it posts from the worktree, the only place a
+  turn may write them. The launcher's `gates-green` submits on the
+  forge's head and reads no worktree (01a20b66-0f78);
 - no external review at the head blocks it, and no check failed;
 - the external review is requested or in progress (`review-this` or
   `hands-reviewing`), or the checks are pending; or the launcher's own

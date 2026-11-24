@@ -51,6 +51,12 @@ type fakeTools struct {
 	comments    []string
 	// steps are scripted answers to a step, in order, before the default one.
 	steps map[string][]stepReply
+	// labelWatch is the watch a label's report gives, agent.WatchOn when
+	// empty.
+	labelWatch string
+	// gitHead and gitStatus are what `git rev-parse HEAD` (tHead when
+	// empty) and `git status` answer.
+	gitHead, gitStatus string
 	// goOut and goCode are what `go version` answers.
 	goOut  string
 	goCode int
@@ -121,6 +127,22 @@ func flagOf(args []string, name string) string {
 }
 
 func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...string) ([]byte, int, error) {
+	// A body file is read as the command reads it, and must lie in the
+	// directory the command runs in, the worktree (01a20b66-0f78); the
+	// call is recorded with the file's name.
+	if i := slices.Index(args, "--body-file"); i >= 0 && i+1 < len(args) && args[i+1] != "-" {
+		path := args[i+1]
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			f.t.Fatalf("%s %v: the body file: %v", name, args, err)
+		}
+		if filepath.Dir(path) != filepath.Clean(dir) {
+			f.t.Fatalf("%s %v: the body file %s is not in the directory the command runs in, %s", name, args, path, dir)
+		}
+		stdin = string(raw)
+		args = slices.Clone(args)
+		args[i+1] = filepath.Base(path)
+	}
 	line := name + " " + strings.Join(args, " ")
 	if name == "aicrew-agent" && args[0] == "step" {
 		line = name + " step " + args[1]
@@ -143,6 +165,14 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 		f.stdin[line] = stdin
 	}
 	if name == "git" {
+		switch {
+		case args[0] == "rev-parse" && f.gitHead != "":
+			return []byte(f.gitHead + "\n"), 0, nil
+		case args[0] == "rev-parse":
+			return []byte(tHead + "\n"), 0, nil
+		case args[0] == "status":
+			return []byte(f.gitStatus), 0, nil
+		}
 		return nil, 0, nil
 	}
 	if name == "go" {
@@ -192,7 +222,12 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 	case args[0] == "forge" && args[2] == "label" && f.labelFails:
 		return []byte("forge pr label: the forge refused"), 1, nil
 	case args[0] == "forge" && args[2] == "label":
-		out, _ := json.Marshal(agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, Labels: []string{"review-this"}}})
+		watch := f.labelWatch
+		if watch == "" {
+			watch = agent.WatchOn
+		}
+		out, _ := json.Marshal(agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, Labels: []string{"review-this"}},
+			Watch: watch})
 		return out, 0, nil
 	case args[0] == "forge" && args[2] == "comment" && strings.Contains(stdin, "] reviewed at head ") &&
 		(&member{home: f.home}).reviewCommand():
@@ -204,7 +239,14 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 		out, _ := json.Marshal(agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull}})
 		return out, 0, nil
 	case args[0] == "forge" && args[2] == "show":
-		out, _ := json.Marshal(f.pull)
+		if f.pull == nil {
+			return []byte("null"), 0, nil
+		}
+		shown := *f.pull
+		if shown.Watch == "" {
+			shown.Watch = agent.WatchOn
+		}
+		out, _ := json.Marshal(shown)
 		return out, 0, nil
 	}
 	f.t.Fatalf("unexpected command: %s (in %s)", line, dir)
@@ -312,6 +354,11 @@ func TestParseBrief(t *testing.T) {
 	if err != nil || b != (brief{Role: "coordinator", Team: "T1", Agent: "A0"}) {
 		t.Fatalf("parseBrief(coordinator) = %+v, %v", b, err)
 	}
+	for why, cont := range map[string]bool{continuationWhy: true, messageWhy: false} {
+		if b, err := parseBrief(workerBrief("running", "working") + why); err != nil || b.Continuation != cont {
+			t.Fatalf("parseBrief with %q: continuation %v, %v; want %v", why, b.Continuation, err, cont)
+		}
+	}
 	for name, in := range map[string]string{
 		"not a turn":      "hello",
 		"no role":         "/crew-turn No open attempt.\n\n## Who and where\n",
@@ -378,7 +425,7 @@ func TestWorkerOpensAndSubmitsThePullRequest(t *testing.T) {
 	for _, want := range []string{
 		"aicrew-agent clone --repository " + tRepo + " --attempt " + tAttempt + " --base " + tBase + " --branch work/" + tTask,
 		"git add sim/" + tTask + ".md", "git push -q origin work/" + tTask,
-		"aicrew-agent forge pr open --title sim: task " + tTask + " --body-file -",
+		"aicrew-agent forge pr open --title sim: task " + tTask + " --body-file " + pullBodyFile,
 		"aicrew-agent forge pr label add --pr 7 --json review-this",
 	} {
 		if !f.called(want) {
@@ -443,8 +490,8 @@ func TestWorkerOpensAndSubmitsThePullRequest(t *testing.T) {
 	// After the submit the worker posted its own review as #279's worker
 	// did: through comment with its own header, refused, then through
 	// review in the worktree, with no header of its own.
-	comment := "aicrew-agent forge pr comment --pr 7 --body-file - --json"
-	posted := "aicrew-agent forge pr review --pr 7 --body-file - --json"
+	comment := "aicrew-agent forge pr comment --pr 7 --body-file " + commentBodyFile + " --json"
+	posted := "aicrew-agent forge pr review --pr 7 --body-file " + reviewBodyFile + " --json"
 	ci, ri := slices.Index(f.calls, comment), slices.Index(f.calls, posted)
 	si := slices.IndexFunc(f.calls, func(c string) bool { return strings.HasPrefix(c, "aicrew-agent step work") })
 	if si < 0 || ci < si || ri < ci || !strings.HasPrefix(f.stdin[comment], ownHeader(tHead)+"\n\n") ||
@@ -467,6 +514,159 @@ func TestWorkerOpensAndSubmitsThePullRequest(t *testing.T) {
 	}
 	if f.called(comment) || f.called(posted) {
 		t.Fatalf("turn 5 reviewed again: %v", f.calls)
+	}
+}
+
+// The two kinds of a brief's "Why this turn" (internal/agent/brief.go).
+const (
+	continuationWhy = "\n\n## Why this turn\n\na continuation of attempt " + tAttempt + ".\n"
+	messageWhy      = "\n\n## Why this turn\n\n1 new message(s) in your inbox (1 action.needed; ids m1).\n"
+)
+
+// A worker's turn that finds its pull request waiting on its gates notes
+// it, and marks the note when the turn was a continuation, the turn a
+// waiting worker never gets (cycle.py, 01a20b66-0f78).
+func TestWorkerMarksAWaitInAContinuation(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		review bool // the worker's own review at the head: the wait on the launcher's submit
+	}{{"the external review", false}, {"the launcher's submit", true}} {
+		for why, cont := range map[string]bool{continuationWhy: true, messageWhy: false} {
+			f := newFake(t)
+			writeSection(t, f.home)
+			f.gatesGreen = "release"
+			var out bytes.Buffer
+			if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+				t.Fatalf("turn 1 = %d: %s", code, out.String())
+			}
+			f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: "open", HeadCommit: tHead,
+				Labels: []string{"review-this"}}, Content: &forge.PullContent{}}
+			want := "Waiting on the external review of #7"
+			if c.review {
+				f.readyAtHead()
+				f.pull.Content.Comments = append(f.pull.Content.Comments, forge.PullComment{Author: "sim-worker",
+					Review: &forge.ReviewHeader{Reviewer: forge.ReviewerLocal, Head: tHead, AtHead: true,
+						Verdict: "READY_FOR_HUMAN_MERGE"}})
+				want = "Waiting for the launcher's submit of #7"
+			}
+			out.Reset()
+			if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")+why), &out, f.member()); code != 0 {
+				t.Fatalf("%s: turn 2 = %d: %s", c.name, code, out.String())
+			}
+			// The wait on the launcher's submit is bounded, and past the
+			// bound a continuation is right: it is never marked.
+			marked := cont && !c.review
+			doc := readHandoff(t, f.home)
+			if !strings.Contains(doc, want) || strings.Contains(doc, continuationWait) != marked {
+				t.Fatalf("%s, continuation %v: the handoff:\n%s", c.name, cont, doc)
+			}
+		}
+	}
+}
+
+// A continuation that finds the external review requested is marked only
+// where the launcher's wait on the gates applies; where the launcher is
+// right to give the turn, the note is not marked (hands review of #288 at
+// d924f3f).
+func TestWorkerMarksOnlyAWaitTheLauncherKeeps(t *testing.T) {
+	failed := func(f *fakeTools) {
+		f.pull.Content.Checks = []forge.Check{{Name: "sim-ci", State: forge.ChecksFailure}}
+	}
+	for _, c := range []struct {
+		name   string
+		set    func(f *fakeTools)
+		marked bool
+	}{
+		{"the review requested", func(*fakeTools) {}, true},
+		{"the checks pending", func(f *fakeTools) {
+			f.pull.Content.Checks = []forge.Check{{Name: "sim-ci", State: forge.ChecksPending}}
+		}, true},
+		{"the review in progress", func(f *fakeTools) { f.pull.Pull.Labels = []string{"hands-reviewing"} }, true},
+		{"an untracked body file", func(f *fakeTools) { f.gitStatus = "" }, true},
+		{"a failed check", failed, false},
+		{"a failed check with the review in progress", func(f *fakeTools) {
+			failed(f)
+			f.pull.Pull.Labels = []string{"hands-reviewing"}
+		}, false},
+		{"an external review at the head", func(f *fakeTools) {
+			f.pull.Content.Comments = []forge.PullComment{{Author: "sim-hands", Review: &forge.ReviewHeader{
+				Reviewer: forge.ReviewerExternal, Head: tHead, AtHead: true, Verdict: "RETURN_TO_IMPLEMENTATION"}}}
+		}, false},
+		{"an unpushed commit", func(f *fakeTools) { f.gitHead = "0123456789abcdef0123456789abcdef01234567" }, false},
+		{"a changed tracked file", func(f *fakeTools) { f.gitStatus = " M sim/task.md\n" }, false},
+		{"a push while the review ran", func(f *fakeTools) {
+			doc := readHandoff(f.t, f.home)
+			i := strings.Index(doc, "\n### Decisions")
+			doc = doc[:i] + "\n- 2026-11-24T00:00:00Z Reworked #7: " + pushedInReview + "; pushed a new commit." + doc[i:]
+			if err := os.WriteFile(filepath.Join(f.home, "docs", "HANDOFF.md"), []byte(doc), 0o600); err != nil {
+				f.t.Fatal(err)
+			}
+		}, false},
+	} {
+		f := newFake(t)
+		writeSection(t, f.home)
+		f.gatesGreen = "release"
+		var out bytes.Buffer
+		if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+			t.Fatalf("turn 1 = %d: %s", code, out.String())
+		}
+		f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: "open", HeadCommit: tHead,
+			Labels: []string{"review-this"}}, Content: &forge.PullContent{}}
+		c.set(f)
+		out.Reset()
+		if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")+continuationWhy), &out, f.member()); code != 0 {
+			t.Fatalf("%s: turn 2 = %d: %s", c.name, code, out.String())
+		}
+		doc := readHandoff(t, f.home)
+		if !strings.Contains(doc, "Waiting on the external review of #7") || strings.Contains(doc, continuationWait) != c.marked {
+			t.Fatalf("%s: marked should be %v; the handoff:\n%s", c.name, c.marked, doc)
+		}
+	}
+}
+
+// Where the label's report says the launcher was not told of the pull
+// request, the worker notes it, and the next continuation's note is not
+// marked: the launcher's observation may lack the label until its next
+// poll. The same holds for the worker's read of the pull request in a
+// turn, and a continuation after a read the launcher was told of is marked
+// again.
+func TestWorkerMarksNoWaitTheLauncherWasNotToldOf(t *testing.T) {
+	f := newFake(t)
+	writeSection(t, f.home)
+	f.gatesGreen = "release"
+	f.labelWatch = "not watched: read its status: EOF"
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 1 = %d: %s", code, out.String())
+	}
+	if doc := readHandoff(t, f.home); !strings.Contains(doc, "Asked for the external review of #7 (review-this)"+
+		launcherNotTold+f.labelWatch+".") {
+		t.Fatalf("turn 1 did not note it: the handoff:\n%s", doc)
+	}
+	f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: "open", HeadCommit: tHead,
+		Labels: []string{"review-this"}}, Content: &forge.PullContent{}}
+	// Turn 4's read of the pull request is not told to the launcher either,
+	// so turn 5's continuation is not marked.
+	for turn, c := range []struct {
+		watch  string
+		marked bool
+	}{{"", false}, {"", true}, {"not watched: read its status: EOF", true}, {"", false}} {
+		f.pull.Watch = c.watch
+		marked := c.marked
+		out.Reset()
+		if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")+continuationWhy), &out, f.member()); code != 0 {
+			t.Fatalf("turn %d = %d: %s", turn+2, code, out.String())
+		}
+		doc := readHandoff(t, f.home)
+		last := ""
+		for _, line := range strings.Split(doc, "\n") {
+			if strings.HasPrefix(line, "- ") && strings.Contains(line, "Waiting on the external review of #7 ") {
+				last = line
+			}
+		}
+		if strings.HasSuffix(last, continuationWait+".") != marked {
+			t.Fatalf("turn %d: marked should be %v; the handoff:\n%s", turn+2, marked, doc)
+		}
 	}
 }
 
@@ -501,7 +701,7 @@ func TestWorkerLeavesTheSubmitToTheLauncher(t *testing.T) {
 		if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, m); code != 0 {
 			t.Fatalf("itself %v: turn 2 = %d: %s", itself, code, out.String())
 		}
-		posted := "aicrew-agent forge pr review --pr 7 --body-file - --json"
+		posted := "aicrew-agent forge pr review --pr 7 --body-file " + reviewBodyFile + " --json"
 		submitted := slices.ContainsFunc(f.calls, func(c string) bool { return strings.HasPrefix(c, "aicrew-agent step work") })
 		doc := readHandoff(t, f.home)
 		if !f.called(posted) || submitted != itself || f.called("aicrew-agent check") == itself ||
@@ -1155,6 +1355,16 @@ func TestReviewsOnAnEarlierHome(t *testing.T) {
 	writeSection(t, w.home)
 	if code := turnRun(context.Background(), w.home, strings.NewReader(workerBrief("running", "working")), &out, w.member()); code != 0 {
 		t.Fatalf("worker turn 1 = %d: %s", code, out.String())
+	}
+	// That release's wait counts a body file in the worktree as uncommitted
+	// work: the worker opens its pull request on standard input, as the
+	// stand-in did then (01a20b66-0f78).
+	opened := "aicrew-agent forge pr open --title sim: task " + tTask + " --body-file - --json"
+	if !w.called(opened) || !strings.HasPrefix(w.stdin[opened], "The pilot simulation's change for task "+tTask) {
+		t.Fatalf("the worker's pull request on an earlier home: %v", w.calls)
+	}
+	if _, err := os.Stat(filepath.Join(w.home, "worktrees", tAttempt, pullBodyFile)); err == nil {
+		t.Fatal("the worker left a body file in its worktree on an earlier home")
 	}
 	w.calls = nil
 	w.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: "open", HeadCommit: tHead,

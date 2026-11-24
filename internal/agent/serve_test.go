@@ -575,8 +575,11 @@ func TestTurnLoopWaitsOnGates(t *testing.T) {
 	}
 }
 
-// worktreeClean sees every uncommitted change, an untracked file and a
-// tracked edit alike, and a worktree it cannot read is not clean.
+// worktreeClean sees every uncommitted change to a tracked file (an edit,
+// a staged file, a deletion, a rename) and no untracked file, such as the
+// pull request's text and the review the guidance has a worker post from
+// files in its worktree (01a20b66-0f78); a worktree it cannot read is not
+// clean.
 func TestWorktreeClean(t *testing.T) {
 	ctx := context.Background()
 	wt := t.TempDir()
@@ -592,17 +595,117 @@ func TestWorktreeClean(t *testing.T) {
 	if !worktreeClean(ctx, wt) {
 		t.Fatal("a committed worktree is not clean")
 	}
-	write("b.txt", "b\n")
-	if worktreeClean(ctx, wt) {
-		t.Fatal("an untracked file is clean")
+	write("pr-body.md", "The change.\n")
+	write("review.md", "VERDICT\nREADY_FOR_HUMAN_MERGE\n")
+	if !worktreeClean(ctx, wt) {
+		t.Fatal("untracked body files are a change")
 	}
-	os.Remove(filepath.Join(wt, "b.txt"))
-	write("a.txt", "edited\n")
-	if worktreeClean(ctx, wt) {
-		t.Fatal("a tracked edit is clean")
+	for _, c := range []struct {
+		name   string
+		change func()
+		undo   func()
+	}{
+		{"a tracked edit", func() { write("a.txt", "edited\n") }, func() { git(t, wt, "checkout", "--", "a.txt") }},
+		{"a staged new file", func() { git(t, wt, "add", "review.md") }, func() { git(t, wt, "rm", "-q", "--cached", "review.md") }},
+		{"a deleted tracked file", func() {
+			if err := os.Remove(filepath.Join(wt, "a.txt")); err != nil {
+				t.Fatal(err)
+			}
+		}, func() { git(t, wt, "checkout", "--", "a.txt") }},
+		{"a staged rename", func() { git(t, wt, "mv", "a.txt", "c.txt") }, func() { git(t, wt, "mv", "c.txt", "a.txt") }},
+	} {
+		c.change()
+		if worktreeClean(ctx, wt) {
+			t.Errorf("%s is clean", c.name)
+		}
+		c.undo()
+		if !worktreeClean(ctx, wt) {
+			t.Fatalf("after %s was undone, the worktree is not clean", c.name)
+		}
 	}
 	if worktreeClean(ctx, filepath.Join(wt, "missing")) {
 		t.Fatal("a missing worktree is clean")
+	}
+}
+
+// Through the turn loop with the launcher's own worktreeClean over a real
+// worktree (01a20b66-0f78): a worker that wrote its pull request's text and
+// its review into files in its worktree, as the guidance has it do, waits on
+// the external review in progress and on the launcher's gates-green submit;
+// one with a change to a tracked file keeps its continuations and stalls as
+// before.
+func TestTurnLoopWaitsWithTheGuidancesBodyFiles(t *testing.T) {
+	waiting := PullObservation{Host: "git.example.test", Repository: "crew/p", Number: 4, State: forge.PullOpen,
+		HeadCommit: "h1", Labels: []string{"review-this"}, Checks: forge.ChecksPending}
+	reviewed := PullObservation{Host: "git.example.test", Repository: "crew/p", Number: 4, State: forge.PullOpen,
+		HeadCommit: "h1", Labels: []string{"hands-reviewed"}, Checks: forge.ChecksSuccess,
+		Review: &ObservedReview{AtHead: true, Verdict: verdictReady}}
+	// start runs the worker's turn that committed, pushed and posted, with
+	// change applied to the attempt's worktree after it.
+	start := func(o PullObservation, green bool, change func(wt string)) *loopEnv {
+		e := newLoopEnv(t)
+		e.loop.Clean = worktreeClean
+		wt := filepath.Join(e.home, "worktrees", "att-1")
+		if err := os.MkdirAll(wt, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		git(t, wt, "init", "-q", "-b", "work")
+		if err := os.WriteFile(filepath.Join(wt, "a.txt"), []byte("a\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		git(t, wt, "add", "a.txt")
+		git(t, wt, "commit", "-q", "-m", "work")
+		e.host.attempt = &memberAttempt{ID: "att-1", State: "running", Phase: "working", Task: TaskRef{TaskID: "task-1"}}
+		e.host.pending = []PendingMessage{msg("offer", "lifecycle")}
+		e.next = func(TurnSpec, *fakeHost) TurnResult {
+			e.host.pending, e.head, e.host.observed = nil, "h1", []PullObservation{o}
+			for _, f := range []string{"pr-body.md", "review.md"} {
+				if err := os.WriteFile(filepath.Join(wt, f), []byte("text\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if change != nil {
+				change(wt)
+			}
+			if green {
+				e.host.mu.Lock()
+				e.host.greenHead = "h1"
+				e.host.mu.Unlock()
+			}
+			return TurnResult{Outcome: TurnFinished}
+		}
+		e.tick(t)
+		e.next = func(TurnSpec, *fakeHost) TurnResult {
+			e.host.pending = nil
+			return TurnResult{Outcome: TurnFinished}
+		}
+		return e
+	}
+	edit := func(wt string) {
+		if err := os.WriteFile(filepath.Join(wt, "a.txt"), []byte("edited\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name          string
+		o             PullObservation
+		green         bool
+		change        func(wt string)
+		turns, blocks int
+	}{
+		{"the body files, the external review in progress", waiting, false, nil, 1, 0},
+		{"the body files, the launcher to submit", reviewed, true, nil, 1, 0},
+		{"a tracked edit, the external review in progress", waiting, false, edit, 1 + stallTurns, 1},
+		{"a tracked edit, the launcher to submit", reviewed, true, edit, 1 + stallTurns, 1},
+	} {
+		e := start(c.o, c.green, c.change)
+		for range 8 {
+			e.tick(t)
+		}
+		if len(e.specs) != c.turns || len(e.host.calls) != c.blocks {
+			t.Errorf("%s: %d turns and %d blocks, want %d and %d", c.name, len(e.specs), len(e.host.calls), c.turns,
+				c.blocks)
+		}
 	}
 }
 

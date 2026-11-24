@@ -140,8 +140,9 @@ type TurnLoop struct {
 	// Interpreters are the names a coordinator's delivery check looks its
 	// interpreter up by; nil means deliveryInterpreters (delivery.go).
 	Interpreters []string
-	// Clean reports whether a worktree has no uncommitted change, tracked
-	// or untracked; false when it cannot tell, or when it is nil.
+	// Clean reports whether a worktree has no uncommitted change to a
+	// tracked file; false when it cannot tell, or when it is nil.
+	// An untracked file is no change (worktreeClean).
 	Clean func(ctx context.Context, worktree string) bool
 
 	lastStart time.Time
@@ -638,12 +639,13 @@ func openTranscript(home, turnID string) (io.Writer, func()) {
 // waitingOnGates reports whether the attempt waits on its pull request's
 // gates, the harness's states of docs/DESIGN-TURNS.md 4.2 (checking,
 // external-review, gates), where a turn has nothing to do. The worktree is
-// clean, and a watched pull request, as last observed, is open at its head
-// (all the work is committed and pushed); no external review at the head
-// blocks it and no check failed; and the external review is requested or
-// in progress, or the checks are pending. It also waits while both reviews
-// are READY at the head with CI green and the launcher's gates-green is to
-// submit, within that wait's bound (GatesGreenWait).
+// clean (no change to a tracked file), and a watched pull request, as last
+// observed, is open at its head (all the work is committed and pushed); no
+// external review at the head blocks it and no check failed; and the
+// external review is requested or in progress, or the checks are pending.
+// It also waits while both reviews are READY at the head with CI green and
+// the launcher's gates-green is to submit, within that wait's bound
+// (GatesGreenWait).
 func (l *TurnLoop) waitingOnGates(ctx context.Context, attempt *memberAttempt) bool {
 	observed := l.Host.Observed()
 	if len(observed) == 0 {
@@ -693,13 +695,18 @@ func worktreeHead(ctx context.Context, worktree string) string {
 	return strings.TrimSpace(out)
 }
 
-// worktreeClean reports whether a worktree has no uncommitted change, an
-// untracked file included; false when git cannot tell.
+// worktreeClean reports whether a worktree has no uncommitted change to a
+// tracked file (modified, staged, deleted or renamed); false when git
+// cannot tell. An untracked file is no change: the guidance has a worker
+// write its pull request's text and its review into files it posts from
+// the worktree (commands.go, crew-submit), the only place a turn may write
+// them, and the launcher's gates-green submits on the forge's head without
+// reading the worktree (01a20b66-0f78).
 func worktreeClean(ctx context.Context, worktree string) bool {
 	if _, err := os.Stat(worktree); err != nil {
 		return false
 	}
-	out, err := execGit(ctx, worktree, gitEnv, "status", "--porcelain")
+	out, err := execGit(ctx, worktree, gitEnv, "status", "--porcelain", "--untracked-files=no")
 	return err == nil && strings.TrimSpace(out) == ""
 }
 

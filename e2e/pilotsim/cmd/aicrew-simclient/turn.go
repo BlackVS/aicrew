@@ -42,6 +42,9 @@ type brief struct {
 	Role, Team, Agent     string
 	Task, Project, Hub    string
 	Branch, Base, Repo    string
+	// Continuation is a turn the turn loop started with no new message:
+	// the brief's "Why this turn" is a continuation of the attempt.
+	Continuation bool
 }
 
 var (
@@ -50,6 +53,7 @@ var (
 	briefTask   = regexp.MustCompile(`(?m)^- Attempt (\S+) on task (\S+) \(project (\S+), hub (\S+)\)\.$`)
 	briefBranch = regexp.MustCompile("(?m)^- Branch (\\S+) from base commit (\\S+); worktree `")
 	briefRepo   = regexp.MustCompile(`(?m)^- Repository (\S+) \(default branch \S+\)\.$`)
+	briefCont   = regexp.MustCompile(`(?m)^## Why this turn\n\na continuation of attempt `)
 )
 
 // parseBrief reads the brief after the /crew-turn command.
@@ -83,6 +87,7 @@ func parseBrief(prompt string) (brief, error) {
 	if m := briefRepo.FindStringSubmatch(text); m != nil {
 		b.Repo = m[1]
 	}
+	b.Continuation = briefCont.MatchString(text)
 	return b, nil
 }
 
@@ -566,9 +571,21 @@ func (m *member) openPull(ctx context.Context, b brief, wt string) error {
 		return err
 	}
 	var opened agent.PullReport
-	body := "The pilot simulation's change for task " + b.Task + " (attempt " + b.Attempt + ").\n"
-	if err := m.agentJSON(ctx, wt, body, &opened, "forge", "pr", "open", "--title", "sim: task "+b.Task,
-		"--body-file", "-"); err != nil {
+	text := "The pilot simulation's change for task " + b.Task + " (attempt " + b.Attempt + ").\n"
+	stdin, body := text, "-"
+	if m.reviewCommand() {
+		// This release's guidance and wait: the text from a file in the
+		// worktree. A home of an earlier release counts such a file as
+		// uncommitted work and does not wait on its gates, so there the
+		// stand-in posts on standard input, as it did then.
+		path, err := bodyFile(wt, pullBodyFile, text)
+		if err != nil {
+			return err
+		}
+		stdin, body = "", path
+	}
+	if err := m.agentJSON(ctx, wt, stdin, &opened, "forge", "pr", "open", "--title", "sim: task "+b.Task,
+		"--body-file", body); err != nil {
 		return err
 	}
 	m.note("Pull request #%d: %s, opened at head %s.", opened.Pull.Number, opened.Pull.URL, opened.Pull.HeadCommit)
@@ -632,7 +649,7 @@ func (m *member) requestReview(ctx context.Context, wt string, n int64, stale bo
 		"review-this"); err != nil {
 		return err
 	}
-	m.note("Asked for the external review of #%d (review-this).", n)
+	m.note("Asked for the external review of #%d (review-this)%s.", n, untold(labelled.Watch))
 	return nil
 }
 
@@ -653,7 +670,12 @@ func (m *member) followPull(ctx context.Context, b brief, wt string, n int64) er
 		!strings.Contains(m.section(), pushedInReview):
 		return m.rework(ctx, b, wt, n, pushedInReview) // once per attempt
 	case asked:
-		m.note("Waiting on the external review of #%d at %s (labels %s).", n, p.HeadCommit, strings.Join(p.Labels, ", "))
+		mark := ""
+		if b.Continuation && m.gateWaitHolds(ctx, wt, n, p.HeadCommit, checks, shown.Content) {
+			mark = continuationWait
+		}
+		m.note("Waiting on the external review of #%d at %s (labels %s)%s%s.", n, p.HeadCommit, strings.Join(p.Labels, ", "),
+			untold(shown.Watch), mark)
 	case checks == forge.ChecksFailure:
 		return m.rework(ctx, b, wt, n, "the checks failed at "+p.HeadCommit)
 	case verdict == "RETURN_TO_IMPLEMENTATION":
@@ -1379,9 +1401,17 @@ func ownHeader(head string) string { return "[worker review] reviewed at head " 
 // command, then through `forge pr review` in the worktree, which writes
 // the header the gates read at the worktree's commit.
 func (m *member) postOwnReview(ctx context.Context, wt string, n int64, head string) error {
-	body := reviewBody(workerReview)
-	out, code, err := m.run(ctx, wt, ownHeader(head)+"\n\n"+body, "aicrew-agent", "forge", "pr", "comment",
-		"--pr", fmt.Sprint(n), "--body-file", "-", "--json")
+	text := reviewBody(workerReview)
+	comment, err := bodyFile(wt, commentBodyFile, ownHeader(head)+"\n\n"+text)
+	if err != nil {
+		return err
+	}
+	review, err := bodyFile(wt, reviewBodyFile, text)
+	if err != nil {
+		return err
+	}
+	out, code, err := m.run(ctx, wt, "", "aicrew-agent", "forge", "pr", "comment",
+		"--pr", fmt.Sprint(n), "--body-file", comment, "--json")
 	if err != nil {
 		return fmt.Errorf("aicrew-agent forge pr comment: %w", err)
 	}
@@ -1391,11 +1421,105 @@ func (m *member) postOwnReview(ctx context.Context, wt string, n int64, head str
 	}
 	m.note("forge pr comment refused the worker's review of #%d with the header %q (exit %d).", n, ownHeader(head), code)
 	var posted agent.PullReport
-	if err := m.agentJSON(ctx, wt, body, &posted, "forge", "pr", "review", "--pr", fmt.Sprint(n), "--body-file", "-"); err != nil {
+	if err := m.agentJSON(ctx, wt, "", &posted, "forge", "pr", "review", "--pr", fmt.Sprint(n), "--body-file", review); err != nil {
 		return err
 	}
 	m.note("Posted the worker's review of #%d at head %s with forge pr review: READY_FOR_HUMAN_MERGE.", n, head)
 	return nil
+}
+
+// The files the worker writes its pull request's text and its reviews into,
+// in its worktree and never added, as the managed guidance has a worker post
+// them: `--body-file FILE` from the worktree, the only place a turn may write
+// them (01a20b66-0f78). The launcher's wait on the gates takes such a file
+// for no change. Only a home whose guidance names `forge pr review` (this
+// release's) gets them: the review is posted only there, and openPull
+// posts on standard input elsewhere.
+const (
+	pullBodyFile    = "pr-body.md"
+	commentBodyFile = "comment.md"
+	reviewBodyFile  = "review.md"
+)
+
+// bodyFile writes text to name in the worktree wt and returns its path.
+func bodyFile(wt, name, text string) (string, error) {
+	path := filepath.Join(wt, name)
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		return "", fmt.Errorf("write the body file %s: %w", name, err)
+	}
+	return path, nil
+}
+
+// continuationWait marks the note of a continuation turn that found the
+// pull request waiting on the external review where the launcher's wait on
+// the gates applies (gateWaitHolds): a worker that waits on its gates gets
+// no such turn, which cycle.py checks. The wait on the launcher's submit is
+// never marked: it is bounded, and past the bound a continuation is right.
+const continuationWait = " (a continuation turn)"
+
+// gateWaitHolds reports whether the launcher's wait on the gates applies to
+// pull request n at head as the turn reads it, by a condition narrower than
+// the launcher's (waitingOnGates, internal/agent/serve.go), so that a mark
+// never falls on a continuation the launcher was right to give:
+//   - no check failed and no external review is at the head (the launcher
+//     skips a failed check and a blocking review);
+//   - the worktree's HEAD is head and no tracked file is changed: the work
+//     is committed and pushed (an untracked file, such as the body files,
+//     is no change);
+//   - the last note on n is not a push made while the external review ran
+//     (P2), nor a request for the review whose report says the launcher
+//     was not told: the launcher's observation can still hold the earlier
+//     head or lack the label.
+func (m *member) gateWaitHolds(ctx context.Context, wt string, n int64, head, checks string, c *forge.PullContent) bool {
+	if checks == forge.ChecksFailure || externalAtHead(c) || m.unreported(n) {
+		return false
+	}
+	out, code, err := m.run(ctx, wt, "", "git", "rev-parse", "HEAD")
+	if err != nil || code != 0 || strings.TrimSpace(string(out)) != head {
+		return false
+	}
+	out, code, err = m.run(ctx, wt, "", "git", "status", "--porcelain", "--untracked-files=no")
+	return err == nil && code == 0 && strings.TrimSpace(string(out)) == ""
+}
+
+// externalAtHead reports whether c holds an external review at the head.
+func externalAtHead(c *forge.PullContent) bool {
+	if c == nil {
+		return false
+	}
+	return slices.ContainsFunc(c.Comments, func(cm forge.PullComment) bool {
+		return cm.Review != nil && cm.Review.Reviewer == forge.ReviewerExternal && cm.Review.AtHead
+	})
+}
+
+// launcherNotTold is what a note on a forge pr command adds when the
+// command's report says the launcher was not told of the pull request
+// (its watch is not agent.WatchOn): the launcher's observation then waits
+// for its next poll.
+const launcherNotTold = "; the launcher was not told: "
+
+// untold is launcherNotTold with the report's watch, or "" where the
+// launcher was told.
+func untold(watch string) string {
+	if watch == agent.WatchOn {
+		return ""
+	}
+	return launcherNotTold + watch
+}
+
+// unreported reports whether the section's last note on pull request n is
+// one the launcher's observation may not hold yet: the push made while the
+// external review ran (rework, P2), which no forge pr command followed, or
+// a command whose report says the launcher was not told.
+func (m *member) unreported(n int64) bool {
+	tag := fmt.Sprintf("#%d", n)
+	last := ""
+	for _, line := range strings.Split(m.section(), "\n") {
+		if strings.HasPrefix(line, "- ") && (strings.Contains(line, tag+" ") || strings.Contains(line, tag+":")) {
+			last = line
+		}
+	}
+	return strings.Contains(last, "Reworked "+tag+": "+pushedInReview+";") || strings.Contains(last, launcherNotTold)
 }
 
 // ownReviewAt reports whether c holds a local review at the head.

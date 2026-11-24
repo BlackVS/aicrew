@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -648,15 +649,23 @@ func checkEndsTheInitProbe(t *testing.T, atOnce bool) {
 	e := setupCheck(t, f, "aimem", "claude")
 	e.installSkills(t, "1.26.1", "oh-code-review")
 	var out bytes.Buffer
-	start := time.Now()
-	// A run the probe did not end lasts the whole ceiling, since the fake
-	// waits an hour: only that is the failure, never a slow runner
-	// (01a20d9b-a3a8).
+	// The probe ends the run at the init event: its own duration, as the
+	// check prints it, stays under its own ceiling. A probe that read the
+	// init event and then waited for its deadline takes the whole ceiling,
+	// since the fake retries for an hour; time spent in the other commands
+	// does not count (01a20d9b-a3a8).
 	const ceiling = 60 * time.Second
-	rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"claude"}, Timeout: ceiling, Out: &out})
-	took := time.Since(start)
-	if err != nil || rep.Clients[0].MCP != "connected" || took >= ceiling {
-		t.Fatalf("%+v, %v, after %s", rep, err, took)
+	rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"claude"}, Timeout: ceiling,
+		probeCeiling: ceiling, Out: &out})
+	if err != nil || rep.Clients[0].MCP != "connected" {
+		t.Fatalf("%+v, %v", rep, err)
+	}
+	m := regexp.MustCompile(`(?m)^  claude init probe: ([^,\n]+), init event read`).FindStringSubmatch(out.String())
+	if m == nil {
+		t.Fatalf("no duration for the init probe:\n%s", out.String())
+	}
+	if took, err := time.ParseDuration(m[1]); err != nil || took >= ceiling {
+		t.Fatalf("the init probe took %s against its %s ceiling (%v)", m[1], ceiling, err)
 	}
 	if runtime.GOOS != "windows" {
 		if b, _ := os.ReadFile(f.TermMark); string(b) != "terminated" {

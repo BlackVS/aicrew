@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -221,18 +222,58 @@ func TestWaitPendingEnds(t *testing.T) {
 	if r := waitPending(ctx, flaky, nil, time.Minute); len(r.Pending) != 1 || tries != 3 {
 		t.Fatalf("a read that failed twice: %+v after %d tries", r, tries)
 	}
-	down := func(context.Context) (json.RawMessage, error) { return nil, errors.New("connection refused") }
-	start := time.Now()
-	// "timeout" is the event; the bound fails only a wait that ran on far
-	// past its deadline, never a slow runner (01a20d9b-a3a8).
-	if r := waitPending(ctx, down, nil, 300*time.Millisecond); r.Ended != "timeout" || time.Since(start) > 30*time.Second {
-		t.Fatalf("a read that never answers: %+v after %s", r, time.Since(start))
+	// A read that never answers ends the wait at its own deadline. The proof
+	// is the number of reads, not a clock: one read every wakePoll from the
+	// start to the deadline is at most wait/wakePoll+1, and a loaded runner
+	// can only make it fewer; a wait that ran past its deadline reads more.
+	// The guard fails only a wait that never ends (01a20d9b-a3a8).
+	var downReads atomic.Int32
+	down := func(context.Context) (json.RawMessage, error) {
+		downReads.Add(1)
+		return nil, errors.New("connection refused")
+	}
+	const short = 300 * time.Millisecond
+	ended := make(chan WakeResult, 1)
+	go func() { ended <- waitPending(ctx, down, nil, short) }()
+	select {
+	case r := <-ended:
+		if most := int32(short/wakePoll) + 1; r.Ended != "timeout" || downReads.Load() > most {
+			t.Fatalf("a read that never answers: %+v after %d reads, at most %d", r, downReads.Load(), most)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("a wait over a read that never answers did not end (%d reads)", downReads.Load())
 	}
 	stopping, cancel := context.WithCancel(ctx)
 	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
 	empty := func(context.Context) (json.RawMessage, error) { return json.RawMessage(`{"pending":[]}`), nil }
 	if r := waitPending(stopping, empty, nil, time.Minute); r.Ended != "stopping" {
 		t.Fatalf("the launcher stopping: %+v", r)
+	}
+}
+
+// The wait returns on the read that finds a message, not at its deadline:
+// with an hour's wait and the message on the second read, it reads exactly
+// twice. A wait that kept reading until its deadline reads more; one that
+// slept on fails the guard, which a slow runner never reaches
+// (01a20d9b-a3a8).
+func TestWaitPendingReturnsOnTheReadThatFindsAMessage(t *testing.T) {
+	shortWakePoll(t)
+	var reads atomic.Int32
+	read := func(context.Context) (json.RawMessage, error) {
+		if reads.Add(1) < 2 {
+			return json.RawMessage(`{"pending":[]}`), nil
+		}
+		return json.RawMessage(`{"pending":[{"id":"m1","seq":1,"kind":"message"}]}`), nil
+	}
+	done := make(chan WakeResult, 1)
+	go func() { done <- waitPending(context.Background(), read, nil, time.Hour) }()
+	select {
+	case r := <-done:
+		if len(r.Pending) != 1 || r.Pending[0].ID != "m1" || reads.Load() != 2 {
+			t.Fatalf("the wait: %+v after %d reads, want the message after 2", r, reads.Load())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the wait did not return on the read that found the message (%d reads)", reads.Load())
 	}
 }
 
@@ -257,19 +298,21 @@ func TestWaitPendingRetriesARetryableRefusal(t *testing.T) {
 // time however slow the forge (01a1301d-55e3).
 func TestWaitPendingBoundsTheForgePoll(t *testing.T) {
 	empty := func(context.Context) (json.RawMessage, error) { return json.RawMessage(`{"pending":[]}`), nil }
-	var polled bool
+	var polled, cut bool
 	slow := func(ctx context.Context) {
 		polled = true
 		select {
 		case <-ctx.Done():
+			cut = true
 		case <-time.After(time.Minute):
 		}
 	}
 	start := time.Now()
 	r := waitPending(context.Background(), empty, slow, time.Second)
-	// The slow poll lasts a minute: a poll the wait did not end takes that
-	// long, and a slow runner never does (01a20d9b-a3a8).
-	if took := time.Since(start); !polled || r.Ended != "timeout" || took > 30*time.Second {
-		t.Fatalf("a 1-second wait with a slow forge: %+v after %v (polled %v)", r, took, polled)
+	// The poll ended through its context, the wait's deadline: that is the
+	// proof. The bound, half the poll's minute, fails only a poll the wait
+	// did not end, never a slow runner (01a20d9b-a3a8).
+	if took := time.Since(start); !polled || !cut || r.Ended != "timeout" || took > 30*time.Second {
+		t.Fatalf("a 1-second wait with a slow forge: %+v after %v (polled %v, cut %v)", r, took, polled, cut)
 	}
 }

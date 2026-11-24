@@ -583,7 +583,13 @@ nothing to do ends, and the launcher's next message starts the next one.
   each member's last turn errors, read from its `logs/turns.jsonl`, where
   that message stands. Then it commits one file, pushes with the home's own
   credential, opens the pull request with `aicrew-agent forge pr open`, and
-  adds `review-this`. Later turns read the pull request with
+  adds `review-this`. The worker posts its pull request's text and its
+  reviews as the guidance has a worker do: from files it writes in its
+  worktree and never adds (`pr-body.md`, `comment.md`, `review.md`), with
+  `--body-file FILE`. On a home whose `docs/ROLES.md` does not name
+  `forge pr review` (an earlier release, whose wait counts such a file as
+  uncommitted work), it opens the pull request on standard input, as it
+  did then. Later turns read the pull request with
   `forge pr show` and wait while `review-this` or `hands-reviewing` is on.
   A `RETURN_TO_IMPLEMENTATION` from sim-hands at the head, or failed
   checks once the review is done, gets a new commit, the stale
@@ -630,7 +636,15 @@ or later.
 The scenario makes sim-hands return each pull request's first review and
 take 50 seconds over every review, more than three of the launcher's turn
 gaps: a worker waiting on its gates gets no continuation turn and is never
-stalled or blocked (docs/DESIGN-CONTROL-PLANE.md, 1.8).
+stalled or blocked (docs/DESIGN-CONTROL-PLANE.md, 1.8). A turn that finds
+its pull request waiting on the external review or on the launcher's
+submit notes it, and marks the note "(a continuation turn)" when the turn
+loop started it as a continuation. From the `pull` step on, the cycle's
+checks fail on such a mark where the worker's report of the attempt's
+own time names this run's build. That is the wait with the body files in
+the worktree (task 01a20b66-0f78). A home of an earlier release counts
+those files as uncommitted work and does not wait, and its marks are not
+checked.
 
 The operator files the task READY through the hub's API: a coordinator is
 woken by a change to READY, not by a new BACKLOG task. The script holds

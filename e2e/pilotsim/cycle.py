@@ -299,6 +299,18 @@ def check(step, d, case=""):
             expect(own, "worker: the handoff does not record its own submit of #%d" % n)
             expect(not launcher_note(handoff, n), "worker: it left the submit of #%d to the launcher where it "
                    "submits itself" % n)
+    if after("pull") and pulls:
+        # A worker of this tree's build waits on its gates with the body
+        # files the guidance has it post from in its worktree (01a20b66-0f78):
+        # no continuation turn finds its pull request waiting on the external
+        # review or on the launcher's submit. A home of an earlier release
+        # counts the files as uncommitted work and does not wait.
+        n = pulls[0]["number"]
+        this, why = worker_this_build(d)
+        expect(why == "", "worker: its build is not known: %s" % why)
+        if this:
+            expect(not continuation_wait(handoff, n), "worker: a continuation turn found #%d waiting on its gates: "
+                   "the turn loop did not wait" % n)
     coordinator = load(d, "homes/coordinator/HANDOFF.md", "") or ""
     for s, text in (("review", "Accepted result 1 of attempt " + a["id"]),
                     ("done", "Attempt %s was finalized" % a["id"])):
@@ -315,15 +327,12 @@ def check(step, d, case=""):
 LAUNCHER_SUBMITS = "the launcher submits it, since gates-green is in the set"
 
 
-def launcher_submits(d, case):
-    """Whether the launcher, not the worker, submits the attempt, from the
-    run's facts, and "" or why that is not known: the worker's check report
-    of the attempt's own time (its aicrew-agent build against
-    PILOTSIM_BUILD_COMMIT, and gates-green in its effective set and not
-    disabled, as the stand-in reads it) and the case (F1 submits itself)."""
-    # The report of the attempt's own time: the cycle's submit snapshot
-    # beside d, where the cycle took one (a re-check after an upgrade reads
-    # the first cycle's attempt, which ran on the earlier release), else d's.
+def worker_report(d):
+    """The worker's check report of the attempt's own time and the snapshot
+    it was read from, or None and why there is none: the cycle's submit
+    snapshot beside d, where the cycle took one (a re-check after an upgrade
+    reads the first cycle's attempt, which ran on the earlier release), else
+    d's."""
     src = os.path.join(os.path.dirname(os.path.abspath(d)), "submit")
     if not os.path.isfile(os.path.join(src, "homes", "worker", "check.json")):
         src = d
@@ -331,17 +340,40 @@ def launcher_submits(d, case):
         rep = loadj(src, "homes/worker/check.json", None)
     except ValueError:
         rep = None
-    build = os.environ.get("PILOTSIM_BUILD_COMMIT", "")
     if not isinstance(rep, dict) or not isinstance(rep.get("aicrew_agent"), dict):
-        return False, "no readable check report of the worker in %s" % src
-    if not build:
-        return False, "PILOTSIM_BUILD_COMMIT is not set"
+        return None, "no readable check report of the worker in %s" % src
+    if not os.environ.get("PILOTSIM_BUILD_COMMIT", ""):
+        return None, "PILOTSIM_BUILD_COMMIT is not set"
+    return rep, src
+
+
+def worker_this_build(d):
+    """Whether the worker's home ran this tree's build (PILOTSIM_BUILD_COMMIT)
+    at the attempt's time, and "" or why that is not known."""
+    rep, src = worker_report(d)
+    if rep is None:
+        return False, src
+    commit = rep["aicrew_agent"].get("commit")
+    if not commit:
+        return False, "the worker's check report in %s names no build commit" % src
+    return commit == os.environ["PILOTSIM_BUILD_COMMIT"], ""
+
+
+def launcher_submits(d, case):
+    """Whether the launcher, not the worker, submits the attempt, from the
+    run's facts, and "" or why that is not known: the worker's check report
+    of the attempt's own time (its aicrew-agent build against
+    PILOTSIM_BUILD_COMMIT, and gates-green in its effective set and not
+    disabled, as the stand-in reads it) and the case (F1 submits itself)."""
+    rep, src = worker_report(d)
+    if rep is None:
+        return False, src
     if case == "F1":
         return False, ""
     commit = rep["aicrew_agent"].get("commit")
     if not commit:
         return False, "the worker's check report in %s names no build commit" % src
-    if commit != build:
+    if commit != os.environ["PILOTSIM_BUILD_COMMIT"]:
         return False, ""
     if not isinstance(rep.get("automations"), dict):
         return False, "the worker's check report lists no automations (its launcher did not answer)"
@@ -355,6 +387,19 @@ def launcher_note(handoff, number):
     HEAD; " + LAUNCHER_SUBMITS)."""
     return re.search(r"(?m)^- \S+ Posted the review of #%d at [0-9a-f]+; %s\.$" % (number, re.escape(LAUNCHER_SUBMITS)),
                      handoff) is not None
+
+
+# What the stand-in appends to a waiting note in a continuation turn
+# (aicrew-simclient, continuationWait).
+CONTINUATION_WAIT = " (a continuation turn)"
+
+
+def continuation_wait(handoff, number):
+    """Whether the worker's handoff notes, for pull request number, a
+    continuation turn that found it waiting on the external review or on the
+    launcher's submit (aicrew-simclient, followPull)."""
+    return re.search(r"(?m)^- \S+ Waiting (on the external review|for the launcher's submit) of #%d .*%s\.$" %
+                     (number, re.escape(CONTINUATION_WAIT)), handoff) is not None
 
 
 def launcher_submitted(d, attempt):

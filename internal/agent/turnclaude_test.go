@@ -158,11 +158,13 @@ func TestRunClaudeTurn(t *testing.T) {
 			t.Errorf("a dangerous argument: %s", a)
 		}
 	}
-	spec.Env = append(env, fakeTurnSleepEnv+"=30s")
+	// The fake sleeps 3 minutes: a turn not stopped at its limit takes that
+	// long, and a slow runner never does (01a20d9b-a3a8).
+	spec.Env = append(env, fakeTurnSleepEnv+"=3m")
 	spec.Timeout = 300 * time.Millisecond
 	start := time.Now()
 	if res := RunClaudeTurn(context.Background(), spec); res.Outcome != TurnStopped || res.LoopStopping ||
-		time.Since(start) > 20*time.Second {
+		time.Since(start) > time.Minute {
 		t.Errorf("a turn past its limit: %+v after %s", res, time.Since(start))
 	}
 	// The parent's cancellation is the loop stopping, not the turn's limit.

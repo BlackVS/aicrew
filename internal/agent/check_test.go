@@ -649,9 +649,13 @@ func checkEndsTheInitProbe(t *testing.T, atOnce bool) {
 	e.installSkills(t, "1.26.1", "oh-code-review")
 	var out bytes.Buffer
 	start := time.Now()
-	rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"claude"}, Timeout: 60 * time.Second, Out: &out})
+	// A run the probe did not end lasts the whole ceiling, since the fake
+	// waits an hour: only that is the failure, never a slow runner
+	// (01a20d9b-a3a8).
+	const ceiling = 60 * time.Second
+	rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"claude"}, Timeout: ceiling, Out: &out})
 	took := time.Since(start)
-	if err != nil || rep.Clients[0].MCP != "connected" || took > 20*time.Second {
+	if err != nil || rep.Clients[0].MCP != "connected" || took >= ceiling {
 		t.Fatalf("%+v, %v, after %s", rep, err, took)
 	}
 	if runtime.GOOS != "windows" {

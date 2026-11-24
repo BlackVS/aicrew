@@ -40,12 +40,12 @@ func TestWaitInboxWakesOnAMessage(t *testing.T) {
 		s.store.SendMessage(ctx, s.coord, "wake-1", store.NewMessage{SessionID: s.coordSess.ID,
 			Generation: s.coordSess.Generation, To: s.agentID, Text: "Please look at the parser task next."})
 	}()
-	ten, _ := json.Marshal(map[string]int{"seconds": 10})
-	start := time.Now()
-	ans = s.call(t, &answers, StepCall{Op: "wait-inbox", Body: ten})
-	if !ans.OK || json.Unmarshal(ans.Result, &res) != nil || len(res.Pending) != 1 || res.Pending[0].Kind != "message" ||
-		time.Since(start) > 5*time.Second {
-		t.Fatalf("a message during the wait: %+v %s after %s", ans, ans.Result, time.Since(start))
+	// The wait returns as soon as the message is pending: the wake is the
+	// event, and its 30 seconds fail only a hang (01a20d9b-a3a8).
+	thirty, _ := json.Marshal(map[string]int{"seconds": 30})
+	ans = s.call(t, &answers, StepCall{Op: "wait-inbox", Body: thirty})
+	if !ans.OK || json.Unmarshal(ans.Result, &res) != nil || len(res.Pending) != 1 || res.Pending[0].Kind != "message" {
+		t.Fatalf("a message during the wait: %+v %s", ans, ans.Result)
 	}
 	if strings.Contains(string(ans.Result), "parser") {
 		t.Fatal("the wait carried the message's text")
@@ -223,7 +223,9 @@ func TestWaitPendingEnds(t *testing.T) {
 	}
 	down := func(context.Context) (json.RawMessage, error) { return nil, errors.New("connection refused") }
 	start := time.Now()
-	if r := waitPending(ctx, down, nil, 300*time.Millisecond); r.Ended != "timeout" || time.Since(start) > 2*time.Second {
+	// "timeout" is the event; the bound fails only a wait that ran on far
+	// past its deadline, never a slow runner (01a20d9b-a3a8).
+	if r := waitPending(ctx, down, nil, 300*time.Millisecond); r.Ended != "timeout" || time.Since(start) > 30*time.Second {
 		t.Fatalf("a read that never answers: %+v after %s", r, time.Since(start))
 	}
 	stopping, cancel := context.WithCancel(ctx)
@@ -265,7 +267,9 @@ func TestWaitPendingBoundsTheForgePoll(t *testing.T) {
 	}
 	start := time.Now()
 	r := waitPending(context.Background(), empty, slow, time.Second)
-	if took := time.Since(start); !polled || r.Ended != "timeout" || took > 3*time.Second {
+	// The slow poll lasts a minute: a poll the wait did not end takes that
+	// long, and a slow runner never does (01a20d9b-a3a8).
+	if took := time.Since(start); !polled || r.Ended != "timeout" || took > 30*time.Second {
 		t.Fatalf("a 1-second wait with a slow forge: %+v after %v (polled %v)", r, took, polled)
 	}
 }

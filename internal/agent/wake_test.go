@@ -6,8 +6,8 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/store"
@@ -222,27 +222,18 @@ func TestWaitPendingEnds(t *testing.T) {
 	if r := waitPending(ctx, flaky, nil, time.Minute); len(r.Pending) != 1 || tries != 3 {
 		t.Fatalf("a read that failed twice: %+v after %d tries", r, tries)
 	}
-	// A read that never answers ends the wait at its own deadline. The proof
-	// is the number of reads, not a clock: one read every wakePoll from the
-	// start to the deadline is at most wait/wakePoll+1, and a loaded runner
-	// can only make it fewer; a wait that ran past its deadline reads more.
-	// The guard fails only a wait that never ends (01a20d9b-a3a8).
-	var downReads atomic.Int32
-	down := func(context.Context) (json.RawMessage, error) {
-		downReads.Add(1)
-		return nil, errors.New("connection refused")
-	}
-	const short = 300 * time.Millisecond
-	ended := make(chan WakeResult, 1)
-	go func() { ended <- waitPending(ctx, down, nil, short) }()
-	select {
-	case r := <-ended:
-		if most := int32(short/wakePoll) + 1; r.Ended != "timeout" || downReads.Load() > most {
-			t.Fatalf("a read that never answers: %+v after %d reads, at most %d", r, downReads.Load(), most)
+	// A read that never answers ends the wait exactly at its own deadline.
+	// The wait runs in a synctest bubble, on its virtual clock: no runner's
+	// speed enters the measure, and a wait that ended late shows it exactly
+	// (01a20d9b-a3a8).
+	synctest.Test(t, func(t *testing.T) {
+		down := func(context.Context) (json.RawMessage, error) { return nil, errors.New("connection refused") }
+		const short = 300 * time.Millisecond
+		start := time.Now()
+		if r := waitPending(context.Background(), down, nil, short); r.Ended != "timeout" || time.Since(start) != short {
+			t.Fatalf("a read that never answers: %+v after %s of virtual time, want %s", r, time.Since(start), short)
 		}
-	case <-time.After(30 * time.Second):
-		t.Fatalf("a wait over a read that never answers did not end (%d reads)", downReads.Load())
-	}
+	})
 	stopping, cancel := context.WithCancel(ctx)
 	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
 	empty := func(context.Context) (json.RawMessage, error) { return json.RawMessage(`{"pending":[]}`), nil }
@@ -252,29 +243,25 @@ func TestWaitPendingEnds(t *testing.T) {
 }
 
 // The wait returns on the read that finds a message, not at its deadline:
-// with an hour's wait and the message on the second read, it reads exactly
-// twice. A wait that kept reading until its deadline reads more; one that
-// slept on fails the guard, which a slow runner never reaches
-// (01a20d9b-a3a8).
+// with an hour's wait and the message on the second read, it returns after
+// exactly one wakePoll of virtual time and two reads. A wait that held the
+// message until its deadline shows an hour (01a20d9b-a3a8).
 func TestWaitPendingReturnsOnTheReadThatFindsAMessage(t *testing.T) {
-	shortWakePoll(t)
-	var reads atomic.Int32
-	read := func(context.Context) (json.RawMessage, error) {
-		if reads.Add(1) < 2 {
-			return json.RawMessage(`{"pending":[]}`), nil
+	synctest.Test(t, func(t *testing.T) {
+		reads := 0
+		read := func(context.Context) (json.RawMessage, error) {
+			if reads++; reads < 2 {
+				return json.RawMessage(`{"pending":[]}`), nil
+			}
+			return json.RawMessage(`{"pending":[{"id":"m1","seq":1,"kind":"message"}]}`), nil
 		}
-		return json.RawMessage(`{"pending":[{"id":"m1","seq":1,"kind":"message"}]}`), nil
-	}
-	done := make(chan WakeResult, 1)
-	go func() { done <- waitPending(context.Background(), read, nil, time.Hour) }()
-	select {
-	case r := <-done:
-		if len(r.Pending) != 1 || r.Pending[0].ID != "m1" || reads.Load() != 2 {
-			t.Fatalf("the wait: %+v after %d reads, want the message after 2", r, reads.Load())
+		start := time.Now()
+		r := waitPending(context.Background(), read, nil, time.Hour)
+		if len(r.Pending) != 1 || r.Pending[0].ID != "m1" || reads != 2 || time.Since(start) != wakePoll {
+			t.Fatalf("the wait: %+v after %d reads and %s of virtual time, want the message after 2 and %s",
+				r, reads, time.Since(start), wakePoll)
 		}
-	case <-time.After(30 * time.Second):
-		t.Fatalf("the wait did not return on the read that found the message (%d reads)", reads.Load())
-	}
+	})
 }
 
 // A retryable refusal (a rate limit) is tried again, not taken for an ended
@@ -297,22 +284,24 @@ func TestWaitPendingRetriesARetryableRefusal(t *testing.T) {
 // A forge poll that does not answer ends with the wait: a short wait ends on
 // time however slow the forge (01a1301d-55e3).
 func TestWaitPendingBoundsTheForgePoll(t *testing.T) {
-	empty := func(context.Context) (json.RawMessage, error) { return json.RawMessage(`{"pending":[]}`), nil }
-	var polled, cut bool
-	slow := func(ctx context.Context) {
-		polled = true
-		select {
-		case <-ctx.Done():
-			cut = true
-		case <-time.After(time.Minute):
+	// On the bubble's virtual clock the 1-second wait with a minute-long
+	// poll ends after exactly one second, its poll cut by the wait's
+	// deadline (01a20d9b-a3a8).
+	synctest.Test(t, func(t *testing.T) {
+		empty := func(context.Context) (json.RawMessage, error) { return json.RawMessage(`{"pending":[]}`), nil }
+		var polled, cut bool
+		slow := func(ctx context.Context) {
+			polled = true
+			select {
+			case <-ctx.Done():
+				cut = true
+			case <-time.After(time.Minute):
+			}
 		}
-	}
-	start := time.Now()
-	r := waitPending(context.Background(), empty, slow, time.Second)
-	// The poll ended through its context, the wait's deadline: that is the
-	// proof. The bound, half the poll's minute, fails only a poll the wait
-	// did not end, never a slow runner (01a20d9b-a3a8).
-	if took := time.Since(start); !polled || !cut || r.Ended != "timeout" || took > 30*time.Second {
-		t.Fatalf("a 1-second wait with a slow forge: %+v after %v (polled %v, cut %v)", r, took, polled, cut)
-	}
+		start := time.Now()
+		r := waitPending(context.Background(), empty, slow, time.Second)
+		if took := time.Since(start); !polled || !cut || r.Ended != "timeout" || took != time.Second {
+			t.Fatalf("a 1-second wait with a slow forge: %+v after %s of virtual time (polled %v, cut %v)", r, took, polled, cut)
+		}
+	})
 }

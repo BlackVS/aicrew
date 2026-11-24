@@ -18,8 +18,8 @@ v0.11.4 was tagged and never published: its release run failed in a test
 that asserted a runner's speed, so there is nothing to install under that
 number. This release carries what 0.11.4 prepared, and that test's fix.
 
-Nine pull requests since 0.11.3 (#279, #280, #281, #282, #283, #285,
-#286, #288, #289). What changes for a running team:
+Ten pull requests since 0.11.3 (#279, #280, #281, #282, #283, #285,
+#286, #288, #289, #291). What changes for a running team:
 - **A worker posts its own review and waits; the launcher submits**
   (#285, #286). A worker posts its review with `aicrew-agent forge pr
   review`, which writes the header the gates read. While `gates-green` is in
@@ -236,6 +236,12 @@ member's hold to reach the team state. This release is tested with aimem
   guarded by a test that fails when the behaviour breaks: the wait's
   deadlines are asserted exactly on a `testing/synctest` virtual clock, and
   the init probe's stop by the fake client's own mark.
+- **The upgrade simulation starts from the newest published release**
+  (01a20e6b-ffa8, #291). Simulation only; no product change. It upgraded
+  from the newest tag before HEAD, which for this release was v0.11.4,
+  tagged and never published. It now passes over a tag whose release has
+  no `SHA256SUMS` to download and names it in the run's log, and fails
+  with the reason when the forge gives any other answer.
 
 ## [0.11.3] - 2026-11-20
 

@@ -51,6 +51,9 @@ type fakeTools struct {
 	comments    []string
 	// steps are scripted answers to a step, in order, before the default one.
 	steps map[string][]stepReply
+	// gitHead and gitStatus are what `git rev-parse HEAD` (tHead when
+	// empty) and `git status` answer.
+	gitHead, gitStatus string
 	// goOut and goCode are what `go version` answers.
 	goOut  string
 	goCode int
@@ -159,6 +162,14 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 		f.stdin[line] = stdin
 	}
 	if name == "git" {
+		switch {
+		case args[0] == "rev-parse" && f.gitHead != "":
+			return []byte(f.gitHead + "\n"), 0, nil
+		case args[0] == "rev-parse":
+			return []byte(tHead + "\n"), 0, nil
+		case args[0] == "status":
+			return []byte(f.gitStatus), 0, nil
+		}
 		return nil, 0, nil
 	}
 	if name == "go" {
@@ -505,7 +516,7 @@ func TestWorkerMarksAWaitInAContinuation(t *testing.T) {
 		name   string
 		review bool // the worker's own review at the head: the wait on the launcher's submit
 	}{{"the external review", false}, {"the launcher's submit", true}} {
-		for why, marked := range map[string]bool{continuationWhy: true, messageWhy: false} {
+		for why, cont := range map[string]bool{continuationWhy: true, messageWhy: false} {
 			f := newFake(t)
 			writeSection(t, f.home)
 			f.gatesGreen = "release"
@@ -527,10 +538,73 @@ func TestWorkerMarksAWaitInAContinuation(t *testing.T) {
 			if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")+why), &out, f.member()); code != 0 {
 				t.Fatalf("%s: turn 2 = %d: %s", c.name, code, out.String())
 			}
+			// The wait on the launcher's submit is bounded, and past the
+			// bound a continuation is right: it is never marked.
+			marked := cont && !c.review
 			doc := readHandoff(t, f.home)
 			if !strings.Contains(doc, want) || strings.Contains(doc, continuationWait) != marked {
-				t.Fatalf("%s, continuation %v: the handoff:\n%s", c.name, marked, doc)
+				t.Fatalf("%s, continuation %v: the handoff:\n%s", c.name, cont, doc)
 			}
+		}
+	}
+}
+
+// A continuation that finds the external review requested is marked only
+// where the launcher's wait on the gates applies; where the launcher is
+// right to give the turn, the note is not marked (hands review of #288 at
+// d924f3f).
+func TestWorkerMarksOnlyAWaitTheLauncherKeeps(t *testing.T) {
+	failed := func(f *fakeTools) {
+		f.pull.Content.Checks = []forge.Check{{Name: "sim-ci", State: forge.ChecksFailure}}
+	}
+	for _, c := range []struct {
+		name   string
+		set    func(f *fakeTools)
+		marked bool
+	}{
+		{"the review requested", func(*fakeTools) {}, true},
+		{"the checks pending", func(f *fakeTools) {
+			f.pull.Content.Checks = []forge.Check{{Name: "sim-ci", State: forge.ChecksPending}}
+		}, true},
+		{"the review in progress", func(f *fakeTools) { f.pull.Pull.Labels = []string{"hands-reviewing"} }, true},
+		{"an untracked body file", func(f *fakeTools) { f.gitStatus = "" }, true},
+		{"a failed check", failed, false},
+		{"a failed check with the review in progress", func(f *fakeTools) {
+			failed(f)
+			f.pull.Pull.Labels = []string{"hands-reviewing"}
+		}, false},
+		{"an external review at the head", func(f *fakeTools) {
+			f.pull.Content.Comments = []forge.PullComment{{Author: "sim-hands", Review: &forge.ReviewHeader{
+				Reviewer: forge.ReviewerExternal, Head: tHead, AtHead: true, Verdict: "RETURN_TO_IMPLEMENTATION"}}}
+		}, false},
+		{"an unpushed commit", func(f *fakeTools) { f.gitHead = "0123456789abcdef0123456789abcdef01234567" }, false},
+		{"a changed tracked file", func(f *fakeTools) { f.gitStatus = " M sim/task.md\n" }, false},
+		{"a push while the review ran", func(f *fakeTools) {
+			doc := readHandoff(f.t, f.home)
+			i := strings.Index(doc, "\n### Decisions")
+			doc = doc[:i] + "\n- 2026-11-24T00:00:00Z Reworked #7: " + pushedInReview + "; pushed a new commit." + doc[i:]
+			if err := os.WriteFile(filepath.Join(f.home, "docs", "HANDOFF.md"), []byte(doc), 0o600); err != nil {
+				f.t.Fatal(err)
+			}
+		}, false},
+	} {
+		f := newFake(t)
+		writeSection(t, f.home)
+		f.gatesGreen = "release"
+		var out bytes.Buffer
+		if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+			t.Fatalf("turn 1 = %d: %s", code, out.String())
+		}
+		f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: "open", HeadCommit: tHead,
+			Labels: []string{"review-this"}}, Content: &forge.PullContent{}}
+		c.set(f)
+		out.Reset()
+		if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")+continuationWhy), &out, f.member()); code != 0 {
+			t.Fatalf("%s: turn 2 = %d: %s", c.name, code, out.String())
+		}
+		doc := readHandoff(t, f.home)
+		if !strings.Contains(doc, "Waiting on the external review of #7") || strings.Contains(doc, continuationWait) != c.marked {
+			t.Fatalf("%s: marked should be %v; the handoff:\n%s", c.name, c.marked, doc)
 		}
 	}
 }

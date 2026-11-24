@@ -638,13 +638,26 @@ take 50 seconds over every review, more than three of the launcher's turn
 gaps: a worker waiting on its gates gets no continuation turn and is never
 stalled or blocked (docs/DESIGN-CONTROL-PLANE.md, 1.8). A turn that finds
 its pull request waiting on the external review or on the launcher's
-submit notes it, and marks the note "(a continuation turn)" when the turn
-loop started it as a continuation. From the `pull` step on, the cycle's
-checks fail on such a mark where the worker's report of the attempt's
-own time names this run's build. That is the wait with the body files in
-the worktree (task 01a20b66-0f78). A home of an earlier release counts
-those files as uncommitted work and does not wait, and its marks are not
-checked.
+submit notes it. The note on the external review gets the mark "(a
+continuation turn)" when the turn loop started the turn as a
+continuation, but only where the launcher's wait applies by a narrower
+condition than the launcher's own:
+- no check failed and no external review is at the head;
+- the worktree's HEAD is the pull request's head and no tracked file is
+  changed;
+- the last note on the pull request is not a push made while the review
+  ran (P2), which no `forge pr` command reported to the launcher.
+
+Elsewhere the launcher is right to give the turn. The note on the
+launcher's submit is never marked: that wait is bounded, and past the
+bound a continuation is right. From the `pull` step on, the cycle's
+checks fail on a mark where the worker's report of the attempt's own
+time names this run's build. That is the wait with the body files in
+the worktree (task 01a20b66-0f78). The wait on the launcher's submit
+with the files shows in the cycle's outcome instead: the attempt is
+never stalled and the launcher submits. A home of an earlier release
+counts those files as uncommitted work and does not wait, and its marks
+are not checked.
 
 The operator files the task READY through the hub's API: a coordinator is
 woken by a change to READY, not by a new BACKLOG task. The script holds

@@ -670,8 +670,12 @@ func (m *member) followPull(ctx context.Context, b brief, wt string, n int64) er
 		!strings.Contains(m.section(), pushedInReview):
 		return m.rework(ctx, b, wt, n, pushedInReview) // once per attempt
 	case asked:
+		mark := ""
+		if b.Continuation && m.gateWaitHolds(ctx, wt, n, p.HeadCommit, checks, shown.Content) {
+			mark = continuationWait
+		}
 		m.note("Waiting on the external review of #%d at %s (labels %s)%s.", n, p.HeadCommit, strings.Join(p.Labels, ", "),
-			continued(b))
+			mark)
 	case checks == forge.ChecksFailure:
 		return m.rework(ctx, b, wt, n, "the checks failed at "+p.HeadCommit)
 	case verdict == "RETURN_TO_IMPLEMENTATION":
@@ -689,7 +693,7 @@ func (m *member) followPull(ctx context.Context, b brief, wt string, n int64) er
 			}
 			if launcher {
 				if ownReviewAt(shown.Content) {
-					m.note("Waiting for the launcher's submit of #%d at %s%s.", n, p.HeadCommit, continued(b))
+					m.note("Waiting for the launcher's submit of #%d at %s.", n, p.HeadCommit)
 					return nil
 				}
 				if err := m.postOwnReview(ctx, wt, n, p.HeadCommit); err != nil {
@@ -1446,17 +1450,59 @@ func bodyFile(wt, name, text string) (string, error) {
 	return path, nil
 }
 
-// continuationWait marks a waiting note of a turn the turn loop started as a
-// continuation: a worker that waits on its gates gets no such turn, which
-// cycle.py checks.
+// continuationWait marks the note of a continuation turn that found the
+// pull request waiting on the external review where the launcher's wait on
+// the gates applies (gateWaitHolds): a worker that waits on its gates gets
+// no such turn, which cycle.py checks. The wait on the launcher's submit is
+// never marked: it is bounded, and past the bound a continuation is right.
 const continuationWait = " (a continuation turn)"
 
-// continued is continuationWait for a continuation turn, else "".
-func continued(b brief) string {
-	if b.Continuation {
-		return continuationWait
+// gateWaitHolds reports whether the launcher's wait on the gates applies to
+// pull request n at head as the turn reads it, by a condition narrower than
+// the launcher's (waitingOnGates, internal/agent/serve.go), so that a mark
+// never falls on a continuation the launcher was right to give:
+//   - no check failed and no external review is at the head (the launcher
+//     skips a failed check and a blocking review);
+//   - the worktree's HEAD is head and no tracked file is changed: the work
+//     is committed and pushed (an untracked file, such as the body files,
+//     is no change);
+//   - the last note on n is not a push made while the external review ran
+//     (P2): no forge pr command reported that head to the launcher since,
+//     so its observation can still hold the earlier head.
+func (m *member) gateWaitHolds(ctx context.Context, wt string, n int64, head, checks string, c *forge.PullContent) bool {
+	if checks == forge.ChecksFailure || externalAtHead(c) || m.pushedUnreported(n) {
+		return false
 	}
-	return ""
+	out, code, err := m.run(ctx, wt, "", "git", "rev-parse", "HEAD")
+	if err != nil || code != 0 || strings.TrimSpace(string(out)) != head {
+		return false
+	}
+	out, code, err = m.run(ctx, wt, "", "git", "status", "--porcelain", "--untracked-files=no")
+	return err == nil && code == 0 && strings.TrimSpace(string(out)) == ""
+}
+
+// externalAtHead reports whether c holds an external review at the head.
+func externalAtHead(c *forge.PullContent) bool {
+	if c == nil {
+		return false
+	}
+	return slices.ContainsFunc(c.Comments, func(cm forge.PullComment) bool {
+		return cm.Review != nil && cm.Review.Reviewer == forge.ReviewerExternal && cm.Review.AtHead
+	})
+}
+
+// pushedUnreported reports whether the section's last note on pull request
+// n is the push made while the external review ran (rework, P2), which no
+// forge pr command followed.
+func (m *member) pushedUnreported(n int64) bool {
+	tag := fmt.Sprintf("#%d", n)
+	last := ""
+	for _, line := range strings.Split(m.section(), "\n") {
+		if strings.HasPrefix(line, "- ") && (strings.Contains(line, tag+" ") || strings.Contains(line, tag+":")) {
+			last = line
+		}
+	}
+	return strings.Contains(last, "Reworked "+tag+": "+pushedInReview+";")
 }
 
 // ownReviewAt reports whether c holds a local review at the head.

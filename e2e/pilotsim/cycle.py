@@ -303,8 +303,9 @@ def check(step, d, case=""):
         # A worker of this tree's build waits on its gates with the body
         # files the guidance has it post from in its worktree (01a20b66-0f78):
         # no continuation turn finds its pull request waiting on the external
-        # review or on the launcher's submit. A home of an earlier release
-        # counts the files as uncommitted work and does not wait.
+        # review where the launcher's wait applies (the stand-in marks only
+        # those). A home of an earlier release counts the files as
+        # uncommitted work and does not wait.
         n = pulls[0]["number"]
         this, why = worker_this_build(d)
         expect(why == "", "worker: its build is not known: %s" % why)
@@ -389,16 +390,17 @@ def launcher_note(handoff, number):
                      handoff) is not None
 
 
-# What the stand-in appends to a waiting note in a continuation turn
-# (aicrew-simclient, continuationWait).
+# What the stand-in appends to its note on the external review in a
+# continuation turn where the launcher's wait applies (aicrew-simclient,
+# continuationWait, gateWaitHolds).
 CONTINUATION_WAIT = " (a continuation turn)"
 
 
 def continuation_wait(handoff, number):
     """Whether the worker's handoff notes, for pull request number, a
-    continuation turn that found it waiting on the external review or on the
-    launcher's submit (aicrew-simclient, followPull)."""
-    return re.search(r"(?m)^- \S+ Waiting (on the external review|for the launcher's submit) of #%d .*%s\.$" %
+    continuation turn that found it waiting on the external review where the
+    launcher's wait applies (aicrew-simclient, followPull)."""
+    return re.search(r"(?m)^- \S+ Waiting on the external review of #%d .*%s\.$" %
                      (number, re.escape(CONTINUATION_WAIT)), handoff) is not None
 
 

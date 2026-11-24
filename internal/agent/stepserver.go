@@ -469,6 +469,13 @@ func (s *StepServer) handle(ctx context.Context, call StepCall) StepAnswer {
 	}
 	res, err := s.driver.Run(ctx, req)
 	if err != nil {
+		if call.Op == "work" && workIntent(req.Body) == "submit" {
+			// Another submit of the attempt in this home, its launcher's or
+			// an earlier turn's, met this one (submitmeet.go).
+			if m, ok := s.meetSubmitFor(ctx, err, call.AttemptID); ok {
+				return submitMeetAnswer(err, m, call.AttemptID, workDetail(req.Body))
+			}
+		}
 		return answerErr(err)
 	}
 	if !res.Settled || res.Outcome == "committed" {

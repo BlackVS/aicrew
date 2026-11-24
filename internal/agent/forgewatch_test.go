@@ -23,6 +23,8 @@ type fakeStatus struct {
 	reads    int
 	contents int
 	token    string
+	// contentErr fails each content read while set.
+	contentErr error
 }
 
 func (f *fakeStatus) GetPullContent(_ context.Context, host string, k forge.Kind, token, path string, n int64) (forge.Pull, forge.PullContent, error) {
@@ -31,6 +33,9 @@ func (f *fakeStatus) GetPullContent(_ context.Context, host string, k forge.Kind
 	f.contents++
 	if token != f.token || n != f.st.Number {
 		return forge.Pull{}, forge.PullContent{}, forge.ErrNotFound
+	}
+	if f.contentErr != nil {
+		return forge.Pull{}, forge.PullContent{}, f.contentErr
 	}
 	return f.st.Pull, f.content, nil
 }

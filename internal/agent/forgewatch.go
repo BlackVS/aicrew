@@ -89,6 +89,13 @@ type PullObservation struct {
 	// so aicrewd sends no wake for a transition the launcher performs
 	// itself; nil when the set could not be read.
 	Automations []string `json:"automations,omitempty"`
+	// reported is true for a poll's observation that aicrewd took
+	// (observePull returned without error) whose content aicrewd holds:
+	// this report carried it, or an earlier one did at the same status
+	// (wantsContent), so the points hold the reviews it shows
+	// (GatesGreenWait). Each new observation starts without it; it is
+	// never sent.
+	reported bool
 }
 
 // PrePushFailure is a declared check that failed after a push, as the
@@ -203,8 +210,9 @@ type pullSeen struct {
 
 // wantsContent reports whether a pull request's status calls for its
 // content: CI concluded, or it carries comments, and that changed since
-// this launcher last reported it with its content. A restarted launcher
-// reads the content once more.
+// this launcher last reported it with its content, or content it wanted
+// since did not reach aicrewd (forgetSeen). A restarted launcher reads the
+// content once more.
 func (s *StepServer) wantsContent(key string, st forge.PullStatus) bool {
 	if st.Checks != forge.ChecksFailure && st.Checks != forge.ChecksSuccess && st.Comments == 0 {
 		return false
@@ -265,6 +273,16 @@ func (s *StepServer) noteObserved(body []byte) {
 		}
 	}
 	s.last = append(s.last, o)
+}
+
+// forgetSeen drops what this launcher last reported of a pull request with
+// its content, after content it wanted did not reach aicrewd: the comment
+// count is no identity of the content, so a later status with the earlier
+// count reads the content again (hands review of #286 at 13a1604).
+func (s *StepServer) forgetSeen(key string) {
+	s.seenMu.Lock()
+	defer s.seenMu.Unlock()
+	delete(s.seen, key)
 }
 
 func (s *StepServer) markSeen(key string, st forge.PullStatus) {
@@ -467,7 +485,8 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 		key := pullKey(w.Host, w.Repository, w.Number)
 		running := st.Running
 		facts := pullFacts{Base: st.Base, Running: &running}
-		if s.wantsContent(key, st) {
+		wanted := s.wantsContent(key, st)
+		if wanted {
 			// The content tells aicrewd whether a decision is needed; a read
 			// that fails sends the status alone, and the next poll tries again.
 			p, c, err := api.GetPullContent(ctx, w.Host, forge.Kind(e.Kind), tok, w.Repository, w.Number)
@@ -493,10 +512,19 @@ func (s *StepServer) pollPulls(ctx context.Context) {
 		last = append(last, withLastContent(prev, o))
 		if _, err := s.observePull(ctx, body, facts); err != nil {
 			s.log.Warn("forge events: report a pull request", "pull", w.Number, "error", err.Error())
+			if wanted {
+				s.forgetSeen(key)
+			}
 			continue
 		}
+		// aicrewd holds the content of this status when this report
+		// carried it, or when no content was wanted: an earlier report
+		// carried it at the same status (markSeen).
+		last[len(last)-1].reported = !wanted || o.Content
 		if o.Content {
 			s.markSeen(key, st)
+		} else if wanted {
+			s.forgetSeen(key)
 		}
 	}
 }

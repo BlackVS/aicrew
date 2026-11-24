@@ -289,14 +289,45 @@ the case when the pull request, as last observed, meets three conditions:
   committed and pushed;
 - no external review at the head blocks it, and no check failed;
 - the external review is requested or in progress (`review-this` or
-  `hands-reviewing`), or the checks are pending.
+  `hands-reviewing`), or the checks are pending; or the launcher's own
+  `gates-green` is to submit: the observation meets the condition the
+  `gates-green` point fires on (the worker's and the external review
+  READY at the head, CI passed, no external review in flight) and names
+  `gates-green` among the effective set's automations, in an observation
+  whose content aicrewd holds: its report succeeded and carried the
+  content, or an earlier report did at the same status (so the launcher's
+  record of the reviews is the forge's).
+  That last wait lasts at most three forge reads (3 × the watch's
+  interval, 3 minutes) from the first observation at which the condition
+  held for the head; a new head starts a new count.
 
 Those are the harness's states of DESIGN-TURNS 4.2. While they hold, the
 runner defers the continuation, which spends nothing of the limit. A turn
 that ends in such a wait resets both stall counts. The continuation comes
 once the gates move. A message, the forge's action.needed among them, still
 starts a turn at once. A forge pr command's report counts as an observation
-at once, so the runner sees the label the turn just added.
+at once, so the runner sees the label the turn just added. After a
+worker's turn that leaves the attempt in work, the runner reads the
+watched pull requests once, before it decides, so it sees a review the
+turn posted: at its next tick, or, when the turn reached a stall count,
+before the stall, which it skips if the read shows a wait.
+
+Past the bound of the wait on `gates-green`, the stall rule applies as to
+any turn: the continuation turns come back, each a model session; after
+three of them without a step or a commit, counted from the wait (a
+turn that ends in it resets both stall counts, as above), the runner blocks the attempt with the stall's text, and the
+block's lifecycle message reaches the coordinator. A `gates-green` run that
+failed has already woken the coordinators.
+
+While aicrewd cannot be reached after the worker's review, no report of
+an observation succeeds, so there is no wait on `gates-green`: the
+continuation turns come, each a model session, and count toward the
+stall. When the stall's own block step cannot reach aicrewd either, the
+runner marks the attempt stalled in the home and starts no continuation
+turn; the attempt is then neither blocked on aicrewd nor waiting on the
+gates, and its next turn comes with a message. Once a report succeeds
+again, `gates-green` fires at that observation and submits, and the
+attempt's lifecycle message starts that turn.
 
 A submitted or blocked attempt gets no continuation turns. It waits for
 messages: the coordinator's review, a forge event or an answer. The

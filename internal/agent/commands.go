@@ -259,7 +259,10 @@ const pullRequestNever = "Never use `gh`, `tea`, `glab` or another forge client,
 const submitOrder = "Post your own review last. While `gates-green` is in your set (`aicrew-agent check` lists " +
 	"the effective set), do not mark the pull request ready and do not submit: the launcher does both once your " +
 	"review and the external one are READY at the head and CI is green there, and the attempt's lifecycle " +
-	"message tells you."
+	"message tells you. If you submitted anyway, read the step's answer: `pending` with \"" + inFlightWords + "\" " +
+	"means the launcher's submit is in flight, so do not submit again; `done` with \"" + submittedWords + "\" means " +
+	"the attempt is submitted with your link, and there is nothing to submit; a refusal that says \"" +
+	submittedWords + "\" means it is submitted with another result, or this launcher has no record of one."
 
 // reviewPostRule says how a member's review is posted so that the gates
 // count it (01a1fa07-5db2): the header is the command's, never the

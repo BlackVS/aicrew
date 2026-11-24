@@ -80,6 +80,12 @@ type pullPoints struct {
 	// once however the observations flap between it and another; the
 	// edges are kept for as long as the pull request is (writePoints).
 	Fired map[string][]string `json:"fired,omitempty"`
+	// GreenHead is the head at which gates-green's firing condition
+	// (gatesGreen) first held, and GreenSince the time: where the worker
+	// waits on the launcher's own submit, the wait is bounded from then
+	// (GatesGreenWait). A new head starts a new count.
+	GreenHead  string    `json:"green_head,omitempty"`
+	GreenSince time.Time `json:"green_since,omitempty"`
 	// PrePush is the declared check that failed at Head's after-push point,
 	// kept until a head where the checks pass and sent with every
 	// observation at the head (forgewatch.go), so the worker's need holds
@@ -424,13 +430,10 @@ func (p *pullPoints) edges(o PullObservation, f pullFacts, inflight map[string]b
 		if o.Checks == forge.ChecksFailure {
 			fire(automation.PointCIFailed, head+" "+o.Checks)
 		}
-		// The gates edge is not taken while an external review is in
-		// flight: a run then would consume the head's one edge without
-		// the transition, and the worker gets no gates wake while
-		// gates-green is in the set. The first observation without the
-		// label takes it.
-		if o.Checks == forge.ChecksSuccess && p.Reviews[forge.ReviewerLocal].ready(head) && p.Reviews[forge.ReviewerExternal].ready(head) &&
-			!slices.Contains(o.Labels, labelReviewing) {
+		if p.gatesGreen(o) {
+			if p.GreenHead != head {
+				p.GreenHead, p.GreenSince = head, p.Seen
+			}
 			fire(automation.PointGatesGreen, head)
 		}
 	}
@@ -441,6 +444,63 @@ func (p *pullPoints) edges(o PullObservation, f pullFacts, inflight map[string]b
 }
 
 // edgeOf is the edge a point fired for at o.
+// gatesGreen is gates-green's firing condition at o, after edges took o's
+// head and reviews: the pull request open at a head whose local and
+// external reviews are READY while its CI passed. It is not taken while an
+// external review is in flight: a run then would consume the head's one
+// edge without the transition, and the worker gets no gates wake while
+// gates-green is in the set. The first observation without the label takes
+// it. The worker's wait on the launcher's submit reads the same condition
+// (GatesGreenWait).
+func (p *pullPoints) gatesGreen(o PullObservation) bool {
+	head := p.Head
+	return o.State == forge.PullOpen && head != "" && o.Checks == forge.ChecksSuccess &&
+		p.Reviews[forge.ReviewerLocal].ready(head) && p.Reviews[forge.ReviewerExternal].ready(head) &&
+		!slices.Contains(o.Labels, labelReviewing)
+}
+
+// automationGatesGreen is the name of the release default that performs
+// the gates transition, as an observation's Automations names it; aicrewd
+// matches the same name (store.AutomationGatesGreen).
+const automationGatesGreen = "gates-green"
+
+// gatesGreenWait bounds a worker's wait on its launcher's gates-green
+// submit: three forge reads from the first observation at which the
+// condition held for the head. Past it the turn loop's stall rule applies
+// as for any other turn.
+func gatesGreenWait() time.Duration { return 3 * forgePoll }
+
+// GatesGreenWait says whether the worker's attempt at head waits on its
+// launcher's own submit: the launcher's last observation of the attempt's
+// pull request, at head, is reported, its content held by aicrewd (so the
+// points hold the reviews it shows), meets gates-green's firing condition (gatesGreen), names
+// gates-green among its automations, and less than gatesGreenWait has
+// passed since the condition first held at head. A worker whose review is
+// not READY at the head, a set without gates-green, one the launcher could
+// not read (no automations), or an observation whose content aicrewd does
+// not hold, whose reviews the points may not hold, waits on nothing here.
+func (s *StepServer) GatesGreenWait(attemptID, head string, now time.Time) bool {
+	if head == "" {
+		return false
+	}
+	s.points.mu.Lock()
+	doc := readPoints(s.home)
+	s.points.mu.Unlock()
+	for _, o := range s.Observed() {
+		p := doc.Pulls[pullKey(o.Host, o.Repository, o.Number)]
+		// p's head is the last observation's, and edges set GreenHead
+		// to it whenever the condition held there.
+		if !o.reported || p == nil || p.Attempt != attemptID || p.Head != head ||
+			!slices.Contains(o.Automations, automationGatesGreen) || !p.gatesGreen(o) {
+			continue
+		}
+		if now.Sub(p.GreenSince) < gatesGreenWait() {
+			return true
+		}
+	}
+	return false
+}
+
 // labelReviewing is the external reviewer's in-progress label (the
 // external-review row of docs/DESIGN-TURNS.md 4.2).
 const labelReviewing = "hands-reviewing"

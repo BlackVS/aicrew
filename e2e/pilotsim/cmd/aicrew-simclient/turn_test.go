@@ -54,6 +54,9 @@ type fakeTools struct {
 	// goOut and goCode are what `go version` answers.
 	goOut  string
 	goCode int
+	// gatesGreen is gates-green's source in what `aicrew-agent check`
+	// lists; "" lists it as disabled, the order before 01a206f8-24d0.
+	gatesGreen string
 }
 
 // toolchainSettings is a worker turn's settings with dev-go's rules, as the
@@ -170,6 +173,14 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 		return answer(map[string]string{"attempt_id": tAttempt, "request_key": "k1"}), 0, nil
 	case args[0] == "step":
 		return answer(map[string]string{"attempt_id": flagOf(args, "--attempt")}), 0, nil
+	case args[0] == "check":
+		source := f.gatesGreen
+		if source == "" {
+			source = "disabled"
+		}
+		out, _ := json.Marshal(map[string]any{"status": "ready", "automations": map[string]any{"entries": []map[string]string{
+			{"name": "review-request", "source": "release"}, {"name": "gates-green", "source": source}}}})
+		return out, 0, nil
 	case args[0] == "clone":
 		if err := os.MkdirAll(filepath.Join(f.home, "worktrees", flagOf(args, "--attempt")), 0o755); err != nil {
 			f.t.Fatal(err)
@@ -456,6 +467,98 @@ func TestWorkerOpensAndSubmitsThePullRequest(t *testing.T) {
 	}
 	if f.called(comment) || f.called(posted) {
 		t.Fatalf("turn 5 reviewed again: %v", f.calls)
+	}
+}
+
+// readyAtHead makes the fake's pull request READY at its head from
+// sim-hands, with its checks passed.
+func (f *fakeTools) readyAtHead() {
+	f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: "open", HeadCommit: tHead,
+		Labels: []string{"hands-reviewed"}}, Content: &forge.PullContent{
+		Checks: []forge.Check{{Name: "sim-ci", State: forge.ChecksSuccess}},
+		Comments: []forge.PullComment{{Author: "sim-hands", Review: &forge.ReviewHeader{Reviewer: forge.ReviewerExternal,
+			Head: tHead, AtHead: true, Verdict: "READY_FOR_HUMAN_MERGE"}}}}}
+}
+
+// Where `aicrew-agent check` lists gates-green in the effective set, the
+// worker posts its own review and does not submit: the launcher submits
+// (01a206f8-24d0). With the scenario submit_itself (case F1) it submits
+// first, as before.
+func TestWorkerLeavesTheSubmitToTheLauncher(t *testing.T) {
+	for _, itself := range []bool{false, true} {
+		f := newFake(t)
+		writeSection(t, f.home)
+		f.gatesGreen = "release"
+		var out bytes.Buffer
+		if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+			t.Fatalf("turn 1 = %d: %s", code, out.String())
+		}
+		f.calls = nil
+		f.readyAtHead()
+		m := f.member()
+		m.sc.SubmitItself = itself
+		out.Reset()
+		if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, m); code != 0 {
+			t.Fatalf("itself %v: turn 2 = %d: %s", itself, code, out.String())
+		}
+		posted := "aicrew-agent forge pr review --pr 7 --body-file - --json"
+		submitted := slices.ContainsFunc(f.calls, func(c string) bool { return strings.HasPrefix(c, "aicrew-agent step work") })
+		doc := readHandoff(t, f.home)
+		if !f.called(posted) || submitted != itself || f.called("aicrew-agent check") == itself ||
+			strings.Contains(doc, "the launcher submits it, since gates-green is in the set") == itself {
+			t.Fatalf("itself %v: calls %v\n%s", itself, f.calls, doc)
+		}
+		if itself {
+			continue
+		}
+		// The next turn, the review at the head: it waits for the launcher.
+		f.calls = nil
+		f.pull.Content.Comments = append(f.pull.Content.Comments, forge.PullComment{Author: "sim-worker",
+			Review: &forge.ReviewHeader{Reviewer: forge.ReviewerLocal, Head: tHead, AtHead: true, Verdict: "READY_FOR_HUMAN_MERGE"}})
+		out.Reset()
+		if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+			t.Fatalf("turn 3 = %d: %s", code, out.String())
+		}
+		if f.called("aicrew-agent step") || f.called(posted) || !strings.Contains(readHandoff(t, f.home),
+			"Waiting for the launcher's submit of #7 at "+tHead) {
+			t.Fatalf("turn 3: %v\n%s", f.calls, readHandoff(t, f.home))
+		}
+	}
+}
+
+// With the scenario submit_anyway, the worker submits once more in the
+// phase submitted and records the step's answer as it came, once.
+func TestWorkerSubmitsAnyway(t *testing.T) {
+	f := newFake(t)
+	writeSection(t, f.home)
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 1 = %d: %s", code, out.String())
+	}
+	f.readyAtHead()
+	said := "Attempt " + tAttempt + " is submitted already, with the result " + tPull + ": there is nothing to submit."
+	done, _ := json.Marshal(agent.StepAnswer{OK: true, Status: agent.StepDone, Result: json.RawMessage(`{"submitted":true}`),
+		NextAction: said})
+	f.steps = map[string][]stepReply{"work": {{out: done, code: 0}}}
+	for turn := 2; turn <= 3; turn++ {
+		f.calls = nil
+		m := f.member()
+		m.sc.SubmitAnyway = true
+		out.Reset()
+		if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "submitted")), &out, m); code != 0 {
+			t.Fatalf("turn %d = %d: %s", turn, code, out.String())
+		}
+		submitted := f.called("aicrew-agent step work")
+		if submitted != (turn == 2) {
+			t.Fatalf("turn %d: calls %v", turn, f.calls)
+		}
+	}
+	if got := f.bodies["work"]; got["intent"] != "submit" || got["detail"] != tPull {
+		t.Fatalf("the body: %v", got)
+	}
+	want := "Submitted anyway #7 (" + tPull + ") after the launcher: exit 0, done: " + said
+	if doc := readHandoff(t, f.home); strings.Count(doc, want) != 1 {
+		t.Fatalf("the handoff does not record the answer once:\n%s", doc)
 	}
 }
 

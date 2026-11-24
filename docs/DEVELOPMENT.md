@@ -1286,6 +1286,61 @@ automation. A set that fails later, at a repository-sourced script's base
 read, still names its automations: the point then records no edge and
 fires again at the next observation, so the transition the names promise
 is performed once the base reads.
+
+**When the two submits meet** (task 01a206f8-24d0). A worker that submits
+anyway, and the launcher's `gates-green` submit of the same attempt, both
+go through the launcher's step driver, so the second begin is refused
+with `attempt_state`. Only that refusal of the call's own first begin,
+which the step driver marks as it drops the call's record, can be such a
+meeting: a refusal after the call's own begin, by its update or settle,
+is never one, whatever its code, so the call's own record is never taken
+for the other submit. The launcher then answers from what it knows itself,
+never from aicrewd's text (which carries the code's fixed message only).
+A `work` submit of the attempt that has begun in the home's step records
+and not settled makes the member's answer `pending` ("This launcher is
+submitting attempt ... already"; not that it is submitted, since it may
+settle as not committed) and gates-green's run "nothing to do". Otherwise
+the session status, read once, must show the same attempt running in the
+phase `submitted`. Then gates-green's run ends "nothing to do", and the
+member's answer is `done` ("is submitted already ... there is nothing to
+submit") only when `state/submits/ATTEMPT.json`, the launcher's record of
+the attempt's latest committed submit, names the member's own link. For
+another link, no record, or a record that cannot be read, the refusal
+stands with that fact added. The driver writes the record when a work
+submit settles as committed, never for a link that holds a home's token;
+a step record cannot serve, since a settled step's record is dropped. A
+run that ends "nothing to do" fails nothing, so it wakes nobody; if the
+member's submit it met then fails, nothing retries at that head, and the
+member's own step answers for it. Anything else is the refusal as it was,
+so a launcher and an aicrewd of different releases get today's refusal,
+and a home upgraded while its attempt was submitted has no record and
+gets the refusal with "no record". Nothing removes the records: the
+directory keeps one small file per attempt submitted through the home.
+
+**The worker's wait on the launcher's submit** (the same task). A worker
+that follows its guidance posts its review and leaves the submit to
+`gates-green`. The turn loop counts that as a wait on the gates, costing
+no turn and no stall (DESIGN-CONTROL-PLANE 1.8), while the launcher's last
+observation meets `pullPoints.gatesGreen`, the condition the point fires
+on, and names `gates-green` among its automations, for at most
+`3 × forgePoll` from the first observation at which it held for the head
+(`green_head`, `green_since` in the points state). The wait reads only a
+poll's observation whose content aicrewd holds: the points take an
+observation's reviews only with a report that carried them and succeeded,
+so the observation waits only when its report succeeded and either
+carried the content or wanted none (`wantsContent`: an earlier report
+carried it at the same status). An observation whose report failed, or
+whose content read failed while the content was wanted, may show what the
+points do not hold, and it waits on nothing (each new observation starts
+unmarked; the mark is never carried on). Content that was wanted and did
+not reach aicrewd, its read or its report failing, drops what the
+launcher last reported (`forgetSeen`), so the next poll reads it again at
+any comment count: the count is no identity of the content.
+The runner reads the watched pull requests once after each worker turn
+that leaves the attempt in work, before it decides: at the next tick, or,
+when the turn reached a stall count, before the stall, which it skips if
+that read shows the wait. One status read per watched pull request, and
+its content only when the status changed.
 The event a script gets at a point names the point as its kind and the
 pull request with its head as its ID, and carries `base_only`: at
 `after-push`, whether the new head's patch identity (`git diff

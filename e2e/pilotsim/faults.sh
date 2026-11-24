@@ -237,6 +237,10 @@ case_f1() {
   case_start F1
   scenario "{$CASE_SCENARIO}"
   hold worker "case F1: the offer"
+  # F1's faults are on the worker's own submit: its stand-in submits
+  # before its review, as where gates-green is out of the set. The run's
+  # process cannot take gates-green out for one case (01a206f8-24d0).
+  member_scenario worker '{"submit_itself":true}'
   hold coordinator "case F1: the lost claim"
   file_task
   lose_request F1-claim-request coordinator claim 300 "the coordinator's claim"
@@ -266,6 +270,9 @@ case_f1() {
   disarm
   check_case F1-finalize-reply reply
   snapshot done F1
+  hold worker "case F1: its scenario back"
+  member_scenario worker '{}'
+  member resume worker
 }
 
 # ---- F2: a lost aicrewd reply ------------------------------------------------------

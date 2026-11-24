@@ -4,10 +4,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -346,8 +351,44 @@ func TestPrevious(t *testing.T) {
 	git(t, repo, "init", "-q", "-b", "main")
 	commit := func(m string) { git(t, repo, "commit", "-q", "--allow-empty", "-m", m) }
 
+	// The forge: a tag's SHA256SUMS answers 200 when it is in published,
+	// the status in answers when it is there, and 404 otherwise. mu guards
+	// the three, which the server's handler and the test both use.
+	var mu sync.Mutex
+	published := map[string]bool{"v0.9.0": true, "v0.10.0": true, "v0.11.0": true, "v0.12.0": true}
+	answers := map[string]int{}
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		tag, ok := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, "/"), "/SHA256SUMS")
+		asked = append(asked, tag)
+		switch {
+		case !ok:
+			http.NotFound(w, r)
+		case answers[tag] != 0:
+			w.WriteHeader(answers[tag])
+		case published[tag]:
+			_, _ = io.WriteString(w, "sums\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	var log strings.Builder
+	prev := func(override string) (string, error) {
+		log.Reset()
+		mu.Lock()
+		asked = nil
+		mu.Unlock()
+		tag, err := previous(repo, override, publishedAt(srv.URL), &log)
+		mu.Lock()
+		defer mu.Unlock()
+		return tag, err
+	}
+
 	commit("one")
-	if _, err := previous(repo, ""); err == nil || !strings.Contains(err.Error(), "no release tag") {
+	if _, err := prev(""); err == nil || !strings.Contains(err.Error(), "no release tag") {
 		t.Fatalf("no tag: %v", err)
 	}
 	git(t, repo, "tag", "v0.9.0")
@@ -366,17 +407,54 @@ func TestPrevious(t *testing.T) {
 		{"", "v0.10.0"},
 		{"v0.8.0", "v0.8.0"},
 	} {
-		got, err := previous(repo, c.override)
+		got, err := prev(c.override)
 		if err != nil || got != c.want {
 			t.Fatalf("previous(%q) = %q, %v; want %s", c.override, got, err, c.want)
 		}
 	}
 	commit("four")
-	if got, err := previous(repo, ""); err != nil || got != "v0.11.0" {
-		t.Fatalf("after the release: %q, %v", got, err)
+	if got, err := prev(""); err != nil || got != "v0.11.0" || log.Len() != 0 || len(asked) != 1 {
+		t.Fatalf("after the release: %q, %v, log %q, asked %v", got, err, log.String(), asked)
 	}
+
+	// A tag whose release run failed, between two published releases: the
+	// older published one, and the tag passed over is named.
+	git(t, repo, "tag", "v0.11.1")
+	commit("five")
+	got, err := prev("")
+	if err != nil || got != "v0.11.0" || !slices.Equal(asked, []string{"v0.11.1", "v0.11.0"}) {
+		t.Fatalf("over an unpublished tag: %q, %v, asked %v", got, err, asked)
+	}
+	if want := "passed over v0.11.1: no published release (its SHA256SUMS answered 404)"; !strings.Contains(log.String(), want) {
+		t.Fatalf("log %q, want %q", log.String(), want)
+	}
+	// Any other answer is an error, not a reason to start from an older
+	// release.
+	mu.Lock()
+	answers["v0.11.1"] = http.StatusServiceUnavailable
+	mu.Unlock()
+	if got, err := prev(""); err == nil || got != "" || !strings.Contains(err.Error(), "v0.11.1") || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("a forge that answers 503: %q, %v", got, err)
+	}
+	mu.Lock()
+	delete(answers, "v0.11.1")
+	mu.Unlock()
+	// No published release before HEAD at all: an error naming each tag.
+	mu.Lock()
+	clear(published)
+	mu.Unlock()
+	if _, err := prev(""); err == nil || !strings.Contains(err.Error(), "no published release before HEAD") ||
+		!strings.Contains(err.Error(), "v0.11.1, v0.11.0, v0.10.0, v0.9.0") {
+		t.Fatalf("nothing published: %v", err)
+	}
+	// The forge cannot be reached: an error, never an older tag.
+	srv.Close()
+	if got, err := prev(""); err == nil || got != "" || !strings.Contains(err.Error(), "could not be read") {
+		t.Fatalf("an unreachable forge: %q, %v", got, err)
+	}
+
 	for _, bad := range []string{"0.11.0", "v0.11", "v0.11.0-rc1", "main"} {
-		if _, err := previous(repo, bad); err == nil {
+		if _, err := prev(bad); err == nil {
 			t.Fatalf("override %q accepted", bad)
 		}
 	}

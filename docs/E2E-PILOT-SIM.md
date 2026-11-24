@@ -732,10 +732,15 @@ release; then one cycle, the upgrade, a second cycle, and a last read of
 the first cycle.
 
 **The previous release** is the newest `vX.Y.Z` tag merged into HEAD that
-does not sit on HEAD itself (`simupgrade previous`,
+does not sit on HEAD itself and was published (`simupgrade previous`,
 `e2e/pilotsim/cmd/simupgrade`). On a release's own commit, which is main
 right after the release, that is the release before it. Nothing has to be
-moved after a release. `PILOTSIM_PREVIOUS=vX.Y.Z` overrides it for a run
+moved after a release. A tag is published when its release's `SHA256SUMS`
+downloads, anonymously, from the URL the run fetches it from next. A tag
+whose release run failed answers 404: it is passed over, and the run's log
+names it ("passed over vX.Y.Z: no published release"). Any other answer
+fails the run, naming the tag, so an unreachable forge never changes the
+release the run starts from. `PILOTSIM_PREVIOUS=vX.Y.Z` overrides it for a run
 by hand. Without such a tag (a shallow clone, for one), or when one of
 that release's assets cannot be downloaded, the run fails and names the
 tag; it never skips.

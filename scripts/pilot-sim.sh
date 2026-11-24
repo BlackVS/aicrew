@@ -36,8 +36,8 @@
 # operator upgrades; the first cycle's records in aicrewd, aimem and the
 # homes must read unchanged; a second cycle runs, and the first cycle's
 # records are compared again after it. The previous release is the newest
-# vX.Y.Z tag merged into HEAD and not on HEAD itself (e2e/pilotsim/cmd/
-# simupgrade), or PILOTSIM_PREVIOUS for a run by hand.
+# published vX.Y.Z tag merged into HEAD and not on HEAD itself (e2e/
+# pilotsim/cmd/simupgrade), or PILOTSIM_PREVIOUS for a run by hand.
 #
 # -upgrade -below-minimum starts instead from the pinned pair of
 # `simupgrade below-minimum`, an aicrew release with an aimem below this

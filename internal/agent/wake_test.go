@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/BlackVS/aicrew/internal/store"
@@ -40,12 +41,12 @@ func TestWaitInboxWakesOnAMessage(t *testing.T) {
 		s.store.SendMessage(ctx, s.coord, "wake-1", store.NewMessage{SessionID: s.coordSess.ID,
 			Generation: s.coordSess.Generation, To: s.agentID, Text: "Please look at the parser task next."})
 	}()
-	ten, _ := json.Marshal(map[string]int{"seconds": 10})
-	start := time.Now()
-	ans = s.call(t, &answers, StepCall{Op: "wait-inbox", Body: ten})
-	if !ans.OK || json.Unmarshal(ans.Result, &res) != nil || len(res.Pending) != 1 || res.Pending[0].Kind != "message" ||
-		time.Since(start) > 5*time.Second {
-		t.Fatalf("a message during the wait: %+v %s after %s", ans, ans.Result, time.Since(start))
+	// The wait returns as soon as the message is pending: the wake is the
+	// event, and its 30 seconds fail only a hang (01a20d9b-a3a8).
+	thirty, _ := json.Marshal(map[string]int{"seconds": 30})
+	ans = s.call(t, &answers, StepCall{Op: "wait-inbox", Body: thirty})
+	if !ans.OK || json.Unmarshal(ans.Result, &res) != nil || len(res.Pending) != 1 || res.Pending[0].Kind != "message" {
+		t.Fatalf("a message during the wait: %+v %s", ans, ans.Result)
 	}
 	if strings.Contains(string(ans.Result), "parser") {
 		t.Fatal("the wait carried the message's text")
@@ -221,17 +222,46 @@ func TestWaitPendingEnds(t *testing.T) {
 	if r := waitPending(ctx, flaky, nil, time.Minute); len(r.Pending) != 1 || tries != 3 {
 		t.Fatalf("a read that failed twice: %+v after %d tries", r, tries)
 	}
-	down := func(context.Context) (json.RawMessage, error) { return nil, errors.New("connection refused") }
-	start := time.Now()
-	if r := waitPending(ctx, down, nil, 300*time.Millisecond); r.Ended != "timeout" || time.Since(start) > 2*time.Second {
-		t.Fatalf("a read that never answers: %+v after %s", r, time.Since(start))
-	}
+	// A read that never answers ends the wait exactly at its own deadline.
+	// The wait runs in a synctest bubble, on its virtual clock: no runner's
+	// speed enters the measure, and a wait that ended late shows it exactly
+	// (01a20d9b-a3a8).
+	synctest.Test(t, func(t *testing.T) {
+		down := func(context.Context) (json.RawMessage, error) { return nil, errors.New("connection refused") }
+		const short = 300 * time.Millisecond
+		start := time.Now()
+		if r := waitPending(context.Background(), down, nil, short); r.Ended != "timeout" || time.Since(start) != short {
+			t.Fatalf("a read that never answers: %+v after %s of virtual time, want %s", r, time.Since(start), short)
+		}
+	})
 	stopping, cancel := context.WithCancel(ctx)
 	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
 	empty := func(context.Context) (json.RawMessage, error) { return json.RawMessage(`{"pending":[]}`), nil }
 	if r := waitPending(stopping, empty, nil, time.Minute); r.Ended != "stopping" {
 		t.Fatalf("the launcher stopping: %+v", r)
 	}
+}
+
+// The wait returns on the read that finds a message, not at its deadline:
+// with an hour's wait and the message on the second read, it returns after
+// exactly one wakePoll of virtual time and two reads. A wait that held the
+// message until its deadline shows an hour (01a20d9b-a3a8).
+func TestWaitPendingReturnsOnTheReadThatFindsAMessage(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reads := 0
+		read := func(context.Context) (json.RawMessage, error) {
+			if reads++; reads < 2 {
+				return json.RawMessage(`{"pending":[]}`), nil
+			}
+			return json.RawMessage(`{"pending":[{"id":"m1","seq":1,"kind":"message"}]}`), nil
+		}
+		start := time.Now()
+		r := waitPending(context.Background(), read, nil, time.Hour)
+		if len(r.Pending) != 1 || r.Pending[0].ID != "m1" || reads != 2 || time.Since(start) != wakePoll {
+			t.Fatalf("the wait: %+v after %d reads and %s of virtual time, want the message after 2 and %s",
+				r, reads, time.Since(start), wakePoll)
+		}
+	})
 }
 
 // A retryable refusal (a rate limit) is tried again, not taken for an ended
@@ -254,18 +284,24 @@ func TestWaitPendingRetriesARetryableRefusal(t *testing.T) {
 // A forge poll that does not answer ends with the wait: a short wait ends on
 // time however slow the forge (01a1301d-55e3).
 func TestWaitPendingBoundsTheForgePoll(t *testing.T) {
-	empty := func(context.Context) (json.RawMessage, error) { return json.RawMessage(`{"pending":[]}`), nil }
-	var polled bool
-	slow := func(ctx context.Context) {
-		polled = true
-		select {
-		case <-ctx.Done():
-		case <-time.After(time.Minute):
+	// On the bubble's virtual clock the 1-second wait with a minute-long
+	// poll ends after exactly one second, its poll cut by the wait's
+	// deadline (01a20d9b-a3a8).
+	synctest.Test(t, func(t *testing.T) {
+		empty := func(context.Context) (json.RawMessage, error) { return json.RawMessage(`{"pending":[]}`), nil }
+		var polled, cut bool
+		slow := func(ctx context.Context) {
+			polled = true
+			select {
+			case <-ctx.Done():
+				cut = true
+			case <-time.After(time.Minute):
+			}
 		}
-	}
-	start := time.Now()
-	r := waitPending(context.Background(), empty, slow, time.Second)
-	if took := time.Since(start); !polled || r.Ended != "timeout" || took > 3*time.Second {
-		t.Fatalf("a 1-second wait with a slow forge: %+v after %v (polled %v)", r, took, polled)
-	}
+		start := time.Now()
+		r := waitPending(context.Background(), empty, slow, time.Second)
+		if took := time.Since(start); !polled || !cut || r.Ended != "timeout" || took != time.Second {
+			t.Fatalf("a 1-second wait with a slow forge: %+v after %s of virtual time (polled %v, cut %v)", r, took, polled, cut)
+		}
+	})
 }

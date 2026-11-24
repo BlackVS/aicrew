@@ -193,15 +193,11 @@ func (e introspectEnv) call(t *testing.T, c introspectCall) (int, http.Header, [
 	if c.contentType != "" {
 		req.Header.Set("Content-Type", c.contentType)
 	}
-	start := time.Now()
 	resp, err := e.client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if d := time.Since(start); d > time.Second {
-		t.Errorf("introspection took %s; aimem's budget is 2 s", d)
-	}
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, resp.Header, b
 }
@@ -373,6 +369,35 @@ func TestIntrospectActive(t *testing.T) {
 	exp, _ := time.Parse(time.RFC3339, got["handle_expires_at"].(string))
 	if d := time.Until(exp); d <= 0 || d > store.HandleLifetime {
 		t.Fatalf("handle_expires_at %v is not within the handle lifetime", exp)
+	}
+}
+
+// Aimem gives an introspection 2 seconds. The route stays inside them by
+// what it does, not by a runner's speed: it reads in snapshots on the
+// store's read-only connection and hashes the bearer once, never waiting on
+// the write lock a running command holds. So it answers active while
+// another connection holds that lock (01a20d9b-a3a8); a route that wrote,
+// or read through the writer, would wait out the busy timeout and fail.
+func TestIntrospectWaitsOnNoWriter(t *testing.T) {
+	e := setupIntrospect(t, "aicrew-example", testLink)
+	db, err := sql.Open("sqlite", e.storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	defer conn.ExecContext(ctx, `ROLLBACK`) //nolint:errcheck // the test's own lock
+	code, reply, nonce := e.ask(t, e.handle)
+	if active, err := mirrorVerify(reply, nonce, "aicrew-example", e.hub, time.Now()); code != http.StatusOK || err != nil || !active {
+		t.Fatalf("an introspection under a held write lock: %d %s (%v)", code, reply, err)
 	}
 }
 

@@ -49,6 +49,11 @@ type fakeTools struct {
 	// itself. On a SIGTERM it writes TermMark and exits.
 	ClaudeRetries bool   `json:"claude_retries,omitempty"`
 	TermMark      string `json:"term_mark,omitempty"`
+	// ClaudeRunFor, a duration, makes the retrying run end by itself after
+	// that long, writing EndMark: its natural end, which a probe that ends
+	// the run at the init event never lets it reach. Empty: an hour.
+	ClaudeRunFor string `json:"claude_run_for,omitempty"`
+	EndMark      string `json:"end_mark,omitempty"`
 	// ClaudeTermAtOnce: the SIGTERM arrives the moment the init event is
 	// out (the fake sends it to itself), before any later step of the fake.
 	ClaudeTermAtOnce bool `json:"claude_term_at_once,omitempty"`
@@ -258,7 +263,7 @@ func fakeClaude(f fakeTools, args []string) int {
 			}
 		}
 		if f.ClaudeRetries {
-			waitForTerm(term, f.TermMark)
+			waitForTerm(term, f.TermMark, f.ClaudeRunFor, f.EndMark)
 		}
 		fmt.Println(`{"type":"result","subtype":"error_during_execution","is_error":true}`)
 		return 1
@@ -615,15 +620,23 @@ func TestCheckClaudeApprovalPending(t *testing.T) {
 // waitForTerm stands in for Claude Code retrying its model request: it
 // blocks until a SIGTERM on c, then writes mark and exits. c is registered
 // before the init event is printed, so a probe that terminates the client
-// as soon as it reads the event cannot beat the registration.
-func waitForTerm(c chan os.Signal, mark string) {
+// as soon as it reads the event cannot beat the registration. Past runFor
+// (an hour when empty) the run ends by itself and writes endMark.
+func waitForTerm(c chan os.Signal, mark, runFor, endMark string) {
+	d, err := time.ParseDuration(runFor)
+	if err != nil {
+		d = time.Hour
+	}
 	select {
 	case <-c:
 		if mark != "" {
 			os.WriteFile(mark, []byte("terminated"), 0o644)
 		}
 		os.Exit(143)
-	case <-time.After(time.Hour):
+	case <-time.After(d):
+		if endMark != "" {
+			_ = os.WriteFile(endMark, []byte("ended by itself"), 0o644)
+		}
 	}
 }
 
@@ -645,14 +658,24 @@ func checkEndsTheInitProbe(t *testing.T, atOnce bool) {
 	f.ClaudeRetries = true
 	f.ClaudeTermAtOnce = atOnce
 	f.TermMark = filepath.Join(t.TempDir(), "terminated")
+	// The probe ends the run at the init event, so the run never reaches its
+	// natural end: the fake's own mark says whether it did, with no clock in
+	// the test. The run ends by itself after a minute, and the probe's
+	// ceiling is twice that, so a probe that read the init event and did not
+	// end the run lets the fake write the mark before any deadline
+	// (01a20d9b-a3a8).
+	const runFor = time.Minute
+	f.ClaudeRunFor, f.EndMark = runFor.String(), filepath.Join(t.TempDir(), "ended")
 	e := setupCheck(t, f, "aimem", "claude")
 	e.installSkills(t, "1.26.1", "oh-code-review")
 	var out bytes.Buffer
-	start := time.Now()
-	rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"claude"}, Timeout: 60 * time.Second, Out: &out})
-	took := time.Since(start)
-	if err != nil || rep.Clients[0].MCP != "connected" || took > 20*time.Second {
-		t.Fatalf("%+v, %v, after %s", rep, err, took)
+	rep, err := Check(context.Background(), CheckOptions{Home: e.home, Clients: []string{"claude"}, Timeout: 2 * runFor,
+		probeCeiling: 2 * runFor, Out: &out})
+	if err != nil || rep.Clients[0].MCP != "connected" {
+		t.Fatalf("%+v, %v", rep, err)
+	}
+	if b, err := os.ReadFile(f.EndMark); err == nil {
+		t.Fatalf("the probe did not end the run at the init event: the fake %s", b)
 	}
 	if runtime.GOOS != "windows" {
 		if b, _ := os.ReadFile(f.TermMark); string(b) != "terminated" {

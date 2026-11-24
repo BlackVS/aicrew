@@ -85,8 +85,10 @@ func TestProbeTurnModel(t *testing.T) {
 	}
 	env, _ = modelProbeEnv(t, streamInit)
 	start := time.Now()
-	rep = ProbeTurnModel(ctx, self, home, append(env, fakeTurnSleepEnv+"=30s"), "haiku", 300*time.Millisecond)
-	if rep.State != ModelUnknown || !strings.Contains(rep.Detail, "did not finish within 300ms") || time.Since(start) > 20*time.Second {
+	// The fake sleeps 3 minutes: a probe not stopped at its ceiling takes
+	// that long, and a slow runner never does (01a20d9b-a3a8).
+	rep = ProbeTurnModel(ctx, self, home, append(env, fakeTurnSleepEnv+"=3m"), "haiku", 300*time.Millisecond)
+	if rep.State != ModelUnknown || !strings.Contains(rep.Detail, "did not finish within 300ms") || time.Since(start) > time.Minute {
 		t.Errorf("a probe past its ceiling: %+v after %s", rep, time.Since(start))
 	}
 	if rep := ProbeTurnModel(ctx, filepath.Join(home, "no-such-client"), home, env, "haiku", time.Minute); rep.State != ModelUnknown {

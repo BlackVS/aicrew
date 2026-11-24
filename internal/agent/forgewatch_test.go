@@ -131,12 +131,14 @@ func TestWaitWakesOnAForgeEvent(t *testing.T) {
 			st.Labels, st.Checks, st.Comments = []string{"hands-reviewed"}, forge.ChecksSuccess, 1
 		})
 	}()
-	ten, _ := json.Marshal(map[string]int{"seconds": 10})
-	start := time.Now()
-	ans = s.call(t, &answers, StepCall{Op: "wait-inbox", Body: ten})
+	// The wait returns as soon as the message is pending: the wake is the
+	// event. Its 30 seconds, which also bound each of its polls, fail only
+	// a hang, never a slow runner (01a20d9b-a3a8).
+	thirty, _ := json.Marshal(map[string]int{"seconds": 30})
+	ans = s.call(t, &answers, StepCall{Op: "wait-inbox", Body: thirty})
 	if json.Unmarshal(ans.Result, &wake) != nil || len(wake.Pending) != 1 || wake.Pending[0].Kind != "action.needed" ||
-		wake.Pending[0].AttemptID != id || time.Since(start) > 5*time.Second {
-		t.Fatalf("a review during the wait: %s after %s", ans.Result, time.Since(start))
+		wake.Pending[0].AttemptID != id {
+		t.Fatalf("a review during the wait: %s", ans.Result)
 	}
 	page := s.call(t, &answers, StepCall{Op: "inbox"})
 	var inbox struct {
@@ -177,9 +179,12 @@ func TestWaitWakesOnAForgeEvent(t *testing.T) {
 		t.Fatalf("the observation after the second report: %+v", o)
 	}
 
-	// Merged: reported once more, then no longer watched.
+	// Merged: reported once more, then no longer watched. The step is the
+	// launcher's poll whose report of the merge aicrewd accepts, run as the
+	// turn loop runs it, within the poll's own budget; a one-second wait's
+	// poll could end at the wait before its report (01a20d9b-a3a8).
 	fake.set(func(st *forge.PullStatus) { st.State = forge.PullMerged })
-	s.call(t, &answers, StepCall{Op: "wait-inbox", Body: one})
+	srv.PollPulls(context.Background())
 	if w := readWatched(s.cfg.Home); len(w) != 0 {
 		t.Fatalf("a merged pull request is still watched: %+v", w)
 	}

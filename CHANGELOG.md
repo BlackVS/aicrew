@@ -14,16 +14,18 @@ section, and the release workflow refuses a tag that has none
 
 ## [0.11.4] - 2026-11-24
 
-Seven pull requests since 0.11.3 (#279, #280, #281, #282, #283, #285,
-#286). What changes for a running team:
+Eight pull requests since 0.11.3 (#279, #280, #281, #282, #283, #285,
+#286, #288). What changes for a running team:
 - **A worker posts its own review and waits; the launcher submits**
   (#285, #286). A worker posts its review with `aicrew-agent forge pr
   review`, which writes the header the gates read. While `gates-green` is in
   the home's set of automations, the worker neither marks the pull request
   ready nor submits the attempt: its launcher does both once both reviews
-  are READY at the head and CI passed. The two pull requests ship together.
+  are READY at the head and CI passed. #285, #286 and #288 ship together.
   #285's guidance alone would leave a worker that waits on the launcher to
-  be stalled within three continuations.
+  be stalled within three continuations, and without #288 a worker that
+  posts from a body file in its worktree, as the guidance has it do, never
+  waits.
 - **A coordinator's launcher checks a merged delivery** (#282) and confirms
   it with the check's own evidence. A turn no longer runs the check.
 - **Turns that leave their messages unacknowledged wait, then hold the
@@ -113,15 +115,25 @@ member's hold to reach the team state. This release is tested with aimem
   being the head it reviewed. Where the
   project's process takes `gates-green` out of the set, the worker submits
   itself, as before.
-- **The wait is bounded.** While both reviews are READY at the head, CI
-  passed and `gates-green` is to submit, the worker's turn loop starts no
-  continuation turn and counts no stall. The bound is three forge reads (3
-  minutes at the watch's 60 seconds) from the first observation at which
-  that held for the head. Normally `gates-green` submits at that same
+- **It waits on its gates with a clean worktree, by tracked files.** The
+  worker's turn loop starts no continuation turn and counts no stall while
+  the pull request, as the launcher last observed it, is open at the
+  worktree's commit and no tracked file is changed. An untracked file,
+  such as the body files the worker posts from, is no change (#288). A
+  modified, staged, deleted or renamed tracked file is, and then the worker
+  gets its continuations as before. It waits while
+  the external review is requested or in progress, or the checks are
+  pending, and no check failed and no review at the head blocks.
+- **The wait on the launcher's submit is bounded.** While both reviews are
+  READY at the head, CI passed and `gates-green` is to submit, the worker
+  also waits. The bound is 3 minutes elapsed from the first observation at
+  which that held for the head. Normally `gates-green` submits at that same
   observation. Past the bound, the stall rule applies as to any turn: the
-  continuation turns come back, and after three turns without a step or a
-  commit, counted from the wait, the launcher blocks the attempt with the
-  stall's text. The block's lifecycle message reaches the coordinator. The
+  continuation turns come back, and the launcher blocks the attempt with
+  the stall's text after three turns in a row without a step or a new
+  commit, or after two turns in a row without a step that leave the
+  CURRENT ATTEMPT section of `docs/HANDOFF.md` unchanged, each counted from
+  the wait. The block's lifecycle message reaches the coordinator. The
   launcher reads the watched pull requests once after each worker turn
   that leaves the attempt in work, so it sees a review the turn just
   posted.
@@ -156,6 +168,13 @@ member's hold to reach the team state. This release is tested with aimem
 
 ### Changed
 
+- **A worker that posts from body files waits on its gates**
+  (01a20b66-0f78, #288). The wait's check of a clean worktree reads `git
+  status` without untracked files. The guidance has a worker post its pull
+  request's text and its review with `--body-file FILE` from its worktree,
+  the only place a turn may write them, so before this change such a worker
+  never waited and its continuation turns counted toward the stall. No
+  guidance changes, and the join rerun's changes are as listed above.
 - **A member's review through `forge pr review`** (01a1fa07-5db2, #285).
   The command writes line 1, `[oh-code-review (LEVEL) review] reviewed at
   head FULL_SHA`, at the level of the file's `Review: oh-code-review
@@ -202,7 +221,10 @@ member's hold to reach the team state. This release is tested with aimem
   Case P5 has the worker submit anyway after the launcher's submit and
   shows its answer, and case F1 stays on the worker's own submit. New case U1 holds a member on
   unacknowledged turns, case O1 runs "The operator during a cycle", and
-  case E1 runs the architect's step in the document's form.
+  case E1 runs the architect's step in the document's form. The stand-in
+  worker posts its pull request's text and its reviews from body files in
+  its worktree, and the cycle fails where a continuation turn finds the
+  pull request waiting on the external review (#288).
 
 ## [0.11.3] - 2026-11-20
 

@@ -649,7 +649,7 @@ func (m *member) requestReview(ctx context.Context, wt string, n int64, stale bo
 		"review-this"); err != nil {
 		return err
 	}
-	m.note("Asked for the external review of #%d (review-this).", n)
+	m.note("Asked for the external review of #%d (review-this)%s.", n, untold(labelled.Watch))
 	return nil
 }
 
@@ -674,8 +674,8 @@ func (m *member) followPull(ctx context.Context, b brief, wt string, n int64) er
 		if b.Continuation && m.gateWaitHolds(ctx, wt, n, p.HeadCommit, checks, shown.Content) {
 			mark = continuationWait
 		}
-		m.note("Waiting on the external review of #%d at %s (labels %s)%s.", n, p.HeadCommit, strings.Join(p.Labels, ", "),
-			mark)
+		m.note("Waiting on the external review of #%d at %s (labels %s)%s%s.", n, p.HeadCommit, strings.Join(p.Labels, ", "),
+			untold(shown.Watch), mark)
 	case checks == forge.ChecksFailure:
 		return m.rework(ctx, b, wt, n, "the checks failed at "+p.HeadCommit)
 	case verdict == "RETURN_TO_IMPLEMENTATION":
@@ -1467,10 +1467,11 @@ const continuationWait = " (a continuation turn)"
 //     is committed and pushed (an untracked file, such as the body files,
 //     is no change);
 //   - the last note on n is not a push made while the external review ran
-//     (P2): no forge pr command reported that head to the launcher since,
-//     so its observation can still hold the earlier head.
+//     (P2), nor a request for the review whose report says the launcher
+//     was not told: the launcher's observation can still hold the earlier
+//     head or lack the label.
 func (m *member) gateWaitHolds(ctx context.Context, wt string, n int64, head, checks string, c *forge.PullContent) bool {
-	if checks == forge.ChecksFailure || externalAtHead(c) || m.pushedUnreported(n) {
+	if checks == forge.ChecksFailure || externalAtHead(c) || m.unreported(n) {
 		return false
 	}
 	out, code, err := m.run(ctx, wt, "", "git", "rev-parse", "HEAD")
@@ -1491,10 +1492,26 @@ func externalAtHead(c *forge.PullContent) bool {
 	})
 }
 
-// pushedUnreported reports whether the section's last note on pull request
-// n is the push made while the external review ran (rework, P2), which no
-// forge pr command followed.
-func (m *member) pushedUnreported(n int64) bool {
+// launcherNotTold is what a note on a forge pr command adds when the
+// command's report says the launcher was not told of the pull request
+// (its watch is not agent.WatchOn): the launcher's observation then waits
+// for its next poll.
+const launcherNotTold = "; the launcher was not told: "
+
+// untold is launcherNotTold with the report's watch, or "" where the
+// launcher was told.
+func untold(watch string) string {
+	if watch == agent.WatchOn {
+		return ""
+	}
+	return launcherNotTold + watch
+}
+
+// unreported reports whether the section's last note on pull request n is
+// one the launcher's observation may not hold yet: the push made while the
+// external review ran (rework, P2), which no forge pr command followed, or
+// a command whose report says the launcher was not told.
+func (m *member) unreported(n int64) bool {
 	tag := fmt.Sprintf("#%d", n)
 	last := ""
 	for _, line := range strings.Split(m.section(), "\n") {
@@ -1502,7 +1519,7 @@ func (m *member) pushedUnreported(n int64) bool {
 			last = line
 		}
 	}
-	return strings.Contains(last, "Reworked "+tag+": "+pushedInReview+";")
+	return strings.Contains(last, "Reworked "+tag+": "+pushedInReview+";") || strings.Contains(last, launcherNotTold)
 }
 
 // ownReviewAt reports whether c holds a local review at the head.

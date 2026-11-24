@@ -646,7 +646,10 @@ condition than the launcher's own:
 - the worktree's HEAD is the pull request's head and no tracked file is
   changed;
 - the last note on the pull request is not a push made while the review
-  ran (P2), which no `forge pr` command reported to the launcher.
+  ran (P2), which no `forge pr` command reported to the launcher, nor a
+  `forge pr` command whose report says the launcher was not told (its
+  `watch` says "not watched"): the stand-in notes that with the
+  command.
 
 Elsewhere the launcher is right to give the turn. The note on the
 launcher's submit is never marked: that wait is bounded, and past the

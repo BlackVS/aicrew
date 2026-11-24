@@ -51,6 +51,9 @@ type fakeTools struct {
 	comments    []string
 	// steps are scripted answers to a step, in order, before the default one.
 	steps map[string][]stepReply
+	// labelWatch is the watch a label's report gives, agent.WatchOn when
+	// empty.
+	labelWatch string
 	// gitHead and gitStatus are what `git rev-parse HEAD` (tHead when
 	// empty) and `git status` answer.
 	gitHead, gitStatus string
@@ -219,7 +222,12 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 	case args[0] == "forge" && args[2] == "label" && f.labelFails:
 		return []byte("forge pr label: the forge refused"), 1, nil
 	case args[0] == "forge" && args[2] == "label":
-		out, _ := json.Marshal(agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, Labels: []string{"review-this"}}})
+		watch := f.labelWatch
+		if watch == "" {
+			watch = agent.WatchOn
+		}
+		out, _ := json.Marshal(agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, Labels: []string{"review-this"}},
+			Watch: watch})
 		return out, 0, nil
 	case args[0] == "forge" && args[2] == "comment" && strings.Contains(stdin, "] reviewed at head ") &&
 		(&member{home: f.home}).reviewCommand():
@@ -231,7 +239,14 @@ func (f *fakeTools) run(_ context.Context, dir, stdin, name string, args ...stri
 		out, _ := json.Marshal(agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull}})
 		return out, 0, nil
 	case args[0] == "forge" && args[2] == "show":
-		out, _ := json.Marshal(f.pull)
+		if f.pull == nil {
+			return []byte("null"), 0, nil
+		}
+		shown := *f.pull
+		if shown.Watch == "" {
+			shown.Watch = agent.WatchOn
+		}
+		out, _ := json.Marshal(shown)
 		return out, 0, nil
 	}
 	f.t.Fatalf("unexpected command: %s (in %s)", line, dir)
@@ -605,6 +620,52 @@ func TestWorkerMarksOnlyAWaitTheLauncherKeeps(t *testing.T) {
 		doc := readHandoff(t, f.home)
 		if !strings.Contains(doc, "Waiting on the external review of #7") || strings.Contains(doc, continuationWait) != c.marked {
 			t.Fatalf("%s: marked should be %v; the handoff:\n%s", c.name, c.marked, doc)
+		}
+	}
+}
+
+// Where the label's report says the launcher was not told of the pull
+// request, the worker notes it, and the next continuation's note is not
+// marked: the launcher's observation may lack the label until its next
+// poll. The same holds for the worker's read of the pull request in a
+// turn, and a continuation after a read the launcher was told of is marked
+// again.
+func TestWorkerMarksNoWaitTheLauncherWasNotToldOf(t *testing.T) {
+	f := newFake(t)
+	writeSection(t, f.home)
+	f.gatesGreen = "release"
+	f.labelWatch = "not watched: read its status: EOF"
+	var out bytes.Buffer
+	if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")), &out, f.member()); code != 0 {
+		t.Fatalf("turn 1 = %d: %s", code, out.String())
+	}
+	if doc := readHandoff(t, f.home); !strings.Contains(doc, "Asked for the external review of #7 (review-this)"+
+		launcherNotTold+f.labelWatch+".") {
+		t.Fatalf("turn 1 did not note it: the handoff:\n%s", doc)
+	}
+	f.pull = &agent.PullReport{Pull: forge.Pull{Number: 7, URL: tPull, State: "open", HeadCommit: tHead,
+		Labels: []string{"review-this"}}, Content: &forge.PullContent{}}
+	// Turn 4's read of the pull request is not told to the launcher either,
+	// so turn 5's continuation is not marked.
+	for turn, c := range []struct {
+		watch  string
+		marked bool
+	}{{"", false}, {"", true}, {"not watched: read its status: EOF", true}, {"", false}} {
+		f.pull.Watch = c.watch
+		marked := c.marked
+		out.Reset()
+		if code := turnRun(context.Background(), f.home, strings.NewReader(workerBrief("running", "working")+continuationWhy), &out, f.member()); code != 0 {
+			t.Fatalf("turn %d = %d: %s", turn+2, code, out.String())
+		}
+		doc := readHandoff(t, f.home)
+		last := ""
+		for _, line := range strings.Split(doc, "\n") {
+			if strings.HasPrefix(line, "- ") && strings.Contains(line, "Waiting on the external review of #7 ") {
+				last = line
+			}
+		}
+		if strings.HasSuffix(last, continuationWait+".") != marked {
+			t.Fatalf("turn %d: marked should be %v; the handoff:\n%s", turn+2, marked, doc)
 		}
 	}
 }

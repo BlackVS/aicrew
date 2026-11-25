@@ -243,7 +243,11 @@ export_previous() {
   cp -r "$dir/." "$STAGE/member/export/"
   # Whether the release's join takes --reviewer (v0.11.4 on) is read from
   # its own usage, not from a version: a later release keeps the flag.
+  # The binary runs here, so it is checked against the release's
+  # SHA256SUMS first, as its installers check it in the containers.
   local agent="$dir/aicrew/$PREVIOUS/aicrew-agent-linux-$1" usage
+  (cd "$dir/aicrew/$PREVIOUS" && grep " \*\{0,1\}aicrew-agent-linux-$1\$" SHA256SUMS | sha256sum -c --status) ||
+    fail "aicrew $PREVIOUS: aicrew-agent-linux-$1 does not match its SHA256SUMS"
   chmod +x "$agent"
   usage=$("$agent" join --help 2>&1) || true
   case $usage in

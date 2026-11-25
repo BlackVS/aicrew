@@ -759,7 +759,10 @@ products. sim-aicrewd and each member install from it with `AICREW_BASE`,
 by that release's own installers, which check every file against its
 `SHA256SUMS`, and each member joins with `AICREW_BASE` too, the documented
 join in a closed network: the home records the export as `export_base`,
-and its check's instructions name the export. The settings are I1's.
+and its check's instructions name the export. The settings are I1's. The
+coordinator joins with `--reviewer` where that release's join takes it,
+as its own `aicrew-agent join --help` shows (v0.11.4 on), and without it
+on an earlier one; the upgrade's rerun of join gives it in either case.
 
 **The upgrade** (scenario `upgrade`) uses this tree's installers, with the
 command line of the first install (`AICREW_NO_SERVICE=1`,

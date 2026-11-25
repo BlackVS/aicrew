@@ -68,6 +68,8 @@ KEEP=
 OUT=
 UPGRADE=
 BELOW=
+# Set by export_previous where the previous release's join takes --reviewer.
+PREVIOUS_REVIEWER=
 while [ $# -gt 0 ]; do
   case "$1" in
     -keep) KEEP=1 ;;
@@ -239,6 +241,16 @@ export_previous() {
   printf 'aiforge-export 1\naicrew %s\naimem v%s\n' "$PREVIOUS" "$PILOTSIM_AIMEM_VERSION" > "$dir/MANIFEST"
   cp -r "$dir/." "$STAGE/aicrewd/export/"
   cp -r "$dir/." "$STAGE/member/export/"
+  # Whether the release's join takes --reviewer (v0.11.4 on) is read from
+  # its own usage, not from a version: a later release keeps the flag.
+  local agent="$dir/aicrew/$PREVIOUS/aicrew-agent-linux-$1" usage
+  chmod +x "$agent"
+  usage=$("$agent" join --help 2>&1) || true
+  case $usage in
+    *"usage: aicrew-agent join"*) ;;
+    *) fail "aicrew $PREVIOUS: its aicrew-agent printed no join usage" ;;
+  esac
+  case $usage in *"--reviewer HOST=ACCOUNT"*) PREVIOUS_REVIEWER=1 ;; esac
 }
 
 # ---- failure and teardown ----------------------------------------------------
@@ -548,8 +560,9 @@ mrejoin() {
 # docs/ROLES.md.
 mupgrade_join() {
   local line rev=()
-  # The previous release's coordinator joined without --reviewer, which
-  # the launcher's check on Gitea needs (BRING-UP.md, step 6).
+  # A previous release whose join predates --reviewer joined the
+  # coordinator without it, which the launcher's check on Gitea needs
+  # (BRING-UP.md, step 6); one that has it already gave it.
   [ "$1" != coordinator ] || rev=(-add "--reviewer FORGE_HOST=ACCOUNT" -set FORGE_HOST=sim-gitea:3000 -set ACCOUNT=sim-hands)
   line=$(docline join-upgrade -set "HOME=$(mhome "$1")" "${rev[@]}") || fail "docs/BRING-UP.md: no line for step join-upgrade"
   dc exec -T -u member -e AICREW_NO_SERVICE=1 "sim-$1" sh -c "$line" > "$OUT/upgrade-join-$1.json" 2> "$OUT/upgrade-join-$1.txt" ||
@@ -771,10 +784,11 @@ member_lines() {
   member_doc "$role" preflight "${v[@]}"
   # The coordinator's launcher checks the delivery on Gitea, which counts
   # the external review only from the account it is told. The upgrade
-  # scenario's members join with the previous release, which predates
-  # --reviewer, so they go without it.
+  # scenario's members join with the previous release: with --reviewer
+  # where its join takes it (export_previous), else without.
   local rev=()
-  [ "$role" != coordinator ] || [ -n "$UPGRADE" ] || rev=(-add "--reviewer FORGE_HOST=ACCOUNT" -set ACCOUNT=sim-hands)
+  [ "$role" != coordinator ] || { [ -n "$UPGRADE" ] && [ -z "$PREVIOUS_REVIEWER" ]; } ||
+    rev=(-add "--reviewer FORGE_HOST=ACCOUNT" -set ACCOUNT=sim-hands)
   member_doc "$role" join -per "$per" "${v[@]}" -add "--aimem-ca-file hub-ca.pem" -add "--code-file PATH" -set PATH=invite.code     "${rev[@]}"
 }
 dc up -d sim-coordinator sim-worker sim-indep sim-architect >/dev/null

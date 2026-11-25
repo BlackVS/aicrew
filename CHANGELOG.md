@@ -12,10 +12,14 @@ of the pull requests merged since the last tag. A release's notes are that
 section, and the release workflow refuses a tag that has none
 (DEVELOPMENT.md, "Releasing").
 
-## [0.11.4] - 2026-11-24
+## [0.11.5] - 2026-11-24
 
-Eight pull requests since 0.11.3 (#279, #280, #281, #282, #283, #285,
-#286, #288). What changes for a running team:
+v0.11.4 was tagged and never published: its release run failed in a test
+that asserted a runner's speed, so there is nothing to install under that
+number. This release carries what 0.11.4 prepared, and that test's fix.
+
+Ten pull requests since 0.11.3 (#279, #280, #281, #282, #283, #285,
+#286, #288, #289, #291). What changes for a running team:
 - **A worker posts its own review and waits; the launcher submits**
   (#285, #286). A worker posts its review with `aicrew-agent forge pr
   review`, which writes the header the gates read. While `gates-green` is in
@@ -40,7 +44,7 @@ member's hold to reach the team state. This release is tested with aimem
 1. **aicrewd, on the hub host.** As root, rerun the installer at the new tag:
 
    ```sh
-   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.4/install-aicrewd.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.5/install-aicrewd.sh | bash
    ```
 
    It stops aicrewd, keeps a copy of the configuration and of the store
@@ -59,19 +63,19 @@ member's hold to reach the team state. This release is tested with aimem
       - Linux and macOS:
 
         ```sh
-        curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.4/boot.sh | bash
+        curl -fsSL https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.5/boot.sh | bash
         ```
 
       - Windows, in a PowerShell window that is already open:
 
         ```powershell
-        irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.4/boot.ps1 | iex
+        irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.5/boot.ps1 | iex
         ```
 
       - Windows, from cmd or the Run dialog:
 
         ```powershell
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.4/boot.ps1 | iex"
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/BlackVS/aicrew/v0.11.5/boot.ps1 | iex"
         ```
 
       In a closed network, install from the aiforge export instead, as
@@ -225,6 +229,19 @@ member's hold to reach the team state. This release is tested with aimem
   worker posts its pull request's text and its reviews from body files in
   its worktree, and the cycle fails where a continuation turn finds the
   pull request waiting on the external review (#288).
+- **Tests that asserted a runner's speed wait on their event instead**
+  (01a20d9b-a3a8, #289). Tests only; no product change. The forge watch
+  test that failed v0.11.4's release run now has the launcher's own poll
+  report the merged pull request. Each bound the change removed or loosened is
+  guarded by a test that fails when the behaviour breaks: the wait's
+  deadlines are asserted exactly on a `testing/synctest` virtual clock, and
+  the init probe's stop by the fake client's own mark.
+- **The upgrade simulation starts from the newest published release**
+  (01a20e6b-ffa8, #291). Simulation only; no product change. It upgraded
+  from the newest tag before HEAD, which for this release was v0.11.4,
+  tagged and never published. It now passes over a tag whose release has
+  no `SHA256SUMS` to download and names it in the run's log, and fails
+  with the reason when the forge gives any other answer.
 
 ## [0.11.3] - 2026-11-20
 

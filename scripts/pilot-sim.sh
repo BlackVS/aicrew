@@ -68,6 +68,8 @@ KEEP=
 OUT=
 UPGRADE=
 BELOW=
+# Set by export_previous where the previous release's join takes --reviewer.
+PREVIOUS_REVIEWER=
 while [ $# -gt 0 ]; do
   case "$1" in
     -keep) KEEP=1 ;;
@@ -239,6 +241,20 @@ export_previous() {
   printf 'aiforge-export 1\naicrew %s\naimem v%s\n' "$PREVIOUS" "$PILOTSIM_AIMEM_VERSION" > "$dir/MANIFEST"
   cp -r "$dir/." "$STAGE/aicrewd/export/"
   cp -r "$dir/." "$STAGE/member/export/"
+  # Whether the release's join takes --reviewer (v0.11.4 on) is read from
+  # its own usage, not from a version: a later release keeps the flag.
+  # The binary runs here, so it is checked against the release's
+  # SHA256SUMS first, as its installers check it in the containers.
+  local agent="$dir/aicrew/$PREVIOUS/aicrew-agent-linux-$1" usage
+  (cd "$dir/aicrew/$PREVIOUS" && grep " \*\{0,1\}aicrew-agent-linux-$1\$" SHA256SUMS | sha256sum -c --status) ||
+    fail "aicrew $PREVIOUS: aicrew-agent-linux-$1 does not match its SHA256SUMS"
+  chmod +x "$agent"
+  usage=$("$agent" join --help 2>&1) || true
+  case $usage in
+    *"usage: aicrew-agent join"*) ;;
+    *) fail "aicrew $PREVIOUS: its aicrew-agent printed no join usage" ;;
+  esac
+  case $usage in *"--reviewer HOST=ACCOUNT"*) PREVIOUS_REVIEWER=1 ;; esac
 }
 
 # ---- failure and teardown ----------------------------------------------------
@@ -543,26 +559,30 @@ mrejoin() {
 # mupgrade_join ROLE: the document's rerun of join in an upgrade, on the
 # member's home, with its JSON report in $OUT/upgrade-join-ROLE.json (its
 # progress lines in .txt); no
-# service, as in member.sh. The report asks for the restart a changed
-# managed file needs (restart_required), and it updated the home's
-# docs/ROLES.md.
+# service, as in member.sh. What the report should say is derived from the
+# home's files before and after the rerun (rerun.py,
+# $OUT/upgrade-join-ROLE.before and .after), by the rules rerun.py's
+# docstring names with their source in the product.
 mupgrade_join() {
   local line rev=()
-  # The previous release's coordinator joined without --reviewer, which
-  # the launcher's check on Gitea needs (BRING-UP.md, step 6).
+  home_files "$1" > "$OUT/upgrade-join-$1.before" || fail "sim-$1: the home's files before the rerun of join"
+  # A previous release whose join predates --reviewer joined the
+  # coordinator without it, which the launcher's check on Gitea needs
+  # (BRING-UP.md, step 6); one that has it already gave it.
   [ "$1" != coordinator ] || rev=(-add "--reviewer FORGE_HOST=ACCOUNT" -set FORGE_HOST=sim-gitea:3000 -set ACCOUNT=sim-hands)
   line=$(docline join-upgrade -set "HOME=$(mhome "$1")" "${rev[@]}") || fail "docs/BRING-UP.md: no line for step join-upgrade"
   dc exec -T -u member -e AICREW_NO_SERVICE=1 "sim-$1" sh -c "$line" > "$OUT/upgrade-join-$1.json" 2> "$OUT/upgrade-join-$1.txt" ||
     fail "the upgrade's rerun of join on sim-$1 ($OUT/upgrade-join-$1.json, $OUT/upgrade-join-$1.txt)"
   echo join-upgrade >> "$OUT/docsteps.ran"
-  python3 - "$OUT/upgrade-join-$1.json" <<'PY' || fail "sim-$1: the upgrade's rerun of join did not update the home's guidance ($OUT/upgrade-join-$1.json)"
-import json, sys
-rep = json.load(open(sys.argv[1]))
-changes = {c["path"]: c["action"] for c in rep.get("changes") or []}
-print("  the rerun's changes: " + ", ".join("%s %s" % (a, p) for p, a in sorted(changes.items()) if a != "unchanged"))
-print("  the rerun's status: %s (%s)" % (rep.get("status"), rep.get("instruction", "")))
-sys.exit(0 if rep.get("status") == "restart_required" and changes.get("docs/ROLES.md") == "update" else 1)
-PY
+  home_files "$1" > "$OUT/upgrade-join-$1.after" || fail "sim-$1: the home's files after the rerun of join"
+  python3 "$SIM/rerun.py" "$OUT/upgrade-join-$1.json" "$OUT/upgrade-join-$1.before" "$OUT/upgrade-join-$1.after" ||
+    fail "sim-$1: the upgrade's rerun of join reported other changes than the home's files show ($OUT/upgrade-join-$1.json)"
+}
+# home_files ROLE: the digests of the member home's own files, as sha256sum
+# prints them, leaving out its clones, worktrees, credentials, logs and
+# state.
+home_files() {
+  dc exec -T -u member "sim-$1" sh -c 'cd "$1" && find . \( -path ./repos -o -path ./worktrees -o -path ./creds -o -path ./logs -o -path ./state \) -prune -o -type f -print0 | sort -z | xargs -0 sha256sum' sh "$(mhome "$1")"
 }
 # upgraded_delivery: after the upgrade, the cycle's delivery is the
 # coordinator's launcher's, on the guidance and settings the rerun wrote:
@@ -771,10 +791,11 @@ member_lines() {
   member_doc "$role" preflight "${v[@]}"
   # The coordinator's launcher checks the delivery on Gitea, which counts
   # the external review only from the account it is told. The upgrade
-  # scenario's members join with the previous release, which predates
-  # --reviewer, so they go without it.
+  # scenario's members join with the previous release: with --reviewer
+  # where its join takes it (export_previous), else without.
   local rev=()
-  [ "$role" != coordinator ] || [ -n "$UPGRADE" ] || rev=(-add "--reviewer FORGE_HOST=ACCOUNT" -set ACCOUNT=sim-hands)
+  [ "$role" != coordinator ] || { [ -n "$UPGRADE" ] && [ -z "$PREVIOUS_REVIEWER" ]; } ||
+    rev=(-add "--reviewer FORGE_HOST=ACCOUNT" -set ACCOUNT=sim-hands)
   member_doc "$role" join -per "$per" "${v[@]}" -add "--aimem-ca-file hub-ca.pem" -add "--code-file PATH" -set PATH=invite.code     "${rev[@]}"
 }
 dc up -d sim-coordinator sim-worker sim-indep sim-architect >/dev/null
@@ -1100,14 +1121,14 @@ take_proxies() {
     px "$p" log > "$1/proxy/$p.jsonl" || fail "sim-px-$p's request log"
   done
 }
-# take_homes DIR: each home's turn records, guard log, turn state, handoff
-# and automation records, and the worker's check report, whose build and
-# effective automations say who submits (cycle.py).
+# take_homes DIR: each home's turn records, guard log, turn state, handoff,
+# automation records and docs/ROLES.md, and the worker's check report: the
+# worker's guidance and effective automations say who submits (cycle.py).
 take_homes() {
   local d=$1 role f
   for role in coordinator worker indep; do
     mkdir -p "$d/homes/$role"
-    for f in logs/turns.jsonl logs/guard.jsonl docs/HANDOFF.md state/turns.json logs/automations.jsonl; do
+    for f in logs/turns.jsonl logs/guard.jsonl docs/HANDOFF.md state/turns.json logs/automations.jsonl docs/ROLES.md; do
       dc exec -T -u member "sim-$role" sh -c '[ ! -f "$1" ] || cat "$1"' sh "$(mhome "$role")/$f" \
         > "$d/homes/$role/${f##*/}"
     done

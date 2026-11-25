@@ -618,16 +618,20 @@ nothing to do ends, and the launcher's next message starts the next one.
 
 The cycle's checks take who submits from the run's facts, never from the
 worker's notes. Each snapshot holds the worker's `aicrew-agent check
---json` report, and the checks read the one of the attempt's own time:
-the cycle's `submit` snapshot where the cycle took one, so a re-check of
-the first cycle after the upgrade reads the previous release's report,
-else the snapshot's own. The launcher submits where that report's build
-is the commit the run built (`PILOTSIM_BUILD_COMMIT`) and lists
-`gates-green`, not disabled, but in case F1, where the worker submits
-itself on every release. A snapshot with no readable report fails the
-check ("who submits is not known"), and outside case F1 so does one whose
-report names no build commit. The checks read
-only the notes of the attempt's own pull request.
+--json` report and its `docs/ROLES.md`, and the checks read those of the
+attempt's own time: the cycle's `submit` snapshot where the cycle took
+one, so a re-check of the first cycle after the upgrade reads the
+previous release's, else the snapshot's own. The launcher submits where
+the home's release has the guidance that leaves it the submit (its
+`docs/ROLES.md` names `forge pr review`, as the stand-in reads it; v0.11.4
+and later) and the report lists `gates-green`, not disabled, but in case
+F1, where the worker submits itself on every release. No build commit or
+version is compared, so the rule holds as releases are published: a home
+of v0.11.3 or earlier submits itself, and one of v0.11.5, the next
+release or this tree leaves it to the launcher. A snapshot with no
+readable report or no `docs/ROLES.md` fails the check ("who submits is
+not known"). `python3 e2e/pilotsim/cycle_test.py` tests the rule. The
+checks read only the notes of the attempt's own pull request.
 
 The script gives the members no input of its own. `--process` needs an
 aimem with `aimem process pin` that reads under the team session, 0.10.18
@@ -755,7 +759,10 @@ products. sim-aicrewd and each member install from it with `AICREW_BASE`,
 by that release's own installers, which check every file against its
 `SHA256SUMS`, and each member joins with `AICREW_BASE` too, the documented
 join in a closed network: the home records the export as `export_base`,
-and its check's instructions name the export. The settings are I1's.
+and its check's instructions name the export. The settings are I1's. The
+coordinator joins with `--reviewer` where that release's join takes it,
+as the usage its own `aicrew-agent join` prints shows (v0.11.4 on), and without it
+on an earlier one; the upgrade's rerun of join gives it in either case.
 
 **The upgrade** (scenario `upgrade`) uses this tree's installers, with the
 command line of the first install (`AICREW_NO_SERVICE=1`,
@@ -778,7 +785,31 @@ ended:
    The runner checks the new `aicrew-agent`'s digest, waits for serve's
    model probe after the restart, and runs `aicrew-agent check`, the
    release notes' step after an upgrade, through the smoke check's
-   checks. `join` does not run again: the home keeps its `agent.json`.
+   checks. Before the restart, `join` runs again as BRING-UP.md's
+   "Upgrading a member" writes it. What its report must say is derived
+   from the home's files before and after it (`e2e/pilotsim/rerun.py`,
+   tested by `rerun_test.py`), not from which release the home had:
+   - each row, the managed files' `changes` and the client wiring's
+     `check.wiring`, carries an action join reports there, and the file
+     shows it: `create` for a file that was not there (or an entry added
+     to its file), `update` for one that changed, the file as it was for
+     `unchanged`, `kept` and `collision`;
+   - every file that changed, other than agent.json and aimem/, is
+     written by one of those rows;
+   - `restart_required` exactly when a managed file was replaced or the
+     wiring was created or updated, else `ready` (a created file alone
+     needs no restart);
+   - a conflict fails.
+
+   rerun.py names, beside each rule, the product's file and function the
+   rule comes from.
+
+   A run from a release whose managed files equal this tree's proves no
+   update. The update path is proven on every pull request by the
+   below-minimum run, which starts from v0.11.0, whose guidance is older,
+   and by a run from any release with older guidance. It is also proven by
+   `TestJoinAddsRoleGuidance` (internal/agent), which reruns join over an
+   older home.
 4. After the upgrade the runner reads the first cycle again
    (`cycle-1/upgrade-after`), and resumes the members.
 

@@ -30,6 +30,8 @@ jobs:
         run: bash scripts/check-repo.sh
       - name: The simulation's restart helper
         run: bash e2e/pilotsim/restart_test.sh
+      - name: The simulation's rules for who submits and for the rerun of join
+        run: python3 e2e/pilotsim/cycle_test.py && python3 e2e/pilotsim/rerun_test.py
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.25'

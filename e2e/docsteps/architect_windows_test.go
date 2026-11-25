@@ -59,13 +59,16 @@ func TestWindowsArchitectInit(t *testing.T) {
 }
 
 // powershell runs a command line in Windows PowerShell with home as the
-// user's home ($HOME) and bins first on PATH.
+// user's home ($HOME) and bins first on PATH, as a window the operator
+// opens has it. PSModulePath is left out: one inherited from PowerShell 7
+// (a CI step's shell) names modules Windows PowerShell cannot load, such
+// as the one Get-Acl is in, and without it Windows PowerShell uses its own.
 func powershell(t *testing.T, home, bins, line string) (string, error) {
 	t.Helper()
 	vol := filepath.VolumeName(home)
 	env := slices.DeleteFunc(os.Environ(), func(e string) bool {
 		k, _, _ := strings.Cut(e, "=")
-		return slices.Contains([]string{"USERPROFILE", "HOMEDRIVE", "HOMEPATH", "PATH"}, strings.ToUpper(k))
+		return slices.Contains([]string{"USERPROFILE", "HOMEDRIVE", "HOMEPATH", "PATH", "PSMODULEPATH"}, strings.ToUpper(k))
 	})
 	env = append(env, "USERPROFILE="+home, "HOMEDRIVE="+vol, "HOMEPATH="+strings.TrimPrefix(home, vol),
 		"PATH="+bins+string(os.PathListSeparator)+os.Getenv("PATH"))

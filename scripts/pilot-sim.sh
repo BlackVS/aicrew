@@ -555,11 +555,14 @@ mrejoin() {
 # mupgrade_join ROLE: the document's rerun of join in an upgrade, on the
 # member's home, with its JSON report in $OUT/upgrade-join-ROLE.json (its
 # progress lines in .txt); no
-# service, as in member.sh. The report asks for the restart a changed
-# managed file needs (restart_required), and it updated the home's
-# docs/ROLES.md.
+# service, as in member.sh. What the report should say is derived from the
+# home's files before and after the rerun (rerun.py,
+# $OUT/upgrade-join-ROLE.before and .after): an update and restart_required
+# where this tree's join changed a file, unchanged and ready where the
+# previous release's files were already this tree's.
 mupgrade_join() {
   local line rev=()
+  home_files "$1" > "$OUT/upgrade-join-$1.before" || fail "sim-$1: the home's files before the rerun of join"
   # A previous release whose join predates --reviewer joined the
   # coordinator without it, which the launcher's check on Gitea needs
   # (BRING-UP.md, step 6); one that has it already gave it.
@@ -568,14 +571,15 @@ mupgrade_join() {
   dc exec -T -u member -e AICREW_NO_SERVICE=1 "sim-$1" sh -c "$line" > "$OUT/upgrade-join-$1.json" 2> "$OUT/upgrade-join-$1.txt" ||
     fail "the upgrade's rerun of join on sim-$1 ($OUT/upgrade-join-$1.json, $OUT/upgrade-join-$1.txt)"
   echo join-upgrade >> "$OUT/docsteps.ran"
-  python3 - "$OUT/upgrade-join-$1.json" <<'PY' || fail "sim-$1: the upgrade's rerun of join did not update the home's guidance ($OUT/upgrade-join-$1.json)"
-import json, sys
-rep = json.load(open(sys.argv[1]))
-changes = {c["path"]: c["action"] for c in rep.get("changes") or []}
-print("  the rerun's changes: " + ", ".join("%s %s" % (a, p) for p, a in sorted(changes.items()) if a != "unchanged"))
-print("  the rerun's status: %s (%s)" % (rep.get("status"), rep.get("instruction", "")))
-sys.exit(0 if rep.get("status") == "restart_required" and changes.get("docs/ROLES.md") == "update" else 1)
-PY
+  home_files "$1" > "$OUT/upgrade-join-$1.after" || fail "sim-$1: the home's files after the rerun of join"
+  python3 "$SIM/rerun.py" "$OUT/upgrade-join-$1.json" "$OUT/upgrade-join-$1.before" "$OUT/upgrade-join-$1.after" ||
+    fail "sim-$1: the upgrade's rerun of join reported other changes than the home's files show ($OUT/upgrade-join-$1.json)"
+}
+# home_files ROLE: the digests of the member home's own files, as sha256sum
+# prints them, leaving out its clones, worktrees, credentials, logs and
+# state.
+home_files() {
+  dc exec -T -u member "sim-$1" sh -c 'cd "$1" && find . \( -path ./repos -o -path ./worktrees -o -path ./creds -o -path ./logs -o -path ./state \) -prune -o -type f -print0 | sort -z | xargs -0 sha256sum' sh "$(mhome "$1")"
 }
 # upgraded_delivery: after the upgrade, the cycle's delivery is the
 # coordinator's launcher's, on the guidance and settings the rerun wrote:

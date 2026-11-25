@@ -761,7 +761,7 @@ by that release's own installers, which check every file against its
 join in a closed network: the home records the export as `export_base`,
 and its check's instructions name the export. The settings are I1's. The
 coordinator joins with `--reviewer` where that release's join takes it,
-as its own `aicrew-agent join --help` shows (v0.11.4 on), and without it
+as the usage its own `aicrew-agent join` prints shows (v0.11.4 on), and without it
 on an earlier one; the upgrade's rerun of join gives it in either case.
 
 **The upgrade** (scenario `upgrade`) uses this tree's installers, with the
@@ -785,7 +785,21 @@ ended:
    The runner checks the new `aicrew-agent`'s digest, waits for serve's
    model probe after the restart, and runs `aicrew-agent check`, the
    release notes' step after an upgrade, through the smoke check's
-   checks. `join` does not run again: the home keeps its `agent.json`.
+   checks. Before the restart, `join` runs again as BRING-UP.md's
+   "Upgrading a member" writes it. What its report must say is derived
+   from the home's files before and after it (`e2e/pilotsim/rerun.py`,
+   tested by `rerun_test.py`), not from which release the home had:
+   - an `update` (or `create`) where this tree's join changed a file, and
+     `unchanged` where it did not;
+   - `restart_required` exactly when a file changed, else `ready`;
+   - a conflict fails.
+
+   A run from a release whose managed files equal this tree's proves no
+   update. The update path is proven on every pull request by the
+   below-minimum run, which starts from v0.11.0, whose guidance is older,
+   and by a run from any release with older guidance. It is also proven by
+   `TestJoinAddsRoleGuidance` (internal/agent), which reruns join over an
+   older home.
 4. After the upgrade the runner reads the first cycle again
    (`cycle-1/upgrade-after`), and resumes the members.
 

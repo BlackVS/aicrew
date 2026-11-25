@@ -11,7 +11,9 @@
 # (the checkout needs fetch-depth 2). The race job runs when the change
 # touches a directory of a package the tested package or its tests import
 # from this module; the Windows job when it touches internal/agent,
-# internal/service, scripts, an installer or a _windows.go file. go.mod,
+# internal/service, scripts, an installer, a _windows.go file, or the
+# bring-up document and its reader (docs/BRING-UP.md, e2e/docsteps), whose
+# step 8 PowerShell lines it runs. go.mod,
 # go.sum and this workflow run both.
 set -euo pipefail
 
@@ -57,7 +59,8 @@ case $kind in
   windows)
     while IFS= read -r f; do
       case $f in
-        internal/agent/* | internal/service/* | scripts/* | boot.sh | boot.ps1 | install-aicrewd.sh | *_windows.go)
+        internal/agent/* | internal/service/* | scripts/* | boot.sh | boot.ps1 | install-aicrewd.sh | *_windows.go | \
+          *_windows_test.go | docs/BRING-UP.md | e2e/docsteps/*)
           decide true "" "$f changed"
           ;;
       esac

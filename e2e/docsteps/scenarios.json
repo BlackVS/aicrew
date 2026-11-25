@@ -8,5 +8,8 @@
   ],
   "pilot-sim-upgrade-below-minimum": [
     "status", "team-setup", "hub-grant", "team-toolchain", "team-show", "skills-import", "skills-list", "team-pause-bring-up", "user-add", "member-token", "access-list", "invitation-issue", "invitation-list", "join-upgrade", "check", "team-resume"
+  ],
+  "go-test-windows": [
+    "architect-init-windows", "architect-carry-windows"
   ]
 }

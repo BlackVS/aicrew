@@ -91,7 +91,9 @@ What runs where:
     that package or a package of this module its tests import.
   - `go-test (windows-latest)` runs only when the change touches
     `internal/agent`, `internal/service`, `scripts`, an installer
-    (`boot.sh`, `boot.ps1`, `install-aicrewd.sh`) or a `_windows.go` file.
+    (`boot.sh`, `boot.ps1`, `install-aicrewd.sh`), a `_windows.go` or
+    `_windows_test.go` file, or `docs/BRING-UP.md` and its reader
+    `e2e/docsteps`, whose step 8 PowerShell lines that job runs.
   - A change to `go.mod`, `go.sum`, `ci.yml` or the gate script runs both.
   - A gated job that has nothing to test still reports its check, as
     passed, with the test steps skipped.

@@ -375,12 +375,20 @@ Each difference is in one place in the scripts, named in the table.
 | step 8's architect machine is sim-architect, its user the image's `sessiond`, and the operator's SSH login the image's `ops` | `e2e/pilotsim/aicrewd/Dockerfile`, `architect_init` in `e2e/pilotsim/cases.sh` | sim-architect runs aicrewd's image for its `aicrew`; the login exists only for the carrying ([The escalation case](#the-escalation-case)) |
 | step 8 runs with the document's pinned alternative (`spki_sha256`) | `architect_init` in `e2e/pilotsim/cases.sh` | sim-architect has no simulation CA in its system trust |
 
+Step 8's Windows lines run in CI's Windows test job, not in the
+simulation, whose containers are Linux (`e2e/docsteps/scenarios.json`
+declares them as `go-test-windows`). `TestWindowsArchitectInit` runs the
+directory's PowerShell line as the document writes it against a temporary
+home, and reads `creds\` with `icacls`: the user, SYSTEM and
+Administrators, none inherited, and a protected list.
+`TestWindowsArchitectCarry` runs the carrying with Windows' OpenSSH client
+against a local OpenSSH server that `scripts/ci-windows-sshd.ps1` sets up
+on the runner, standing in for aicrewd's host. It carries a throwaway file
+and reads its rights with `icacls`: each of the three inherited from
+`creds\`. No copy is left on the server.
+
 The marked lines no scenario runs, each with its reason (also in
 `e2e/docsteps/docsteps_test.go`), are still parsed:
-- step 8's Windows lines, `aicrew architect init` in PowerShell and the
-  carrying with Windows' OpenSSH client: the simulation's containers are
-  Linux. They were tried by hand on Windows 11, with the directory's
-  `creds\` and a carried file's rights read with `icacls`;
 - `aicrew-agent service restart` and `service status`: no systemd user
   manager in the members' containers;
 - `loginctl enable-linger`: a systemd login setting of a real host;

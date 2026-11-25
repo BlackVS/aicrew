@@ -16,7 +16,7 @@ DIR is the step's snapshot, which scripts/pilot-sim.sh takes read-only:
   forge/comments.json    its comments
   forge/status.json      the merge commit's combined status, from the step merge on
   verify.json            verify-delivery's answer for the pull request, at the step done
-  homes/ROLE/            turns.jsonl, guard.jsonl, turns.json and HANDOFF.md of each home
+  homes/ROLE/            turns.jsonl, guard.jsonl, turns.json, HANDOFF.md and ROLES.md of each home
   homes/worker/check.json the worker's aicrew-agent check --json report
 
 STEP is one of STEPS. CASE names the pilot case (cases.py) whose cycle the
@@ -31,8 +31,10 @@ outside a case: the below-minimum upgrade run's offered turn, one, before
 the second cycle. The audit may hold that many control.nudge calls.
 
 PILOTSIM_BUILD_COMMIT is the commit this tree's members are built from: a
-worker home whose aicrew-agent is that build, with gates-green in its
-effective set, leaves the submit to its launcher, but in case F1.
+worker home whose aicrew-agent is that build waits on its gates with the
+body files in its worktree. Who submits is the home's release's: a worker
+whose docs/ROLES.md has the `forge pr review` guidance, with gates-green in
+its effective set, leaves the submit to its launcher, but in case F1.
 """
 import json
 import os
@@ -278,13 +280,14 @@ def check(step, d, case=""):
             expect(text in handoff, "worker: the handoff does not record %r" % text)
     if after("submit"):
         # Who submits comes from the run's facts, not the worker's notes:
-        # where the worker home runs this tree's build, whose guidance
-        # leaves the submit to the launcher's gates-green, with gates-green
-        # in its effective set, the worker posts its review and the
-        # launcher submits (01a206f8-24d0), but in case F1 (submit_itself).
-        # A home of an earlier release, or case F1, submits itself. Only
-        # the notes of this attempt's pull request count: the handoff's
-        # archive keeps earlier attempts' notes.
+        # where the worker home's release has the guidance that leaves the
+        # submit to the launcher's gates-green (its docs/ROLES.md names
+        # `forge pr review`, from v0.11.4 on), with gates-green in its
+        # effective set, the worker posts its review and the launcher
+        # submits (01a206f8-24d0, 01a2113d-fa1e), but in case F1
+        # (submit_itself). A home of a release before that guidance, or
+        # case F1, submits itself. Only the notes of this attempt's pull
+        # request count: the handoff's archive keeps earlier attempts' notes.
         n = pulls[0]["number"] if pulls else 0
         launcher, why = launcher_submits(d, case)
         expect(why == "", "worker: who submits is not known: %s" % why)
@@ -343,8 +346,6 @@ def worker_report(d):
         rep = None
     if not isinstance(rep, dict) or not isinstance(rep.get("aicrew_agent"), dict):
         return None, "no readable check report of the worker in %s" % src
-    if not os.environ.get("PILOTSIM_BUILD_COMMIT", ""):
-        return None, "PILOTSIM_BUILD_COMMIT is not set"
     return rep, src
 
 
@@ -354,27 +355,40 @@ def worker_this_build(d):
     rep, src = worker_report(d)
     if rep is None:
         return False, src
+    if not os.environ.get("PILOTSIM_BUILD_COMMIT", ""):
+        return False, "PILOTSIM_BUILD_COMMIT is not set"
     commit = rep["aicrew_agent"].get("commit")
     if not commit:
         return False, "the worker's check report in %s names no build commit" % src
     return commit == os.environ["PILOTSIM_BUILD_COMMIT"], ""
 
 
+# The wording of a home's docs/ROLES.md whose release has `forge pr review`
+# and leaves the submit to the launcher's gates-green (#285, #286; v0.11.4
+# on). The stand-in tests the same text (aicrew-simclient, reviewGuidance),
+# and a test keeps the two equal.
+REVIEW_GUIDANCE = "`review --pr N --body-file FILE [--head SHA]` for a review"
+
+
 def launcher_submits(d, case):
     """Whether the launcher, not the worker, submits the attempt, from the
-    run's facts, and "" or why that is not known: the worker's check report
-    of the attempt's own time (its aicrew-agent build against
-    PILOTSIM_BUILD_COMMIT, and gates-green in its effective set and not
-    disabled, as the stand-in reads it) and the case (F1 submits itself)."""
+    run's facts, and "" or why that is not known. The facts are the home's
+    own release, read as the stand-in reads them at the attempt's time: its
+    docs/ROLES.md has the guidance that leaves the submit to the launcher
+    (REVIEW_GUIDANCE), and its check report lists gates-green in its
+    effective set, not disabled. Case F1 submits itself. No build commit or
+    version is compared, so a release published later changes nothing: a
+    home of a release before the guidance lacks its wording, and every
+    later one has it."""
     rep, src = worker_report(d)
     if rep is None:
         return False, src
     if case == "F1":
         return False, ""
-    commit = rep["aicrew_agent"].get("commit")
-    if not commit:
-        return False, "the worker's check report in %s names no build commit" % src
-    if commit != os.environ["PILOTSIM_BUILD_COMMIT"]:
+    roles = load(src, "homes/worker/ROLES.md")
+    if not roles:
+        return False, "no docs/ROLES.md of the worker in %s" % src
+    if REVIEW_GUIDANCE not in roles:
         return False, ""
     if not isinstance(rep.get("automations"), dict):
         return False, "the worker's check report lists no automations (its launcher did not answer)"

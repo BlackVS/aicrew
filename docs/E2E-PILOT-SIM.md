@@ -618,16 +618,20 @@ nothing to do ends, and the launcher's next message starts the next one.
 
 The cycle's checks take who submits from the run's facts, never from the
 worker's notes. Each snapshot holds the worker's `aicrew-agent check
---json` report, and the checks read the one of the attempt's own time:
-the cycle's `submit` snapshot where the cycle took one, so a re-check of
-the first cycle after the upgrade reads the previous release's report,
-else the snapshot's own. The launcher submits where that report's build
-is the commit the run built (`PILOTSIM_BUILD_COMMIT`) and lists
-`gates-green`, not disabled, but in case F1, where the worker submits
-itself on every release. A snapshot with no readable report fails the
-check ("who submits is not known"), and outside case F1 so does one whose
-report names no build commit. The checks read
-only the notes of the attempt's own pull request.
+--json` report and its `docs/ROLES.md`, and the checks read those of the
+attempt's own time: the cycle's `submit` snapshot where the cycle took
+one, so a re-check of the first cycle after the upgrade reads the
+previous release's, else the snapshot's own. The launcher submits where
+the home's release has the guidance that leaves it the submit (its
+`docs/ROLES.md` names `forge pr review`, as the stand-in reads it; v0.11.4
+and later) and the report lists `gates-green`, not disabled, but in case
+F1, where the worker submits itself on every release. No build commit or
+version is compared, so the rule holds as releases are published: a home
+of v0.11.3 or earlier submits itself, and one of v0.11.5, the next
+release or this tree leaves it to the launcher. A snapshot with no
+readable report or no `docs/ROLES.md` fails the check ("who submits is
+not known"). `python3 e2e/pilotsim/cycle_test.py` tests the rule. The
+checks read only the notes of the attempt's own pull request.
 
 The script gives the members no input of its own. `--process` needs an
 aimem with `aimem process pin` that reads under the team session, 0.10.18

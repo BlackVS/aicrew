@@ -1328,6 +1328,14 @@ func TestReviewGuidance(t *testing.T) {
 	if f.member().reviewCommand() {
 		t.Errorf("v0.11.3's guidance names the review command")
 	}
+	// cycle.py decides who submits from the same text (01a2113d-fa1e).
+	raw, err := os.ReadFile(filepath.Join("..", "..", "cycle.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "REVIEW_GUIDANCE = \"" + reviewGuidance + "\""; !strings.Contains(string(raw), want) {
+		t.Errorf("e2e/pilotsim/cycle.py has no %s", want)
+	}
 }
 
 // On a home of an earlier release, the upgrade scenario's first cycle, the

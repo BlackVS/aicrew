@@ -67,6 +67,7 @@ CGO_ENABLED=0 go build ./...
 bash scripts/release.sh build v0.0.0   # every release asset, sums, stamp check
 bash scripts/release_test.sh           # the release script's refusals
 bash e2e/pilotsim/restart_test.sh      # the simulation's restart helper
+python3 e2e/pilotsim/cycle_test.py     # the simulation's rule for who submits
 ```
 
 CI check names: `repo-checks`, `go-lint`, `go-test (ubuntu-latest)`,

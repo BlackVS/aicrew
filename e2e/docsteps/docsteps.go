@@ -357,14 +357,14 @@ func (d *Doc) Line(id string, o Options) (string, error) {
 	if s == nil {
 		return "", fmt.Errorf("step %s is not marked in the document", id)
 	}
-	words := Split(s.Line)
+	words := splitWords(s.Line)
 	if o.Alt {
 		if len(s.alts) == 0 {
 			return "", fmt.Errorf("step %s has no run-alt marker", id)
 		}
 		for _, alt := range s.alts {
 			var err error
-			if words, err = replaceFlags(words, Split(alt)); err != nil {
+			if words, err = replaceFlags(words, splitWords(alt)); err != nil {
 				return "", fmt.Errorf("step %s: its run-alt %q: %w", id, alt, err)
 			}
 		}
@@ -377,7 +377,7 @@ func (d *Doc) Line(id string, o Options) (string, error) {
 		if !found {
 			return "", fmt.Errorf("step %s: %q is not marked as its addition", id, a)
 		}
-		words = append(words, Split(a)...)
+		words = append(words, splitWords(a)...)
 	}
 	if o.Per != "" {
 		if s.Per == "" {
@@ -385,25 +385,51 @@ func (d *Doc) Line(id string, o Options) (string, error) {
 		}
 		re := regexp.MustCompile(`\b` + regexp.QuoteMeta(s.Per) + `\b`)
 		for i, w := range words {
-			words[i] = re.ReplaceAllString(w, o.Per)
+			words[i] = w.filled(re.ReplaceAllString(w.text, o.Per))
 		}
 	}
 	var missing []string
 	for i, w := range words {
-		words[i] = fill(w, func(p string) string {
+		words[i] = w.filled(fill(w.text, func(p string) string {
 			v, ok := o.Values[p]
 			if !ok {
 				missing = append(missing, p)
 				return p
 			}
 			return v
-		})
+		}))
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
 		return "", fmt.Errorf("step %s: no value for %s", id, strings.Join(unique(missing), ", "))
 	}
-	return Join(words), nil
+	return join(words), nil
+}
+
+// Text is step id's line as the document writes it, each placeholder
+// replaced by its value and nothing else changed: the form for a shell
+// other than sh, such as the document's PowerShell lines, which Line's
+// quoting for sh would change. A value is put in unquoted, so each must be
+// plain (letters, digits and -_./:=@,+%).
+func (d *Doc) Text(id string, values map[string]string) (string, error) {
+	s := d.Steps[id]
+	if s == nil {
+		return "", fmt.Errorf("step %s is not marked in the document", id)
+	}
+	var bad []string
+	line := fill(s.Line, func(p string) string {
+		v, ok := values[p]
+		if !ok || v == "" || strings.Trim(v, safeChars) != "" {
+			bad = append(bad, p)
+			return p
+		}
+		return v
+	})
+	if len(bad) > 0 {
+		sort.Strings(bad)
+		return "", fmt.Errorf("step %s: no plain value for %s", id, strings.Join(unique(bad), ", "))
+	}
+	return line, nil
 }
 
 // Placeholders are the capitals words of step id's line, its additions and
@@ -448,23 +474,23 @@ func isWord(c byte) bool {
 // line's flag of that name. alt is pairs of a flag and its value, and each
 // of its flags must be one the line has: an alternative replaces, it adds
 // nothing.
-func replaceFlags(line, alt []string) ([]string, error) {
+func replaceFlags(line, alt []word) ([]word, error) {
 	if len(alt)%2 != 0 {
 		return nil, fmt.Errorf("not pairs of a flag and its value")
 	}
 	line = slices.Clone(line)
 	for i := 0; i < len(alt); i += 2 {
-		if !strings.HasPrefix(alt[i], "-") {
-			return nil, fmt.Errorf("%q is not a flag", alt[i])
+		if !strings.HasPrefix(alt[i].text, "-") {
+			return nil, fmt.Errorf("%q is not a flag", alt[i].text)
 		}
 		found := false
 		for j := 0; j+1 < len(line); j++ {
-			if line[j] == alt[i] {
+			if line[j].text == alt[i].text {
 				line[j+1], found = alt[i+1], true
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("the step has no flag %s", alt[i])
+			return nil, fmt.Errorf("the step has no flag %s", alt[i].text)
 		}
 	}
 	return line, nil
@@ -480,12 +506,41 @@ func unique(s []string) []string {
 	return out
 }
 
+// word is a word of a document line: its text, and how the document
+// writes it. quote is 0 for a word written without quotes, else the quote
+// it is written in (the last, for a word that mixes them). literal is set
+// on a word filled from a value, which is a literal whatever the document
+// wrote around it.
+type word struct {
+	text    string
+	quote   rune
+	literal bool
+}
+
+// filled is w with its text replaced; a changed text came from a value.
+func (w word) filled(text string) word {
+	if text != w.text {
+		w.text, w.literal = text, true
+	}
+	return w
+}
+
 // Split splits a command line into its words as sh does for the quoting
 // the document uses: single and double quotes, no expansion.
 func Split(s string) []string {
-	var out []string
+	ws := splitWords(s)
+	out := make([]string, len(ws))
+	for i, w := range ws {
+		out[i] = w.text
+	}
+	return out
+}
+
+// splitWords is Split with each word's quoting.
+func splitWords(s string) []word {
+	var out []word
 	var cur strings.Builder
-	in, quote := false, rune(0)
+	in, quote, used := false, rune(0), rune(0)
 	for _, r := range s {
 		switch {
 		case quote != 0 && r == quote:
@@ -493,12 +548,12 @@ func Split(s string) []string {
 		case quote != 0:
 			cur.WriteRune(r)
 		case r == '\'' || r == '"':
-			quote, in = r, true
+			quote, used, in = r, r, true
 		case r == ' ' || r == '\t':
 			if in {
-				out = append(out, cur.String())
+				out = append(out, word{text: cur.String(), quote: used})
 				cur.Reset()
-				in = false
+				in, used = false, 0
 			}
 		default:
 			cur.WriteRune(r)
@@ -506,27 +561,41 @@ func Split(s string) []string {
 		}
 	}
 	if in {
-		out = append(out, cur.String())
+		out = append(out, word{text: cur.String(), quote: used})
 	}
 	return out
 }
 
-// Join quotes the words for sh, in single quotes where a word needs any.
+// Join quotes the words for sh, each read as a word the document writes
+// without quotes: in single quotes where a word needs any.
 func Join(words []string) string {
+	ws := make([]word, len(words))
+	for i, w := range words {
+		ws[i] = word{text: w}
+	}
+	return join(ws)
+}
+
+// join quotes the words for sh as the document writes them. Only a word
+// written without quotes and not filled from a value can be one of the
+// shell's own words. A word the document quotes keeps its quotes, and a
+// value is a literal, never a home path or a variable.
+func join(words []word) string {
 	out := make([]string, len(words))
 	for i, w := range words {
+		bare := w.quote == 0 && !w.literal
 		switch {
-		case w != "" && strings.Trim(w, safeChars) == "":
-			out[i] = w
-		case w == "&&" || homeWord.MatchString(w):
+		case w.text != "" && strings.Trim(w.text, safeChars) == "":
+			out[i] = w.text
+		case bare && (w.text == "&&" || homeWord.MatchString(w.text)):
 			// The shell's own words, as a person's shell reads them: the
 			// list operator, and a path from a home (~/x, ~sessiond/x).
-			out[i] = w
-		case shellVar.MatchString(w):
-			// "$USER": the variable, expanded and kept one word.
-			out[i] = `"` + w + `"`
+			out[i] = w.text
+		case (bare || w.quote == '"' && !w.literal) && shellVar.MatchString(w.text):
+			// $USER or "$USER": the variable, expanded and kept one word.
+			out[i] = `"` + w.text + `"`
 		default:
-			out[i] = "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
+			out[i] = "'" + strings.ReplaceAll(w.text, "'", `'\''`) + "'"
 		}
 	}
 	return strings.Join(out, " ")

@@ -98,6 +98,19 @@ jobs:
         env:
           AICREW_REAL_SERVICE: '1'
         run: go test -count=1 -v -run TestRealService ./internal/service/
+      # docs/BRING-UP.md step 8's carrying with Windows' OpenSSH client: a
+      # local OpenSSH server stands in for aicrewd's host, and the test runs
+      # the document's line against it (e2e/docsteps). The directory's
+      # PowerShell line runs in go test above.
+      - name: a local OpenSSH server (Windows)
+        if: runner.os == 'Windows' && steps.gate.outputs.run == 'true'
+        timeout-minutes: 15
+        shell: pwsh
+        run: ./scripts/ci-windows-sshd.ps1
+      - name: step 8's carrying (Windows)
+        if: runner.os == 'Windows' && steps.gate.outputs.run == 'true'
+        timeout-minutes: 10
+        run: go test -count=1 -v -run TestWindowsArchitectCarry ./e2e/docsteps/
 
   # The race detector checks, on one OS, the packages whose goroutines
   # share state: the launcher's step channel reads the engine's session

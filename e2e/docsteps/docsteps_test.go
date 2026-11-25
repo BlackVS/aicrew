@@ -25,9 +25,6 @@ var exempt = map[string]string{
 		"installed; the runner restarts serve as the installed service would (docs/E2E-PILOT-SIM.md)",
 	"service-status": "the same: no systemd user manager in the simulation's member containers",
 	"enable-linger":  "a systemd login setting of a real host, not an aicrew or aimem line",
-	"architect-init-windows": "a Windows architect machine's PowerShell line; the simulation's containers are Linux " +
-		"(tried by hand on Windows 11, docs/E2E-PILOT-SIM.md)",
-	"architect-carry-windows": "the same: the Windows OpenSSH client's carrying, tried by hand",
 	"session-leave": "named only in join's skills_conversation reason, which no scenario reaches: it needs the " +
 		"hub to refuse a conversation for a session the home recorded earlier, a hub fault no harness injects",
 }
@@ -516,5 +513,52 @@ func TestJoinShellWords(t *testing.T) {
 		if got := Join(c.in); got != c.want {
 			t.Errorf("Join(%q) = %s, want %s", c.in, got, c.want)
 		}
+	}
+}
+
+// A word the document writes in quotes keeps them, and a value filled in
+// is a literal: neither is read as a home path, a variable or the list
+// operator, while the same words written bare still are.
+func TestLineKeepsQuotes(t *testing.T) {
+	d, err := Parse([]byte("<!-- run: q -->\n```sh\n" +
+		`aicrew x '~/example' "~/also" '$HOME' "$USER" '&&' ~/plain $USER --dir DIR --who WHO --name "a NAME" && echo ok` +
+		"\n```\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.Line("q", Options{Values: map[string]string{"DIR": "~/elsewhere", "WHO": "$USER", "NAME": "~root"}})
+	want := `aicrew x '~/example' '~/also' '$HOME' "$USER" '&&' ~/plain "$USER" --dir '~/elsewhere' --who '$USER' --name 'a ~root' && echo ok`
+	if err != nil || got != want {
+		t.Errorf("Line:\n got %s, %v\nwant %s", got, err, want)
+	}
+}
+
+// Text is the line as written with its placeholders filled, for the
+// document's PowerShell lines, and refuses a value it would have to quote.
+func TestText(t *testing.T) {
+	d, err := Parse([]byte("<!-- run: w -->\n```powershell\n" +
+		`aicrew architect init --dir $HOME\aicrew\architect --project PROJECT --url https://AICREWD:PORT; if ($?) { echo "ok" }` +
+		"\n```\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := map[string]string{"PROJECT": "demo", "AICREWD": "a.example", "PORT": "9443"}
+	got, err := d.Text("w", v)
+	want := `aicrew architect init --dir $HOME\aicrew\architect --project demo --url https://a.example:9443; if ($?) { echo "ok" }`
+	if err != nil || got != want {
+		t.Errorf("Text:\n got %s, %v\nwant %s", got, err, want)
+	}
+	for _, bad := range []string{"", "a b", "$x", "a;b", "~/x"} {
+		v["PROJECT"] = bad
+		if _, err := d.Text("w", v); err == nil || !strings.Contains(err.Error(), "PROJECT") {
+			t.Errorf("value %q: %v", bad, err)
+		}
+	}
+	delete(v, "PROJECT")
+	if _, err := d.Text("w", v); err == nil {
+		t.Error("a missing value: no error")
+	}
+	if _, err := d.Text("none", v); err == nil {
+		t.Error("an unmarked step: no error")
 	}
 }

@@ -789,10 +789,20 @@ ended:
    "Upgrading a member" writes it. What its report must say is derived
    from the home's files before and after it (`e2e/pilotsim/rerun.py`,
    tested by `rerun_test.py`), not from which release the home had:
-   - an `update` (or `create`) where this tree's join changed a file, and
-     `unchanged` where it did not;
-   - `restart_required` exactly when a file changed, else `ready`;
+   - each row, the managed files' `changes` and the client wiring's
+     `check.wiring`, carries an action join reports there, and the file
+     shows it: `create` for a file that was not there (or an entry added
+     to its file), `update` for one that changed, the file as it was for
+     `unchanged`, `kept` and `collision`;
+   - every file that changed, other than agent.json and aimem/, is
+     written by one of those rows;
+   - `restart_required` exactly when a managed file was replaced or the
+     wiring was created or updated, else `ready` (a created file alone
+     needs no restart);
    - a conflict fails.
+
+   rerun.py names, beside each rule, the product's file and function the
+   rule comes from.
 
    A run from a release whose managed files equal this tree's proves no
    update. The update path is proven on every pull request by the

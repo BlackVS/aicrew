@@ -1,0 +1,90 @@
+{
+ "status": "ready",
+ "changes": [
+  {
+   "path": "AGENTS.md",
+   "action": "unchanged"
+  },
+  {
+   "path": "CLAUDE.md",
+   "action": "unchanged"
+  },
+  {
+   "path": "docs/START.md",
+   "action": "unchanged"
+  },
+  {
+   "path": "docs/ROLES.md",
+   "action": "unchanged"
+  },
+  {
+   "path": "docs/HANDOFF.md",
+   "action": "kept"
+  },
+  {
+   "path": ".claude/settings.json",
+   "action": "unchanged"
+  },
+  {
+   "path": ".claude/turn-settings.json",
+   "action": "unchanged"
+  },
+  {
+   "path": ".claude/turn-settings-coordinator.json",
+   "action": "unchanged"
+  },
+  {
+   "path": ".claude/commands/crew-start.md",
+   "action": "unchanged"
+  },
+  {
+   "path": ".claude/commands/crew-turn.md",
+   "action": "unchanged"
+  },
+  {
+   "path": ".claude/commands/crew-inbox.md",
+   "action": "unchanged"
+  },
+  {
+   "path": ".claude/commands/crew-triage.md",
+   "action": "unchanged"
+  },
+  {
+   "path": ".claude/commands/crew-offer.md",
+   "action": "unchanged"
+  },
+  {
+   "path": ".claude/commands/crew-review.md",
+   "action": "unchanged"
+  },
+  {
+   "path": ".claude/commands/crew-escalate.md",
+   "action": "unchanged"
+  },
+  {
+   "path": ".claude/commands/crew-accept.md",
+   "action": "unchanged"
+  },
+  {
+   "path": ".claude/commands/crew-submit.md",
+   "action": "unchanged"
+  },
+  {
+   "path": ".claude/commands/crew-claim.md",
+   "action": "unchanged"
+  },
+  {
+   "path": ".claude/commands/crew-handoff.md",
+   "action": "unchanged"
+  }
+ ],
+ "check": {
+  "status": "ready",
+  "wiring": [
+   {
+    "path": ".mcp.json (mcpServers.aimem)",
+    "action": "unchanged"
+   }
+  ]
+ }
+}

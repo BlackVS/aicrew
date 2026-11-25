@@ -561,9 +561,8 @@ mrejoin() {
 # progress lines in .txt); no
 # service, as in member.sh. What the report should say is derived from the
 # home's files before and after the rerun (rerun.py,
-# $OUT/upgrade-join-ROLE.before and .after): an update and restart_required
-# where this tree's join changed a file, unchanged and ready where the
-# previous release's files were already this tree's.
+# $OUT/upgrade-join-ROLE.before and .after), by the rules rerun.py's
+# docstring names with their source in the product.
 mupgrade_join() {
   local line rev=()
   home_files "$1" > "$OUT/upgrade-join-$1.before" || fail "sim-$1: the home's files before the rerun of join"
